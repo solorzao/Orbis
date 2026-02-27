@@ -1,0 +1,139 @@
+"use client";
+
+import { useEffect, useRef, useCallback, useState } from "react";
+import type { GlobeInstance } from "globe.gl";
+import { GlobePoint } from "@/types/news";
+
+interface GlobeProps {
+  points: GlobePoint[];
+  onPointClick: (point: GlobePoint) => void;
+  onZoomChange: (altitude: number) => void;
+}
+
+export default function Globe({
+  points,
+  onPointClick,
+  onZoomChange,
+}: GlobeProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const globeRef = useRef<GlobeInstance | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  const onPointClickRef = useRef(onPointClick);
+  onPointClickRef.current = onPointClick;
+
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
+
+  const initGlobe = useCallback(async () => {
+    if (!containerRef.current || globeRef.current) return;
+
+    const GlobeGL = (await import("globe.gl")).default;
+
+    const globe = new GlobeGL(containerRef.current)
+      .backgroundColor("rgba(0,0,0,0)")
+      .globeImageUrl(
+        "//unpkg.com/three-globe/example/img/earth-night.jpg"
+      )
+      .bumpImageUrl(
+        "//unpkg.com/three-globe/example/img/earth-topology.png"
+      )
+      .atmosphereColor("#1a3a5c")
+      .atmosphereAltitude(0.15)
+      .showAtmosphere(true)
+      .pointsData([])
+      .pointLat("lat")
+      .pointLng("lng")
+      .pointRadius("size")
+      .pointColor("color")
+      .pointAltitude(0.01)
+      .pointResolution(12)
+      .pointLabel((d: object) => {
+        const p = d as GlobePoint;
+        if (p.isCluster) {
+          return `<div style="background:rgba(10,14,28,0.85);backdrop-filter:blur(12px);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:8px 12px;font-family:monospace;color:#e2e8f0;font-size:12px;pointer-events:none"><span style="color:${p.color};font-weight:600">${p.count} stories</span> <span style="color:#64748b">\u2022 cluster</span></div>`;
+        }
+        return `<div style="background:rgba(10,14,28,0.85);backdrop-filter:blur(12px);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:8px 12px;font-family:system-ui;color:#e2e8f0;font-size:12px;max-width:240px;pointer-events:none">${p.articles[0]?.title || ""}</div>`;
+      })
+      .onPointClick((point: object) => {
+        onPointClickRef.current(point as GlobePoint);
+      })
+      .onZoom(
+        (pov: { lat: number; lng: number; altitude: number }) => {
+          onZoomChangeRef.current(pov.altitude);
+        }
+      );
+
+    // Initial camera position
+    globe.pointOfView({ lat: 20, lng: 0, altitude: 2.5 });
+
+    // Customize controls for smooth interaction
+    const controls = globe.controls();
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.3;
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+    controls.rotateSpeed = 0.6;
+    controls.zoomSpeed = 0.8;
+    controls.minDistance = 120;
+    controls.maxDistance = 600;
+
+    // Stop auto-rotate on user interaction
+    const container = containerRef.current;
+    const stopAutoRotate = () => {
+      controls.autoRotate = false;
+    };
+    container.addEventListener("mousedown", stopAutoRotate);
+    container.addEventListener("touchstart", stopAutoRotate);
+
+    globeRef.current = globe;
+    setIsLoaded(true);
+
+    // Handle resize
+    const handleResize = () => {
+      if (globeRef.current) {
+        globeRef.current.width(window.innerWidth);
+        globeRef.current.height(window.innerHeight);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    handleResize();
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      container.removeEventListener("mousedown", stopAutoRotate);
+      container.removeEventListener("touchstart", stopAutoRotate);
+    };
+  }, []);
+
+  useEffect(() => {
+    initGlobe();
+    return () => {
+      if (globeRef.current) {
+        globeRef.current._destructor();
+        globeRef.current = null;
+      }
+    };
+  }, [initGlobe]);
+
+  // Update points data when it changes
+  useEffect(() => {
+    if (globeRef.current && isLoaded) {
+      globeRef.current.pointsData(points);
+    }
+  }, [points, isLoaded]);
+
+  return (
+    <div className="fixed inset-0 z-0">
+      {/* Radial gradient vignette overlay */}
+      <div
+        className="pointer-events-none absolute inset-0 z-10"
+        style={{
+          background:
+            "radial-gradient(ellipse at center, transparent 40%, rgba(3, 7, 18, 0.6) 100%)",
+        }}
+      />
+      <div ref={containerRef} className="h-full w-full" />
+    </div>
+  );
+}

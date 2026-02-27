@@ -1,0 +1,71 @@
+"""AI-powered cluster summarisation using Claude Haiku."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+
+import anthropic
+
+from app.config import settings
+from app.models.news import NewsArticle
+from app.services.cache import get_cached, set_cached
+
+logger = logging.getLogger(__name__)
+
+_SYSTEM_PROMPT = (
+    "You are a concise news analyst. Summarize the following news cluster "
+    "in 2-3 sentences. Focus on the key event, who's involved, and why it matters."
+)
+
+
+async def summarise_cluster(articles: list[NewsArticle]) -> str:
+    """Generate a 2-3 sentence summary for a cluster of articles.
+
+    Uses Claude Haiku via the Anthropic SDK.  Results are cached in Redis
+    for ``settings.summary_cache_ttl`` seconds.
+    """
+    if not articles:
+        return "No articles to summarise."
+
+    # Build a deterministic cache key from the sorted article IDs.
+    ids_str = ",".join(sorted(a.id for a in articles))
+    cache_key = "summary:" + hashlib.sha256(ids_str.encode()).hexdigest()[:24]
+
+    cached = await get_cached(cache_key)
+    if cached is not None:
+        return str(cached)
+
+    # Compose the user message listing each headline + source.
+    lines = [f"- {a.title} ({a.source_name})" for a in articles[:30]]
+    user_msg = "News articles in this cluster:\n" + "\n".join(lines)
+
+    summary = await _call_claude(user_msg)
+
+    await set_cached(cache_key, summary, settings.summary_cache_ttl)
+    return summary
+
+
+async def _call_claude(user_message: str) -> str:
+    """Call the Anthropic messages API.  Returns the text response."""
+    if not settings.anthropic_api_key:
+        logger.warning("ANTHROPIC_API_KEY not set — returning placeholder summary.")
+        return "AI summary unavailable (API key not configured)."
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
+            model=settings.haiku_model_id,
+            max_tokens=256,
+            system=_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        # Extract the text from the first content block.
+        text = response.content[0].text if response.content else ""
+        return text.strip()
+    except anthropic.RateLimitError:
+        logger.warning("Anthropic rate-limited — returning fallback.")
+        return "Summary temporarily unavailable due to rate limits."
+    except Exception:
+        logger.error("Anthropic API call failed.", exc_info=True)
+        return "Summary generation failed."

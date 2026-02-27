@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // globe.gl and its dependencies are ESM-only; transpile them for Next.js
+  transpilePackages: ["globe.gl", "three-globe", "three"],
 };
 
 export default nextConfig;

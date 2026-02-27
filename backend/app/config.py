@@ -1,0 +1,82 @@
+"""Application configuration loaded from environment variables."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def _env(key: str, default: str = "") -> str:
+    return os.environ.get(key, default)
+
+
+def _env_int(key: str, default: int = 0) -> int:
+    raw = os.environ.get(key, "")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return default
+
+
+def _env_float(key: str, default: float = 0.0) -> float:
+    raw = os.environ.get(key, "")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return default
+
+
+@dataclass
+class Settings:
+    """Central configuration for the Orbis backend."""
+
+    # --- Supabase ---
+    supabase_url: str = field(default_factory=lambda: _env("SUPABASE_URL"))
+    supabase_anon_key: str = field(default_factory=lambda: _env("SUPABASE_ANON_KEY"))
+    supabase_service_role_key: str = field(default_factory=lambda: _env("SUPABASE_SERVICE_ROLE_KEY"))
+
+    # --- Redis (Upstash) ---
+    redis_url: str = field(default_factory=lambda: _env("REDIS_URL"))
+
+    # --- AI ---
+    anthropic_api_key: str = field(default_factory=lambda: _env("ANTHROPIC_API_KEY"))
+    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))
+
+    # --- GDELT ---
+    gdelt_doc_base_url: str = field(
+        default_factory=lambda: _env(
+            "GDELT_DOC_BASE_URL",
+            "https://api.gdeltproject.org/api/v2/doc/doc",
+        )
+    )
+    gdelt_geo_base_url: str = field(
+        default_factory=lambda: _env(
+            "GDELT_GEO_BASE_URL",
+            "https://api.gdeltproject.org/api/v2/geo/geo",
+        )
+    )
+
+    # --- Cache TTLs (seconds) ---
+    gdelt_cache_ttl: int = field(default_factory=lambda: _env_int("GDELT_CACHE_TTL", 900))
+    summary_cache_ttl: int = field(default_factory=lambda: _env_int("SUMMARY_CACHE_TTL", 3600))
+
+    # --- Clustering ---
+    cluster_resolution_deg: float = field(
+        default_factory=lambda: _env_float("CLUSTER_RESOLUTION_DEG", 2.0)
+    )
+
+    # --- AI model ---
+    haiku_model_id: str = field(
+        default_factory=lambda: _env("HAIKU_MODEL_ID", "claude-haiku-4-5-20251001")
+    )
+
+
+settings = Settings()
