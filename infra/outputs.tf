@@ -14,6 +14,17 @@ output "postgres_connection_string" {
   sensitive   = true
 }
 
+output "redis_hostname" {
+  description = "Azure Cache for Redis hostname"
+  value       = azurerm_redis_cache.orbis.hostname
+}
+
+output "redis_connection_string" {
+  description = "Redis connection string (SSL)"
+  value       = "rediss://:${azurerm_redis_cache.orbis.primary_access_key}@${azurerm_redis_cache.orbis.hostname}:${azurerm_redis_cache.orbis.ssl_port}"
+  sensitive   = true
+}
+
 output "container_app_url" {
   description = "FQDN of the deployed Container App API"
   value       = azurerm_container_app.api.ingress[0].fqdn

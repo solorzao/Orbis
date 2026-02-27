@@ -41,7 +41,7 @@ resource "azurerm_container_app" "api" {
 
   secret {
     name  = "redis-url"
-    value = var.redis_url
+    value = "rediss://:${azurerm_redis_cache.orbis.primary_access_key}@${azurerm_redis_cache.orbis.hostname}:${azurerm_redis_cache.orbis.ssl_port}"
   }
 
   secret {
@@ -111,5 +111,6 @@ resource "azurerm_container_app" "api" {
     azurerm_postgresql_flexible_server.orbis,
     azurerm_postgresql_flexible_server_database.orbis,
     azurerm_postgresql_flexible_server_configuration.extensions,
+    azurerm_redis_cache.orbis,
   ]
 }

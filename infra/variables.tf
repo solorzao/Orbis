@@ -44,12 +44,6 @@ variable "ghcr_password" {
   sensitive   = true
 }
 
-variable "redis_url" {
-  description = "Upstash Redis connection URL"
-  type        = string
-  sensitive   = true
-}
-
 variable "anthropic_api_key" {
   description = "Anthropic API key for Claude"
   type        = string
