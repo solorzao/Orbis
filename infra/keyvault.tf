@@ -44,7 +44,7 @@ resource "azurerm_role_assignment" "api_secrets" {
 
 resource "azurerm_key_vault_secret" "database_url" {
   name         = "database-url"
-  value        = "postgresql://orbisadmin:${var.pg_admin_password}@${azurerm_postgresql_flexible_server.orbis.fqdn}:5432/orbis?sslmode=require"
+  value        = "postgresql://orbisadmin:${urlencode(var.pg_admin_password)}@${azurerm_postgresql_flexible_server.orbis.fqdn}:5432/orbis?sslmode=require"
   key_vault_id = azurerm_key_vault.orbis.id
 
   depends_on = [azurerm_role_assignment.deployer_secrets]
