@@ -38,10 +38,8 @@ def _env_float(key: str, default: float = 0.0) -> float:
 class Settings:
     """Central configuration for the Orbis backend."""
 
-    # --- Supabase ---
-    supabase_url: str = field(default_factory=lambda: _env("SUPABASE_URL"))
-    supabase_anon_key: str = field(default_factory=lambda: _env("SUPABASE_ANON_KEY"))
-    supabase_service_role_key: str = field(default_factory=lambda: _env("SUPABASE_SERVICE_ROLE_KEY"))
+    # --- Database (Azure PostgreSQL) ---
+    database_url: str = field(default_factory=lambda: _env("DATABASE_URL"))
 
     # --- Redis (Upstash) ---
     redis_url: str = field(default_factory=lambda: _env("REDIS_URL"))

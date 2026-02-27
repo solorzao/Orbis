@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.news import router as news_router
 from app.services.cache import close_redis, get_redis
+from app.services.database import close_pool, get_pool
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -42,16 +43,18 @@ app.include_router(news_router)
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def startup() -> None:
-    """Warm up Redis connection on startup."""
+    """Warm up Redis and database connections on startup."""
     logger.info("Starting Orbis API …")
     await get_redis()
+    await get_pool()
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    """Release Redis connection on shutdown."""
+    """Release Redis and database connections on shutdown."""
     logger.info("Shutting down Orbis API …")
     await close_redis()
+    await close_pool()
 
 
 # ---------------------------------------------------------------------------
