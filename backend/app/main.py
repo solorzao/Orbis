@@ -28,7 +28,7 @@ app = FastAPI(title="Orbis API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "https://*.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,4 +82,4 @@ async def log_requests(request: Request, call_next):
 @app.get("/health")
 async def health():
     """Simple liveness probe."""
-    return {"status": "ok"}
+    return {"status": "ok", "version": app.version}
