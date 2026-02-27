@@ -1,0 +1,7 @@
+subscription_id   = "00000000-0000-0000-0000-000000000000"
+pg_admin_password = "YourStrongPasswordHere123!"
+ghcr_username     = "your-github-username"
+ghcr_password     = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+redis_url         = "rediss://default:xxxx@your-redis.upstash.io:6379"
+anthropic_api_key = "sk-ant-xxxxxxxxxxxxxxxxxxxx"
+openai_api_key    = "sk-xxxxxxxxxxxxxxxxxxxx"

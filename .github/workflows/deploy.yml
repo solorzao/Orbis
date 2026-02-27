@@ -1,0 +1,83 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+# Only allow one deployment at a time
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      database: ${{ steps.filter.outputs.database }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            database:
+              - 'database/**'
+
+  build-and-push:
+    name: Build & Push Docker Image
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/orbis-api:latest
+            ghcr.io/${{ github.repository_owner }}/orbis-api:${{ github.sha }}
+
+  deploy-backend:
+    name: Deploy Backend to Azure
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Deploy to Container Apps
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          resourceGroup: rg-orbis
+          containerAppName: orbis-api
+          imageToDeploy: ghcr.io/${{ github.repository_owner }}/orbis-api:${{ github.sha }}
+
+  run-migrations:
+    name: Run Database Migrations
+    needs: changes
+    if: needs.changes.outputs.database == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          sudo apt-get install -y postgresql-client
+          for f in database/migrations/*.sql; do
+            echo "Running $f..."
+            psql "$DATABASE_URL" -f "$f"
+          done
