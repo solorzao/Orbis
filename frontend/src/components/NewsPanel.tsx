@@ -70,6 +70,7 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
       {point && (
         <motion.div
           ref={panelRef}
+          data-testid="news-panel"
           initial={{ x: "100%", opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: "100%", opacity: 0 }}
