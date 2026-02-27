@@ -8,21 +8,19 @@ output "postgres_fqdn" {
   value       = azurerm_postgresql_flexible_server.orbis.fqdn
 }
 
-output "postgres_connection_string" {
-  description = "Full PostgreSQL connection string"
-  value       = "postgresql://orbisadmin:${var.pg_admin_password}@${azurerm_postgresql_flexible_server.orbis.fqdn}:5432/orbis?sslmode=require"
-  sensitive   = true
-}
-
 output "redis_hostname" {
   description = "Azure Cache for Redis hostname"
   value       = azurerm_redis_cache.orbis.hostname
 }
 
-output "redis_connection_string" {
-  description = "Redis connection string (SSL)"
-  value       = "rediss://:${azurerm_redis_cache.orbis.primary_access_key}@${azurerm_redis_cache.orbis.hostname}:${azurerm_redis_cache.orbis.ssl_port}"
-  sensitive   = true
+output "key_vault_name" {
+  description = "Azure Key Vault name"
+  value       = azurerm_key_vault.orbis.name
+}
+
+output "key_vault_uri" {
+  description = "Azure Key Vault URI"
+  value       = azurerm_key_vault.orbis.vault_uri
 }
 
 output "container_app_url" {
@@ -38,4 +36,9 @@ output "container_app_name" {
 output "container_apps_environment_name" {
   description = "Name of the Container Apps Environment"
   value       = azurerm_container_app_environment.orbis.name
+}
+
+output "managed_identity_client_id" {
+  description = "Client ID of the API managed identity"
+  value       = azurerm_user_assigned_identity.orbis_api.client_id
 }

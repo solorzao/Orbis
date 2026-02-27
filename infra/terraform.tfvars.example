@@ -1,6 +1,14 @@
-subscription_id   = "00000000-0000-0000-0000-000000000000"
-pg_admin_password = "YourStrongPasswordHere123!"
-ghcr_username     = "your-github-username"
-ghcr_password     = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-anthropic_api_key = "sk-ant-xxxxxxxxxxxxxxxxxxxx"
-openai_api_key    = "sk-xxxxxxxxxxxxxxxxxxxx"
+# DO NOT create a terraform.tfvars with real secrets.
+# Instead, set environment variables before running terraform:
+#
+#   export TF_VAR_subscription_id="your-azure-subscription-id"
+#   export TF_VAR_pg_admin_password="YourStrongPasswordHere123!"
+#   export TF_VAR_ghcr_username="your-github-username"
+#   export TF_VAR_ghcr_password="ghp_xxxxxxxxxxxxxxxxxxxx"
+#   export TF_VAR_anthropic_api_key="sk-ant-xxxxxxxxxxxxxxxxxxxx"
+#   export TF_VAR_openai_api_key="sk-xxxxxxxxxxxxxxxxxxxx"
+#
+# Then run: terraform plan / terraform apply
+#
+# All sensitive values are stored in Azure Key Vault at runtime.
+# The Container App reads secrets from Key Vault via managed identity.

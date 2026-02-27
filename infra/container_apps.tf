@@ -34,24 +34,34 @@ resource "azurerm_container_app" "api" {
     environment = "dev"
   }
 
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.orbis_api.id]
+  }
+
+  # Secrets sourced from Key Vault via managed identity
   secret {
-    name  = "database-url"
-    value = "postgresql://orbisadmin:${var.pg_admin_password}@${azurerm_postgresql_flexible_server.orbis.fqdn}:5432/orbis?sslmode=require"
+    name                = "database-url"
+    key_vault_secret_id = azurerm_key_vault_secret.database_url.id
+    identity            = azurerm_user_assigned_identity.orbis_api.id
   }
 
   secret {
-    name  = "redis-url"
-    value = "rediss://:${azurerm_redis_cache.orbis.primary_access_key}@${azurerm_redis_cache.orbis.hostname}:${azurerm_redis_cache.orbis.ssl_port}"
+    name                = "redis-url"
+    key_vault_secret_id = azurerm_key_vault_secret.redis_url.id
+    identity            = azurerm_user_assigned_identity.orbis_api.id
   }
 
   secret {
-    name  = "anthropic-api-key"
-    value = var.anthropic_api_key
+    name                = "anthropic-api-key"
+    key_vault_secret_id = azurerm_key_vault_secret.anthropic_api_key.id
+    identity            = azurerm_user_assigned_identity.orbis_api.id
   }
 
   secret {
-    name  = "openai-api-key"
-    value = var.openai_api_key
+    name                = "openai-api-key"
+    key_vault_secret_id = azurerm_key_vault_secret.openai_api_key.id
+    identity            = azurerm_user_assigned_identity.orbis_api.id
   }
 
   secret {
@@ -112,5 +122,6 @@ resource "azurerm_container_app" "api" {
     azurerm_postgresql_flexible_server_database.orbis,
     azurerm_postgresql_flexible_server_configuration.extensions,
     azurerm_redis_cache.orbis,
+    azurerm_role_assignment.api_secrets,
   ]
 }
