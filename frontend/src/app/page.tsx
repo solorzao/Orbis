@@ -117,7 +117,7 @@ export default function Home() {
   }, []);
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-[#030712]">
+    <main className="relative h-screen w-screen overflow-hidden bg-[var(--bg-page)]">
       {/* Globe */}
       <Globe points={points} onPointClick={handlePointClick} onZoomChange={handleZoomChange} />
 
@@ -138,7 +138,7 @@ export default function Home() {
           >
             Orbis
           </h1>
-          <p className="hidden text-[9px] font-medium tracking-[0.3em] text-slate-500 uppercase sm:block">
+          <p className="hidden text-[9px] font-medium tracking-[0.3em] text-[var(--text-muted)] uppercase sm:block">
             Global Intelligence
           </p>
         </div>
@@ -162,9 +162,9 @@ export default function Home() {
       {/* Bottom status bar */}
       <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-4">
         <div
-          className="flex items-center gap-2 rounded-full border border-white/[0.05] px-3 py-1.5 text-[9px] tracking-wider text-slate-600 sm:gap-3 sm:px-4 sm:py-2 sm:text-[10px]"
+          className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 py-1.5 text-[9px] tracking-wider text-[var(--text-secondary)] sm:gap-3 sm:px-4 sm:py-2 sm:text-[10px]"
           style={{
-            background: "rgba(8, 12, 24, 0.5)",
+            background: "var(--surface-overlay)",
             backdropFilter: "blur(12px)",
           }}
         >
@@ -186,9 +186,9 @@ export default function Home() {
               </>
             )}
           </span>
-          <span className="text-slate-700">|</span>
+          <span className="text-[var(--text-muted)]">|</span>
           <span>{points.reduce((sum, p) => sum + p.count, 0)} stories tracked</span>
-          <span className="text-slate-700">|</span>
+          <span className="text-[var(--text-muted)]">|</span>
           <span>{points.length} locations</span>
         </div>
       </div>
