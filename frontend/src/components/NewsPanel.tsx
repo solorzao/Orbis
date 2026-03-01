@@ -34,23 +34,54 @@ function sentimentLabel(score: number): string {
   return "Critical";
 }
 
-function ArticleSkeleton() {
+function ArticleSkeleton({ delay = 0 }: { delay?: number }) {
   return (
-    <div className="rounded-xl border border-white/[0.05] p-4" style={{ background: "rgba(15, 20, 35, 0.6)" }}>
+    <div
+      className="relative overflow-hidden rounded-xl border border-white/[0.05] p-4"
+      style={{ background: "rgba(15, 20, 35, 0.6)", animationDelay: `${delay}ms` }}
+    >
+      {/* Shimmer overlay */}
+      <div
+        className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_ease-in-out_infinite]"
+        style={{
+          background: "linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.04), transparent)",
+          animationDelay: `${delay}ms`,
+        }}
+      />
       <div className="mb-2.5 flex items-center gap-2">
-        <div className="h-2 w-2 animate-pulse rounded-full bg-white/[0.08]" />
-        <div className="h-2 w-12 animate-pulse rounded bg-white/[0.06]" />
+        <div className="h-2 w-2 rounded-full bg-white/[0.08]" />
+        <div className="h-2 w-12 rounded bg-white/[0.06]" />
         <div className="h-2 w-px bg-slate-700" />
-        <div className="h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />
+        <div className="h-4 w-14 rounded-full bg-white/[0.04]" />
       </div>
       <div className="space-y-2">
-        <div className="h-3 w-full animate-pulse rounded bg-white/[0.06]" />
-        <div className="h-3 w-4/5 animate-pulse rounded bg-white/[0.06]" />
+        <div className="h-3 w-full rounded bg-white/[0.06]" />
+        <div className="h-3 w-4/5 rounded bg-white/[0.06]" />
       </div>
       <div className="mt-3 flex items-center justify-between">
-        <div className="h-2 w-20 animate-pulse rounded bg-white/[0.04]" />
-        <div className="h-2 w-10 animate-pulse rounded bg-white/[0.04]" />
+        <div className="h-2 w-20 rounded bg-white/[0.04]" />
+        <div className="h-2 w-10 rounded bg-white/[0.04]" />
       </div>
+    </div>
+  );
+}
+
+function LoadingHeader() {
+  return (
+    <div className="mb-4 flex flex-col items-center gap-3 py-4">
+      <div className="relative h-10 w-10">
+        <div
+          className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-blue-500"
+          style={{ animationDuration: "1.2s" }}
+        />
+        <div
+          className="absolute inset-1 animate-spin rounded-full border-2 border-transparent border-b-blue-400/40"
+          style={{ animationDuration: "1.8s", animationDirection: "reverse" }}
+        />
+      </div>
+      <p className="text-[10px] font-semibold tracking-widest text-blue-400/70 uppercase">
+        Fetching stories
+      </p>
     </div>
   );
 }
@@ -180,8 +211,9 @@ export default function NewsPanel({
             <div className="space-y-3">
               {articlesLoading && point.articles.length === 0 && (
                 <>
+                  <LoadingHeader />
                   {Array.from({ length: 3 }).map((_, i) => (
-                    <ArticleSkeleton key={`skel-${i}`} />
+                    <ArticleSkeleton key={`skel-${i}`} delay={i * 150} />
                   ))}
                 </>
               )}

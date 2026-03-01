@@ -96,7 +96,7 @@ async def get_cluster_articles(
     resolved = _resolve_topic(topic)
     gdelt_query = _build_location_query(location_name, topic=resolved)
     # Fetch more than we need so post-filtering by classifier still yields results
-    articles = await fetch_articles(query=gdelt_query, max_records=50)
+    articles = await fetch_articles(query=gdelt_query, max_records=15)
 
     if resolved:
         articles = [a for a in articles if resolved in a.topic_tags]
@@ -115,7 +115,7 @@ async def get_cluster_summary(
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
     gdelt_query = _build_location_query(location_name, topic=resolved)
-    articles = await fetch_articles(query=gdelt_query, max_records=50)
+    articles = await fetch_articles(query=gdelt_query, max_records=15)
 
     if resolved:
         articles = [a for a in articles if resolved in a.topic_tags]

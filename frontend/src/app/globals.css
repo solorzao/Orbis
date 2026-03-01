@@ -40,6 +40,12 @@ body {
   background: rgba(59, 130, 246, 0.3);
 }
 
+/* Shimmer animation for loading skeletons */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 /* Globe tooltip styling override */
 .scene-tooltip {
   z-index: 100 !important;
