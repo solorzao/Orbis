@@ -34,10 +34,16 @@ async def get_globe_data(
 ) -> list[GlobeDataPoint]:
     """Return globe data points for rendering on the 3-D globe.
 
-    Fetches articles from GDELT, clusters nearby articles, and returns
-    lightweight ``GlobeDataPoint`` objects.
+    Fetches articles from GDELT, optionally filters by classified topic,
+    clusters nearby articles, and returns lightweight ``GlobeDataPoint``
+    objects.
     """
-    articles = await fetch_articles(timespan=timespan, topic=topic)
+    articles = await fetch_articles(timespan=timespan)
+
+    # Post-filter by classified topic tags (not GDELT query)
+    if topic:
+        articles = [a for a in articles if topic in a.topic_tags]
+
     clusters = cluster_articles(articles)
     points = clusters_to_globe_points(clusters)
     # Sort by article count descending so the front-end gets the heaviest dots first.
@@ -56,7 +62,9 @@ async def get_cluster_articles(
 
     Used when a user clicks a dot on the globe.
     """
-    articles = await fetch_articles(topic=topic)
+    articles = await fetch_articles()
+    if topic:
+        articles = [a for a in articles if topic in a.topic_tags]
     nearby = articles_near(articles, lat, lng, radius)
     return nearby
 
