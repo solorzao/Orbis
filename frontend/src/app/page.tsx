@@ -17,6 +17,7 @@ export default function Home() {
 
   const [points, setPoints] = useState<GlobePoint[]>([]);
   const [apiError, setApiError] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [clusterSummary, setClusterSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
@@ -24,6 +25,7 @@ export default function Home() {
     let cancelled = false;
 
     setApiError(false);
+    setLoading(true);
     fetchGlobeNews(activeTopic)
       .then((apiPoints) => {
         if (cancelled) return;
@@ -33,6 +35,9 @@ export default function Home() {
         if (cancelled) return;
         setPoints([]);
         setApiError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
 
     return () => {
@@ -149,6 +154,11 @@ export default function Home() {
           <span className="flex items-center gap-1.5">
             {apiError ? (
               <span className="text-red-400 text-xs font-semibold tracking-wider">OFFLINE</span>
+            ) : loading ? (
+              <>
+                <span className="h-2 w-2 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
+                <span className="text-blue-400 text-xs font-semibold tracking-wider">CONNECTING</span>
+              </>
             ) : (
               <>
                 <span className="relative flex h-2 w-2">
