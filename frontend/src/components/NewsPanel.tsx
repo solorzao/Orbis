@@ -8,6 +8,8 @@ import { getSentimentColor } from "@/lib/clustering";
 interface NewsPanelProps {
   point: GlobePoint | null;
   onClose: () => void;
+  clusterSummary?: string | null;
+  summaryLoading?: boolean;
 }
 
 function timeAgo(dateString: string): string {
@@ -31,7 +33,12 @@ function sentimentLabel(score: number): string {
   return "Critical";
 }
 
-export default function NewsPanel({ point, onClose }: NewsPanelProps) {
+export default function NewsPanel({
+  point,
+  onClose,
+  clusterSummary,
+  summaryLoading,
+}: NewsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Click outside to close
@@ -113,6 +120,40 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
 
           {/* Cards */}
           <div className="flex-1 overflow-y-auto px-4 py-4">
+            {/* AI Briefing */}
+            {summaryLoading && (
+              <div className="mb-4 rounded-xl border border-blue-500/10 bg-blue-500/[0.03] p-4">
+                <div className="mb-2.5 flex items-center gap-1.5">
+                  <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-blue-500/30" />
+                  <div className="h-2 w-16 animate-pulse rounded bg-blue-500/20" />
+                </div>
+                <div className="space-y-2">
+                  <div className="h-2 w-full animate-pulse rounded bg-white/[0.04]" />
+                  <div className="h-2 w-4/5 animate-pulse rounded bg-white/[0.04]" />
+                  <div className="h-2 w-3/5 animate-pulse rounded bg-white/[0.04]" />
+                </div>
+              </div>
+            )}
+            {clusterSummary && !summaryLoading && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
+                className="mb-4 rounded-xl border border-blue-500/10 bg-blue-500/[0.04] p-4"
+              >
+                <div className="mb-2 flex items-center gap-1.5">
+                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
+                    <circle cx="5" cy="5" r="4" stroke="#3B82F6" strokeWidth="1" />
+                    <circle cx="5" cy="5" r="1.5" fill="#3B82F6" />
+                  </svg>
+                  <span className="text-[10px] font-semibold tracking-widest text-blue-400 uppercase">
+                    AI Briefing
+                  </span>
+                </div>
+                <p className="text-sm leading-relaxed text-slate-300">{clusterSummary}</p>
+              </motion.div>
+            )}
+
             <div className="space-y-3">
               <AnimatePresence mode="popLayout">
                 {point.articles.map((article, index) => (

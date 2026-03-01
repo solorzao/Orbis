@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle } from "@/types/news";
 import { mockArticles } from "@/lib/mockData";
 import { clusterArticles, apiPointsToGlobePoints } from "@/lib/clustering";
-import { fetchGlobeNews, fetchClusterArticles } from "@/lib/api";
+import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import NewsPanel from "@/components/NewsPanel";
 import TopicFilter from "@/components/TopicFilter";
 
@@ -19,6 +19,8 @@ export default function Home() {
 
   const [points, setPoints] = useState<GlobePoint[]>([]);
   const [usingMockData, setUsingMockData] = useState(false);
+  const [clusterSummary, setClusterSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,11 +50,17 @@ export default function Home() {
   const handlePointClick = useCallback(
     async (point: GlobePoint) => {
       setSelectedPoint(point);
+      setClusterSummary(null);
+      setSummaryLoading(false);
 
       if (usingMockData) return;
 
+      setSummaryLoading(true);
+      const articlesPromise = fetchClusterArticles(point.lat, point.lng);
+      const summaryPromise = fetchClusterSummary(point.lat, point.lng);
+
       try {
-        const articles = await fetchClusterArticles(point.lat, point.lng);
+        const articles = await articlesPromise;
         const mapped: NewsArticle[] = articles.map((a) => ({
           id: a.id,
           title: a.title,
@@ -72,6 +80,15 @@ export default function Home() {
       } catch {
         // Keep the panel open with whatever we have
       }
+
+      try {
+        const result = await summaryPromise;
+        setClusterSummary(result.summary);
+      } catch {
+        // Summary unavailable — not critical
+      } finally {
+        setSummaryLoading(false);
+      }
     },
     [usingMockData],
   );
@@ -82,6 +99,8 @@ export default function Home() {
 
   const handleClosePanel = useCallback(() => {
     setSelectedPoint(null);
+    setClusterSummary(null);
+    setSummaryLoading(false);
   }, []);
 
   return (
@@ -126,7 +145,12 @@ export default function Home() {
       <TopicFilter activeTopic={activeTopic} onTopicChange={setActiveTopic} />
 
       {/* News Panel */}
-      <NewsPanel point={selectedPoint} onClose={handleClosePanel} />
+      <NewsPanel
+        point={selectedPoint}
+        onClose={handleClosePanel}
+        clusterSummary={clusterSummary}
+        summaryLoading={summaryLoading}
+      />
 
       {/* Bottom status bar */}
       <div className="fixed bottom-4 left-1/2 z-30 -translate-x-1/2">
