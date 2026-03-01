@@ -131,7 +131,7 @@ export default function Home() {
         />
         <div>
           <h1
-            className="text-sm font-bold tracking-[0.2em] text-white uppercase sm:text-lg"
+            className="text-sm font-bold tracking-[0.2em] text-[var(--text-primary)] uppercase sm:text-lg"
             style={{
               textShadow: "0 0 30px rgba(59, 130, 246, 0.3)",
             }}
