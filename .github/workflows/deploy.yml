@@ -16,6 +16,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       database: ${{ steps.filter.outputs.database }}
+      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -26,6 +27,8 @@ jobs:
               - 'backend/**'
             database:
               - 'database/**'
+            frontend:
+              - 'frontend/**'
 
   build-and-push:
     name: Build & Push Docker Image
@@ -65,6 +68,21 @@ jobs:
           containerAppName: orbis-api
           imageToDeploy: ghcr.io/${{ github.repository_owner }}/orbis-api:${{ github.sha }}
 
+  deploy-frontend:
+    name: Deploy Frontend to Vercel
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: frontend
+          vercel-args: '--prod'
+
   run-migrations:
     name: Run Database Migrations
     needs: changes
@@ -72,12 +90,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run migrations
+      - name: Install PostgreSQL client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Run pending migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          sudo apt-get install -y postgresql-client
+          # Ensure tracking table exists (idempotent)
+          psql "$DATABASE_URL" -f database/migrations/005_migration_tracking.sql
+
+          # Run only unapplied migrations in order
           for f in database/migrations/*.sql; do
-            echo "Running $f..."
-            psql "$DATABASE_URL" -f "$f"
+            fname=$(basename "$f")
+            already=$(psql "$DATABASE_URL" -tAc "SELECT 1 FROM schema_migrations WHERE filename = '$fname'" 2>/dev/null || echo "")
+            if [ "$already" != "1" ]; then
+              echo "Applying: $fname"
+              psql "$DATABASE_URL" -f "$f"
+              psql "$DATABASE_URL" -c "INSERT INTO schema_migrations (filename) VALUES ('$fname')"
+            else
+              echo "Skipping (already applied): $fname"
+            fi
           done
