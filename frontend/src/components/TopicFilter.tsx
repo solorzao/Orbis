@@ -44,14 +44,14 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
       {canScrollLeft && (
         <div
           className="pointer-events-none absolute top-0 left-0 z-10 h-full w-6 rounded-l-2xl"
-          style={{ background: "linear-gradient(to right, rgba(8, 12, 24, 0.9), transparent)" }}
+          style={{ background: "linear-gradient(to right, var(--bg-page), transparent)" }}
         />
       )}
       {/* Right fade */}
       {canScrollRight && (
         <div
           className="pointer-events-none absolute top-0 right-0 z-10 h-full w-6 rounded-r-2xl"
-          style={{ background: "linear-gradient(to left, rgba(8, 12, 24, 0.9), transparent)" }}
+          style={{ background: "linear-gradient(to left, var(--bg-page), transparent)" }}
         />
       )}
       <motion.div
@@ -60,11 +60,11 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
         initial={{ y: -30, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.5, duration: 0.6, ease: [0.23, 1, 0.32, 1] }}
-        className="flex items-center gap-0.5 overflow-x-auto rounded-2xl border border-white/[0.06] px-1.5 py-1 sm:gap-1 sm:px-2 sm:py-1.5"
+        className="flex items-center gap-0.5 overflow-x-auto rounded-2xl border border-[var(--border-subtle)] px-1.5 py-1 sm:gap-1 sm:px-2 sm:py-1.5"
         style={{
-          background: "rgba(8, 12, 24, 0.65)",
+          background: "var(--surface-overlay)",
           backdropFilter: "blur(20px) saturate(1.3)",
-          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.03)",
+          boxShadow: "0 8px 32px var(--shadow), inset 0 1px 0 var(--inset-highlight)",
           scrollbarWidth: "none",
         }}
       >
@@ -78,7 +78,7 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
               onClick={() => onTopicChange(topic)}
               className="relative shrink-0 rounded-xl px-2.5 py-1 text-[11px] font-medium tracking-wide transition-colors sm:px-3.5 sm:py-1.5 sm:text-xs"
               style={{
-                color: isActive ? "#fff" : "#64748b",
+                color: isActive ? "#fff" : "var(--text-muted)",
               }}
             >
               {isActive && (
@@ -102,7 +102,7 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
                   <span
                     className="inline-block h-1.5 w-1.5 rounded-full"
                     style={{
-                      backgroundColor: isActive ? color : "#334155",
+                      backgroundColor: isActive ? color : "var(--text-muted)",
                       boxShadow: isActive ? `0 0 6px ${color}60` : "none",
                     }}
                   />
