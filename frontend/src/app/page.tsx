@@ -114,7 +114,7 @@ export default function Home() {
         <img
           src="/Orbis_logo_50_resize.png"
           alt="Orbis"
-          className="h-9 w-9"
+          className="h-10 w-10"
           style={{ filter: "drop-shadow(0 0 12px rgba(59, 130, 246, 0.4))" }}
         />
         <div>
