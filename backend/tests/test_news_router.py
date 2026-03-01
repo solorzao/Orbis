@@ -88,34 +88,40 @@ class TestGetGlobeData:
 
 class TestGetClusterArticles:
     @pytest.mark.asyncio
-    async def test_filters_by_country_from_location_name(self):
+    async def test_passes_location_name_to_gdelt_query(self):
         from app.routers.news import get_cluster_articles
 
-        articles = [
-            _make_article("Iran news", ["politics"], lat=35.7, lng=51.4, country_code="IR"),
-            _make_article("US news", ["politics"], lat=40.0, lng=-74.0, country_code="US"),
-        ]
+        articles = [_make_article("Tehran protest", ["politics"])]
 
-        with patch("app.routers.news.fetch_articles", new_callable=AsyncMock, return_value=articles):
+        with patch("app.routers.news.fetch_articles", new_callable=AsyncMock, return_value=articles) as mock_fetch:
             result = await get_cluster_articles(
                 lat=35.7, lng=51.4, radius=5.0, topic=None,
                 location_name="Tehran, Tehran, Iran",
             )
+            # Should query GDELT with the city name
+            query = mock_fetch.call_args[1].get("query") or mock_fetch.call_args[0][0]
+            assert "Tehran" in query
             assert len(result) == 1
-            assert result[0].country_code == "IR"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_proximity(self):
-        from app.routers.news import get_cluster_articles
+    async def test_caps_results_at_max(self):
+        from app.routers.news import get_cluster_articles, _MAX_CLUSTER_ARTICLES
 
-        articles = [
-            _make_article("Nearby article", ["general"], lat=40.0, lng=-74.0, country_code="US"),
-            _make_article("Far article", ["general"], lat=-33.0, lng=151.0, country_code="AU"),
-        ]
+        articles = [_make_article(f"Article {i}", ["general"]) for i in range(50)]
 
         with patch("app.routers.news.fetch_articles", new_callable=AsyncMock, return_value=articles):
             result = await get_cluster_articles(
+                lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name="New York",
+            )
+            assert len(result) == _MAX_CLUSTER_ARTICLES
+
+    @pytest.mark.asyncio
+    async def test_no_location_uses_default_query(self):
+        from app.routers.news import get_cluster_articles
+
+        with patch("app.routers.news.fetch_articles", new_callable=AsyncMock, return_value=[]) as mock_fetch:
+            await get_cluster_articles(
                 lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name=None,
             )
-            assert len(result) == 1
-            assert result[0].title == "Nearby article"
+            query = mock_fetch.call_args[1].get("query") or mock_fetch.call_args[0][0]
+            assert query == "sourcelang:english"

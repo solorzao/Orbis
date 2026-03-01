@@ -14,8 +14,6 @@ from app.models.news import (
     TopicCount,
 )
 from app.services.ai_summary import summarise_cluster
-from app.services.clustering import articles_near
-from app.services.country_centroids import normalize_country
 from app.services.gdelt import fetch_articles, fetch_geo_points
 
 logger = logging.getLogger(__name__)
@@ -43,17 +41,19 @@ def _resolve_topic(topic: str | None) -> str | None:
     return _TOPIC_ALIASES.get(lower, lower)
 
 
-def _extract_country_from_location(location_name: str) -> str | None:
-    """Extract country code from a GEO API location name.
+def _build_location_query(location_name: str | None) -> str:
+    """Build a GDELT DOC query scoped to a location name.
 
-    Examples: "Tehran, Tehran, Iran" -> "IR", "United Kingdom" -> "GB"
+    Uses the first part of the location (city/region) as a search keyword
+    so GDELT returns articles mentioning that place.
     """
-    parts = [p.strip() for p in location_name.split(",")]
-    for part in reversed(parts):
-        code = normalize_country(part)
-        if code and len(code) == 2:
-            return code
-    return None
+    if not location_name:
+        return "sourcelang:english"
+    # Use the first component (city/region) — most specific part
+    city = location_name.split(",")[0].strip()
+    if city:
+        return f'"{city}" sourcelang:english'
+    return "sourcelang:english"
 
 
 @router.get("/news", response_model=list[GlobeDataPoint])
@@ -77,6 +77,9 @@ async def get_globe_data(
     return points[:limit]
 
 
+_MAX_CLUSTER_ARTICLES = 10
+
+
 @router.get("/news/cluster", response_model=list[NewsArticle])
 async def get_cluster_articles(
     lat: float = Query(..., description="Latitude of cluster center"),
@@ -87,24 +90,18 @@ async def get_cluster_articles(
 ) -> list[NewsArticle]:
     """Return full articles near a given lat/lng point.
 
-    Used when a user clicks a dot on the globe.
+    Used when a user clicks a dot on the globe.  Searches GDELT with the
+    location name so articles are relevant to the specific city/region.
     """
-    articles = await fetch_articles()
+    # Build a location-specific GDELT query for relevant articles
+    gdelt_query = _build_location_query(location_name)
+    articles = await fetch_articles(query=gdelt_query)
+
     resolved = _resolve_topic(topic)
     if resolved:
         articles = [a for a in articles if resolved in a.topic_tags]
 
-    # Try country-based filtering first (more reliable than proximity with centroids)
-    if location_name:
-        country_code = _extract_country_from_location(location_name)
-        if country_code:
-            by_country = [a for a in articles if a.country_code == country_code]
-            if by_country:
-                return by_country
-
-    # Fallback: proximity search
-    nearby = articles_near(articles, lat, lng, radius)
-    return nearby
+    return articles[:_MAX_CLUSTER_ARTICLES]
 
 
 @router.get("/news/summary", response_model=ClusterSummaryResponse)
@@ -115,16 +112,9 @@ async def get_cluster_summary(
     location_name: str | None = Query(None, description="Location name from GEO API"),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
-    articles = await fetch_articles()
-
-    if location_name:
-        country_code = _extract_country_from_location(location_name)
-        if country_code:
-            nearby = [a for a in articles if a.country_code == country_code]
-        else:
-            nearby = articles_near(articles, lat, lng, radius)
-    else:
-        nearby = articles_near(articles, lat, lng, radius)
+    gdelt_query = _build_location_query(location_name)
+    articles = await fetch_articles(query=gdelt_query)
+    nearby = articles[:_MAX_CLUSTER_ARTICLES]
 
     summary_text = await summarise_cluster(nearby, lat, lng)
     return ClusterSummaryResponse(
