@@ -1,4 +1,5 @@
 import { NewsArticle, GlobePoint, Topic } from "@/types/news";
+import type { ApiGlobePoint } from "./api";
 
 const TOPIC_COLORS: Record<Topic, string> = {
   All: "#3B82F6",
@@ -93,4 +94,17 @@ export function clusterArticles(
   }
 
   return clusters;
+}
+
+export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[] {
+  return apiPoints.map((p, i) => ({
+    id: `api-${i}`,
+    lat: p.lat,
+    lng: p.lng,
+    size: Math.min(0.4 + p.article_count * 0.15, 1.5),
+    color: getTopicColor((p.topic || "All") as Topic),
+    articles: [],
+    isCluster: p.article_count > 1,
+    count: p.article_count,
+  }));
 }

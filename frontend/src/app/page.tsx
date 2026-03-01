@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint } from "@/types/news";
 import { mockArticles } from "@/lib/mockData";
-import { clusterArticles } from "@/lib/clustering";
+import { clusterArticles, apiPointsToGlobePoints } from "@/lib/clustering";
+import { fetchGlobeNews } from "@/lib/api";
 import NewsPanel from "@/components/NewsPanel";
 import TopicFilter from "@/components/TopicFilter";
 
@@ -16,17 +17,35 @@ export default function Home() {
   const [selectedPoint, setSelectedPoint] = useState<GlobePoint | null>(null);
   const [altitude, setAltitude] = useState(2.5);
 
-  // Filter articles by topic
-  const filteredArticles = useMemo(() => {
-    if (activeTopic === "All") return mockArticles;
-    return mockArticles.filter((a) => a.topicTags.includes(activeTopic));
-  }, [activeTopic]);
+  const [points, setPoints] = useState<GlobePoint[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [usingMockData, setUsingMockData] = useState(false);
 
-  // Cluster articles based on zoom level
-  const points = useMemo(
-    () => clusterArticles(filteredArticles, altitude),
-    [filteredArticles, altitude]
-  );
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
+    fetchGlobeNews(activeTopic)
+      .then((apiPoints) => {
+        if (cancelled) return;
+        setPoints(apiPointsToGlobePoints(apiPoints));
+        setUsingMockData(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Fallback to mock data
+        const filtered = activeTopic === "All"
+          ? mockArticles
+          : mockArticles.filter((a) => a.topicTags.includes(activeTopic));
+        setPoints(clusterArticles(filtered, altitude));
+        setUsingMockData(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [activeTopic, altitude]);
 
   const handlePointClick = useCallback((point: GlobePoint) => {
     setSelectedPoint(point);
@@ -97,14 +116,20 @@ export default function Home() {
           }}
         >
           <span className="flex items-center gap-1.5">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            </span>
-            LIVE
+            {usingMockData ? (
+              <span className="text-amber-400 text-xs font-semibold tracking-wider">DEMO</span>
+            ) : (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                <span className="text-emerald-400 text-xs font-semibold tracking-wider">LIVE</span>
+              </>
+            )}
           </span>
           <span className="text-slate-700">|</span>
-          <span>{filteredArticles.length} stories tracked</span>
+          <span>{points.reduce((sum, p) => sum + p.count, 0)} stories tracked</span>
           <span className="text-slate-700">|</span>
           <span>{points.length} locations</span>
         </div>
