@@ -78,7 +78,7 @@ async def get_cluster_summary(
     """Return an AI-generated summary for the cluster at a location."""
     articles = await fetch_articles()
     nearby = articles_near(articles, lat, lng, radius)
-    summary_text = await summarise_cluster(nearby)
+    summary_text = await summarise_cluster(nearby, lat, lng)
     return ClusterSummaryResponse(
         lat=lat,
         lng=lng,

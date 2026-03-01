@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 
 import anthropic
@@ -19,18 +18,24 @@ _SYSTEM_PROMPT = (
 )
 
 
-async def summarise_cluster(articles: list[NewsArticle]) -> str:
+async def summarise_cluster(
+    articles: list[NewsArticle],
+    lat: float,
+    lng: float,
+) -> str:
     """Generate a 2-3 sentence summary for a cluster of articles.
 
     Uses Claude Haiku via the Anthropic SDK.  Results are cached in Redis
-    for ``settings.summary_cache_ttl`` seconds.
+    for ``settings.summary_cache_ttl`` seconds, keyed by grid cell so that
+    the cache survives GDELT article refreshes.
     """
     if not articles:
         return "No articles to summarise."
 
-    # Build a deterministic cache key from the sorted article IDs.
-    ids_str = ",".join(sorted(a.id for a in articles))
-    cache_key = "summary:" + hashlib.sha256(ids_str.encode()).hexdigest()[:24]
+    # Snap to the same grid used for clustering → stable cache key.
+    cell_lat = int(lat // settings.cluster_resolution_deg)
+    cell_lng = int(lng // settings.cluster_resolution_deg)
+    cache_key = f"summary:{cell_lat}:{cell_lng}"
 
     cached = await get_cached(cache_key)
     if cached is not None:

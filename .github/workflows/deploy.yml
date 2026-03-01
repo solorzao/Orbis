@@ -16,7 +16,6 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       database: ${{ steps.filter.outputs.database }}
-      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -27,8 +26,6 @@ jobs:
               - 'backend/**'
             database:
               - 'database/**'
-            frontend:
-              - 'frontend/**'
 
   build-and-push:
     name: Build & Push Docker Image
@@ -67,21 +64,6 @@ jobs:
           resourceGroup: rg-orbis
           containerAppName: orbis-api
           imageToDeploy: ghcr.io/${{ github.repository_owner }}/orbis-api:${{ github.sha }}
-
-  deploy-frontend:
-    name: Deploy Frontend to Vercel
-    needs: [changes]
-    if: needs.changes.outputs.frontend == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          working-directory: frontend
-          vercel-args: '--prod'
 
   run-migrations:
     name: Run Database Migrations

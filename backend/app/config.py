@@ -57,7 +57,7 @@ class Settings:
     )
     # --- Cache TTLs (seconds) ---
     gdelt_cache_ttl: int = field(default_factory=lambda: _env_int("GDELT_CACHE_TTL", 900))
-    summary_cache_ttl: int = field(default_factory=lambda: _env_int("SUMMARY_CACHE_TTL", 3600))
+    summary_cache_ttl: int = field(default_factory=lambda: _env_int("SUMMARY_CACHE_TTL", 21600))
 
     # --- Clustering ---
     cluster_resolution_deg: float = field(
