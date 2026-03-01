@@ -33,8 +33,8 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
 
     const globe = new GlobeGL(containerRef.current)
       .backgroundColor("rgba(0,0,0,0)")
-      .globeImageUrl("/textures/earth-night-4k.jpg")
-      .bumpImageUrl("/textures/earth-topology.png")
+      .globeImageUrl("//unpkg.com/three-globe/example/img/earth-night.jpg")
+      .bumpImageUrl("//unpkg.com/three-globe/example/img/earth-topology.png")
       .atmosphereColor("#1a3a5c")
       .atmosphereAltitude(0.15)
       .showAtmosphere(true)
