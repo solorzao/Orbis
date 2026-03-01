@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle } from "@/types/news";
-import { mockArticles } from "@/lib/mockData";
-import { clusterArticles, apiPointsToGlobePoints } from "@/lib/clustering";
+import { apiPointsToGlobePoints } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import NewsPanel from "@/components/NewsPanel";
 import TopicFilter from "@/components/TopicFilter";
@@ -15,87 +14,73 @@ const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
 export default function Home() {
   const [activeTopic, setActiveTopic] = useState<Topic>("All");
   const [selectedPoint, setSelectedPoint] = useState<GlobePoint | null>(null);
-  const [altitude, setAltitude] = useState(2.5);
 
   const [points, setPoints] = useState<GlobePoint[]>([]);
-  const [usingMockData, setUsingMockData] = useState(false);
+  const [apiError, setApiError] = useState(false);
   const [clusterSummary, setClusterSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
+    setApiError(false);
     fetchGlobeNews(activeTopic)
       .then((apiPoints) => {
         if (cancelled) return;
         setPoints(apiPointsToGlobePoints(apiPoints));
-        setUsingMockData(false);
       })
       .catch(() => {
         if (cancelled) return;
-        // Fallback to mock data
-        const filtered =
-          activeTopic === "All"
-            ? mockArticles
-            : mockArticles.filter((a) => a.topicTags.includes(activeTopic));
-        setPoints(clusterArticles(filtered, altitude));
-        setUsingMockData(true);
+        setPoints([]);
+        setApiError(true);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [activeTopic, altitude]);
+  }, [activeTopic]);
 
-  const handlePointClick = useCallback(
-    async (point: GlobePoint) => {
-      setSelectedPoint(point);
-      setClusterSummary(null);
+  const handlePointClick = useCallback(async (point: GlobePoint) => {
+    setSelectedPoint(point);
+    setClusterSummary(null);
+    setSummaryLoading(true);
+
+    const articlesPromise = fetchClusterArticles(point.lat, point.lng);
+    const summaryPromise = fetchClusterSummary(point.lat, point.lng);
+
+    try {
+      const articles = await articlesPromise;
+      const mapped: NewsArticle[] = articles.map((a) => ({
+        id: a.id,
+        title: a.title,
+        summary: a.summary ?? undefined,
+        sourceUrl: a.source_url,
+        sourceName: a.source_name,
+        publishedAt: a.published_at,
+        latitude: a.latitude,
+        longitude: a.longitude,
+        countryCode: a.country_code,
+        topicTags: a.topic_tags,
+        sentimentScore: a.sentiment_score,
+      }));
+      setSelectedPoint((prev) =>
+        prev ? { ...prev, articles: mapped, count: mapped.length } : null,
+      );
+    } catch {
+      // Keep the panel open with whatever we have
+    }
+
+    try {
+      const result = await summaryPromise;
+      setClusterSummary(result.summary);
+    } catch {
+      // Summary unavailable — not critical
+    } finally {
       setSummaryLoading(false);
-
-      if (usingMockData) return;
-
-      setSummaryLoading(true);
-      const articlesPromise = fetchClusterArticles(point.lat, point.lng);
-      const summaryPromise = fetchClusterSummary(point.lat, point.lng);
-
-      try {
-        const articles = await articlesPromise;
-        const mapped: NewsArticle[] = articles.map((a) => ({
-          id: a.id,
-          title: a.title,
-          summary: a.summary ?? undefined,
-          sourceUrl: a.source_url,
-          sourceName: a.source_name,
-          publishedAt: a.published_at,
-          latitude: a.latitude,
-          longitude: a.longitude,
-          countryCode: a.country_code,
-          topicTags: a.topic_tags,
-          sentimentScore: a.sentiment_score,
-        }));
-        setSelectedPoint((prev) =>
-          prev ? { ...prev, articles: mapped, count: mapped.length } : null,
-        );
-      } catch {
-        // Keep the panel open with whatever we have
-      }
-
-      try {
-        const result = await summaryPromise;
-        setClusterSummary(result.summary);
-      } catch {
-        // Summary unavailable — not critical
-      } finally {
-        setSummaryLoading(false);
-      }
-    },
-    [usingMockData],
-  );
-
-  const handleZoomChange = useCallback((alt: number) => {
-    setAltitude(alt);
+    }
   }, []);
+
+  const handleZoomChange = useCallback(() => {}, []);
 
   const handleClosePanel = useCallback(() => {
     setSelectedPoint(null);
@@ -162,8 +147,8 @@ export default function Home() {
           }}
         >
           <span className="flex items-center gap-1.5">
-            {usingMockData ? (
-              <span className="text-amber-400 text-xs font-semibold tracking-wider">DEMO</span>
+            {apiError ? (
+              <span className="text-red-400 text-xs font-semibold tracking-wider">OFFLINE</span>
             ) : (
               <>
                 <span className="relative flex h-2 w-2">
