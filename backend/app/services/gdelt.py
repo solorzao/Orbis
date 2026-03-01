@@ -43,7 +43,7 @@ async def _fetch_with_retry(url: str, params: dict[str, Any]) -> dict | list | N
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
-            wait = _BACKOFF_BASE ** attempt
+            wait = _BACKOFF_BASE**attempt
             logger.warning(
                 "GDELT request attempt %d/%d failed (%s). Retrying in %.1fs …",
                 attempt,
@@ -179,5 +179,3 @@ def _parse_gdelt_date(date_str: str) -> datetime:
     except ValueError:
         pass
     return datetime.now(timezone.utc)
-
-

@@ -12,12 +12,12 @@ resource "azurerm_user_assigned_identity" "orbis_api" {
 }
 
 resource "azurerm_key_vault" "orbis" {
-  name                      = "kv-orbis-${random_string.pg_suffix.result}"
-  resource_group_name       = azurerm_resource_group.orbis.name
-  location                  = azurerm_resource_group.orbis.location
-  tenant_id                 = data.azurerm_client_config.current.tenant_id
-  sku_name                  = "standard"
-  purge_protection_enabled  = var.environment == "prod" ? true : false
+  name                       = "kv-orbis-${random_string.pg_suffix.result}"
+  resource_group_name        = azurerm_resource_group.orbis.name
+  location                   = azurerm_resource_group.orbis.location
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  purge_protection_enabled   = var.environment == "prod" ? true : false
   rbac_authorization_enabled = true
 
   tags = {

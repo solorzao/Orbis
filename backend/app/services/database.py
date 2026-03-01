@@ -114,7 +114,10 @@ async def get_nearby_articles(
     pool = await get_pool()
     rows = await pool.fetch(
         "SELECT * FROM nearby_articles($1, $2, $3, $4)",
-        lat, lng, radius_km, limit,
+        lat,
+        lng,
+        radius_km,
+        limit,
     )
     return [dict(r) for r in rows]
 
@@ -130,7 +133,11 @@ async def get_articles_in_bounds(
     pool = await get_pool()
     rows = await pool.fetch(
         "SELECT * FROM articles_in_bounds($1, $2, $3, $4, $5)",
-        min_lat, min_lng, max_lat, max_lng, limit,
+        min_lat,
+        min_lng,
+        max_lat,
+        max_lng,
+        limit,
     )
     return [dict(r) for r in rows]
 

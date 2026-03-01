@@ -86,9 +86,7 @@ def articles_near(
     Uses a simple bounding-box check (not Haversine) for speed.
     """
     return [
-        a
-        for a in articles
-        if abs(a.latitude - lat) <= radius and abs(a.longitude - lng) <= radius
+        a for a in articles if abs(a.latitude - lat) <= radius and abs(a.longitude - lng) <= radius
     ]
 
 
