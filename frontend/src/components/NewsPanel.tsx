@@ -93,7 +93,7 @@ export default function NewsPanel({
                 {point.isCluster ? `${point.count} Stories` : point.articles[0]?.countryCode}
               </h2>
               <p className="mt-0.5 text-xs text-slate-500">
-                {point.lat.toFixed(2)}, {point.lng.toFixed(2)}
+                {point.locationName || `${point.lat.toFixed(2)}°, ${point.lng.toFixed(2)}°`}
               </p>
             </div>
             <button
