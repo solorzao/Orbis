@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+:root,
 [data-theme="dark"] {
   --bg-page:          #030712;
   --surface-panel:    rgba(8, 12, 24, 0.82);
