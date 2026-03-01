@@ -37,8 +37,8 @@ function sentimentLabel(score: number): string {
 function ArticleSkeleton({ delay = 0 }: { delay?: number }) {
   return (
     <div
-      className="relative overflow-hidden rounded-xl border border-white/[0.05] p-4"
-      style={{ background: "rgba(15, 20, 35, 0.6)", animationDelay: `${delay}ms` }}
+      className="relative overflow-hidden rounded-xl border border-[var(--border-subtle)] p-4"
+      style={{ background: "var(--surface-card)", animationDelay: `${delay}ms` }}
     >
       {/* Shimmer overlay */}
       <div
@@ -49,18 +49,18 @@ function ArticleSkeleton({ delay = 0 }: { delay?: number }) {
         }}
       />
       <div className="mb-2.5 flex items-center gap-2">
-        <div className="h-2 w-2 rounded-full bg-white/[0.08]" />
-        <div className="h-2 w-12 rounded bg-white/[0.06]" />
-        <div className="h-2 w-px bg-slate-700" />
-        <div className="h-4 w-14 rounded-full bg-white/[0.04]" />
+        <div className="h-2 w-2 rounded-full" style={{ background: "var(--border-subtle)" }} />
+        <div className="h-2 w-12 rounded bg-[var(--border-subtle)]" />
+        <div className="h-2 w-px bg-[var(--text-muted)]" />
+        <div className="h-4 w-14 rounded-full bg-[var(--inset-highlight)]" />
       </div>
       <div className="space-y-2">
-        <div className="h-3 w-full rounded bg-white/[0.06]" />
-        <div className="h-3 w-4/5 rounded bg-white/[0.06]" />
+        <div className="h-3 w-full rounded bg-[var(--border-subtle)]" />
+        <div className="h-3 w-4/5 rounded bg-[var(--border-subtle)]" />
       </div>
       <div className="mt-3 flex items-center justify-between">
-        <div className="h-2 w-20 rounded bg-white/[0.04]" />
-        <div className="h-2 w-10 rounded bg-white/[0.04]" />
+        <div className="h-2 w-20 rounded bg-[var(--inset-highlight)]" />
+        <div className="h-2 w-10 rounded bg-[var(--inset-highlight)]" />
       </div>
     </div>
   );
@@ -135,24 +135,24 @@ export default function NewsPanel({
           transition={{ type: "spring", damping: 28, stiffness: 300 }}
           className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col"
           style={{
-            background: "rgba(8, 12, 24, 0.82)",
+            background: "var(--surface-panel)",
             backdropFilter: "blur(24px) saturate(1.4)",
-            borderLeft: "1px solid rgba(59, 130, 246, 0.12)",
+            borderLeft: "1px solid var(--border-accent)",
           }}
         >
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-white/[0.06] px-6 py-4">
+          <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-6 py-4">
             <div>
               <h2 className="text-sm font-semibold tracking-widest text-blue-400 uppercase">
                 {point.isCluster ? `${point.count} Stories` : point.articles[0]?.countryCode}
               </h2>
-              <p className="mt-0.5 text-xs text-slate-500">
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                 {point.locationName || `${point.lat.toFixed(2)}°, ${point.lng.toFixed(2)}°`}
               </p>
             </div>
             <button
               onClick={onClose}
-              className="group flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] text-slate-500 transition-colors hover:border-blue-500/30 hover:text-slate-300"
+              className="group flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-muted)] transition-colors hover:border-blue-500/30 hover:text-[var(--text-secondary)]"
               aria-label="Close panel"
             >
               <svg
@@ -182,9 +182,9 @@ export default function NewsPanel({
                   <div className="h-2 w-16 animate-pulse rounded bg-blue-500/20" />
                 </div>
                 <div className="space-y-2">
-                  <div className="h-2 w-full animate-pulse rounded bg-white/[0.04]" />
-                  <div className="h-2 w-4/5 animate-pulse rounded bg-white/[0.04]" />
-                  <div className="h-2 w-3/5 animate-pulse rounded bg-white/[0.04]" />
+                  <div className="h-2 w-full animate-pulse rounded bg-[var(--inset-highlight)]" />
+                  <div className="h-2 w-4/5 animate-pulse rounded bg-[var(--inset-highlight)]" />
+                  <div className="h-2 w-3/5 animate-pulse rounded bg-[var(--inset-highlight)]" />
                 </div>
               </div>
             )}
@@ -204,7 +204,7 @@ export default function NewsPanel({
                     AI Briefing
                   </span>
                 </div>
-                <p className="text-sm leading-relaxed text-slate-300">{clusterSummary}</p>
+                <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{clusterSummary}</p>
               </motion.div>
             )}
 
@@ -218,8 +218,8 @@ export default function NewsPanel({
                 </>
               )}
               {!articlesLoading && point.articles.length === 0 && (
-                <div className="rounded-xl border border-white/[0.05] p-6 text-center" style={{ background: "rgba(15, 20, 35, 0.6)" }}>
-                  <p className="text-sm text-slate-500">No stories found for this topic in this area.</p>
+                <div className="rounded-xl border border-[var(--border-subtle)] p-6 text-center" style={{ background: "var(--surface-card)" }}>
+                  <p className="text-sm text-[var(--text-muted)]">No stories found for this topic in this area.</p>
                 </div>
               )}
               <AnimatePresence mode="popLayout">
@@ -234,9 +234,9 @@ export default function NewsPanel({
                       duration: 0.35,
                       ease: [0.23, 1, 0.32, 1],
                     }}
-                    className="group relative rounded-xl border border-white/[0.05] p-4 transition-colors hover:border-blue-500/20"
+                    className="group relative rounded-xl border border-[var(--border-subtle)] p-4 transition-colors hover:border-blue-500/20"
                     style={{
-                      background: "rgba(15, 20, 35, 0.6)",
+                      background: "var(--surface-card)",
                     }}
                   >
                     {/* Sentiment + Topic Tags */}
@@ -257,11 +257,11 @@ export default function NewsPanel({
                       >
                         {sentimentLabel(article.sentimentScore)}
                       </span>
-                      <span className="text-slate-700">|</span>
+                      <span className="text-[var(--text-muted)]">|</span>
                       {article.topicTags.map((tag) => (
                         <span
                           key={tag}
-                          className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium tracking-wide text-slate-400"
+                          className="rounded-full bg-[var(--inset-highlight)] px-2 py-0.5 text-[10px] font-medium tracking-wide text-[var(--text-secondary)]"
                         >
                           {tag}
                         </span>
@@ -269,7 +269,7 @@ export default function NewsPanel({
                     </div>
 
                     {/* Title */}
-                    <h3 className="text-[15px] leading-snug font-medium text-slate-200 transition-colors group-hover:text-white">
+                    <h3 className="text-[15px] leading-snug font-medium text-[var(--text-primary)] transition-colors group-hover:text-[var(--text-primary)]">
                       {article.title}
                     </h3>
 
@@ -285,18 +285,18 @@ export default function NewsPanel({
                             AI Summary
                           </span>
                         </div>
-                        <p className="text-xs leading-relaxed text-slate-400">{article.summary}</p>
+                        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{article.summary}</p>
                       </div>
                     )}
 
                     {/* Source + Time */}
                     <div className="mt-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-slate-500">
+                        <span className="text-xs font-medium text-[var(--text-muted)]">
                           {article.sourceName}
                         </span>
-                        <span className="text-slate-700">&middot;</span>
-                        <span className="text-xs text-slate-600">
+                        <span className="text-[var(--text-muted)]">&middot;</span>
+                        <span className="text-xs text-[var(--text-muted)]">
                           {timeAgo(article.publishedAt)}
                         </span>
                       </div>
@@ -328,7 +328,7 @@ export default function NewsPanel({
           <div
             className="pointer-events-none h-12 w-full"
             style={{
-              background: "linear-gradient(to top, rgba(8, 12, 24, 0.9), transparent)",
+              background: "linear-gradient(to top, var(--surface-panel), transparent)",
             }}
           />
         </motion.div>
