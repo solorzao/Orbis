@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { GlobeInstance } from "globe.gl";
 import { GlobePoint } from "@/types/news";
+import { useTheme } from "@/lib/theme";
 
 interface GlobeProps {
   points: GlobePoint[];
@@ -14,6 +15,7 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const { resolvedTheme } = useTheme();
 
   const onPointClickRef = useRef(onPointClick);
   onPointClickRef.current = onPointClick;
@@ -93,9 +95,9 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
         const p = d as GlobePoint;
         const location = p.locationName || "";
         const label = location
-          ? `<span style="color:${p.color};font-weight:600">${p.count} stories</span> <span style="color:#64748b">\u2022</span> ${location}`
+          ? `<span style="color:${p.color};font-weight:600">${p.count} stories</span> <span style="color:var(--text-muted)">\u2022</span> ${location}`
           : `<span style="color:${p.color};font-weight:600">${p.count} stories</span>`;
-        return `<div style="background:rgba(10,14,28,0.85);backdrop-filter:blur(12px);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:8px 12px;font-family:system-ui;color:#e2e8f0;font-size:12px;max-width:300px;pointer-events:none">${label}</div>`;
+        return `<div style="background:var(--surface-panel);backdrop-filter:blur(12px);border:1px solid var(--border-accent);border-radius:8px;padding:8px 12px;font-family:system-ui;color:var(--text-primary);font-size:12px;max-width:300px;pointer-events:none">${label}</div>`;
       })
       .onPointClick((point: object) => {
         onPointClickRef.current(point as GlobePoint);
@@ -175,6 +177,19 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
     }
   }, [points, isLoaded]);
 
+  // Swap globe texture and atmosphere color when theme changes
+  useEffect(() => {
+    if (!globeRef.current || !isLoaded) return;
+    const isDark = resolvedTheme === "dark";
+    globeRef.current
+      .globeImageUrl(
+        isDark
+          ? "//unpkg.com/three-globe/example/img/earth-night.jpg"
+          : "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+      )
+      .atmosphereColor(isDark ? "#1a3a5c" : "#87CEEB");
+  }, [resolvedTheme, isLoaded]);
+
   return (
     <div className="fixed inset-0 z-0">
       {/* Radial gradient vignette overlay */}
@@ -182,7 +197,7 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
         className="pointer-events-none absolute inset-0 z-10"
         style={{
           background:
-            "radial-gradient(ellipse at center, transparent 40%, rgba(3, 7, 18, 0.6) 100%)",
+            "radial-gradient(ellipse at center, transparent 40%, var(--vignette) 100%)",
         }}
       />
       <div ref={containerRef} className="h-full w-full" />
