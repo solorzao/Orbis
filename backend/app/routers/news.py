@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["news"])
 
+# Frontend sends "Climate" but classifier uses "environment"
+_TOPIC_ALIASES = {"climate": "environment"}
+
+
+def _resolve_topic(topic: str | None) -> str | None:
+    if not topic:
+        return None
+    lower = topic.lower()
+    return _TOPIC_ALIASES.get(lower, lower)
+
 
 @router.get("/news", response_model=list[GlobeDataPoint])
 async def get_globe_data(
@@ -41,8 +51,9 @@ async def get_globe_data(
     articles = await fetch_articles(timespan=timespan)
 
     # Post-filter by classified topic tags (not GDELT query)
-    if topic:
-        articles = [a for a in articles if topic in a.topic_tags]
+    resolved = _resolve_topic(topic)
+    if resolved:
+        articles = [a for a in articles if resolved in a.topic_tags]
 
     clusters = cluster_articles(articles)
     points = clusters_to_globe_points(clusters)
@@ -63,8 +74,9 @@ async def get_cluster_articles(
     Used when a user clicks a dot on the globe.
     """
     articles = await fetch_articles()
-    if topic:
-        articles = [a for a in articles if topic in a.topic_tags]
+    resolved = _resolve_topic(topic)
+    if resolved:
+        articles = [a for a in articles if resolved in a.topic_tags]
     nearby = articles_near(articles, lat, lng, radius)
     return nearby
 

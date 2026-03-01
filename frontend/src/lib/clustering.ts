@@ -91,13 +91,27 @@ export function clusterArticles(articles: NewsArticle[], altitude: number): Glob
   return clusters;
 }
 
+const API_TOPIC_MAP: Record<string, Topic> = {
+  politics: "Politics",
+  conflict: "Conflict",
+  technology: "Technology",
+  climate: "Climate",
+  environment: "Climate",
+  economy: "Economy",
+  health: "Health",
+};
+
+function mapApiTopic(apiTopic: string): Topic {
+  return API_TOPIC_MAP[apiTopic.toLowerCase()] ?? "All";
+}
+
 export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[] {
   return apiPoints.map((p, i) => ({
     id: `api-${i}`,
     lat: p.lat,
     lng: p.lng,
     size: Math.min(0.4 + p.article_count * 0.15, 1.5),
-    color: getTopicColor((p.topic || "All") as Topic),
+    color: getTopicColor(mapApiTopic(p.topic)),
     articles: [],
     isCluster: p.article_count > 1,
     count: p.article_count,
