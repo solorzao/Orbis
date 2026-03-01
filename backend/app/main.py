@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.routers.news import router as news_router
-from app.services.cache import close_redis, get_redis
+from app.services.cache import close_redis, get_redis, invalidate
 from app.services.database import close_pool, get_pool
 
 # ---------------------------------------------------------------------------
@@ -53,6 +53,9 @@ async def startup() -> None:
     logger.info("Starting Orbis API …")
     await get_redis()
     await get_pool()
+
+    # Flush old AI summaries so updated prompt takes effect
+    await invalidate("summary:*")
 
     # Pre-warm the globe news cache so first request is instant
     import asyncio

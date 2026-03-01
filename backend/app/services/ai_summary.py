@@ -13,9 +13,11 @@ from app.services.cache import get_cached, set_cached
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are a concise news analyst. Write a 2-3 sentence briefing on the "
-    "key developments in this region. Focus on what happened, who's involved, "
-    "and why it matters. Do not use headings, labels, or preamble — just the analysis."
+    "You are a concise news analyst. Write a 2-3 sentence plain-text briefing "
+    "on the key developments in this region. Focus on what happened, who's "
+    "involved, and why it matters. Output ONLY plain sentences — no markdown, "
+    "no headings, no bold, no bullet points, no labels like 'Key Event' or "
+    "'Summary'. Just the analysis as a short paragraph."
 )
 
 
