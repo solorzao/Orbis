@@ -1,0 +1,77 @@
+"use client";
+
+import { AnimatePresence } from "framer-motion";
+import { PanelEntry } from "@/types/news";
+import NewsPanel from "@/components/NewsPanel";
+import PanelTab from "@/components/PanelTab";
+
+interface PanelQueueProps {
+  panelQueue: PanelEntry[];
+  expandedPanelId: string | null;
+  onExpandPanel: (panelId: string) => void;
+  onClosePanel: (panelId: string) => void;
+  onMinimizePanel: () => void;
+}
+
+export default function PanelQueue({
+  panelQueue,
+  expandedPanelId,
+  onExpandPanel,
+  onClosePanel,
+  onMinimizePanel,
+}: PanelQueueProps) {
+  const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
+  const minimizedPanels = panelQueue.filter((p) => p.panelId !== expandedPanelId);
+
+  return (
+    <>
+      {/* Expanded panel */}
+      <AnimatePresence>
+        {expandedPanel && (
+          <NewsPanel
+            key={expandedPanel.panelId}
+            point={{ ...expandedPanel.point, articles: expandedPanel.articles }}
+            onClose={() => onClosePanel(expandedPanel.panelId)}
+            onMinimize={onMinimizePanel}
+            clusterSummary={expandedPanel.clusterSummary}
+            summaryLoading={expandedPanel.summaryLoading}
+            articlesLoading={expandedPanel.articlesLoading}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Minimized tab stack -- desktop: right edge, mobile: bottom row */}
+      {minimizedPanels.length > 0 && (
+        <>
+          {/* Desktop: vertical stack on right */}
+          <div className="fixed right-3 top-16 z-40 hidden flex-col gap-2 sm:flex">
+            <AnimatePresence>
+              {minimizedPanels.map((entry) => (
+                <PanelTab
+                  key={entry.panelId}
+                  entry={entry}
+                  onExpand={onExpandPanel}
+                  onClose={onClosePanel}
+                />
+              ))}
+            </AnimatePresence>
+          </div>
+
+          {/* Mobile: horizontal row at bottom */}
+          <div className="fixed bottom-14 left-0 right-0 z-40 flex gap-1.5 overflow-x-auto px-3 sm:hidden">
+            <AnimatePresence>
+              {minimizedPanels.map((entry) => (
+                <PanelTab
+                  key={entry.panelId}
+                  entry={entry}
+                  onExpand={onExpandPanel}
+                  onClose={onClosePanel}
+                />
+              ))}
+            </AnimatePresence>
+          </div>
+        </>
+      )}
+    </>
+  );
+}

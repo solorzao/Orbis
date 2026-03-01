@@ -33,3 +33,13 @@ export interface GlobePoint {
   locationName?: string;
   topic: Topic;
 }
+
+export interface PanelEntry {
+  panelId: string;
+  point: GlobePoint;
+  articles: NewsArticle[];
+  clusterSummary: string | null;
+  articlesLoading: boolean;
+  summaryLoading: boolean;
+  createdAt: number;
+}

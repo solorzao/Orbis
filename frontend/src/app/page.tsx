@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Topic, GlobePoint, NewsArticle } from "@/types/news";
+import { Topic, GlobePoint, NewsArticle, PanelEntry } from "@/types/news";
 import { apiPointsToGlobePoints } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
-import NewsPanel from "@/components/NewsPanel";
+import PanelQueue from "@/components/PanelQueue";
 import TopicFilter from "@/components/TopicFilter";
 import ThemeToggle from "@/components/ThemeToggle";
 
@@ -14,14 +14,14 @@ const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
 
 export default function Home() {
   const [activeTopic, setActiveTopic] = useState<Topic>("All");
-  const [selectedPoint, setSelectedPoint] = useState<GlobePoint | null>(null);
 
   const [allPoints, setAllPoints] = useState<GlobePoint[]>([]);
   const [apiError, setApiError] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [clusterSummary, setClusterSummary] = useState<string | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [articlesLoading, setArticlesLoading] = useState(false);
+
+  const MAX_PANELS = 5;
+  const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
+  const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
 
   // Fetch all points once on mount
   useEffect(() => {
@@ -49,71 +49,107 @@ export default function Home() {
     ? allPoints
     : allPoints.filter((p) => p.topic === activeTopic);
 
-  const handlePointClick = useCallback(async (point: GlobePoint) => {
-    setSelectedPoint(point);
-    setClusterSummary(null);
-    setArticlesLoading(true);
-    setSummaryLoading(true);
+  const updatePanel = useCallback((panelId: string, updates: Partial<PanelEntry>) => {
+    setPanelQueue((prev) =>
+      prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p))
+    );
+  }, []);
 
-    // Sequential: fetch articles first, then summary.
-    // This way the summary endpoint hits the Redis cache populated by
-    // the articles call instead of making a duplicate GDELT request.
-    const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
-    try {
-      const articles = await fetchClusterArticles(
-        point.lat,
-        point.lng,
-        5.0,
-        topicFilter,
-        point.locationName,
-      );
-      const mapped: NewsArticle[] = articles.map((a) => ({
-        id: a.id,
-        title: a.title,
-        summary: a.summary ?? undefined,
-        sourceUrl: a.source_url,
-        sourceName: a.source_name,
-        publishedAt: a.published_at,
-        latitude: a.latitude,
-        longitude: a.longitude,
-        countryCode: a.country_code,
-        topicTags: a.topic_tags,
-        sentimentScore: a.sentiment_score,
-      }));
-      setSelectedPoint((prev) =>
-        prev ? { ...prev, articles: mapped, count: mapped.length } : null,
-      );
-    } catch {
-      // Keep the panel open with whatever we have
-    } finally {
-      setArticlesLoading(false);
-    }
+  const fetchPanelData = useCallback(
+    async (panelId: string, point: GlobePoint) => {
+      const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
 
-    // Now fetch summary — GDELT results are cached from the call above.
-    // Skip if no articles matched the topic filter.
-    try {
-      const result = await fetchClusterSummary(
-        point.lat,
-        point.lng,
-        5.0,
-        point.locationName,
-        topicFilter,
-      );
-      setClusterSummary(result.summary);
-    } catch {
-      // Summary unavailable — not critical
-    } finally {
-      setSummaryLoading(false);
-    }
-  }, [activeTopic]);
+      try {
+        const apiArticles = await fetchClusterArticles(
+          point.lat, point.lng, 5.0, topicFilter, point.locationName,
+        );
+        const mapped: NewsArticle[] = apiArticles.map((a) => ({
+          id: a.id,
+          title: a.title,
+          summary: a.summary ?? undefined,
+          sourceUrl: a.source_url,
+          sourceName: a.source_name,
+          publishedAt: a.published_at,
+          latitude: a.latitude,
+          longitude: a.longitude,
+          countryCode: a.country_code,
+          topicTags: a.topic_tags,
+          sentimentScore: a.sentiment_score,
+        }));
+        updatePanel(panelId, {
+          articles: mapped,
+          point: { ...point, articles: mapped, count: mapped.length },
+          articlesLoading: false,
+        });
+      } catch {
+        updatePanel(panelId, { articlesLoading: false });
+      }
+
+      try {
+        const result = await fetchClusterSummary(
+          point.lat, point.lng, 5.0, point.locationName, topicFilter,
+        );
+        updatePanel(panelId, { clusterSummary: result.summary, summaryLoading: false });
+      } catch {
+        updatePanel(panelId, { summaryLoading: false });
+      }
+    },
+    [activeTopic, updatePanel]
+  );
+
+  const handlePointClick = useCallback(
+    (point: GlobePoint) => {
+      // Check if already in queue
+      const existing = panelQueue.find((p) => p.point.id === point.id);
+      if (existing) {
+        setExpandedPanelId(existing.panelId);
+        return;
+      }
+
+      const panelId = `${point.id}-${Date.now()}`;
+      const newEntry: PanelEntry = {
+        panelId,
+        point,
+        articles: [],
+        clusterSummary: null,
+        articlesLoading: true,
+        summaryLoading: true,
+        createdAt: Date.now(),
+      };
+
+      setPanelQueue((prev) => {
+        let next = [...prev, newEntry];
+        if (next.length > MAX_PANELS) {
+          const oldest = next
+            .filter((p) => p.panelId !== panelId)
+            .sort((a, b) => a.createdAt - b.createdAt)[0];
+          if (oldest) next = next.filter((p) => p.panelId !== oldest.panelId);
+        }
+        return next;
+      });
+
+      setExpandedPanelId(panelId);
+      fetchPanelData(panelId, point);
+    },
+    [panelQueue, fetchPanelData]
+  );
 
   const handleZoomChange = useCallback(() => {}, []);
 
-  const handleClosePanel = useCallback(() => {
-    setSelectedPoint(null);
-    setClusterSummary(null);
-    setSummaryLoading(false);
-    setArticlesLoading(false);
+  const handleClosePanel = useCallback(
+    (panelId: string) => {
+      setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
+      setExpandedPanelId((prev) => (prev === panelId ? null : prev));
+    },
+    []
+  );
+
+  const handleMinimizePanel = useCallback(() => {
+    setExpandedPanelId(null);
+  }, []);
+
+  const handleExpandPanel = useCallback((panelId: string) => {
+    setExpandedPanelId(panelId);
   }, []);
 
   return (
@@ -150,13 +186,13 @@ export default function Home() {
       {/* Theme Toggle */}
       <ThemeToggle />
 
-      {/* News Panel */}
-      <NewsPanel
-        point={selectedPoint}
-        onClose={handleClosePanel}
-        clusterSummary={clusterSummary}
-        summaryLoading={summaryLoading}
-        articlesLoading={articlesLoading}
+      {/* Panel Queue */}
+      <PanelQueue
+        panelQueue={panelQueue}
+        expandedPanelId={expandedPanelId}
+        onExpandPanel={handleExpandPanel}
+        onClosePanel={handleClosePanel}
+        onMinimizePanel={handleMinimizePanel}
       />
 
       {/* Bottom status bar */}

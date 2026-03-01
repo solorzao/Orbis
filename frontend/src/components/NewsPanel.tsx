@@ -8,6 +8,7 @@ import { getSentimentColor } from "@/lib/clustering";
 interface NewsPanelProps {
   point: GlobePoint | null;
   onClose: () => void;
+  onMinimize?: () => void;
   clusterSummary?: string | null;
   summaryLoading?: boolean;
   articlesLoading?: boolean;
@@ -89,17 +90,19 @@ function LoadingHeader() {
 export default function NewsPanel({
   point,
   onClose,
+  onMinimize,
   clusterSummary,
   summaryLoading,
   articlesLoading,
 }: NewsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Click outside to close
+  // Click outside to minimize (or close if no minimize handler)
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
-        onClose();
+        if (onMinimize) onMinimize();
+        else onClose();
       }
     }
     if (point) {
@@ -112,16 +115,19 @@ export default function NewsPanel({
         document.removeEventListener("mousedown", handleClickOutside);
       };
     }
-  }, [point, onClose]);
+  }, [point, onClose, onMinimize]);
 
-  // ESC key to close
+  // ESC key to minimize (or close if no minimize handler)
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (onMinimize) onMinimize();
+        else onClose();
+      }
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose]);
+  }, [onClose, onMinimize]);
 
   return (
     <AnimatePresence>
@@ -150,26 +156,39 @@ export default function NewsPanel({
                 {point.locationName || `${point.lat.toFixed(2)}°, ${point.lng.toFixed(2)}°`}
               </p>
             </div>
-            <button
-              onClick={onClose}
-              className="group flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-muted)] transition-colors hover:border-blue-500/30 hover:text-[var(--text-secondary)]"
-              aria-label="Close panel"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                className="transition-transform group-hover:scale-110"
+            <div className="flex items-center gap-1.5">
+              {onMinimize && (
+                <button
+                  onClick={onMinimize}
+                  className="group flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-muted)] transition-colors hover:border-blue-500/30 hover:text-[var(--text-secondary)]"
+                  aria-label="Minimize panel"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M3 7H11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                className="group flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-muted)] transition-colors hover:border-blue-500/30 hover:text-[var(--text-secondary)]"
+                aria-label="Close panel"
               >
-                <path
-                  d="M1 1L13 13M13 1L1 13"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  className="transition-transform group-hover:scale-110"
+                >
+                  <path
+                    d="M1 1L13 13M13 1L1 13"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Cards */}
