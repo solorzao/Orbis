@@ -55,13 +55,10 @@ async function apiFetch<T>(path: string, params?: Record<string, string>): Promi
 }
 
 export function fetchGlobeNews(
-  topic?: string,
   timespan = "24h",
-  limit = 100,
+  limit = 500,
 ): Promise<ApiGlobePoint[]> {
-  const params: Record<string, string> = { timespan, limit: String(limit) };
-  if (topic && topic !== "All") params.topic = topic;
-  return apiFetch<ApiGlobePoint[]>("/api/news", params);
+  return apiFetch<ApiGlobePoint[]>("/api/news", { timespan, limit: String(limit) });
 }
 
 export function fetchClusterArticles(

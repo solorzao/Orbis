@@ -85,6 +85,7 @@ export function clusterArticles(articles: NewsArticle[], altitude: number): Glob
       articles: nearby,
       isCluster,
       count,
+      topic: dominantTopic ?? "All",
     });
   }
 
@@ -116,5 +117,6 @@ export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[]
     isCluster: p.article_count > 1,
     count: p.article_count,
     locationName: p.location_name,
+    topic: mapApiTopic(p.topic),
   }));
 }

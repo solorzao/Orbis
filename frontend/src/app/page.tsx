@@ -15,35 +15,37 @@ export default function Home() {
   const [activeTopic, setActiveTopic] = useState<Topic>("All");
   const [selectedPoint, setSelectedPoint] = useState<GlobePoint | null>(null);
 
-  const [points, setPoints] = useState<GlobePoint[]>([]);
+  const [allPoints, setAllPoints] = useState<GlobePoint[]>([]);
   const [apiError, setApiError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [clusterSummary, setClusterSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
+  // Fetch all points once on mount
   useEffect(() => {
     let cancelled = false;
-
     setApiError(false);
     setLoading(true);
-    fetchGlobeNews(activeTopic)
+    fetchGlobeNews()
       .then((apiPoints) => {
         if (cancelled) return;
-        setPoints(apiPointsToGlobePoints(apiPoints));
+        setAllPoints(apiPointsToGlobePoints(apiPoints));
       })
       .catch(() => {
         if (cancelled) return;
-        setPoints([]);
+        setAllPoints([]);
         setApiError(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+    return () => { cancelled = true; };
+  }, []);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTopic]);
+  // Filter points client-side — instant, no API call
+  const points = activeTopic === "All"
+    ? allPoints
+    : allPoints.filter((p) => p.topic === activeTopic);
 
   const handlePointClick = useCallback(async (point: GlobePoint) => {
     setSelectedPoint(point);
@@ -171,7 +173,7 @@ export default function Home() {
             )}
           </span>
           <span className="text-slate-700">|</span>
-          <span>{points.reduce((sum, p) => sum + p.count, 0)} stories tracked</span>
+          <span>{allPoints.reduce((sum, p) => sum + p.count, 0)} stories tracked</span>
           <span className="text-slate-700">|</span>
           <span>{points.length} locations</span>
         </div>

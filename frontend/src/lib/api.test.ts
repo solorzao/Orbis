@@ -28,21 +28,7 @@ describe("fetchGlobeNews", () => {
     const url = new URL(mockFetch.mock.calls[0][0]);
     expect(url.pathname).toBe("/api/news");
     expect(url.searchParams.get("timespan")).toBe("24h");
-    expect(url.searchParams.get("limit")).toBe("100");
-    expect(url.searchParams.has("topic")).toBe(false);
-  });
-
-  it("includes topic param when not All", async () => {
-    mockFetch.mockReturnValue(jsonResponse([]));
-    await fetchGlobeNews("Politics");
-    const url = new URL(mockFetch.mock.calls[0][0]);
-    expect(url.searchParams.get("topic")).toBe("Politics");
-  });
-
-  it("omits topic param for All", async () => {
-    mockFetch.mockReturnValue(jsonResponse([]));
-    await fetchGlobeNews("All");
-    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.searchParams.get("limit")).toBe("500");
     expect(url.searchParams.has("topic")).toBe(false);
   });
 

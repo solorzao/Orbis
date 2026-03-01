@@ -31,4 +31,5 @@ export interface GlobePoint {
   isCluster: boolean;
   count: number;
   locationName?: string;
+  topic: Topic;
 }
