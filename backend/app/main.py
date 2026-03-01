@@ -49,10 +49,23 @@ app.include_router(news_router)
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def startup() -> None:
-    """Warm up Redis and database connections on startup."""
+    """Warm up Redis, database, and GDELT cache on startup."""
     logger.info("Starting Orbis API …")
     await get_redis()
     await get_pool()
+
+    # Pre-warm the globe news cache so first request is instant
+    import asyncio
+    from app.services.gdelt import fetch_geo_points
+
+    async def _warm_cache():
+        try:
+            points = await fetch_geo_points(query="sourcelang:english", timespan="24h")
+            logger.info("Cache warm-up complete: %d globe points loaded.", len(points))
+        except Exception:
+            logger.warning("Cache warm-up failed — first request will be slower.", exc_info=True)
+
+    asyncio.create_task(_warm_cache())
 
 
 @app.on_event("shutdown")
