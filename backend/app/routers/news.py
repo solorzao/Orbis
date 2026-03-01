@@ -109,7 +109,7 @@ async def get_cluster_summary(
     articles = await fetch_articles(query=gdelt_query, max_records=_MAX_CLUSTER_ARTICLES)
     nearby = articles[:_MAX_CLUSTER_ARTICLES]
 
-    summary_text = await summarise_cluster(nearby, lat, lng)
+    summary_text = await summarise_cluster(nearby, lat, lng, location_name=location_name)
     return ClusterSummaryResponse(
         lat=lat,
         lng=lng,

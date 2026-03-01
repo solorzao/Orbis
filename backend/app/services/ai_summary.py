@@ -13,11 +13,14 @@ from app.services.cache import get_cached, set_cached
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are a concise news analyst. Write a 2-3 sentence plain-text briefing "
-    "on the key developments in this region. Focus on what happened, who's "
-    "involved, and why it matters. Output ONLY plain sentences — no markdown, "
-    "no headings, no bold, no bullet points, no labels like 'Key Event' or "
-    "'Summary'. Just the analysis as a short paragraph."
+    "You are a concise news analyst. You will receive a location and a list "
+    "of headlines. Some headlines may not actually relate to the given location "
+    "— ignore those. Write a 2-3 sentence plain-text briefing covering ONLY "
+    "the stories relevant to that specific location. Focus on what happened, "
+    "who's involved, and why it matters. Output ONLY plain sentences — no "
+    "markdown, no headings, no bold, no bullet points, no labels. Just the "
+    "analysis as a short paragraph. If none of the headlines are relevant to "
+    "the location, say so briefly."
 )
 
 
@@ -25,6 +28,7 @@ async def summarise_cluster(
     articles: list[NewsArticle],
     lat: float,
     lng: float,
+    location_name: str | None = None,
 ) -> str:
     """Generate a 2-3 sentence summary for a cluster of articles.
 
@@ -44,9 +48,10 @@ async def summarise_cluster(
     if cached is not None:
         return str(cached)
 
-    # Compose the user message listing each headline + source.
+    # Compose the user message with location context.
+    location = location_name or f"{lat:.1f}°, {lng:.1f}°"
     lines = [f"- {a.title} ({a.source_name})" for a in articles[:30]]
-    user_msg = "Recent headlines from this region:\n" + "\n".join(lines)
+    user_msg = f"Location: {location}\n\nHeadlines:\n" + "\n".join(lines)
 
     summary = await _call_claude(user_msg)
 

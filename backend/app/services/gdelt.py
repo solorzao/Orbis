@@ -157,7 +157,7 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
                     latitude=lat,
                     longitude=lng,
                     country_code=country_code,
-                    sentiment_score=float(tone) if tone is not None else 0.0,
+                    sentiment_score=max(-1.0, min(1.0, float(tone) / 10.0)) if tone is not None else 0.0,
                     topic_tags=topic_tags,
                 )
             )
