@@ -173,7 +173,7 @@ export default function Home() {
             )}
           </span>
           <span className="text-slate-700">|</span>
-          <span>{allPoints.reduce((sum, p) => sum + p.count, 0)} stories tracked</span>
+          <span>{points.reduce((sum, p) => sum + p.count, 0)} stories tracked</span>
           <span className="text-slate-700">|</span>
           <span>{points.length} locations</span>
         </div>
