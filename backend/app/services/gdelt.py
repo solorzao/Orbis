@@ -1,4 +1,4 @@
-"""Client for the GDELT DOC 2.0 and GEO APIs."""
+"""Client for the GDELT DOC 2.0 API."""
 
 from __future__ import annotations
 
@@ -72,11 +72,9 @@ async def fetch_articles(
 
     Results are cached in Redis for ``settings.gdelt_cache_ttl`` seconds.
     """
-    search_query = query or ""
+    search_query = query or "sourcelang:english"
     if topic:
         search_query = f"{search_query} {topic}".strip()
-    if not search_query:
-        search_query = "*"  # wildcard — get everything
 
     cache_k = _cache_key("gdelt:doc", q=search_query, ts=timespan, mr=str(max_records))
     cached = await get_cached(cache_k)
@@ -94,37 +92,12 @@ async def fetch_articles(
     data = await _fetch_with_retry(settings.gdelt_doc_base_url, params)
     articles = _parse_doc_response(data)
 
-    # Try to enrich with geo coordinates from the GEO API.
-    geo_articles = await _fetch_geo(search_query, timespan, max_records)
-    if geo_articles:
-        _merge_geo(articles, geo_articles)
-
     # Drop articles without a valid location — they cannot be plotted.
     articles = [a for a in articles if a.latitude != 0.0 or a.longitude != 0.0]
 
     # Cache the result.
     await set_cached(cache_k, [a.model_dump() for a in articles], settings.gdelt_cache_ttl)
     return articles
-
-
-async def _fetch_geo(
-    query: str, timespan: str, max_records: int
-) -> list[dict[str, Any]]:
-    """Fetch point-level data from the GDELT GEO API."""
-    params: dict[str, Any] = {
-        "query": query,
-        "mode": "PointData",
-        "maxrecords": max_records,
-        "format": "GeoJSON",
-        "timespan": timespan,
-    }
-    data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
-    if data is None:
-        return []
-    features: list[dict] = []
-    if isinstance(data, dict):
-        features = data.get("features", [])
-    return features
 
 
 def _parse_doc_response(data: Any) -> list[NewsArticle]:
@@ -208,33 +181,3 @@ def _parse_gdelt_date(date_str: str) -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _merge_geo(articles: list[NewsArticle], features: list[dict]) -> None:
-    """Assign lat/lng from GEO features to articles matched by URL hash."""
-    url_to_coords: dict[str, tuple[float, float]] = {}
-    for feat in features:
-        props = feat.get("properties", {})
-        geom = feat.get("geometry", {})
-        coords = geom.get("coordinates", [])
-        url = props.get("url", "")
-        if url and len(coords) >= 2:
-            url_to_coords[url] = (coords[1], coords[0])  # GeoJSON is [lng, lat]
-
-    # Also build a fallback: assign any unlocated article a location from
-    # its matching feature (by title substring or domain).
-    for article in articles:
-        if article.source_url in url_to_coords:
-            article.latitude, article.longitude = url_to_coords[article.source_url]
-        elif url_to_coords:
-            # If no direct URL match, try to find a location from the GEO
-            # features by iterating and assigning the first available one.
-            for feat in features:
-                geom = feat.get("geometry", {})
-                coords = geom.get("coordinates", [])
-                if len(coords) >= 2:
-                    article.latitude = coords[1]
-                    article.longitude = coords[0]
-                    # Also pull country/region if present.
-                    props = feat.get("properties", {})
-                    article.country_code = props.get("countrycode", "")
-                    article.region = props.get("locationname", "")
-                    break

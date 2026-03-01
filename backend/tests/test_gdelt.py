@@ -1,6 +1,9 @@
 """Tests for GDELT response parsing with centroid and topic enrichment."""
 
-from app.services.gdelt import _parse_doc_response
+import pytest
+from unittest.mock import AsyncMock, patch
+
+from app.services.gdelt import _parse_doc_response, fetch_articles
 
 
 def _make_raw_article(**overrides):
@@ -84,3 +87,87 @@ class TestParseDocResponse:
         assert len(articles) == 2
         assert 40.0 < articles[0].latitude < 50.0
         assert 30.0 < articles[1].latitude < 40.0
+
+
+class TestFetchArticles:
+    @pytest.mark.asyncio
+    async def test_default_query_is_sourcelang_english(self):
+        """Ensure the default query uses sourcelang:english, not '*'."""
+        mock_data = {"articles": [_make_raw_article(sourcecountry="US")]}
+
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
+            mock_fetch.return_value = mock_data
+            articles = await fetch_articles()
+            call_args = mock_fetch.call_args
+            params = call_args[0][1]
+            assert params["query"] == "sourcelang:english"
+
+    @pytest.mark.asyncio
+    async def test_topic_appended_to_query(self):
+        """When topic is provided, it's appended to the base query."""
+        mock_data = {"articles": [_make_raw_article(sourcecountry="US")]}
+
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
+            mock_fetch.return_value = mock_data
+            await fetch_articles(topic="climate")
+            params = mock_fetch.call_args[0][1]
+            assert "climate" in params["query"]
+            assert "sourcelang:english" in params["query"]
+
+    @pytest.mark.asyncio
+    async def test_drops_articles_without_coords(self):
+        """Articles from unknown countries (no centroid) are dropped."""
+        mock_data = {"articles": [
+            _make_raw_article(sourcecountry="US", url="https://a.com/1"),
+            _make_raw_article(sourcecountry="ZZ", url="https://a.com/2"),
+        ]}
+
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
+            mock_fetch.return_value = mock_data
+            articles = await fetch_articles()
+            assert len(articles) == 1
+            assert articles[0].country_code == "US"
+
+    @pytest.mark.asyncio
+    async def test_no_geo_api_call(self):
+        """Ensure only one API call is made (DOC only, no GEO)."""
+        mock_data = {"articles": [_make_raw_article(sourcecountry="US")]}
+
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
+            mock_fetch.return_value = mock_data
+            await fetch_articles()
+            assert mock_fetch.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_returns_cached_results(self):
+        """When cache has data, return it without calling GDELT."""
+        cached = [{
+            "id": "abc123",
+            "title": "Cached article",
+            "source_url": "https://example.com/cached",
+            "source_name": "example.com",
+            "source_language": "en",
+            "published_at": "2026-02-28T12:00:00Z",
+            "ingested_at": "2026-02-28T12:00:00Z",
+            "latitude": 37.09,
+            "longitude": -95.71,
+            "country_code": "US",
+            "region": "",
+            "topic_tags": ["general"],
+            "sentiment_score": 0.0,
+            "entities": {},
+        }]
+
+        with patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=cached), \
+             patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch:
+            articles = await fetch_articles()
+            mock_fetch.assert_not_called()
+            assert len(articles) == 1
