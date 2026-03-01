@@ -80,20 +80,13 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
       .hexBinPointLng("lng")
       .hexBinPointWeight("count")
       .hexBinResolution(3)
-      .hexAltitude((d: object) => {
-        const h = d as { sumWeight: number };
-        return Math.min(0.15, h.sumWeight * 0.003);
-      })
+      .hexAltitude(0.001)
       .hexTopColor((d: object) => {
         const h = d as { sumWeight: number };
         const intensity = Math.min(1, h.sumWeight / 30);
-        return `rgba(59, 130, 246, ${0.08 + intensity * 0.25})`;
+        return `rgba(59, 130, 246, ${0.06 + intensity * 0.2})`;
       })
-      .hexSideColor((d: object) => {
-        const h = d as { sumWeight: number };
-        const intensity = Math.min(1, h.sumWeight / 30);
-        return `rgba(59, 130, 246, ${0.04 + intensity * 0.15})`;
-      })
+      .hexSideColor(() => "rgba(0,0,0,0)")
       .hexBinMerge(false)
       .hexLabel("")
       .pointLabel((d: object) => {
