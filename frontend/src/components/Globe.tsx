@@ -52,11 +52,7 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
         return Math.max(0.04, base * scale);
       })
       .pointColor("color")
-      .pointAltitude((d: object) => {
-        const p = d as GlobePoint;
-        // Height proportional to story count — visual pop for dense areas
-        return 0.01 + Math.log2(Math.max(1, p.count)) * 0.012;
-      })
+      .pointAltitude(0.01)
       .pointResolution(12)
       // Pulsing rings under each dot
       .ringsData([])
@@ -78,6 +74,28 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
       .ringMaxRadius(2)
       .ringPropagationSpeed(1.2)
       .ringRepeatPeriod(2500)
+      // Hex bin density layer
+      .hexBinPointsData([])
+      .hexBinPointLat("lat")
+      .hexBinPointLng("lng")
+      .hexBinPointWeight("count")
+      .hexBinResolution(3)
+      .hexAltitude((d: object) => {
+        const h = d as { sumWeight: number };
+        return Math.min(0.15, h.sumWeight * 0.003);
+      })
+      .hexTopColor((d: object) => {
+        const h = d as { sumWeight: number };
+        const intensity = Math.min(1, h.sumWeight / 30);
+        return `rgba(59, 130, 246, ${0.08 + intensity * 0.25})`;
+      })
+      .hexSideColor((d: object) => {
+        const h = d as { sumWeight: number };
+        const intensity = Math.min(1, h.sumWeight / 30);
+        return `rgba(59, 130, 246, ${0.04 + intensity * 0.15})`;
+      })
+      .hexBinMerge(false)
+      .hexLabel("")
       .pointLabel((d: object) => {
         const p = d as GlobePoint;
         const location = p.locationName || "";
@@ -155,11 +173,12 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
     };
   }, [initGlobe]);
 
-  // Update points + rings data when it changes
+  // Update points, rings, and hex bins when data changes
   useEffect(() => {
     if (globeRef.current && isLoaded) {
       globeRef.current.pointsData(points);
       globeRef.current.ringsData(points);
+      globeRef.current.hexBinPointsData(points);
     }
   }, [points, isLoaded]);
 
