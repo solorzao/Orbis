@@ -57,12 +57,13 @@ export default function Home() {
     // Sequential: fetch articles first, then summary.
     // This way the summary endpoint hits the Redis cache populated by
     // the articles call instead of making a duplicate GDELT request.
+    const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
     try {
       const articles = await fetchClusterArticles(
         point.lat,
         point.lng,
         5.0,
-        undefined,
+        topicFilter,
         point.locationName,
       );
       const mapped: NewsArticle[] = articles.map((a) => ({
@@ -101,7 +102,7 @@ export default function Home() {
     } finally {
       setSummaryLoading(false);
     }
-  }, []);
+  }, [activeTopic]);
 
   const handleZoomChange = useCallback(() => {}, []);
 
