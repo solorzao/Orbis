@@ -52,8 +52,32 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
         return Math.max(0.04, base * scale);
       })
       .pointColor("color")
-      .pointAltitude(0.01)
+      .pointAltitude((d: object) => {
+        const p = d as GlobePoint;
+        // Height proportional to story count — visual pop for dense areas
+        return 0.01 + Math.log2(Math.max(1, p.count)) * 0.012;
+      })
       .pointResolution(12)
+      // Pulsing rings under each dot
+      .ringsData([])
+      .ringLat("lat")
+      .ringLng("lng")
+      .ringColor((d: object) => {
+        const p = d as GlobePoint;
+        // Return a function that fades opacity as ring expands (t: 0→1)
+        return (t: number) => {
+          const c = p.color || "#3b82f6";
+          const opacity = Math.max(0, 0.4 * (1 - t));
+          // Convert hex to rgba
+          const r = parseInt(c.slice(1, 3), 16);
+          const g = parseInt(c.slice(3, 5), 16);
+          const b = parseInt(c.slice(5, 7), 16);
+          return `rgba(${r},${g},${b},${opacity})`;
+        };
+      })
+      .ringMaxRadius(2)
+      .ringPropagationSpeed(1.2)
+      .ringRepeatPeriod(2500)
       .pointLabel((d: object) => {
         const p = d as GlobePoint;
         const location = p.locationName || "";
@@ -72,7 +96,9 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
         if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
         zoomTimerRef.current = setTimeout(() => {
           if (globeRef.current) {
-            globeRef.current.pointsData([...pointsRef.current]);
+            const pts = [...pointsRef.current];
+            globeRef.current.pointsData(pts);
+            globeRef.current.ringsData(pts);
           }
         }, 150);
       });
@@ -129,10 +155,11 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
     };
   }, [initGlobe]);
 
-  // Update points data when it changes
+  // Update points + rings data when it changes
   useEffect(() => {
     if (globeRef.current && isLoaded) {
       globeRef.current.pointsData(points);
+      globeRef.current.ringsData(points);
     }
   }, [points, isLoaded]);
 
