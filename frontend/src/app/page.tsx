@@ -160,7 +160,7 @@ export default function Home() {
             ) : loading ? (
               <>
                 <span className="h-2 w-2 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
-                <span className="text-blue-400 text-xs font-semibold tracking-wider">CONNECTING</span>
+                <span className="text-blue-400 text-xs font-semibold tracking-wider">LOADING</span>
               </>
             ) : (
               <>
