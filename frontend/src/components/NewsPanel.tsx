@@ -269,7 +269,7 @@ export default function NewsPanel({
                     </div>
 
                     {/* Title */}
-                    <h3 className="text-[15px] leading-snug font-medium text-[var(--text-primary)] transition-colors group-hover:text-[var(--text-primary)]">
+                    <h3 className="text-[15px] leading-snug font-medium text-[var(--text-primary)] transition-colors">
                       {article.title}
                     </h3>
 

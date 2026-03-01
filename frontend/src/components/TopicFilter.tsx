@@ -78,7 +78,7 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
               onClick={() => onTopicChange(topic)}
               className="relative shrink-0 rounded-xl px-2.5 py-1 text-[11px] font-medium tracking-wide transition-colors sm:px-3.5 sm:py-1.5 sm:text-xs"
               style={{
-                color: isActive ? "#fff" : "var(--text-muted)",
+                color: isActive ? "var(--text-primary)" : "var(--text-muted)",
               }}
             >
               {isActive && (
