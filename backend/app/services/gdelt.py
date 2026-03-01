@@ -12,6 +12,8 @@ import httpx
 from app.config import settings
 from app.models.news import NewsArticle
 from app.services.cache import get_cached, set_cached
+from app.services.country_centroids import get_centroid
+from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +160,15 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
 
             article_id = hashlib.sha256(url.encode()).hexdigest()[:16]
 
+            # Geo: look up centroid from sourcecountry
+            country_code = item.get("sourcecountry", "")
+            centroid = get_centroid(country_code)
+            lat = centroid[0] if centroid else 0.0
+            lng = centroid[1] if centroid else 0.0
+
+            # Topics: classify from title
+            topic_tags = classify_topic(title)
+
             articles.append(
                 NewsArticle(
                     id=article_id,
@@ -167,9 +178,11 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
                     source_language=lang,
                     published_at=published_at,
                     ingested_at=now,
-                    latitude=0.0,
-                    longitude=0.0,
+                    latitude=lat,
+                    longitude=lng,
+                    country_code=country_code,
                     sentiment_score=float(tone) if tone else 0.0,
+                    topic_tags=topic_tags,
                 )
             )
         except Exception:
