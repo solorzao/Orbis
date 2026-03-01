@@ -44,8 +44,8 @@ resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_service
   end_ip_address   = "0.0.0.0"
 }
 
-# TODO: Restrict this firewall rule in production to specific IP ranges
-resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_all_dev" {
+resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_dev" {
+  count            = var.environment == "dev" ? 1 : 0
   name             = "AllowAllForDevelopment"
   server_id        = azurerm_postgresql_flexible_server.orbis.id
   start_ip_address = "0.0.0.0"

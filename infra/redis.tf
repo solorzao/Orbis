@@ -7,7 +7,7 @@ resource "azurerm_redis_cache" "orbis" {
   sku_name                      = "Basic"
   non_ssl_port_enabled          = false
   minimum_tls_version           = "1.2"
-  public_network_access_enabled = true
+  public_network_access_enabled = var.environment == "dev" ? true : false
 
   redis_configuration {}
 

@@ -17,7 +17,7 @@ resource "azurerm_key_vault" "orbis" {
   location                  = azurerm_resource_group.orbis.location
   tenant_id                 = data.azurerm_client_config.current.tenant_id
   sku_name                  = "standard"
-  purge_protection_enabled  = false
+  purge_protection_enabled  = var.environment == "prod" ? true : false
   rbac_authorization_enabled = true
 
   tags = {
