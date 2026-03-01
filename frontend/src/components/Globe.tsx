@@ -44,11 +44,10 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
       .pointRadius((d: object) => {
         const p = d as GlobePoint;
         const alt = altitudeRef.current;
-        // Scale down when zoomed out, up when zoomed in
-        // alt ~2.5 (far) → scale ~0.28, alt ~0.5 (close) → scale ~1.4
-        const zoomScale = 0.7 / Math.sqrt(alt);
-        const base = 0.3 + Math.log2(Math.max(1, p.count)) * 0.15;
-        return Math.max(0.12, Math.min(1.2, base * zoomScale));
+        // Constant apparent size: dots shrink in globe-units as you zoom in
+        // so they don't overlap when the surface expands visually
+        const base = 0.15 + Math.log2(Math.max(1, p.count)) * 0.06;
+        return Math.max(0.08, base * Math.sqrt(alt));
       })
       .pointColor("color")
       .pointAltitude(0.01)
