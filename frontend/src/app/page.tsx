@@ -18,12 +18,10 @@ export default function Home() {
   const [altitude, setAltitude] = useState(2.5);
 
   const [points, setPoints] = useState<GlobePoint[]>([]);
-  const [loading, setLoading] = useState(true);
   const [usingMockData, setUsingMockData] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
 
     fetchGlobeNews(activeTopic)
       .then((apiPoints) => {
@@ -34,17 +32,17 @@ export default function Home() {
       .catch(() => {
         if (cancelled) return;
         // Fallback to mock data
-        const filtered = activeTopic === "All"
-          ? mockArticles
-          : mockArticles.filter((a) => a.topicTags.includes(activeTopic));
+        const filtered =
+          activeTopic === "All"
+            ? mockArticles
+            : mockArticles.filter((a) => a.topicTags.includes(activeTopic));
         setPoints(clusterArticles(filtered, altitude));
         setUsingMockData(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [activeTopic, altitude]);
 
   const handlePointClick = useCallback(
@@ -69,13 +67,13 @@ export default function Home() {
           sentimentScore: a.sentiment_score,
         }));
         setSelectedPoint((prev) =>
-          prev ? { ...prev, articles: mapped, count: mapped.length } : null
+          prev ? { ...prev, articles: mapped, count: mapped.length } : null,
         );
       } catch {
         // Keep the panel open with whatever we have
       }
     },
-    [usingMockData]
+    [usingMockData],
   );
 
   const handleZoomChange = useCallback((alt: number) => {
@@ -89,11 +87,7 @@ export default function Home() {
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#030712]">
       {/* Globe */}
-      <Globe
-        points={points}
-        onPointClick={handlePointClick}
-        onZoomChange={handleZoomChange}
-      />
+      <Globe points={points} onPointClick={handlePointClick} onZoomChange={handleZoomChange} />
 
       {/* Branding */}
       <div className="fixed top-5 left-6 z-40 flex items-center gap-3">
@@ -108,7 +102,8 @@ export default function Home() {
           <div
             className="absolute inset-0 h-8 w-8 rounded-full"
             style={{
-              background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), transparent 60%)",
+              background:
+                "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), transparent 60%)",
             }}
           />
         </div>

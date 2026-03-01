@@ -10,11 +10,7 @@ interface GlobeProps {
   onZoomChange: (altitude: number) => void;
 }
 
-export default function Globe({
-  points,
-  onPointClick,
-  onZoomChange,
-}: GlobeProps) {
+export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -32,12 +28,8 @@ export default function Globe({
 
     const globe = new GlobeGL(containerRef.current)
       .backgroundColor("rgba(0,0,0,0)")
-      .globeImageUrl(
-        "//unpkg.com/three-globe/example/img/earth-night.jpg"
-      )
-      .bumpImageUrl(
-        "//unpkg.com/three-globe/example/img/earth-topology.png"
-      )
+      .globeImageUrl("//unpkg.com/three-globe/example/img/earth-night.jpg")
+      .bumpImageUrl("//unpkg.com/three-globe/example/img/earth-topology.png")
       .atmosphereColor("#1a3a5c")
       .atmosphereAltitude(0.15)
       .showAtmosphere(true)
@@ -58,11 +50,9 @@ export default function Globe({
       .onPointClick((point: object) => {
         onPointClickRef.current(point as GlobePoint);
       })
-      .onZoom(
-        (pov: { lat: number; lng: number; altitude: number }) => {
-          onZoomChangeRef.current(pov.altitude);
-        }
-      );
+      .onZoom((pov: { lat: number; lng: number; altitude: number }) => {
+        onZoomChangeRef.current(pov.altitude);
+      });
 
     // Initial camera position
     globe.pointOfView({ lat: 20, lng: 0, altitude: 2.5 });

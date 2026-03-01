@@ -56,7 +56,7 @@ async function apiFetch<T>(path: string, params?: Record<string, string>): Promi
 export function fetchGlobeNews(
   topic?: string,
   timespan = "24h",
-  limit = 100
+  limit = 100,
 ): Promise<ApiGlobePoint[]> {
   const params: Record<string, string> = { timespan, limit: String(limit) };
   if (topic && topic !== "All") params.topic = topic;
@@ -67,7 +67,7 @@ export function fetchClusterArticles(
   lat: number,
   lng: number,
   radius = 2.0,
-  topic?: string
+  topic?: string,
 ): Promise<ApiNewsArticle[]> {
   const params: Record<string, string> = {
     lat: String(lat),
@@ -81,7 +81,7 @@ export function fetchClusterArticles(
 export function fetchClusterSummary(
   lat: number,
   lng: number,
-  radius = 2.0
+  radius = 2.0,
 ): Promise<ApiClusterSummary> {
   return apiFetch<ApiClusterSummary>("/api/news/summary", {
     lat: String(lat),

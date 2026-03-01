@@ -37,10 +37,7 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
   // Click outside to close
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (
-        panelRef.current &&
-        !panelRef.current.contains(event.target as Node)
-      ) {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
         onClose();
       }
     }
@@ -86,9 +83,7 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
           <div className="flex items-center justify-between border-b border-white/[0.06] px-6 py-4">
             <div>
               <h2 className="text-sm font-semibold tracking-widest text-blue-400 uppercase">
-                {point.isCluster
-                  ? `${point.count} Stories`
-                  : point.articles[0]?.countryCode}
+                {point.isCluster ? `${point.count} Stories` : point.articles[0]?.countryCode}
               </h2>
               <p className="mt-0.5 text-xs text-slate-500">
                 {point.lat.toFixed(2)}, {point.lng.toFixed(2)}
@@ -141,9 +136,7 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
                       <span
                         className="inline-block h-2 w-2 rounded-full"
                         style={{
-                          backgroundColor: getSentimentColor(
-                            article.sentimentScore
-                          ),
+                          backgroundColor: getSentimentColor(article.sentimentScore),
                           boxShadow: `0 0 6px ${getSentimentColor(article.sentimentScore)}60`,
                         }}
                         title={sentimentLabel(article.sentimentScore)}
@@ -176,28 +169,15 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
                     {article.summary && (
                       <div className="mt-2.5 rounded-lg border border-blue-500/10 bg-blue-500/[0.04] px-3 py-2">
                         <div className="mb-1 flex items-center gap-1.5">
-                          <svg
-                            width="10"
-                            height="10"
-                            viewBox="0 0 10 10"
-                            fill="none"
-                          >
-                            <circle
-                              cx="5"
-                              cy="5"
-                              r="4"
-                              stroke="#3B82F6"
-                              strokeWidth="1"
-                            />
+                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                            <circle cx="5" cy="5" r="4" stroke="#3B82F6" strokeWidth="1" />
                             <circle cx="5" cy="5" r="1.5" fill="#3B82F6" />
                           </svg>
                           <span className="text-[9px] font-semibold tracking-widest text-blue-400 uppercase">
                             AI Summary
                           </span>
                         </div>
-                        <p className="text-xs leading-relaxed text-slate-400">
-                          {article.summary}
-                        </p>
+                        <p className="text-xs leading-relaxed text-slate-400">{article.summary}</p>
                       </div>
                     )}
 
@@ -219,12 +199,7 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
                         className="flex items-center gap-1 text-xs text-blue-500/70 transition-colors hover:text-blue-400"
                       >
                         Read
-                        <svg
-                          width="10"
-                          height="10"
-                          viewBox="0 0 10 10"
-                          fill="none"
-                        >
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                           <path
                             d="M3 7L7 3M7 3H4M7 3V6"
                             stroke="currentColor"
@@ -245,8 +220,7 @@ export default function NewsPanel({ point, onClose }: NewsPanelProps) {
           <div
             className="pointer-events-none h-12 w-full"
             style={{
-              background:
-                "linear-gradient(to top, rgba(8, 12, 24, 0.9), transparent)",
+              background: "linear-gradient(to top, rgba(8, 12, 24, 0.9), transparent)",
             }}
           />
         </motion.div>

@@ -19,10 +19,7 @@ interface TopicFilterProps {
   onTopicChange: (topic: Topic) => void;
 }
 
-export default function TopicFilter({
-  activeTopic,
-  onTopicChange,
-}: TopicFilterProps) {
+export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterProps) {
   return (
     <div className="fixed top-6 left-1/2 z-40 -translate-x-1/2">
       <motion.div

@@ -34,10 +34,7 @@ export function getSentimentColor(score: number): string {
  * Cluster articles by geographic proximity based on zoom level.
  * Higher altitude (zoomed out) = larger clustering radius.
  */
-export function clusterArticles(
-  articles: NewsArticle[],
-  altitude: number
-): GlobePoint[] {
+export function clusterArticles(articles: NewsArticle[], altitude: number): GlobePoint[] {
   // Clustering radius in degrees - increases as we zoom out
   const radius = Math.max(2, altitude * 8);
 
@@ -59,10 +56,8 @@ export function clusterArticles(
     nearby.forEach((a) => used.add(a.id));
 
     // Compute centroid
-    const lat =
-      nearby.reduce((sum, a) => sum + a.latitude, 0) / nearby.length;
-    const lng =
-      nearby.reduce((sum, a) => sum + a.longitude, 0) / nearby.length;
+    const lat = nearby.reduce((sum, a) => sum + a.latitude, 0) / nearby.length;
+    const lng = nearby.reduce((sum, a) => sum + a.longitude, 0) / nearby.length;
 
     const isCluster = nearby.length > 1;
     const count = nearby.length;
@@ -72,11 +67,11 @@ export function clusterArticles(
     nearby.forEach((a) =>
       a.topicTags.forEach((t) => {
         topicCounts[t] = (topicCounts[t] || 0) + 1;
-      })
+      }),
     );
-    const dominantTopic = Object.entries(topicCounts).sort(
-      (a, b) => b[1] - a[1]
-    )[0]?.[0] as Topic | undefined;
+    const dominantTopic = Object.entries(topicCounts).sort((a, b) => b[1] - a[1])[0]?.[0] as
+      | Topic
+      | undefined;
     const color = dominantTopic
       ? TOPIC_COLORS[dominantTopic] || TOPIC_COLORS.All
       : TOPIC_COLORS.All;
