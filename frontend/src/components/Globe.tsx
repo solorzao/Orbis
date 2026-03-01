@@ -42,10 +42,11 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
       .pointResolution(12)
       .pointLabel((d: object) => {
         const p = d as GlobePoint;
-        if (p.isCluster) {
-          return `<div style="background:rgba(10,14,28,0.85);backdrop-filter:blur(12px);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:8px 12px;font-family:monospace;color:#e2e8f0;font-size:12px;pointer-events:none"><span style="color:${p.color};font-weight:600">${p.count} stories</span> <span style="color:#64748b">\u2022 cluster</span></div>`;
-        }
-        return `<div style="background:rgba(10,14,28,0.85);backdrop-filter:blur(12px);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:8px 12px;font-family:system-ui;color:#e2e8f0;font-size:12px;max-width:240px;pointer-events:none">${p.articles[0]?.title || ""}</div>`;
+        const location = p.locationName || "";
+        const label = location
+          ? `<span style="color:${p.color};font-weight:600">${p.count} stories</span> <span style="color:#64748b">\u2022</span> ${location}`
+          : `<span style="color:${p.color};font-weight:600">${p.count} stories</span>`;
+        return `<div style="background:rgba(10,14,28,0.85);backdrop-filter:blur(12px);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:8px 12px;font-family:system-ui;color:#e2e8f0;font-size:12px;max-width:300px;pointer-events:none">${label}</div>`;
       })
       .onPointClick((point: object) => {
         onPointClickRef.current(point as GlobePoint);
