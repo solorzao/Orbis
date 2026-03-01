@@ -7,6 +7,7 @@ import time
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 from app.routers.news import router as news_router
 from app.services.cache import close_redis, get_redis
@@ -81,5 +82,32 @@ async def log_requests(request: Request, call_next):
 # ---------------------------------------------------------------------------
 @app.get("/health")
 async def health():
-    """Simple liveness probe."""
-    return {"status": "ok", "version": app.version}
+    """Liveness / readiness probe — checks downstream services."""
+    checks = {"api": "ok"}
+
+    # Check database
+    try:
+        pool = await get_pool()
+        await pool.fetchval("SELECT 1")
+        checks["database"] = "ok"
+    except Exception:
+        checks["database"] = "unavailable"
+
+    # Check Redis
+    try:
+        r = await get_redis()
+        if r:
+            await r.ping()
+            checks["redis"] = "ok"
+        else:
+            checks["redis"] = "not_configured"
+    except Exception:
+        checks["redis"] = "unavailable"
+
+    all_ok = all(v in ("ok", "not_configured") for v in checks.values())
+    status = "ok" if all_ok else "degraded"
+
+    return JSONResponse(
+        content={"status": status, "version": app.version, "checks": checks},
+        status_code=200 if all_ok else 503,
+    )
