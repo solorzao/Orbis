@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Topic } from "@/types/news";
 import { getTopicColor } from "@/lib/clustering";
@@ -20,9 +21,42 @@ interface TopicFilterProps {
 }
 
 export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const checkScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 2);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+  }, []);
+
+  useEffect(() => {
+    checkScroll();
+    window.addEventListener("resize", checkScroll);
+    return () => window.removeEventListener("resize", checkScroll);
+  }, [checkScroll]);
+
   return (
     <div className="fixed top-12 left-1/2 z-40 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 sm:top-6">
+      {/* Left fade */}
+      {canScrollLeft && (
+        <div
+          className="pointer-events-none absolute top-0 left-0 z-10 h-full w-6 rounded-l-2xl"
+          style={{ background: "linear-gradient(to right, rgba(8, 12, 24, 0.9), transparent)" }}
+        />
+      )}
+      {/* Right fade */}
+      {canScrollRight && (
+        <div
+          className="pointer-events-none absolute top-0 right-0 z-10 h-full w-6 rounded-r-2xl"
+          style={{ background: "linear-gradient(to left, rgba(8, 12, 24, 0.9), transparent)" }}
+        />
+      )}
       <motion.div
+        ref={scrollRef}
+        onScroll={checkScroll}
         initial={{ y: -30, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.5, duration: 0.6, ease: [0.23, 1, 0.32, 1] }}
