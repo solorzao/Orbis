@@ -21,6 +21,11 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
 
+  const altitudeRef = useRef(2.5);
+  const pointsRef = useRef(points);
+  pointsRef.current = points;
+  const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const initGlobe = useCallback(async () => {
     if (!containerRef.current || globeRef.current) return;
 
@@ -36,7 +41,15 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
       .pointsData([])
       .pointLat("lat")
       .pointLng("lng")
-      .pointRadius("size")
+      .pointRadius((d: object) => {
+        const p = d as GlobePoint;
+        const alt = altitudeRef.current;
+        // Scale down when zoomed out, up when zoomed in
+        // alt ~2.5 (far) → scale ~0.28, alt ~0.5 (close) → scale ~1.4
+        const zoomScale = 0.7 / Math.sqrt(alt);
+        const base = 0.3 + Math.log2(Math.max(1, p.count)) * 0.15;
+        return Math.max(0.12, Math.min(1.2, base * zoomScale));
+      })
       .pointColor("color")
       .pointAltitude(0.01)
       .pointResolution(12)
@@ -52,7 +65,15 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
         onPointClickRef.current(point as GlobePoint);
       })
       .onZoom((pov: { lat: number; lng: number; altitude: number }) => {
+        altitudeRef.current = pov.altitude;
         onZoomChangeRef.current(pov.altitude);
+        // Debounce: re-set pointsData to force pointRadius re-evaluation
+        if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
+        zoomTimerRef.current = setTimeout(() => {
+          if (globeRef.current) {
+            globeRef.current.pointsData([...pointsRef.current]);
+          }
+        }, 150);
       });
 
     // Initial camera position
