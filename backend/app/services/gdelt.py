@@ -21,6 +21,42 @@ from app.services.topic_classifier import classify_topic
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Keyword-based sentiment estimation (fallback when GDELT omits tone)
+# ---------------------------------------------------------------------------
+
+_NEGATIVE_WORDS = {
+    "killed", "dead", "death", "dies", "attack", "murder", "crash", "war",
+    "bomb", "shooting", "stabbing", "victim", "fatal", "tragedy", "arrest",
+    "charged", "fraud", "scandal", "crisis", "threat", "riot", "fire",
+    "explosion", "collapse", "drought", "flood", "earthquake", "hurricane",
+    "devastat", "destroy", "terror", "hostage", "kidnap", "abuse", "assault",
+    "protest", "strike", "lawsuit", "sued", "indict", "convict", "sentence",
+    "layoff", "bankrupt", "recession", "shutdown", "fail", "reject",
+    "deportat", "detain", "sanction", "condemn", "flee", "refugee",
+}
+
+_POSITIVE_WORDS = {
+    "win", "wins", "won", "victory", "success", "celebrate", "record",
+    "breakthrough", "award", "honor", "rescue", "save", "recover", "boost",
+    "surge", "grow", "growth", "profit", "deal", "launch", "achieve",
+    "approve", "peace", "agreement", "cure", "champion", "hero",
+    "milestone", "innovate", "discover", "partnership", "donate",
+}
+
+
+def _estimate_sentiment(title: str) -> float:
+    """Estimate sentiment from title keywords. Returns -1.0 to 1.0."""
+    words = set(title.lower().split())
+    neg = sum(1 for w in words if any(w.startswith(n) for n in _NEGATIVE_WORDS))
+    pos = sum(1 for w in words if any(w.startswith(p) for p in _POSITIVE_WORDS))
+    if neg > pos:
+        return -0.6 if neg >= 2 else -0.3
+    if pos > neg:
+        return 0.7 if pos >= 2 else 0.4
+    return 0.0
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -123,12 +159,19 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
             url = item.get("url", "")
             source = item.get("domain", item.get("source", ""))
             lang = item.get("language", "en") or "en"
-            tone = item.get("tone", 0.0)
-            if isinstance(tone, str):
-                try:
-                    tone = float(tone.split(",")[0])
-                except (ValueError, IndexError):
-                    tone = 0.0
+            raw_tone = item.get("tone")
+            tone: float = 0.0
+            has_tone = False
+            if raw_tone is not None:
+                if isinstance(raw_tone, str) and raw_tone.strip():
+                    try:
+                        tone = float(raw_tone.split(",")[0])
+                        has_tone = True
+                    except (ValueError, IndexError):
+                        pass
+                elif isinstance(raw_tone, (int, float)):
+                    tone = float(raw_tone)
+                    has_tone = True
 
             date_str = item.get("seendate", "")
             published_at = _parse_gdelt_date(date_str) if date_str else now
@@ -157,7 +200,7 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
                     latitude=lat,
                     longitude=lng,
                     country_code=country_code,
-                    sentiment_score=max(-1.0, min(1.0, float(tone) / 10.0)) if tone is not None else 0.0,
+                    sentiment_score=max(-1.0, min(1.0, tone / 10.0)) if has_tone else _estimate_sentiment(title),
                     topic_tags=topic_tags,
                 )
             )
