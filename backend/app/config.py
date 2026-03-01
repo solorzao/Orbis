@@ -55,6 +55,12 @@ class Settings:
             "https://api.gdeltproject.org/api/v2/doc/doc",
         )
     )
+    gdelt_geo_base_url: str = field(
+        default_factory=lambda: _env(
+            "GDELT_GEO_BASE_URL",
+            "https://api.gdeltproject.org/api/v2/geo/geo",
+        )
+    )
     # --- Cache TTLs (seconds) ---
     gdelt_cache_ttl: int = field(default_factory=lambda: _env_int("GDELT_CACHE_TTL", 900))
     summary_cache_ttl: int = field(default_factory=lambda: _env_int("SUMMARY_CACHE_TTL", 21600))

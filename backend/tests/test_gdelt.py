@@ -3,7 +3,13 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.services.gdelt import _parse_doc_response, fetch_articles
+from app.services.gdelt import (
+    _extract_titles_from_html,
+    _parse_doc_response,
+    _parse_geo_response,
+    fetch_articles,
+    fetch_geo_points,
+)
 
 
 def _make_raw_article(**overrides):
@@ -164,3 +170,159 @@ class TestFetchArticles:
             articles = await fetch_articles()
             mock_fetch.assert_not_called()
             assert len(articles) == 1
+
+
+# ---------------------------------------------------------------------------
+# GEO 2.0 API tests
+# ---------------------------------------------------------------------------
+
+def _make_geo_feature(
+    lat: float = 35.7,
+    lng: float = 51.4,
+    count: int = 100,
+    name: str = "Tehran, Tehran, Iran",
+    html: str = '<a href="https://example.com" target="_blank" title="Iran launches satellite">Article</a>',
+):
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [lng, lat]},
+        "properties": {"count": count, "name": name, "html": html},
+    }
+
+
+class TestExtractTitlesFromHtml:
+    def test_extracts_single_title(self):
+        html = '<a href="https://ex.com" title="Breaking news headline">link</a>'
+        titles = _extract_titles_from_html(html)
+        assert titles == ["Breaking news headline"]
+
+    def test_extracts_multiple_titles(self):
+        html = (
+            '<a title="First headline">a</a>'
+            '<a title="Second headline">b</a>'
+        )
+        titles = _extract_titles_from_html(html)
+        assert len(titles) == 2
+        assert titles[0] == "First headline"
+        assert titles[1] == "Second headline"
+
+    def test_unescapes_html_entities(self):
+        html = '<a title="Biden &amp; Harris discuss NATO&#39;s future">link</a>'
+        titles = _extract_titles_from_html(html)
+        assert titles[0] == "Biden & Harris discuss NATO's future"
+
+    def test_returns_empty_for_no_titles(self):
+        assert _extract_titles_from_html("") == []
+        assert _extract_titles_from_html("<p>No titles here</p>") == []
+
+
+class TestParseGeoResponse:
+    def test_parses_single_feature(self):
+        data = {"type": "FeatureCollection", "features": [_make_geo_feature()]}
+        points = _parse_geo_response(data)
+        assert len(points) == 1
+        assert points[0].lat == 35.7
+        assert points[0].lng == 51.4
+        assert points[0].location_name == "Tehran, Tehran, Iran"
+
+    def test_geojson_coordinate_order(self):
+        """GeoJSON uses [lng, lat] — verify we don't swap them."""
+        feature = _make_geo_feature(lat=51.5, lng=-0.1)
+        data = {"type": "FeatureCollection", "features": [feature]}
+        points = _parse_geo_response(data)
+        assert points[0].lat == 51.5
+        assert points[0].lng == -0.1
+
+    def test_log_scales_count(self):
+        """Raw counts are mention volumes; article_count should be log-scaled."""
+        feature = _make_geo_feature(count=1024)
+        data = {"type": "FeatureCollection", "features": [feature]}
+        points = _parse_geo_response(data)
+        assert points[0].article_count == 10  # log2(1024) = 10
+
+    def test_minimum_article_count_is_one(self):
+        feature = _make_geo_feature(count=0)
+        data = {"type": "FeatureCollection", "features": [feature]}
+        points = _parse_geo_response(data)
+        assert points[0].article_count >= 1
+
+    def test_uses_headline_for_topic_classification(self):
+        feature = _make_geo_feature(
+            html='<a title="Military strikes intensify in conflict zone">link</a>',
+        )
+        data = {"type": "FeatureCollection", "features": [feature]}
+        points = _parse_geo_response(data)
+        assert points[0].topic == "conflict"
+
+    def test_falls_back_to_name_when_no_titles(self):
+        feature = _make_geo_feature(html="", name="London, United Kingdom")
+        data = {"type": "FeatureCollection", "features": [feature]}
+        points = _parse_geo_response(data)
+        assert points[0].top_headline == "London, United Kingdom"
+
+    def test_skips_features_without_coordinates(self):
+        feature = {"type": "Feature", "geometry": {"coordinates": []}, "properties": {}}
+        data = {"type": "FeatureCollection", "features": [feature]}
+        assert _parse_geo_response(data) == []
+
+    def test_handles_none_input(self):
+        assert _parse_geo_response(None) == []
+
+    def test_handles_empty_features(self):
+        assert _parse_geo_response({"features": []}) == []
+
+    def test_parses_multiple_features(self):
+        data = {
+            "type": "FeatureCollection",
+            "features": [
+                _make_geo_feature(lat=35.7, lng=51.4, name="Tehran"),
+                _make_geo_feature(lat=51.5, lng=-0.1, name="London"),
+                _make_geo_feature(lat=40.7, lng=-74.0, name="New York"),
+            ],
+        }
+        points = _parse_geo_response(data)
+        assert len(points) == 3
+
+
+class TestFetchGeoPoints:
+    @pytest.mark.asyncio
+    async def test_calls_geo_api_with_correct_params(self):
+        geo_data = {"type": "FeatureCollection", "features": [_make_geo_feature()]}
+
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
+            mock_fetch.return_value = geo_data
+            points = await fetch_geo_points()
+            call_args = mock_fetch.call_args
+            params = call_args[0][1]
+            assert params["mode"] == "PointData"
+            assert params["format"] == "GeoJSON"
+            assert len(points) == 1
+
+    @pytest.mark.asyncio
+    async def test_default_query_is_sourcelang_english(self):
+        geo_data = {"type": "FeatureCollection", "features": []}
+
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
+            mock_fetch.return_value = geo_data
+            await fetch_geo_points()
+            params = mock_fetch.call_args[0][1]
+            assert params["query"] == "sourcelang:english"
+
+    @pytest.mark.asyncio
+    async def test_returns_cached_results(self):
+        cached = [{
+            "lat": 35.7, "lng": 51.4, "weight": 100,
+            "article_count": 7, "top_headline": "Cached",
+            "topic": "general", "location_name": "Tehran",
+        }]
+
+        with patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=cached), \
+             patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch:
+            points = await fetch_geo_points()
+            mock_fetch.assert_not_called()
+            assert len(points) == 1
+            assert points[0].location_name == "Tehran"

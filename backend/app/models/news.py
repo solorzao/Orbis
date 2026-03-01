@@ -46,6 +46,7 @@ class GlobeDataPoint(BaseModel):
     article_count: int
     top_headline: str
     topic: str
+    location_name: str = ""
 
 
 class ClusterSummaryResponse(BaseModel):

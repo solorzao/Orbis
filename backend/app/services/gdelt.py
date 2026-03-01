@@ -1,16 +1,19 @@
-"""Client for the GDELT DOC 2.0 API."""
+"""Client for the GDELT DOC 2.0 and GEO 2.0 APIs."""
 
 from __future__ import annotations
 
 import hashlib
+import html as html_mod
 import logging
+import math
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
 from app.config import settings
-from app.models.news import NewsArticle
+from app.models.news import GlobeDataPoint, NewsArticle
 from app.services.cache import get_cached, set_cached
 from app.services.country_centroids import get_centroid, normalize_country
 from app.services.topic_classifier import classify_topic
@@ -179,3 +182,93 @@ def _parse_gdelt_date(date_str: str) -> datetime:
     except ValueError:
         pass
     return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# GEO 2.0 API — city-level globe points
+# ---------------------------------------------------------------------------
+
+
+def _extract_titles_from_html(raw_html: str) -> list[str]:
+    """Extract article titles from GDELT GEO html property."""
+    titles = re.findall(r'title="([^"]+)"', raw_html)
+    return [html_mod.unescape(t) for t in titles if t]
+
+
+def _parse_geo_response(data: Any) -> list[GlobeDataPoint]:
+    """Parse GeoJSON from GDELT GEO 2.0 into GlobeDataPoint models."""
+    if not isinstance(data, dict):
+        return []
+
+    features = data.get("features", [])
+    points: list[GlobeDataPoint] = []
+
+    for feature in features:
+        try:
+            geom = feature.get("geometry", {})
+            props = feature.get("properties", {})
+            coords = geom.get("coordinates", [])
+
+            if len(coords) < 2:
+                continue
+
+            lng, lat = float(coords[0]), float(coords[1])
+            raw_count = props.get("count", 0)
+            name = props.get("name", "")
+            raw_html = props.get("html", "")
+
+            # Extract headlines and classify topic
+            titles = _extract_titles_from_html(raw_html)
+            top_headline = titles[0] if titles else name
+            topic_tags = classify_topic(top_headline)
+            topic = topic_tags[0] if topic_tags else "general"
+
+            # Scale count: raw values are mention volumes (up to 200K+), use log
+            article_count = max(1, int(math.log2(max(1, raw_count))))
+
+            points.append(
+                GlobeDataPoint(
+                    lat=lat,
+                    lng=lng,
+                    weight=min(raw_count, 500),
+                    article_count=article_count,
+                    top_headline=top_headline,
+                    topic=topic,
+                    location_name=name,
+                )
+            )
+        except Exception:
+            logger.debug("Skipping unparseable GEO feature: %s", feature, exc_info=True)
+
+    return points
+
+
+async def fetch_geo_points(
+    query: str = "",
+    timespan: str = "24h",
+) -> list[GlobeDataPoint]:
+    """Fetch globe points from the GDELT GEO 2.0 API.
+
+    Returns city-level GeoJSON data with coordinates and article counts.
+    Results are cached in Redis for ``settings.gdelt_cache_ttl`` seconds.
+    """
+    search_query = query or "sourcelang:english"
+
+    cache_k = _cache_key("gdelt:geo", q=search_query, ts=timespan)
+    cached = await get_cached(cache_k)
+    if cached is not None:
+        return [GlobeDataPoint(**p) for p in cached]
+
+    params: dict[str, Any] = {
+        "query": search_query,
+        "mode": "PointData",
+        "format": "GeoJSON",
+        "timespan": timespan,
+    }
+
+    data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
+    points = _parse_geo_response(data)
+
+    # Cache the result.
+    await set_cached(cache_k, [p.model_dump() for p in points], settings.gdelt_cache_ttl)
+    return points

@@ -50,8 +50,19 @@ export default function Home() {
     setClusterSummary(null);
     setSummaryLoading(true);
 
-    const articlesPromise = fetchClusterArticles(point.lat, point.lng);
-    const summaryPromise = fetchClusterSummary(point.lat, point.lng);
+    const articlesPromise = fetchClusterArticles(
+      point.lat,
+      point.lng,
+      5.0,
+      undefined,
+      point.locationName,
+    );
+    const summaryPromise = fetchClusterSummary(
+      point.lat,
+      point.lng,
+      5.0,
+      point.locationName,
+    );
 
     try {
       const articles = await articlesPromise;

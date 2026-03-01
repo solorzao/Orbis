@@ -30,4 +30,5 @@ export interface GlobePoint {
   articles: NewsArticle[];
   isCluster: boolean;
   count: number;
+  locationName?: string;
 }

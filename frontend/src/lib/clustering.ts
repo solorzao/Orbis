@@ -115,5 +115,6 @@ export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[]
     articles: [],
     isCluster: p.article_count > 1,
     count: p.article_count,
+    locationName: p.location_name,
   }));
 }

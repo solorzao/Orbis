@@ -7,6 +7,7 @@ export interface ApiGlobePoint {
   article_count: number;
   top_headline: string;
   topic: string;
+  location_name?: string;
 }
 
 export interface ApiNewsArticle {
@@ -66,8 +67,9 @@ export function fetchGlobeNews(
 export function fetchClusterArticles(
   lat: number,
   lng: number,
-  radius = 2.0,
+  radius = 5.0,
   topic?: string,
+  locationName?: string,
 ): Promise<ApiNewsArticle[]> {
   const params: Record<string, string> = {
     lat: String(lat),
@@ -75,19 +77,23 @@ export function fetchClusterArticles(
     radius: String(radius),
   };
   if (topic && topic !== "All") params.topic = topic;
+  if (locationName) params.location_name = locationName;
   return apiFetch<ApiNewsArticle[]>("/api/news/cluster", params);
 }
 
 export function fetchClusterSummary(
   lat: number,
   lng: number,
-  radius = 2.0,
+  radius = 5.0,
+  locationName?: string,
 ): Promise<ApiClusterSummary> {
-  return apiFetch<ApiClusterSummary>("/api/news/summary", {
+  const params: Record<string, string> = {
     lat: String(lat),
     lng: String(lng),
     radius: String(radius),
-  });
+  };
+  if (locationName) params.location_name = locationName;
+  return apiFetch<ApiClusterSummary>("/api/news/summary", params);
 }
 
 export function fetchTopics(): Promise<ApiTopicCount[]> {
