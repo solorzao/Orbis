@@ -11,6 +11,9 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Orbis — Global News Intelligence",
   description: "Explore the world's news on an interactive 3D globe",
+  icons: {
+    icon: "/Orbis_logo_50_resize.png",
+  },
 };
 
 export default function RootLayout({

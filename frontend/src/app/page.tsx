@@ -111,22 +111,12 @@ export default function Home() {
 
       {/* Branding */}
       <div className="fixed top-5 left-6 z-40 flex items-center gap-3">
-        <div className="relative">
-          <div
-            className="h-8 w-8 rounded-full"
-            style={{
-              background: "linear-gradient(135deg, #3B82F6 0%, #06B6D4 100%)",
-              boxShadow: "0 0 20px rgba(59, 130, 246, 0.3)",
-            }}
-          />
-          <div
-            className="absolute inset-0 h-8 w-8 rounded-full"
-            style={{
-              background:
-                "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), transparent 60%)",
-            }}
-          />
-        </div>
+        <img
+          src="/Orbis_logo_50_resize.png"
+          alt="Orbis"
+          className="h-9 w-9"
+          style={{ filter: "drop-shadow(0 0 12px rgba(59, 130, 246, 0.4))" }}
+        />
         <div>
           <h1
             className="text-lg font-bold tracking-[0.2em] text-white uppercase"
