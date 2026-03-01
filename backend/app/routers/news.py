@@ -58,21 +58,14 @@ def _build_location_query(location_name: str | None) -> str:
 
 @router.get("/news", response_model=list[GlobeDataPoint])
 async def get_globe_data(
-    topic: str | None = Query(None, description="Optional topic filter"),
     timespan: str = Query("24h", description="GDELT timespan, e.g. 24h, 48h"),
-    limit: int = Query(100, ge=1, le=500, description="Max data points"),
+    limit: int = Query(500, ge=1, le=500, description="Max data points"),
 ) -> list[GlobeDataPoint]:
-    """Return globe data points from the GDELT GEO 2.0 API.
+    """Return all globe data points from the GDELT GEO 2.0 API.
 
-    Uses city-level geographic data for worldwide coverage.
-    Topic filtering is passed to the GDELT query for server-side filtering.
+    Returns all topics — filtering is done client-side for instant switching.
     """
-    resolved = _resolve_topic(topic)
-    gdelt_query = "sourcelang:english"
-    if resolved and resolved in _TOPIC_TO_GDELT_QUERY:
-        gdelt_query = f"({_TOPIC_TO_GDELT_QUERY[resolved]}) sourcelang:english"
-
-    points = await fetch_geo_points(query=gdelt_query, timespan=timespan)
+    points = await fetch_geo_points(query="sourcelang:english", timespan=timespan)
     points.sort(key=lambda p: p.article_count, reverse=True)
     return points[:limit]
 
