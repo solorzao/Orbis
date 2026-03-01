@@ -15,7 +15,7 @@ def _make_raw_article(**overrides):
         "language": "English",
         "seendate": "20260228T120000Z",
         "tone": "-1.5,2.0",
-        "sourcecountry": "US",
+        "sourcecountry": "United States",
     }
     base.update(overrides)
     return base
@@ -29,15 +29,22 @@ class TestParseDocResponse:
         assert articles[0].title == "Test article headline"
         assert articles[0].source_name == "example.com"
 
-    def test_assigns_centroid_from_sourcecountry(self):
-        data = {"articles": [_make_raw_article(sourcecountry="US")]}
+    def test_assigns_centroid_from_full_country_name(self):
+        """GDELT sends full names like 'United States', not ISO codes."""
+        data = {"articles": [_make_raw_article(sourcecountry="United States")]}
         articles = _parse_doc_response(data)
         assert len(articles) == 1
         assert 30.0 < articles[0].latitude < 50.0
         assert -130.0 < articles[0].longitude < -70.0
 
-    def test_assigns_country_code(self):
-        data = {"articles": [_make_raw_article(sourcecountry="GB")]}
+    def test_assigns_centroid_from_iso_code(self):
+        data = {"articles": [_make_raw_article(sourcecountry="US")]}
+        articles = _parse_doc_response(data)
+        assert 30.0 < articles[0].latitude < 50.0
+
+    def test_normalizes_country_code(self):
+        """Full country names are normalized to ISO codes."""
+        data = {"articles": [_make_raw_article(sourcecountry="United Kingdom")]}
         articles = _parse_doc_response(data)
         assert articles[0].country_code == "GB"
 
@@ -80,8 +87,8 @@ class TestParseDocResponse:
 
     def test_handles_multiple_articles_different_countries(self):
         data = {"articles": [
-            _make_raw_article(title="News from France", sourcecountry="FR", url="https://a.com/1"),
-            _make_raw_article(title="News from Japan", sourcecountry="JP", url="https://a.com/2"),
+            _make_raw_article(title="News from France", sourcecountry="France", url="https://a.com/1"),
+            _make_raw_article(title="News from Japan", sourcecountry="Japan", url="https://a.com/2"),
         ]}
         articles = _parse_doc_response(data)
         assert len(articles) == 2
@@ -122,7 +129,7 @@ class TestFetchArticles:
     async def test_drops_articles_without_coords(self):
         """Articles from unknown countries (no centroid) are dropped."""
         mock_data = {"articles": [
-            _make_raw_article(sourcecountry="US", url="https://a.com/1"),
+            _make_raw_article(sourcecountry="United States", url="https://a.com/1"),
             _make_raw_article(sourcecountry="ZZ", url="https://a.com/2"),
         ]}
 

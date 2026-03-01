@@ -12,7 +12,7 @@ import httpx
 from app.config import settings
 from app.models.news import NewsArticle
 from app.services.cache import get_cached, set_cached
-from app.services.country_centroids import get_centroid
+from app.services.country_centroids import get_centroid, normalize_country
 from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger(__name__)
@@ -134,8 +134,9 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
             article_id = hashlib.sha256(url.encode()).hexdigest()[:16]
 
             # Geo: look up centroid from sourcecountry
-            country_code = item.get("sourcecountry", "")
-            centroid = get_centroid(country_code)
+            raw_country = item.get("sourcecountry", "")
+            country_code = normalize_country(raw_country)
+            centroid = get_centroid(raw_country)
             lat = centroid[0] if centroid else 0.0
             lng = centroid[1] if centroid else 0.0
 

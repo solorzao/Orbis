@@ -97,6 +97,123 @@ COUNTRY_CENTROIDS: dict[str, tuple[float, float]] = {
 }
 
 
+# GDELT uses full country names in `sourcecountry`, not ISO codes.
+COUNTRY_NAME_TO_CODE: dict[str, str] = {
+    "afghanistan": "AF",
+    "albania": "AL",
+    "algeria": "DZ",
+    "argentina": "AR",
+    "armenia": "AM",
+    "australia": "AU",
+    "austria": "AT",
+    "azerbaijan": "AZ",
+    "bangladesh": "BD",
+    "belarus": "BY",
+    "belgium": "BE",
+    "brazil": "BR",
+    "bulgaria": "BG",
+    "canada": "CA",
+    "chile": "CL",
+    "china": "CN",
+    "colombia": "CO",
+    "croatia": "HR",
+    "cuba": "CU",
+    "czech republic": "CZ",
+    "czechia": "CZ",
+    "denmark": "DK",
+    "egypt": "EG",
+    "ethiopia": "ET",
+    "finland": "FI",
+    "france": "FR",
+    "georgia": "GE",
+    "germany": "DE",
+    "ghana": "GH",
+    "greece": "GR",
+    "hungary": "HU",
+    "india": "IN",
+    "indonesia": "ID",
+    "iran": "IR",
+    "iraq": "IQ",
+    "ireland": "IE",
+    "israel": "IL",
+    "italy": "IT",
+    "japan": "JP",
+    "jordan": "JO",
+    "kazakhstan": "KZ",
+    "kenya": "KE",
+    "north korea": "KP",
+    "south korea": "KR",
+    "kuwait": "KW",
+    "lebanon": "LB",
+    "libya": "LY",
+    "malaysia": "MY",
+    "mexico": "MX",
+    "morocco": "MA",
+    "myanmar": "MM",
+    "netherlands": "NL",
+    "new zealand": "NZ",
+    "nigeria": "NG",
+    "norway": "NO",
+    "pakistan": "PK",
+    "palestine": "PS",
+    "peru": "PE",
+    "philippines": "PH",
+    "poland": "PL",
+    "portugal": "PT",
+    "qatar": "QA",
+    "romania": "RO",
+    "russia": "RU",
+    "saudi arabia": "SA",
+    "serbia": "RS",
+    "singapore": "SG",
+    "slovakia": "SK",
+    "south africa": "ZA",
+    "spain": "ES",
+    "sudan": "SD",
+    "sweden": "SE",
+    "switzerland": "CH",
+    "syria": "SY",
+    "taiwan": "TW",
+    "thailand": "TH",
+    "tunisia": "TN",
+    "turkey": "TR",
+    "ukraine": "UA",
+    "united arab emirates": "AE",
+    "united kingdom": "GB",
+    "united states": "US",
+    "uzbekistan": "UZ",
+    "venezuela": "VE",
+    "vietnam": "VN",
+    "yemen": "YE",
+    "zimbabwe": "ZW",
+}
+
+
+def normalize_country(raw: str) -> str:
+    """Convert a GDELT sourcecountry value to an ISO 2-letter code.
+
+    Accepts either an ISO code (\"US\") or a full name (\"United States\").
+    Returns the ISO code, or the original string uppercased if no mapping found.
+    """
+    if not raw:
+        return ""
+    stripped = raw.strip()
+    # Already a 2-letter ISO code?
+    upper = stripped.upper()
+    if len(upper) == 2 and upper in COUNTRY_CENTROIDS:
+        return upper
+    # Try full-name lookup
+    code = COUNTRY_NAME_TO_CODE.get(stripped.lower())
+    return code if code else upper
+
+
 def get_centroid(country_code: str) -> tuple[float, float] | None:
-    """Return (latitude, longitude) for the given ISO country code, or None."""
-    return COUNTRY_CENTROIDS.get(country_code.upper().strip()) if country_code else None
+    """Return (latitude, longitude) for the given ISO country code, or None.
+
+    Also accepts full country names (e.g. \"United States\") which are
+    normalized to ISO codes first.
+    """
+    if not country_code:
+        return None
+    normalized = normalize_country(country_code)
+    return COUNTRY_CENTROIDS.get(normalized)
