@@ -112,23 +112,23 @@ export default function Home() {
       <Globe points={points} onPointClick={handlePointClick} onZoomChange={handleZoomChange} />
 
       {/* Branding */}
-      <div className="fixed top-5 left-6 z-40 flex items-center gap-3">
+      <div className="fixed top-3 left-3 z-50 flex items-center gap-2 sm:top-5 sm:left-6 sm:gap-3">
         <img
           src="/Orbis_logo_50_resize.png"
           alt="Orbis"
-          className="h-10 w-10"
+          className="h-7 w-7 sm:h-10 sm:w-10"
           style={{ filter: "drop-shadow(0 0 12px rgba(59, 130, 246, 0.4))" }}
         />
         <div>
           <h1
-            className="text-lg font-bold tracking-[0.2em] text-white uppercase"
+            className="text-sm font-bold tracking-[0.2em] text-white uppercase sm:text-lg"
             style={{
               textShadow: "0 0 30px rgba(59, 130, 246, 0.3)",
             }}
           >
             Orbis
           </h1>
-          <p className="text-[9px] font-medium tracking-[0.3em] text-slate-500 uppercase">
+          <p className="hidden text-[9px] font-medium tracking-[0.3em] text-slate-500 uppercase sm:block">
             Global Intelligence
           </p>
         </div>
@@ -146,9 +146,9 @@ export default function Home() {
       />
 
       {/* Bottom status bar */}
-      <div className="fixed bottom-4 left-1/2 z-30 -translate-x-1/2">
+      <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-4">
         <div
-          className="flex items-center gap-3 rounded-full border border-white/[0.05] px-4 py-2 text-[10px] tracking-wider text-slate-600"
+          className="flex items-center gap-2 rounded-full border border-white/[0.05] px-3 py-1.5 text-[9px] tracking-wider text-slate-600 sm:gap-3 sm:px-4 sm:py-2 sm:text-[10px]"
           style={{
             background: "rgba(8, 12, 24, 0.5)",
             backdropFilter: "blur(12px)",

@@ -21,16 +21,17 @@ interface TopicFilterProps {
 
 export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterProps) {
   return (
-    <div className="fixed top-6 left-1/2 z-40 -translate-x-1/2">
+    <div className="fixed top-12 left-1/2 z-40 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 sm:top-6">
       <motion.div
         initial={{ y: -30, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.5, duration: 0.6, ease: [0.23, 1, 0.32, 1] }}
-        className="flex items-center gap-1 rounded-2xl border border-white/[0.06] px-2 py-1.5"
+        className="flex items-center gap-0.5 overflow-x-auto rounded-2xl border border-white/[0.06] px-1.5 py-1 sm:gap-1 sm:px-2 sm:py-1.5"
         style={{
           background: "rgba(8, 12, 24, 0.65)",
           backdropFilter: "blur(20px) saturate(1.3)",
           boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.03)",
+          scrollbarWidth: "none",
         }}
       >
         {TOPICS.map((topic) => {
@@ -41,7 +42,7 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
             <button
               key={topic}
               onClick={() => onTopicChange(topic)}
-              className="relative rounded-xl px-3.5 py-1.5 text-xs font-medium tracking-wide transition-colors"
+              className="relative shrink-0 rounded-xl px-2.5 py-1 text-[11px] font-medium tracking-wide transition-colors sm:px-3.5 sm:py-1.5 sm:text-xs"
               style={{
                 color: isActive ? "#fff" : "#64748b",
               }}
