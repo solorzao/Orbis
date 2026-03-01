@@ -47,7 +47,9 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
         // Constant apparent size: dots shrink in globe-units as you zoom in
         // so they don't overlap when the surface expands visually
         const base = 0.15 + Math.log2(Math.max(1, p.count)) * 0.06;
-        return Math.max(0.08, base * Math.sqrt(alt));
+        // Scale down more aggressively at close zoom so dots don't dominate
+        const scale = alt < 1 ? alt : Math.sqrt(alt);
+        return Math.max(0.04, base * scale);
       })
       .pointColor("color")
       .pointAltitude(0.01)
