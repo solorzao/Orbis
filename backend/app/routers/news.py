@@ -41,19 +41,26 @@ def _resolve_topic(topic: str | None) -> str | None:
     return _TOPIC_ALIASES.get(lower, lower)
 
 
-def _build_location_query(location_name: str | None) -> str:
-    """Build a GDELT DOC query scoped to a location name.
+def _build_location_query(location_name: str | None, topic: str | None = None) -> str:
+    """Build a GDELT DOC query scoped to a location and optional topic.
 
-    Uses the first part of the location (city/region) as a search keyword
-    so GDELT returns articles mentioning that place.
+    Combines location keywords with topic keywords so GDELT returns
+    articles that are both about the place AND the topic.
     """
-    if not location_name:
-        return "sourcelang:english"
-    # Use the first component (city/region) — most specific part
-    city = location_name.split(",")[0].strip()
-    if city:
-        return f'"{city}" sourcelang:english'
-    return "sourcelang:english"
+    parts: list[str] = []
+
+    if location_name:
+        city = location_name.split(",")[0].strip()
+        if city:
+            parts.append(f'"{city}"')
+
+    if topic:
+        topic_keywords = _TOPIC_TO_GDELT_QUERY.get(topic)
+        if topic_keywords:
+            parts.append(f"({topic_keywords})")
+
+    parts.append("sourcelang:english")
+    return " ".join(parts)
 
 
 @router.get("/news", response_model=list[GlobeDataPoint])
@@ -84,13 +91,13 @@ async def get_cluster_articles(
     """Return full articles near a given lat/lng point.
 
     Used when a user clicks a dot on the globe.  Searches GDELT with the
-    location name so articles are relevant to the specific city/region.
+    location name AND topic keywords so articles match both place and topic.
     """
-    # Build a location-specific GDELT query for relevant articles
-    gdelt_query = _build_location_query(location_name)
-    articles = await fetch_articles(query=gdelt_query, max_records=_MAX_CLUSTER_ARTICLES)
-
     resolved = _resolve_topic(topic)
+    gdelt_query = _build_location_query(location_name, topic=resolved)
+    # Fetch more than we need so post-filtering by classifier still yields results
+    articles = await fetch_articles(query=gdelt_query, max_records=50)
+
     if resolved:
         articles = [a for a in articles if resolved in a.topic_tags]
 
@@ -106,10 +113,10 @@ async def get_cluster_summary(
     location_name: str | None = Query(None, description="Location name from GEO API"),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
-    gdelt_query = _build_location_query(location_name)
-    articles = await fetch_articles(query=gdelt_query, max_records=_MAX_CLUSTER_ARTICLES)
-
     resolved = _resolve_topic(topic)
+    gdelt_query = _build_location_query(location_name, topic=resolved)
+    articles = await fetch_articles(query=gdelt_query, max_records=50)
+
     if resolved:
         articles = [a for a in articles if resolved in a.topic_tags]
 
