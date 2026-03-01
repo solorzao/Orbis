@@ -7,6 +7,7 @@ import { apiPointsToGlobePoints } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import NewsPanel from "@/components/NewsPanel";
 import TopicFilter from "@/components/TopicFilter";
+import ThemeToggle from "@/components/ThemeToggle";
 
 // Globe requires `window` — load without SSR
 const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
@@ -145,6 +146,9 @@ export default function Home() {
 
       {/* Topic Filters */}
       <TopicFilter activeTopic={activeTopic} onTopicChange={setActiveTopic} />
+
+      {/* Theme Toggle */}
+      <ThemeToggle />
 
       {/* News Panel */}
       <NewsPanel
