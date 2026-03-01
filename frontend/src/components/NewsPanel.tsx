@@ -185,6 +185,11 @@ export default function NewsPanel({
                   ))}
                 </>
               )}
+              {!articlesLoading && point.articles.length === 0 && (
+                <div className="rounded-xl border border-white/[0.05] p-6 text-center" style={{ background: "rgba(15, 20, 35, 0.6)" }}>
+                  <p className="text-sm text-slate-500">No stories found for this topic in this area.</p>
+                </div>
+              )}
               <AnimatePresence mode="popLayout">
                 {point.articles.map((article, index) => (
                   <motion.article

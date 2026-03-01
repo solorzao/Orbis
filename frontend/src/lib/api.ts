@@ -83,6 +83,7 @@ export function fetchClusterSummary(
   lng: number,
   radius = 5.0,
   locationName?: string,
+  topic?: string,
 ): Promise<ApiClusterSummary> {
   const params: Record<string, string> = {
     lat: String(lat),
@@ -90,6 +91,7 @@ export function fetchClusterSummary(
     radius: String(radius),
   };
   if (locationName) params.location_name = locationName;
+  if (topic && topic !== "All") params.topic = topic;
   return apiFetch<ApiClusterSummary>("/api/news/summary", params);
 }
 

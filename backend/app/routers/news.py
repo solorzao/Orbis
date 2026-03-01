@@ -102,14 +102,20 @@ async def get_cluster_summary(
     lat: float = Query(..., description="Latitude of cluster center"),
     lng: float = Query(..., description="Longitude of cluster center"),
     radius: float = Query(5.0, description="Search radius in degrees"),
+    topic: str | None = Query(None, description="Optional topic filter"),
     location_name: str | None = Query(None, description="Location name from GEO API"),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
     gdelt_query = _build_location_query(location_name)
     articles = await fetch_articles(query=gdelt_query, max_records=_MAX_CLUSTER_ARTICLES)
+
+    resolved = _resolve_topic(topic)
+    if resolved:
+        articles = [a for a in articles if resolved in a.topic_tags]
+
     nearby = articles[:_MAX_CLUSTER_ARTICLES]
 
-    summary_text = await summarise_cluster(nearby, lat, lng, location_name=location_name)
+    summary_text = await summarise_cluster(nearby, lat, lng, location_name=location_name, topic=resolved)
     return ClusterSummaryResponse(
         lat=lat,
         lng=lng,

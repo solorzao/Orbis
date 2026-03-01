@@ -31,20 +31,22 @@ async def summarise_cluster(
     lat: float,
     lng: float,
     location_name: str | None = None,
+    topic: str | None = None,
 ) -> str:
     """Generate a 2-3 sentence summary for a cluster of articles.
 
     Uses Claude Haiku via the Anthropic SDK.  Results are cached in Redis
-    for ``settings.summary_cache_ttl`` seconds, keyed by grid cell so that
-    the cache survives GDELT article refreshes.
+    for ``settings.summary_cache_ttl`` seconds, keyed by grid cell and
+    topic so that different topic filters get separate summaries.
     """
     if not articles:
-        return "No articles to summarise."
+        return ""
 
     # Snap to the same grid used for clustering → stable cache key.
     cell_lat = int(lat // settings.cluster_resolution_deg)
     cell_lng = int(lng // settings.cluster_resolution_deg)
-    cache_key = f"summary:{cell_lat}:{cell_lng}"
+    topic_suffix = f":{topic}" if topic else ""
+    cache_key = f"summary:{cell_lat}:{cell_lng}{topic_suffix}"
 
     cached = await get_cached(cache_key)
     if cached is not None:

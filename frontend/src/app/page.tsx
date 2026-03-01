@@ -88,13 +88,15 @@ export default function Home() {
       setArticlesLoading(false);
     }
 
-    // Now fetch summary — GDELT results are cached from the call above
+    // Now fetch summary — GDELT results are cached from the call above.
+    // Skip if no articles matched the topic filter.
     try {
       const result = await fetchClusterSummary(
         point.lat,
         point.lng,
         5.0,
         point.locationName,
+        topicFilter,
       );
       setClusterSummary(result.summary);
     } catch {
