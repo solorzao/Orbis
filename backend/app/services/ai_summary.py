@@ -13,14 +13,16 @@ from app.services.cache import get_cached, set_cached
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are a concise news analyst. You will receive a location and a list "
-    "of headlines. Some headlines may not actually relate to the given location "
-    "— ignore those. Write a 2-3 sentence plain-text briefing covering ONLY "
-    "the stories relevant to that specific location. Focus on what happened, "
-    "who's involved, and why it matters. Output ONLY plain sentences — no "
-    "markdown, no headings, no bold, no bullet points, no labels. Just the "
-    "analysis as a short paragraph. If none of the headlines are relevant to "
-    "the location, say so briefly."
+    "You are a concise news analyst providing briefings for a globe news app. "
+    "You will receive a location and a list of headlines. Prioritize stories "
+    "that relate to or near the given location, but include nearby or related "
+    "regional stories too — be generous with relevance. Write a 2-3 sentence "
+    "plain-text briefing. Focus on what happened, who's involved, and why it "
+    "matters. Output ONLY plain sentences — no markdown, no headings, no bold, "
+    "no bullet points, no labels. Never explain your reasoning or mention "
+    "which stories you excluded. If nothing seems relevant, just briefly "
+    'summarize the headlines you have. Respond with exactly "NONE" (and '
+    "nothing else) only if the headlines are completely unrelated gibberish."
 )
 
 
@@ -54,6 +56,10 @@ async def summarise_cluster(
     user_msg = f"Location: {location}\n\nHeadlines:\n" + "\n".join(lines)
 
     summary = await _call_claude(user_msg)
+
+    # Model returns "NONE" when headlines are completely irrelevant
+    if summary.strip().upper() == "NONE":
+        summary = ""
 
     await set_cached(cache_key, summary, settings.summary_cache_ttl)
     return summary
