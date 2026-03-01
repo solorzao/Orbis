@@ -10,6 +10,7 @@ interface NewsPanelProps {
   onClose: () => void;
   clusterSummary?: string | null;
   summaryLoading?: boolean;
+  articlesLoading?: boolean;
 }
 
 function timeAgo(dateString: string): string {
@@ -33,11 +34,33 @@ function sentimentLabel(score: number): string {
   return "Critical";
 }
 
+function ArticleSkeleton() {
+  return (
+    <div className="rounded-xl border border-white/[0.05] p-4" style={{ background: "rgba(15, 20, 35, 0.6)" }}>
+      <div className="mb-2.5 flex items-center gap-2">
+        <div className="h-2 w-2 animate-pulse rounded-full bg-white/[0.08]" />
+        <div className="h-2 w-12 animate-pulse rounded bg-white/[0.06]" />
+        <div className="h-2 w-px bg-slate-700" />
+        <div className="h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />
+      </div>
+      <div className="space-y-2">
+        <div className="h-3 w-full animate-pulse rounded bg-white/[0.06]" />
+        <div className="h-3 w-4/5 animate-pulse rounded bg-white/[0.06]" />
+      </div>
+      <div className="mt-3 flex items-center justify-between">
+        <div className="h-2 w-20 animate-pulse rounded bg-white/[0.04]" />
+        <div className="h-2 w-10 animate-pulse rounded bg-white/[0.04]" />
+      </div>
+    </div>
+  );
+}
+
 export default function NewsPanel({
   point,
   onClose,
   clusterSummary,
   summaryLoading,
+  articlesLoading,
 }: NewsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -155,6 +178,13 @@ export default function NewsPanel({
             )}
 
             <div className="space-y-3">
+              {articlesLoading && point.articles.length === 0 && (
+                <>
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <ArticleSkeleton key={`skel-${i}`} />
+                  ))}
+                </>
+              )}
               <AnimatePresence mode="popLayout">
                 {point.articles.map((article, index) => (
                   <motion.article

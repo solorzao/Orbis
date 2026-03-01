@@ -13,8 +13,9 @@ from app.services.cache import get_cached, set_cached
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are a concise news analyst. Summarize the following news cluster "
-    "in 2-3 sentences. Focus on the key event, who's involved, and why it matters."
+    "You are a concise news analyst. Write a 2-3 sentence briefing on the "
+    "key developments in this region. Focus on what happened, who's involved, "
+    "and why it matters. Do not use headings, labels, or preamble — just the analysis."
 )
 
 
@@ -43,7 +44,7 @@ async def summarise_cluster(
 
     # Compose the user message listing each headline + source.
     lines = [f"- {a.title} ({a.source_name})" for a in articles[:30]]
-    user_msg = "News articles in this cluster:\n" + "\n".join(lines)
+    user_msg = "Recent headlines from this region:\n" + "\n".join(lines)
 
     summary = await _call_claude(user_msg)
 

@@ -20,6 +20,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [clusterSummary, setClusterSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [articlesLoading, setArticlesLoading] = useState(false);
 
   // Fetch all points once on mount
   useEffect(() => {
@@ -50,24 +51,20 @@ export default function Home() {
   const handlePointClick = useCallback(async (point: GlobePoint) => {
     setSelectedPoint(point);
     setClusterSummary(null);
+    setArticlesLoading(true);
     setSummaryLoading(true);
 
-    const articlesPromise = fetchClusterArticles(
-      point.lat,
-      point.lng,
-      5.0,
-      undefined,
-      point.locationName,
-    );
-    const summaryPromise = fetchClusterSummary(
-      point.lat,
-      point.lng,
-      5.0,
-      point.locationName,
-    );
-
+    // Sequential: fetch articles first, then summary.
+    // This way the summary endpoint hits the Redis cache populated by
+    // the articles call instead of making a duplicate GDELT request.
     try {
-      const articles = await articlesPromise;
+      const articles = await fetchClusterArticles(
+        point.lat,
+        point.lng,
+        5.0,
+        undefined,
+        point.locationName,
+      );
       const mapped: NewsArticle[] = articles.map((a) => ({
         id: a.id,
         title: a.title,
@@ -86,10 +83,18 @@ export default function Home() {
       );
     } catch {
       // Keep the panel open with whatever we have
+    } finally {
+      setArticlesLoading(false);
     }
 
+    // Now fetch summary — GDELT results are cached from the call above
     try {
-      const result = await summaryPromise;
+      const result = await fetchClusterSummary(
+        point.lat,
+        point.lng,
+        5.0,
+        point.locationName,
+      );
       setClusterSummary(result.summary);
     } catch {
       // Summary unavailable — not critical
@@ -104,6 +109,7 @@ export default function Home() {
     setSelectedPoint(null);
     setClusterSummary(null);
     setSummaryLoading(false);
+    setArticlesLoading(false);
   }, []);
 
   return (
@@ -143,6 +149,7 @@ export default function Home() {
         onClose={handleClosePanel}
         clusterSummary={clusterSummary}
         summaryLoading={summaryLoading}
+        articlesLoading={articlesLoading}
       />
 
       {/* Bottom status bar */}
