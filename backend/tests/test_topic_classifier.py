@@ -61,3 +61,19 @@ def test_topic_keywords_dict_is_populated():
     assert len(TOPIC_KEYWORDS) >= 7
     for topic, keywords in TOPIC_KEYWORDS.items():
         assert len(keywords) >= 5, f"Topic '{topic}' has too few keywords"
+
+
+def test_no_false_positives_from_substrings():
+    """Word-boundary matching should prevent common false positives."""
+    # "ai" should NOT match "Ukraine" or "explained"
+    assert "technology" not in classify_topic("Ukraine peace talks continue")
+    assert "technology" not in classify_topic("Expert explained the situation")
+    # "app" should NOT match "apple" or "happy"
+    assert "technology" not in classify_topic("Apple orchard hosts harvest festival")
+    # "win" should NOT match "winter"
+    assert "sports" not in classify_topic("Winter storms hit the northeast")
+
+
+def test_multi_word_keywords_still_match():
+    """Multi-word keywords like 'interest rate' should still work."""
+    assert "economy" in classify_topic("Central bank raises interest rate")

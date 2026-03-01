@@ -66,15 +66,14 @@ async def fetch_articles(
     query: str = "",
     timespan: str = "24h",
     max_records: int = 250,
-    topic: str | None = None,
 ) -> list[NewsArticle]:
     """Fetch articles from the GDELT DOC 2.0 API and return parsed models.
 
     Results are cached in Redis for ``settings.gdelt_cache_ttl`` seconds.
+    Topic filtering is handled by the router via post-filtering on
+    classified ``topic_tags``, not via the GDELT query.
     """
     search_query = query or "sourcelang:english"
-    if topic:
-        search_query = f"{search_query} {topic}".strip()
 
     cache_k = _cache_key("gdelt:doc", q=search_query, ts=timespan, mr=str(max_records))
     cached = await get_cached(cache_k)
@@ -155,7 +154,7 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
                     latitude=lat,
                     longitude=lng,
                     country_code=country_code,
-                    sentiment_score=float(tone) if tone else 0.0,
+                    sentiment_score=float(tone) if tone is not None else 0.0,
                     topic_tags=topic_tags,
                 )
             )

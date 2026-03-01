@@ -112,20 +112,6 @@ class TestFetchArticles:
             assert params["query"] == "sourcelang:english"
 
     @pytest.mark.asyncio
-    async def test_topic_appended_to_query(self):
-        """When topic is provided, it's appended to the base query."""
-        mock_data = {"articles": [_make_raw_article(sourcecountry="US")]}
-
-        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
-             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
-             patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
-            mock_fetch.return_value = mock_data
-            await fetch_articles(topic="climate")
-            params = mock_fetch.call_args[0][1]
-            assert "climate" in params["query"]
-            assert "sourcelang:english" in params["query"]
-
-    @pytest.mark.asyncio
     async def test_drops_articles_without_coords(self):
         """Articles from unknown countries (no centroid) are dropped."""
         mock_data = {"articles": [

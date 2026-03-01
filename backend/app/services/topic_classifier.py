@@ -6,6 +6,8 @@ matching topic tags. Falls back to ["general"] if nothing matches.
 
 from __future__ import annotations
 
+import re
+
 TOPIC_KEYWORDS: dict[str, list[str]] = {
     "conflict": [
         "war", "attack", "military", "troops", "bomb", "missile",
@@ -48,8 +50,8 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
 def classify_topic(title: str) -> list[str]:
     """Return a list of topic tags for the given article title.
 
-    Matches are case-insensitive. Returns ``["general"]`` if no
-    keywords match.
+    Uses word-boundary matching to avoid false positives (e.g. "ai" should
+    not match "Ukraine"). Returns ``["general"]`` if no keywords match.
     """
     if not title:
         return ["general"]
@@ -59,8 +61,15 @@ def classify_topic(title: str) -> list[str]:
 
     for topic, keywords in TOPIC_KEYWORDS.items():
         for kw in keywords:
-            if kw in title_lower:
-                matched.append(topic)
-                break
+            # Multi-word keywords (e.g. "interest rate") use substring match;
+            # single-word keywords use word-boundary match to avoid false positives.
+            if " " in kw:
+                if kw in title_lower:
+                    matched.append(topic)
+                    break
+            else:
+                if re.search(r"\b" + re.escape(kw) + r"\b", title_lower):
+                    matched.append(topic)
+                    break
 
     return matched if matched else ["general"]
