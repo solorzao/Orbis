@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Topic, GlobePoint } from "@/types/news";
+import { Topic, GlobePoint, NewsArticle } from "@/types/news";
 import { mockArticles } from "@/lib/mockData";
 import { clusterArticles, apiPointsToGlobePoints } from "@/lib/clustering";
-import { fetchGlobeNews } from "@/lib/api";
+import { fetchGlobeNews, fetchClusterArticles } from "@/lib/api";
 import NewsPanel from "@/components/NewsPanel";
 import TopicFilter from "@/components/TopicFilter";
 
@@ -47,9 +47,36 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [activeTopic, altitude]);
 
-  const handlePointClick = useCallback((point: GlobePoint) => {
-    setSelectedPoint(point);
-  }, []);
+  const handlePointClick = useCallback(
+    async (point: GlobePoint) => {
+      setSelectedPoint(point);
+
+      if (usingMockData) return;
+
+      try {
+        const articles = await fetchClusterArticles(point.lat, point.lng);
+        const mapped: NewsArticle[] = articles.map((a) => ({
+          id: a.id,
+          title: a.title,
+          summary: a.summary ?? undefined,
+          sourceUrl: a.source_url,
+          sourceName: a.source_name,
+          publishedAt: a.published_at,
+          latitude: a.latitude,
+          longitude: a.longitude,
+          countryCode: a.country_code,
+          topicTags: a.topic_tags,
+          sentimentScore: a.sentiment_score,
+        }));
+        setSelectedPoint((prev) =>
+          prev ? { ...prev, articles: mapped, count: mapped.length } : null
+        );
+      } catch {
+        // Keep the panel open with whatever we have
+      }
+    },
+    [usingMockData]
+  );
 
   const handleZoomChange = useCallback((alt: number) => {
     setAltitude(alt);
