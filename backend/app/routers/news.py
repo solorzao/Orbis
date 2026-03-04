@@ -71,21 +71,21 @@ async def get_globe_data(
     timespan: str = Query("24h", description="Timespan, e.g. 24h, 48h"),
     limit: int = Query(500, ge=1, le=500, description="Max data points"),
 ) -> list[GlobeDataPoint]:
-    """Return clustered globe data points from the database."""
+    """Return globe data points — city-level from GEO API when available,
+    falling back to database clusters otherwise."""
+    from app.services.ingestion import GEO_CACHE_KEY
+
+    # Prefer city-level GEO data (populated by ingestion)
+    geo_cached = await get_cached(GEO_CACHE_KEY)
+    if geo_cached:
+        points = [GlobeDataPoint(**p) for p in geo_cached]
+        points.sort(key=lambda p: p.article_count, reverse=True)
+        return points[:limit]
+
+    # Fallback: clustered DB data (country-level)
     hours = _parse_timespan(timespan)
-
-    cache_k = f"db:globe:{hours}:{limit}"
-    cached = await get_cached(cache_k)
-    if cached:
-        return [GlobeDataPoint(**p) for p in cached]
-
     rows = await get_globe_points(timespan_hours=hours, limit=limit)
-    points = [GlobeDataPoint(**r) for r in rows]
-
-    if points:
-        await set_cached(cache_k, [p.model_dump() for p in points], settings.db_cache_ttl)
-
-    return points
+    return [GlobeDataPoint(**r) for r in rows]
 
 
 _MAX_CLUSTER_ARTICLES = 10

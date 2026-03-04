@@ -1,79 +1,119 @@
 """GDELT → PostgreSQL ingestion service.
 
-Periodically fetches articles from the GDELT DOC 2.0 API and upserts
-them into the local PostgreSQL database.  This decouples the app from
-GDELT's availability — the globe is always served from the database.
+Periodically fetches articles from the GDELT DOC 2.0 API and city-level
+globe points from the GEO 2.0 API, storing both locally so the app is
+decoupled from GDELT's live availability.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
 from app.config import settings
 from app.models.news import NewsArticle
-from app.services.cache import invalidate
+from app.services.cache import invalidate, set_cached
 from app.services.database import upsert_articles
-from app.services.gdelt import _fetch_with_retry, _parse_doc_response
+from app.services.gdelt import (
+    _fetch_with_retry,
+    _parse_doc_response,
+    _parse_geo_response,
+)
 
 logger = logging.getLogger("orbis.ingestion")
 
+# Cache key for GEO-sourced globe points (city-level)
+GEO_CACHE_KEY = "geo:globe_points"
+
+
+async def _ingest_articles() -> int:
+    """Fetch articles from GDELT DOC API and upsert into PostgreSQL."""
+    params = {
+        "query": "sourcelang:english",
+        "mode": "ArtList",
+        "maxrecords": 250,
+        "format": "json",
+        "timespan": "24h",
+    }
+
+    data = await _fetch_with_retry(settings.gdelt_doc_base_url, params)
+    raw_articles: list[NewsArticle] = _parse_doc_response(data)
+
+    articles = [a for a in raw_articles if a.latitude != 0.0 or a.longitude != 0.0]
+    if not articles:
+        logger.warning("DOC API: 0 geolocated articles.")
+        return 0
+
+    rows = []
+    for a in articles:
+        rows.append({
+            "title": a.title,
+            "summary": a.summary,
+            "source_url": a.source_url,
+            "source_name": a.source_name,
+            "source_language": a.source_language,
+            "published_at": a.published_at,
+            "latitude": a.latitude,
+            "longitude": a.longitude,
+            "country_code": a.country_code,
+            "region": a.region,
+            "topic_tags": a.topic_tags,
+            "sentiment_score": a.sentiment_score,
+            "entities": a.entities,
+            "image_url": None,
+        })
+
+    count = await upsert_articles(rows)
+    await invalidate("db:*")
+    logger.info("DOC API: upserted %d articles.", count)
+    return count
+
+
+async def _ingest_geo_points() -> int:
+    """Fetch city-level globe points from GDELT GEO API and cache them."""
+    params = {
+        "query": "sourcelang:english",
+        "mode": "PointData",
+        "format": "GeoJSON",
+        "timespan": "24h",
+    }
+
+    data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
+    points = _parse_geo_response(data)
+
+    if not points:
+        logger.warning("GEO API: 0 points returned.")
+        return 0
+
+    # Cache for 2x the ingestion interval so data survives between cycles
+    ttl = settings.ingestion_interval_seconds * 2
+    await set_cached(GEO_CACHE_KEY, [p.model_dump() for p in points], ttl)
+    logger.info("GEO API: cached %d city-level globe points.", len(points))
+    return len(points)
+
 
 async def run_ingestion_cycle() -> int:
-    """Fetch articles from GDELT and upsert into PostgreSQL.
+    """Fetch from both GDELT APIs. Returns number of articles upserted.
 
-    Returns the number of articles upserted, or 0 on failure.
     Never raises — all errors are logged and swallowed so the
     scheduler can keep running.
     """
     try:
         logger.info("Ingestion cycle starting …")
 
-        params = {
-            "query": "sourcelang:english",
-            "mode": "ArtList",
-            "maxrecords": 250,
-            "format": "json",
-            "timespan": "24h",
-        }
+        # Fetch DOC articles and GEO points in parallel, with a small
+        # delay between them to respect GDELT's rate limit.
+        article_count = await _ingest_articles()
+        await asyncio.sleep(5)  # GDELT rate limit: 1 req per 5 seconds
+        geo_count = await _ingest_geo_points()
 
-        data = await _fetch_with_retry(settings.gdelt_doc_base_url, params)
-        raw_articles: list[NewsArticle] = _parse_doc_response(data)
-
-        # Drop articles without valid coordinates — they cannot be plotted
-        articles = [a for a in raw_articles if a.latitude != 0.0 or a.longitude != 0.0]
-
-        if not articles:
-            logger.warning("Ingestion cycle: 0 geolocated articles from GDELT.")
-            return 0
-
-        # Convert Pydantic models → dicts for upsert_articles()
-        rows = []
-        for a in articles:
-            rows.append({
-                "title": a.title,
-                "summary": a.summary,
-                "source_url": a.source_url,
-                "source_name": a.source_name,
-                "source_language": a.source_language,
-                "published_at": a.published_at,
-                "latitude": a.latitude,
-                "longitude": a.longitude,
-                "country_code": a.country_code,
-                "region": a.region,
-                "topic_tags": a.topic_tags,
-                "sentiment_score": a.sentiment_score,
-                "entities": a.entities,
-                "image_url": None,
-            })
-
-        count = await upsert_articles(rows)
-
-        # Invalidate DB-sourced caches so next request picks up fresh data
-        await invalidate("db:*")
-
-        logger.info("Ingestion cycle complete: %d articles upserted.", count)
-        return count
+        logger.info(
+            "Ingestion cycle complete: %d articles, %d geo points.",
+            article_count,
+            geo_count,
+        )
+        return article_count
 
     except Exception:
         logger.error("Ingestion cycle failed.", exc_info=True)
