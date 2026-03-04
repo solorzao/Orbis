@@ -10,6 +10,7 @@ All public functions are importable via:
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -193,7 +194,7 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                     article.get("region", ""),
                     article.get("topic_tags", []),
                     article.get("sentiment_score", 0.0),
-                    article.get("entities", {}),
+                    json.dumps(article.get("entities", {})),
                     article.get("image_url"),
                 )
                 count += 1

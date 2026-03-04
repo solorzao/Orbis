@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -61,7 +62,7 @@ def _row_to_article(row: dict) -> NewsArticle:
         region=row.get("region", ""),
         topic_tags=row.get("topic_tags", []),
         sentiment_score=row.get("sentiment_score", 0.0),
-        entities=row.get("entities", {}),
+        entities=json.loads(row["entities"]) if isinstance(row.get("entities"), str) else row.get("entities", {}),
     )
 
 
