@@ -262,15 +262,17 @@ async def get_globe_points(
     results = []
     for row in rows:
         tags = row["topic_tags"] or []
-        results.append({
-            "lat": row["lat"],
-            "lng": row["lng"],
-            "weight": min(row["article_count"] * 10, 500),
-            "article_count": row["article_count"],
-            "top_headline": row["top_headline"] or "",
-            "topic": tags[0] if tags else "general",
-            "location_name": row["location_name"] or "",
-        })
+        results.append(
+            {
+                "lat": row["lat"],
+                "lng": row["lng"],
+                "weight": min(row["article_count"] * 10, 500),
+                "article_count": row["article_count"],
+                "top_headline": row["top_headline"] or "",
+                "topic": tags[0] if tags else "general",
+                "location_name": row["location_name"] or "",
+            }
+        )
     return results
 
 
