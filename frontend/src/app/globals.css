@@ -2,33 +2,33 @@
 
 :root,
 [data-theme="dark"] {
-  --bg-page:          #030712;
-  --surface-panel:    rgba(8, 12, 24, 0.82);
-  --surface-card:     rgba(15, 20, 35, 0.6);
-  --surface-overlay:  rgba(8, 12, 24, 0.65);
-  --text-primary:     #e2e8f0;
-  --text-secondary:   #94a3b8;
-  --text-muted:       #64748b;
-  --border-subtle:    rgba(255, 255, 255, 0.06);
-  --border-accent:    rgba(59, 130, 246, 0.12);
-  --vignette:         rgba(3, 7, 18, 0.6);
-  --shadow:           rgba(0, 0, 0, 0.4);
-  --inset-highlight:  rgba(255, 255, 255, 0.03);
+  --bg-page: #030712;
+  --surface-panel: rgba(8, 12, 24, 0.82);
+  --surface-card: rgba(15, 20, 35, 0.6);
+  --surface-overlay: rgba(8, 12, 24, 0.65);
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-accent: rgba(59, 130, 246, 0.12);
+  --vignette: rgba(3, 7, 18, 0.6);
+  --shadow: rgba(0, 0, 0, 0.4);
+  --inset-highlight: rgba(255, 255, 255, 0.03);
 }
 
 [data-theme="light"] {
-  --bg-page:          #f0f4f8;
-  --surface-panel:    rgba(255, 255, 255, 0.85);
-  --surface-card:     rgba(255, 255, 255, 0.7);
-  --surface-overlay:  rgba(255, 255, 255, 0.75);
-  --text-primary:     #1e293b;
-  --text-secondary:   #475569;
-  --text-muted:       #94a3b8;
-  --border-subtle:    rgba(0, 0, 0, 0.08);
-  --border-accent:    rgba(59, 130, 246, 0.2);
-  --vignette:         rgba(240, 244, 248, 0.5);
-  --shadow:           rgba(0, 0, 0, 0.1);
-  --inset-highlight:  rgba(255, 255, 255, 0.5);
+  --bg-page: #f0f4f8;
+  --surface-panel: rgba(255, 255, 255, 0.85);
+  --surface-card: rgba(255, 255, 255, 0.7);
+  --surface-overlay: rgba(255, 255, 255, 0.75);
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-accent: rgba(59, 130, 246, 0.2);
+  --vignette: rgba(240, 244, 248, 0.5);
+  --shadow: rgba(0, 0, 0, 0.1);
+  --inset-highlight: rgba(255, 255, 255, 0.5);
 }
 
 :root {
@@ -73,8 +73,12 @@ body {
 
 /* Shimmer animation for loading skeletons */
 @keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 /* Globe tooltip styling override */
