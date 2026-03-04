@@ -153,6 +153,8 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
 
     now = datetime.now(timezone.utc)
     articles: list[NewsArticle] = []
+    if raw_articles:
+        logger.info("GDELT DOC sample article keys: %s", list(raw_articles[0].keys()))
     for item in raw_articles:
         try:
             title = item.get("title", "").strip()
