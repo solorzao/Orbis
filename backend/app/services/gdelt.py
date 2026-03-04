@@ -349,10 +349,15 @@ async def fetch_geo_points(
     points = _parse_geo_response(data)
 
     # Fallback: when GEO API is down, derive globe points from DOC API
-    # articles. Country-level granularity is better than showing nothing.
+    # articles.  Drop the sourcelang:english filter so we get global
+    # coverage (65+ languages) instead of mostly US sources.
     if not points:
         logger.warning("GEO API returned 0 points — falling back to DOC API.")
-        articles = await fetch_articles(query=search_query, timespan=timespan)
+        articles = await fetch_articles(
+            query="",  # no language filter → global coverage
+            timespan=timespan,
+            max_records=250,
+        )
         points = _articles_to_globe_points(articles)
 
     # Only cache non-empty results — a transient GDELT outage should not

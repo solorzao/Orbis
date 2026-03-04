@@ -101,6 +101,38 @@ async def log_requests(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Health endpoint
 # ---------------------------------------------------------------------------
+@app.get("/debug/gdelt")
+async def debug_gdelt():
+    """Temporary diagnostic: test GDELT APIs directly from Azure."""
+    import httpx
+    from app.config import settings
+
+    results = {}
+    for label, url, params in [
+        ("geo", settings.gdelt_geo_base_url, {
+            "query": "sourcelang:english", "mode": "PointData",
+            "format": "GeoJSON", "timespan": "24h",
+        }),
+        ("doc", settings.gdelt_doc_base_url, {
+            "query": "sourcelang:english", "mode": "ArtList",
+            "maxrecords": "3", "format": "json", "timespan": "24h",
+        }),
+    ]:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(url, params=params)
+                body = resp.text[:500]
+                results[label] = {
+                    "status": resp.status_code,
+                    "size": len(resp.text),
+                    "body_preview": body,
+                }
+        except Exception as e:
+            results[label] = {"error": str(e)}
+
+    return results
+
+
 @app.get("/health")
 async def health():
     """Liveness / readiness probe — checks downstream services."""
