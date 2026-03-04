@@ -105,6 +105,7 @@ async def log_requests(request: Request, call_next):
 async def debug_gdelt():
     """Temporary diagnostic: test GDELT APIs directly from Azure."""
     import httpx
+    import time as _time
     from app.config import settings
 
     results = {}
@@ -118,17 +119,27 @@ async def debug_gdelt():
             "maxrecords": "3", "format": "json", "timespan": "24h",
         }),
     ]:
+        t0 = _time.monotonic()
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 resp = await client.get(url, params=params)
+                elapsed = _time.monotonic() - t0
                 body = resp.text[:500]
                 results[label] = {
                     "status": resp.status_code,
                     "size": len(resp.text),
+                    "elapsed_s": round(elapsed, 2),
+                    "url": str(resp.url),
                     "body_preview": body,
                 }
         except Exception as e:
-            results[label] = {"error": str(e)}
+            elapsed = _time.monotonic() - t0
+            results[label] = {
+                "error_type": type(e).__name__,
+                "error": str(e) or repr(e),
+                "elapsed_s": round(elapsed, 2),
+                "url": url,
+            }
 
     return results
 
