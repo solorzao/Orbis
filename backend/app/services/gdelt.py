@@ -147,13 +147,16 @@ def _cache_key(prefix: str, **kwargs: Any) -> str:
 async def _fetch_with_retry(url: str, params: dict[str, Any]) -> dict | list | None:
     """GET *url* with exponential back-off.  Returns parsed JSON or None."""
     import asyncio
+    import json as _json
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(url, params=params)
                 resp.raise_for_status()
-                return resp.json()
+                # Some GDELT endpoints return broken UTF-8; decode leniently
+                text = resp.content.decode("utf-8", errors="replace")
+                return _json.loads(text)
         except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
             wait = _BACKOFF_BASE**attempt
             logger.warning(
