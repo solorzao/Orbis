@@ -298,31 +298,41 @@ class TestParseGeoResponse:
 
 class TestFetchGeoPoints:
     @pytest.mark.asyncio
-    async def test_calls_geo_api_with_correct_params(self):
-        geo_data = {"type": "FeatureCollection", "features": [_make_geo_feature()]}
+    async def test_tries_gkg_first(self):
+        """fetch_geo_points tries GKG GeoJSON v1 before GEO 2.0."""
+        gkg_data = {
+            "type": "FeatureCollection",
+            "features": [_make_geo_feature()],
+        }
 
         with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
              patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
              patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
-            mock_fetch.return_value = geo_data
+            mock_fetch.return_value = gkg_data
             points = await fetch_geo_points()
-            call_args = mock_fetch.call_args
-            params = call_args[0][1]
-            assert params["mode"] == "PointData"
-            assert params["format"] == "GeoJSON"
+            # First call should be to GKG endpoint
+            first_url = mock_fetch.call_args_list[0][0][0]
+            assert "gkg_geojson" in first_url
             assert len(points) == 1
 
     @pytest.mark.asyncio
-    async def test_default_query_is_sourcelang_english(self):
-        geo_data = {"type": "FeatureCollection", "features": [_make_geo_feature()]}
+    async def test_falls_back_to_geo_v2_when_gkg_empty(self):
+        """Falls back to GEO 2.0 when GKG returns nothing."""
+        geo_data = {
+            "type": "FeatureCollection",
+            "features": [_make_geo_feature()],
+        }
 
         with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
              patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
              patch("app.services.gdelt.set_cached", new_callable=AsyncMock):
-            mock_fetch.return_value = geo_data
-            await fetch_geo_points()
-            params = mock_fetch.call_args[0][1]
-            assert params["query"] == "sourcelang:english"
+            # GKG returns empty, GEO 2.0 returns data
+            mock_fetch.side_effect = [None, geo_data]
+            points = await fetch_geo_points()
+            assert len(points) == 1
+            # Second call should be to GEO 2.0
+            second_url = mock_fetch.call_args_list[1][0][0]
+            assert "geo/geo" in second_url
 
     @pytest.mark.asyncio
     async def test_returns_cached_results(self):

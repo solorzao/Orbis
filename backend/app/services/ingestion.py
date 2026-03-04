@@ -72,25 +72,37 @@ async def _ingest_articles() -> int:
 
 
 async def _ingest_geo_points() -> int:
-    """Fetch city-level globe points from GDELT GEO API and cache them."""
-    params = {
-        "query": "sourcelang:english",
-        "mode": "PointData",
-        "format": "GeoJSON",
-        "timespan": "24h",
-    }
+    """Fetch city-level globe points from GDELT and cache them.
 
-    data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
-    points = _parse_geo_response(data)
+    Tries GKG GeoJSON v1 first (reliable), then GEO 2.0 as fallback.
+    """
+    from app.services.gdelt import _parse_gkg_geojson
+
+    # 1. Try GKG GeoJSON v1 — city-level, 2500 features
+    gkg_url = "https://api.gdeltproject.org/api/v1/gkg_geojson"
+    data = await _fetch_with_retry(gkg_url, {})
+    points = _parse_gkg_geojson(data)
+
+    # 2. Fallback to GEO 2.0 API
+    if not points:
+        logger.info("GKG GeoJSON empty — trying GEO 2.0 API.")
+        params = {
+            "query": "sourcelang:english",
+            "mode": "PointData",
+            "format": "GeoJSON",
+            "timespan": "24h",
+        }
+        data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
+        points = _parse_geo_response(data)
 
     if not points:
-        logger.warning("GEO API: 0 points returned.")
+        logger.warning("GEO ingestion: 0 points from all sources.")
         return 0
 
     # Cache for 2x the ingestion interval so data survives between cycles
     ttl = settings.ingestion_interval_seconds * 2
     await set_cached(GEO_CACHE_KEY, [p.model_dump() for p in points], ttl)
-    logger.info("GEO API: cached %d city-level globe points.", len(points))
+    logger.info("GEO ingestion: cached %d city-level globe points.", len(points))
     return len(points)
 
 

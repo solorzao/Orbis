@@ -365,6 +365,54 @@ def _parse_geo_response(data: Any) -> list[GlobeDataPoint]:
     return points
 
 
+def _parse_gkg_geojson(data: Any) -> list[GlobeDataPoint]:
+    """Parse GKG GeoJSON (v1) into GlobeDataPoints grouped by location.
+
+    The GKG GeoJSON endpoint returns one feature per mention, so we
+    group by (lat, lng), pick the first headline per location, and
+    count mentions.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    from collections import defaultdict
+
+    features = data.get("features", [])
+    buckets: dict[tuple[float, float], list[dict]] = defaultdict(list)
+
+    for feature in features:
+        try:
+            coords = feature.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            lng, lat = float(coords[0]), float(coords[1])
+            buckets[(lat, lng)].append(feature.get("properties", {}))
+        except Exception:
+            continue
+
+    points: list[GlobeDataPoint] = []
+    for (lat, lng), props_list in buckets.items():
+        name = props_list[0].get("name", "")
+        themes = props_list[0].get("mentionedthemes", "")
+        topic_tags = classify_topic(name + " " + themes)
+        topic = topic_tags[0] if topic_tags else "general"
+        count = len(props_list)
+
+        points.append(
+            GlobeDataPoint(
+                lat=lat,
+                lng=lng,
+                weight=min(count * 10, 500),
+                article_count=count,
+                top_headline=name,
+                topic=topic,
+                location_name=name,
+            )
+        )
+
+    return points
+
+
 def _articles_to_globe_points(articles: list[NewsArticle]) -> list[GlobeDataPoint]:
     """Convert DOC API articles into GlobeDataPoints grouped by location.
 
@@ -401,44 +449,52 @@ async def fetch_geo_points(
     query: str = "",
     timespan: str = "24h",
 ) -> list[GlobeDataPoint]:
-    """Fetch globe points from the GDELT GEO 2.0 API.
+    """Fetch city-level globe points from GDELT.
 
-    Returns city-level GeoJSON data with coordinates and article counts.
-    Results are cached in Redis for ``settings.gdelt_cache_ttl`` seconds.
+    Tries these sources in order:
+    1. GKG GeoJSON v1 API (city-level, 2500 features)
+    2. GEO 2.0 API (city-level, when available)
+    3. DOC API articles grouped by country (fallback)
 
-    Falls back to DOC API articles (country-level) when GEO API is down.
+    Results are cached in Redis.
     """
-    search_query = query or "sourcelang:english"
-
-    cache_k = _cache_key("gdelt:geo", q=search_query, ts=timespan)
+    cache_k = _cache_key("gdelt:geo", ts=timespan)
     cached = await get_cached(cache_k)
     if cached:
         return [GlobeDataPoint(**p) for p in cached]
 
-    params: dict[str, Any] = {
-        "query": search_query,
-        "mode": "PointData",
-        "format": "GeoJSON",
-        "timespan": timespan,
-    }
+    # 1. Try GKG GeoJSON v1 — returns 2500 city-level features
+    gkg_url = "https://api.gdeltproject.org/api/v1/gkg_geojson"
+    data = await _fetch_with_retry(gkg_url, {})
+    points = _parse_gkg_geojson(data)
 
-    data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
-    points = _parse_geo_response(data)
-
-    # Fallback: when GEO API is down, derive globe points from DOC API
-    # articles.  Drop the sourcelang:english filter so we get global
-    # coverage (65+ languages) instead of mostly US sources.
+    # 2. Try GEO 2.0 API
     if not points:
-        logger.warning("GEO API returned 0 points — falling back to DOC API.")
+        logger.info("GKG GeoJSON returned 0 — trying GEO 2.0 API.")
+        search_query = query or "sourcelang:english"
+        params: dict[str, Any] = {
+            "query": search_query,
+            "mode": "PointData",
+            "format": "GeoJSON",
+            "timespan": timespan,
+        }
+        data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
+        points = _parse_geo_response(data)
+
+    # 3. Fallback: DOC API articles grouped by country
+    if not points:
+        logger.warning("No geo data — falling back to DOC API.")
         articles = await fetch_articles(
-            query="",  # no language filter → global coverage
+            query="",
             timespan=timespan,
             max_records=250,
         )
         points = _articles_to_globe_points(articles)
 
-    # Only cache non-empty results — a transient GDELT outage should not
-    # poison the cache for hours.
     if points:
-        await set_cached(cache_k, [p.model_dump() for p in points], settings.gdelt_geo_cache_ttl)
+        await set_cached(
+            cache_k,
+            [p.model_dump() for p in points],
+            settings.gdelt_geo_cache_ttl,
+        )
     return points
