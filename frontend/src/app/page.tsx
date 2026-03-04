@@ -26,8 +26,6 @@ export default function Home() {
   // Fetch all points once on mount
   useEffect(() => {
     let cancelled = false;
-    setApiError(false);
-    setLoading(true);
     fetchGlobeNews()
       .then((apiPoints) => {
         if (cancelled) return;

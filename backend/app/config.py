@@ -75,9 +75,7 @@ class Settings:
     ingestion_interval_seconds: int = field(
         default_factory=lambda: _env_int("INGESTION_INTERVAL_SECONDS", 900)
     )  # 15 minutes
-    db_cache_ttl: int = field(
-        default_factory=lambda: _env_int("DB_CACHE_TTL", 300)
-    )  # 5 minutes
+    db_cache_ttl: int = field(default_factory=lambda: _env_int("DB_CACHE_TTL", 300))  # 5 minutes
 
     # --- Clustering ---
     cluster_resolution_deg: float = field(

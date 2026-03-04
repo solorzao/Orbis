@@ -148,7 +148,11 @@ async def get_cluster_summary(
     nearby = articles[:_MAX_CLUSTER_ARTICLES]
 
     summary_text = await summarise_cluster(
-        nearby, lat, lng, location_name=location_name, topic=resolved,
+        nearby,
+        lat,
+        lng,
+        location_name=location_name,
+        topic=resolved,
     )
     return ClusterSummaryResponse(
         lat=lat,

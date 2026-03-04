@@ -46,22 +46,24 @@ async def _ingest_articles() -> int:
 
     rows = []
     for a in articles:
-        rows.append({
-            "title": a.title,
-            "summary": a.summary,
-            "source_url": a.source_url,
-            "source_name": a.source_name,
-            "source_language": a.source_language,
-            "published_at": a.published_at,
-            "latitude": a.latitude,
-            "longitude": a.longitude,
-            "country_code": a.country_code,
-            "region": a.region,
-            "topic_tags": a.topic_tags,
-            "sentiment_score": a.sentiment_score,
-            "entities": a.entities,
-            "image_url": None,
-        })
+        rows.append(
+            {
+                "title": a.title,
+                "summary": a.summary,
+                "source_url": a.source_url,
+                "source_name": a.source_name,
+                "source_language": a.source_language,
+                "published_at": a.published_at,
+                "latitude": a.latitude,
+                "longitude": a.longitude,
+                "country_code": a.country_code,
+                "region": a.region,
+                "topic_tags": a.topic_tags,
+                "sentiment_score": a.sentiment_score,
+                "entities": a.entities,
+                "image_url": None,
+            }
+        )
 
     count = await upsert_articles(rows)
     await invalidate("db:*")
