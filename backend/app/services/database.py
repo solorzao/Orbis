@@ -221,7 +221,7 @@ async def get_globe_points(
     pool = await get_pool()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
 
-    query = """
+    base_query = """
         WITH clustered AS (
             SELECT
                 ROUND(latitude / $2) * $2 + $2 / 2  AS lat,
@@ -235,7 +235,7 @@ async def get_globe_points(
                     ORDER BY published_at DESC
                 ) AS rn
             FROM articles
-            WHERE published_at >= $1
+            {time_filter}
         )
         SELECT
             lat,
@@ -250,7 +250,14 @@ async def get_globe_points(
         LIMIT $3
     """
 
+    # Try with time filter first, fall back to all data if empty
+    query = base_query.format(time_filter="WHERE published_at >= $1")
     rows = await pool.fetch(query, cutoff, cell_size, limit)
+
+    if not rows:
+        logger.warning("No articles in last %dh — falling back to all data.", timespan_hours)
+        query_all = base_query.format(time_filter="")
+        rows = await pool.fetch(query_all, cutoff, cell_size, limit)
     results = []
     for row in rows:
         tags = row["topic_tags"] or []
