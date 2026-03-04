@@ -154,7 +154,7 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
     now = datetime.now(timezone.utc)
     articles: list[NewsArticle] = []
     if raw_articles:
-        logger.info("GDELT DOC sample article keys: %s", list(raw_articles[0].keys()))
+        logger.debug("GDELT DOC sample article keys: %s", list(raw_articles[0].keys()))
     for item in raw_articles:
         try:
             title = item.get("title", "").strip()
@@ -204,7 +204,11 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
                     latitude=lat,
                     longitude=lng,
                     country_code=country_code,
-                    sentiment_score=max(-1.0, min(1.0, tone / 10.0)) if has_tone else _estimate_sentiment(title),
+                    sentiment_score=(
+                        max(-1.0, min(1.0, tone / 10.0))
+                        if has_tone
+                        else _estimate_sentiment(title)
+                    ),
                     topic_tags=topic_tags,
                 )
             )

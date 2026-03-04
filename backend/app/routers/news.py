@@ -62,7 +62,11 @@ def _row_to_article(row: dict) -> NewsArticle:
         region=row.get("region", ""),
         topic_tags=row.get("topic_tags", []),
         sentiment_score=row.get("sentiment_score", 0.0),
-        entities=json.loads(row["entities"]) if isinstance(row.get("entities"), str) else row.get("entities", {}),
+        entities=(
+            json.loads(row["entities"])
+            if isinstance(row.get("entities"), str)
+            else row.get("entities", {})
+        ),
     )
 
 
@@ -143,7 +147,9 @@ async def get_cluster_summary(
 
     nearby = articles[:_MAX_CLUSTER_ARTICLES]
 
-    summary_text = await summarise_cluster(nearby, lat, lng, location_name=location_name, topic=resolved)
+    summary_text = await summarise_cluster(
+        nearby, lat, lng, location_name=location_name, topic=resolved,
+    )
     return ClusterSummaryResponse(
         lat=lat,
         lng=lng,

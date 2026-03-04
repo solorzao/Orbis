@@ -65,7 +65,10 @@ class Settings:
     gdelt_cache_ttl: int = field(default_factory=lambda: _env_int("GDELT_CACHE_TTL", 7200))
     # Globe data (GEO API) changes slowly — cache longer so subsequent users
     # get an instant load instead of waiting for the GDELT API.
-    gdelt_geo_cache_ttl: int = field(default_factory=lambda: _env_int("GDELT_GEO_CACHE_TTL", 21600))  # 6 hours
+    # 6 hours
+    gdelt_geo_cache_ttl: int = field(
+        default_factory=lambda: _env_int("GDELT_GEO_CACHE_TTL", 21600),
+    )
     summary_cache_ttl: int = field(default_factory=lambda: _env_int("SUMMARY_CACHE_TTL", 21600))
 
     # --- Ingestion ---
