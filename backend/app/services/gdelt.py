@@ -116,7 +116,7 @@ async def fetch_articles(
 
     cache_k = _cache_key("gdelt:doc", q=search_query, ts=timespan, mr=str(max_records))
     cached = await get_cached(cache_k)
-    if cached is not None:
+    if cached:
         return [NewsArticle(**a) for a in cached]
 
     params: dict[str, Any] = {
@@ -335,7 +335,7 @@ async def fetch_geo_points(
 
     cache_k = _cache_key("gdelt:geo", q=search_query, ts=timespan)
     cached = await get_cached(cache_k)
-    if cached is not None:
+    if cached:
         return [GlobeDataPoint(**p) for p in cached]
 
     params: dict[str, Any] = {
