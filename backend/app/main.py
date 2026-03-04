@@ -56,6 +56,8 @@ async def startup() -> None:
 
     # Flush old AI summaries so updated prompt takes effect
     await invalidate("summary:*")
+    # Flush stale globe cache so improved fallback query runs fresh
+    await invalidate("gdelt:geo:*")
 
     # Pre-warm the globe news cache so first request is instant
     import asyncio
@@ -101,49 +103,6 @@ async def log_requests(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Health endpoint
 # ---------------------------------------------------------------------------
-@app.get("/debug/gdelt")
-async def debug_gdelt():
-    """Temporary diagnostic: test GDELT APIs directly from Azure."""
-    import httpx
-    import time as _time
-    from app.config import settings
-
-    results = {}
-    for label, url, params in [
-        ("geo", settings.gdelt_geo_base_url, {
-            "query": "sourcelang:english", "mode": "PointData",
-            "format": "GeoJSON", "timespan": "24h",
-        }),
-        ("doc", settings.gdelt_doc_base_url, {
-            "query": "sourcelang:english", "mode": "ArtList",
-            "maxrecords": "3", "format": "json", "timespan": "24h",
-        }),
-    ]:
-        t0 = _time.monotonic()
-        try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.get(url, params=params)
-                elapsed = _time.monotonic() - t0
-                body = resp.text[:500]
-                results[label] = {
-                    "status": resp.status_code,
-                    "size": len(resp.text),
-                    "elapsed_s": round(elapsed, 2),
-                    "url": str(resp.url),
-                    "body_preview": body,
-                }
-        except Exception as e:
-            elapsed = _time.monotonic() - t0
-            results[label] = {
-                "error_type": type(e).__name__,
-                "error": str(e) or repr(e),
-                "elapsed_s": round(elapsed, 2),
-                "url": url,
-            }
-
-    return results
-
-
 @app.get("/health")
 async def health():
     """Liveness / readiness probe — checks downstream services."""
