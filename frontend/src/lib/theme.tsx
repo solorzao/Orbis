@@ -24,19 +24,26 @@ function applyTheme(resolved: ResolvedTheme) {
   document.documentElement.setAttribute("data-theme", resolved);
 }
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeChoice>("system");
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("dark");
+function getInitialChoice(): ThemeChoice {
+  if (typeof window === "undefined") return "system";
+  const stored = localStorage.getItem(STORAGE_KEY) as ThemeChoice | null;
+  return stored && ["system", "light", "dark"].includes(stored) ? stored : "system";
+}
 
-  // Initialize from localStorage
+function getInitialResolved(choice: ThemeChoice): ResolvedTheme {
+  return choice === "system" ? getSystemTheme() : choice;
+}
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, setThemeState] = useState<ThemeChoice>(getInitialChoice);
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    getInitialResolved(getInitialChoice()),
+  );
+
+  // Apply theme on mount (DOM side effect, not setState)
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY) as ThemeChoice | null;
-    const choice = stored && ["system", "light", "dark"].includes(stored) ? stored : "system";
-    setThemeState(choice);
-    const resolved = choice === "system" ? getSystemTheme() : choice;
-    setResolvedTheme(resolved);
-    applyTheme(resolved);
-  }, []);
+    applyTheme(resolvedTheme);
+  }, [resolvedTheme]);
 
   // Listen for OS preference changes when in "system" mode
   useEffect(() => {
