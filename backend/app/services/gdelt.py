@@ -15,7 +15,7 @@ import httpx
 from app.config import settings
 from app.models.news import GlobeDataPoint, NewsArticle
 from app.services.cache import get_cached, set_cached
-from app.services.country_centroids import get_centroid, normalize_country
+from app.services.country_centroids import COUNTRY_SPREAD, get_centroid, normalize_country
 from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger(__name__)
@@ -180,12 +180,20 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
 
             article_id = hashlib.sha256(url.encode()).hexdigest()[:16]
 
-            # Geo: look up centroid from sourcecountry
+            # Geo: look up centroid from sourcecountry, then jitter
+            # based on URL hash so articles spread across the country
+            # instead of stacking on one point.
             raw_country = item.get("sourcecountry", "")
             country_code = normalize_country(raw_country)
             centroid = get_centroid(raw_country)
             lat = centroid[0] if centroid else 0.0
             lng = centroid[1] if centroid else 0.0
+
+            if centroid and url:
+                spread = COUNTRY_SPREAD.get(country_code, 3.0)
+                h = int(article_id, 16)
+                lat += ((h % 1000) / 1000 - 0.5) * spread
+                lng += (((h >> 10) % 1000) / 1000 - 0.5) * spread
 
             # Topics: classify from title
             topic_tags = classify_topic(title)

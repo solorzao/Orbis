@@ -189,6 +189,22 @@ COUNTRY_NAME_TO_CODE: dict[str, str] = {
 }
 
 
+# Approximate geographic spread (degrees) per country.
+# Large countries get more jitter so articles fan out across the landmass;
+# small countries get less so dots stay on the map.
+COUNTRY_SPREAD: dict[str, float] = {
+    "RU": 30.0, "CA": 20.0, "US": 20.0, "CN": 15.0, "BR": 15.0,
+    "AU": 15.0, "IN": 10.0, "AR": 12.0, "KZ": 10.0, "DZ": 10.0,
+    "SA": 8.0, "MX": 8.0, "ID": 8.0, "SD": 8.0, "LY": 8.0,
+    "IR": 7.0, "PE": 7.0, "CL": 7.0, "CO": 6.0, "ZA": 6.0,
+    "ET": 6.0, "EG": 5.0, "NG": 5.0, "TR": 5.0, "PK": 5.0,
+    "FR": 4.0, "ES": 4.0, "DE": 3.0, "PL": 3.0, "IT": 3.0,
+    "GB": 3.0, "JP": 4.0, "UA": 4.0, "SE": 5.0, "NO": 5.0,
+    "FI": 5.0, "VN": 4.0, "TH": 4.0, "MM": 4.0, "MY": 4.0,
+    "PH": 4.0, "KE": 4.0, "NZ": 4.0, "RO": 3.0, "IQ": 3.0,
+}
+
+
 def normalize_country(raw: str) -> str:
     """Convert a GDELT sourcecountry value to an ISO 2-letter code.
 

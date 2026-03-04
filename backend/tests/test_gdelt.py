@@ -379,9 +379,10 @@ class TestArticlesToGlobePoints:
             ]
         })
         points = _articles_to_globe_points(articles)
-        assert len(points) == 2  # US + France
-        us_point = next(p for p in points if p.article_count == 2)
-        assert us_point.article_count == 2
+        # Each article gets unique jittered coords, so 3 separate points
+        assert len(points) == 3
+        us_points = [p for p in points if p.location_name == "US"]
+        assert len(us_points) == 2
 
     def test_skips_zero_coord_articles(self):
         articles = _parse_doc_response({
