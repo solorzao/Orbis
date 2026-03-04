@@ -17,7 +17,7 @@ from app.models.news import (
 )
 from app.services.ai_summary import summarise_cluster
 from app.services.cache import get_cached, set_cached
-from app.services.database import get_globe_points, get_nearby_articles, get_topic_counts
+from app.services.database import get_nearby_articles, get_topic_counts
 
 logger = logging.getLogger(__name__)
 
@@ -76,20 +76,12 @@ async def get_globe_data(
     limit: int = Query(500, ge=1, le=500, description="Max data points"),
 ) -> list[GlobeDataPoint]:
     """Return globe data points — city-level from GEO API when available,
-    falling back to database clusters otherwise."""
-    from app.services.ingestion import GEO_CACHE_KEY
+    falling back to DOC API articles grouped by location."""
+    from app.services.gdelt import fetch_geo_points
 
-    # Prefer city-level GEO data (populated by ingestion)
-    geo_cached = await get_cached(GEO_CACHE_KEY)
-    if geo_cached:
-        points = [GlobeDataPoint(**p) for p in geo_cached]
-        points.sort(key=lambda p: p.article_count, reverse=True)
-        return points[:limit]
-
-    # Fallback: clustered DB data (country-level)
-    hours = _parse_timespan(timespan)
-    rows = await get_globe_points(timespan_hours=hours, limit=limit)
-    return [GlobeDataPoint(**r) for r in rows]
+    points = await fetch_geo_points(timespan=timespan)
+    points.sort(key=lambda p: p.article_count, reverse=True)
+    return points[:limit]
 
 
 _MAX_CLUSTER_ARTICLES = 10

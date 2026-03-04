@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from app.models.news import GlobeDataPoint, NewsArticle
 
 
-def _make_globe_row(topic: str = "general", lat: float = 40.0, lng: float = -74.0, count: int = 3):
-    """Create a dict matching get_globe_points() output."""
-    return dict(
+def _make_globe_point(topic: str = "general", lat: float = 40.0, lng: float = -74.0, count: int = 3):
+    """Create a GlobeDataPoint matching fetch_geo_points() output."""
+    return GlobeDataPoint(
         lat=lat,
         lng=lng,
         weight=min(count * 10, 500),
@@ -56,34 +56,46 @@ class TestGetGlobeData:
     async def test_returns_globe_points(self):
         from app.routers.news import get_globe_data
 
-        rows = [
-            _make_globe_row("conflict", lat=33.0, lng=44.0),
-            _make_globe_row("economy", lat=51.0, lng=-0.1),
+        points_data = [
+            _make_globe_point("conflict", lat=33.0, lng=44.0, count=5),
+            _make_globe_point("economy", lat=51.0, lng=-0.1, count=3),
         ]
 
-        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=rows):
+        with patch(
+            "app.services.gdelt.fetch_geo_points",
+            new_callable=AsyncMock,
+            return_value=points_data,
+        ):
             points = await get_globe_data(timespan="24h", limit=100)
             assert len(points) == 2
+            # Sorted by article_count desc
             assert points[0].topic == "conflict"
 
     @pytest.mark.asyncio
     async def test_limit_caps_results(self):
         from app.routers.news import get_globe_data
 
-        rows = [_make_globe_row(count=i + 1) for i in range(10)]
+        points_data = [_make_globe_point(count=i + 1) for i in range(10)]
 
-        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=rows):
+        with patch(
+            "app.services.gdelt.fetch_geo_points",
+            new_callable=AsyncMock,
+            return_value=points_data,
+        ):
             points = await get_globe_data(timespan="24h", limit=3)
-            # get_globe_points handles the limit in SQL, but we pass it through
-            assert len(points) == 10  # limit is passed to DB, not post-filtered
+            assert len(points) == 3
 
     @pytest.mark.asyncio
-    async def test_timespan_parsed_to_hours(self):
+    async def test_timespan_passed_through(self):
         from app.routers.news import get_globe_data
 
-        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[]) as mock_get:
+        with patch(
+            "app.services.gdelt.fetch_geo_points",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_fetch:
             await get_globe_data(timespan="48h", limit=100)
-            mock_get.assert_called_once_with(timespan_hours=48, limit=100)
+            mock_fetch.assert_called_once_with(timespan="48h")
 
 
 class TestGetClusterArticles:
