@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from app.services.gdelt import (
+    _articles_to_globe_points,
     _extract_titles_from_html,
     _parse_doc_response,
     _parse_geo_response,
@@ -144,6 +145,17 @@ class TestFetchArticles:
             mock_fetch.return_value = mock_data
             await fetch_articles()
             assert mock_fetch.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_does_not_cache_empty_doc_results(self):
+        """Empty DOC results (GDELT outage) must NOT be cached."""
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock) as mock_set:
+            mock_fetch.return_value = None  # DOC API down
+            articles = await fetch_articles()
+            assert articles == []
+            mock_set.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_returns_cached_results(self):
@@ -302,7 +314,7 @@ class TestFetchGeoPoints:
 
     @pytest.mark.asyncio
     async def test_default_query_is_sourcelang_english(self):
-        geo_data = {"type": "FeatureCollection", "features": []}
+        geo_data = {"type": "FeatureCollection", "features": [_make_geo_feature()]}
 
         with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
              patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
@@ -326,3 +338,57 @@ class TestFetchGeoPoints:
             mock_fetch.assert_not_called()
             assert len(points) == 1
             assert points[0].location_name == "Tehran"
+
+    @pytest.mark.asyncio
+    async def test_does_not_cache_empty_results(self):
+        """Empty GEO results (GDELT outage) must NOT be cached."""
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock) as mock_set, \
+             patch("app.services.gdelt.fetch_articles", new_callable=AsyncMock, return_value=[]):
+            mock_fetch.return_value = None  # GEO API down
+            await fetch_geo_points()
+            mock_set.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_doc_api_when_geo_returns_empty(self):
+        """When GEO API returns nothing, fall back to DOC-derived points."""
+        doc_articles = _parse_doc_response({
+            "articles": [
+                _make_raw_article(sourcecountry="United States", url="https://a.com/1"),
+                _make_raw_article(sourcecountry="France", url="https://a.com/2"),
+            ]
+        })
+
+        with patch("app.services.gdelt._fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("app.services.gdelt.get_cached", new_callable=AsyncMock, return_value=None), \
+             patch("app.services.gdelt.set_cached", new_callable=AsyncMock), \
+             patch("app.services.gdelt.fetch_articles", new_callable=AsyncMock, return_value=doc_articles):
+            mock_fetch.return_value = None  # GEO API down
+            points = await fetch_geo_points()
+            assert len(points) == 2  # One per country
+
+
+class TestArticlesToGlobePoints:
+    def test_groups_by_location(self):
+        articles = _parse_doc_response({
+            "articles": [
+                _make_raw_article(sourcecountry="US", url="https://a.com/1", title="Story A"),
+                _make_raw_article(sourcecountry="US", url="https://a.com/2", title="Story B"),
+                _make_raw_article(sourcecountry="France", url="https://a.com/3", title="Story C"),
+            ]
+        })
+        points = _articles_to_globe_points(articles)
+        assert len(points) == 2  # US + France
+        us_point = next(p for p in points if p.article_count == 2)
+        assert us_point.article_count == 2
+
+    def test_skips_zero_coord_articles(self):
+        articles = _parse_doc_response({
+            "articles": [_make_raw_article(sourcecountry="ZZ")]
+        })
+        points = _articles_to_globe_points(articles)
+        assert len(points) == 0
+
+    def test_empty_input(self):
+        assert _articles_to_globe_points([]) == []
