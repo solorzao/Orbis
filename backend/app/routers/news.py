@@ -90,16 +90,32 @@ async def get_cluster_articles(
 ) -> list[NewsArticle]:
     """Return full articles near a given lat/lng point.
 
-    Used when a user clicks a dot on the globe.  Searches GDELT with the
-    location name AND topic keywords so articles match both place and topic.
+    Uses a tiered query strategy:
+    1. Fetch articles by location only (no topic in GDELT query) to maximize
+       results — the topic classifier has better keyword coverage than GDELT
+       query keywords, so post-filtering is more reliable.
+    2. If topic filter removes everything, return unfiltered location results
+       so the user always sees *something*.
     """
     resolved = _resolve_topic(topic)
-    gdelt_query = _build_location_query(location_name, topic=resolved)
-    # Fetch more than we need so post-filtering by classifier still yields results
-    articles = await fetch_articles(query=gdelt_query, max_records=15)
+    # Search GDELT by location only — broader query yields more results.
+    # Topic filtering is done locally via the classifier's post-filter.
+    gdelt_query = _build_location_query(location_name)
+    articles = await fetch_articles(query=gdelt_query, max_records=50)
 
     if resolved:
-        articles = [a for a in articles if resolved in a.topic_tags]
+        filtered = [a for a in articles if resolved in a.topic_tags]
+        # Fallback: if topic filter removes everything, return unfiltered
+        # results — better to show related location articles than nothing.
+        if filtered:
+            articles = filtered
+        else:
+            logger.info(
+                "Topic filter '%s' matched 0 of %d articles for '%s' — returning unfiltered",
+                resolved,
+                len(articles),
+                location_name,
+            )
 
     return articles[:_MAX_CLUSTER_ARTICLES]
 
@@ -114,11 +130,14 @@ async def get_cluster_summary(
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
-    gdelt_query = _build_location_query(location_name, topic=resolved)
-    articles = await fetch_articles(query=gdelt_query, max_records=15)
+    # Match the cluster endpoint: location-only GDELT query + local topic filter
+    gdelt_query = _build_location_query(location_name)
+    articles = await fetch_articles(query=gdelt_query, max_records=50)
 
     if resolved:
-        articles = [a for a in articles if resolved in a.topic_tags]
+        filtered = [a for a in articles if resolved in a.topic_tags]
+        if filtered:
+            articles = filtered
 
     nearby = articles[:_MAX_CLUSTER_ARTICLES]
 

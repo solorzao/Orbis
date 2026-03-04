@@ -312,6 +312,7 @@ async def fetch_geo_points(
     data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
     points = _parse_geo_response(data)
 
-    # Cache the result.
-    await set_cached(cache_k, [p.model_dump() for p in points], settings.gdelt_cache_ttl)
+    # Cache globe points with longer TTL — this data changes slowly and
+    # a warm cache means instant loads for subsequent users.
+    await set_cached(cache_k, [p.model_dump() for p in points], settings.gdelt_geo_cache_ttl)
     return points

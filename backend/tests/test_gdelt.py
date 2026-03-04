@@ -89,7 +89,7 @@ class TestParseDocResponse:
     def test_parses_tone_string(self):
         data = {"articles": [_make_raw_article(tone="-3.5,1.2,4.0")]}
         articles = _parse_doc_response(data)
-        assert articles[0].sentiment_score == -3.5
+        assert articles[0].sentiment_score == -0.35  # GDELT tone / 10 → normalized to [-1, 1]
 
     def test_handles_multiple_articles_different_countries(self):
         data = {"articles": [

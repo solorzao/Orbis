@@ -49,20 +49,8 @@ class TestGetGlobeData:
         ]
 
         with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=geo_points):
-            points = await get_globe_data(topic=None, timespan="24h", limit=100)
+            points = await get_globe_data(timespan="24h", limit=100)
             assert len(points) == 2
-
-    @pytest.mark.asyncio
-    async def test_topic_filter_builds_gdelt_query(self):
-        from app.routers.news import get_globe_data
-
-        geo_points = [_make_globe_point("conflict")]
-
-        with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=geo_points) as mock_fetch:
-            await get_globe_data(topic="Conflict", timespan="24h", limit=100)
-            call_args = mock_fetch.call_args
-            query = call_args[1].get("query") or call_args[0][0] if call_args[0] else call_args[1]["query"]
-            assert "war" in query.lower() or "conflict" in query.lower()
 
     @pytest.mark.asyncio
     async def test_limit_caps_results(self):
@@ -71,19 +59,8 @@ class TestGetGlobeData:
         geo_points = [_make_globe_point(article_count=i) for i in range(10)]
 
         with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=geo_points):
-            points = await get_globe_data(topic=None, timespan="24h", limit=3)
+            points = await get_globe_data(timespan="24h", limit=3)
             assert len(points) == 3
-
-    @pytest.mark.asyncio
-    async def test_climate_maps_to_environment(self):
-        """Frontend sends 'Climate' which should resolve to 'environment' topic alias."""
-        from app.routers.news import get_globe_data
-
-        with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=[]) as mock_fetch:
-            await get_globe_data(topic="Climate", timespan="24h", limit=100)
-            call_args = mock_fetch.call_args
-            query = call_args[1].get("query") or call_args[0][0] if call_args[0] else call_args[1]["query"]
-            assert "climate" in query.lower() or "energy" in query.lower()
 
 
 class TestGetClusterArticles:
