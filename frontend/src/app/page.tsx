@@ -39,18 +39,17 @@ export default function Home() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Filter points client-side — instant, no API call
-  const points = activeTopic === "All"
-    ? allPoints
-    : allPoints.filter((p) => p.topic === activeTopic);
+  const points =
+    activeTopic === "All" ? allPoints : allPoints.filter((p) => p.topic === activeTopic);
 
   const updatePanel = useCallback((panelId: string, updates: Partial<PanelEntry>) => {
-    setPanelQueue((prev) =>
-      prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p))
-    );
+    setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
   }, []);
 
   const fetchPanelData = useCallback(
@@ -59,7 +58,11 @@ export default function Home() {
 
       try {
         const apiArticles = await fetchClusterArticles(
-          point.lat, point.lng, 5.0, topicFilter, point.locationName,
+          point.lat,
+          point.lng,
+          5.0,
+          topicFilter,
+          point.locationName,
         );
         const mapped: NewsArticle[] = apiArticles.map((a) => ({
           id: a.id,
@@ -85,14 +88,18 @@ export default function Home() {
 
       try {
         const result = await fetchClusterSummary(
-          point.lat, point.lng, 5.0, point.locationName, topicFilter,
+          point.lat,
+          point.lng,
+          5.0,
+          point.locationName,
+          topicFilter,
         );
         updatePanel(panelId, { clusterSummary: result.summary, summaryLoading: false });
       } catch {
         updatePanel(panelId, { summaryLoading: false });
       }
     },
-    [activeTopic, updatePanel]
+    [activeTopic, updatePanel],
   );
 
   const handlePointClick = useCallback(
@@ -129,18 +136,15 @@ export default function Home() {
       setExpandedPanelId(panelId);
       fetchPanelData(panelId, point);
     },
-    [panelQueue, fetchPanelData]
+    [panelQueue, fetchPanelData],
   );
 
   const handleZoomChange = useCallback(() => {}, []);
 
-  const handleClosePanel = useCallback(
-    (panelId: string) => {
-      setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
-      setExpandedPanelId((prev) => (prev === panelId ? null : prev));
-    },
-    []
-  );
+  const handleClosePanel = useCallback((panelId: string) => {
+    setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
+    setExpandedPanelId((prev) => (prev === panelId ? null : prev));
+  }, []);
 
   const handleMinimizePanel = useCallback(() => {
     setExpandedPanelId(null);

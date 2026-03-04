@@ -185,7 +185,7 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
       .globeImageUrl(
         isDark
           ? "//unpkg.com/three-globe/example/img/earth-night.jpg"
-          : "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+          : "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg",
       )
       .atmosphereColor(isDark ? "#1a3a5c" : "#87CEEB");
   }, [resolvedTheme, isLoaded]);
@@ -196,8 +196,7 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
       <div
         className="pointer-events-none absolute inset-0 z-10"
         style={{
-          background:
-            "radial-gradient(ellipse at center, transparent 40%, var(--vignette) 100%)",
+          background: "radial-gradient(ellipse at center, transparent 40%, var(--vignette) 100%)",
         }}
       />
       <div ref={containerRef} className="h-full w-full" />

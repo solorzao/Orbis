@@ -11,7 +11,9 @@ interface PanelTabProps {
 
 export default function PanelTab({ entry, onExpand, onClose }: PanelTabProps) {
   const isLoading = entry.articlesLoading || entry.summaryLoading;
-  const locationName = entry.point.locationName || `${entry.point.lat.toFixed(1)}\u00B0, ${entry.point.lng.toFixed(1)}\u00B0`;
+  const locationName =
+    entry.point.locationName ||
+    `${entry.point.lat.toFixed(1)}\u00B0, ${entry.point.lng.toFixed(1)}\u00B0`;
   // Truncate to first part before comma for compact display
   const shortName = locationName.split(",")[0].trim();
 
@@ -36,7 +38,11 @@ export default function PanelTab({ entry, onExpand, onClose }: PanelTabProps) {
       {isLoading ? (
         <span
           className="h-2 w-2 shrink-0 animate-spin rounded-full border border-transparent border-t-blue-400"
-          style={{ borderRightColor: "transparent", borderBottomColor: "transparent", borderLeftColor: "transparent" }}
+          style={{
+            borderRightColor: "transparent",
+            borderBottomColor: "transparent",
+            borderLeftColor: "transparent",
+          }}
         />
       ) : (
         <span
@@ -50,10 +56,7 @@ export default function PanelTab({ entry, onExpand, onClose }: PanelTabProps) {
 
       {/* Location name + count */}
       <div className="flex-1 overflow-hidden">
-        <p
-          className="truncate text-[11px] font-medium"
-          style={{ color: "var(--text-primary)" }}
-        >
+        <p className="truncate text-[11px] font-medium" style={{ color: "var(--text-primary)" }}>
           {shortName}
         </p>
         <p className="text-[9px]" style={{ color: "var(--text-muted)" }}>
@@ -72,7 +75,12 @@ export default function PanelTab({ entry, onExpand, onClose }: PanelTabProps) {
         aria-label="Remove from queue"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-          <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          <path
+            d="M2 2L8 8M8 2L2 8"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
         </svg>
       </button>
     </motion.div>

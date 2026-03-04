@@ -164,7 +164,12 @@ export default function NewsPanel({
                   aria-label="Minimize panel"
                 >
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path d="M3 7H11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <path
+                      d="M3 7H11"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
                   </svg>
                 </button>
               )}
@@ -223,7 +228,9 @@ export default function NewsPanel({
                     AI Briefing
                   </span>
                 </div>
-                <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{clusterSummary}</p>
+                <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
+                  {clusterSummary}
+                </p>
               </motion.div>
             )}
 
@@ -237,8 +244,13 @@ export default function NewsPanel({
                 </>
               )}
               {!articlesLoading && point.articles.length === 0 && (
-                <div className="rounded-xl border border-[var(--border-subtle)] p-6 text-center" style={{ background: "var(--surface-card)" }}>
-                  <p className="text-sm text-[var(--text-muted)]">No stories found for this topic in this area.</p>
+                <div
+                  className="rounded-xl border border-[var(--border-subtle)] p-6 text-center"
+                  style={{ background: "var(--surface-card)" }}
+                >
+                  <p className="text-sm text-[var(--text-muted)]">
+                    No stories found for this topic in this area.
+                  </p>
                 </div>
               )}
               <AnimatePresence mode="popLayout">
@@ -304,7 +316,9 @@ export default function NewsPanel({
                             AI Summary
                           </span>
                         </div>
-                        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{article.summary}</p>
+                        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
+                          {article.summary}
+                        </p>
                       </div>
                     )}
 

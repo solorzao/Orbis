@@ -54,10 +54,7 @@ async function apiFetch<T>(path: string, params?: Record<string, string>): Promi
   return res.json() as Promise<T>;
 }
 
-export function fetchGlobeNews(
-  timespan = "24h",
-  limit = 500,
-): Promise<ApiGlobePoint[]> {
+export function fetchGlobeNews(timespan = "24h", limit = 500): Promise<ApiGlobePoint[]> {
   return apiFetch<ApiGlobePoint[]>("/api/news", { timespan, limit: String(limit) });
 }
 
