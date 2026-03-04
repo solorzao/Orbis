@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.routers.news import router as news_router
-from app.services.cache import close_redis, get_redis
+from app.services.cache import close_redis, get_redis, invalidate
 from app.services.database import close_pool, get_pool
 from app.services.ingestion import run_ingestion_cycle
 from app.services.scheduler import start_scheduler, stop_scheduler
@@ -55,6 +55,9 @@ async def startup() -> None:
     logger.info("Starting Orbis API …")
     await get_redis()
     await get_pool()
+
+    # Flush stale geo cache from previous deploys so fresh data is fetched
+    await invalidate("gdelt:geo:*")
 
     # Run one immediate ingestion so the DB has data, then start the
     # periodic scheduler.  Fire-and-forget so startup isn't blocked.

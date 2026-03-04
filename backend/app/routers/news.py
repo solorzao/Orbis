@@ -75,10 +75,19 @@ async def get_globe_data(
     timespan: str = Query("24h", description="Timespan, e.g. 24h, 48h"),
     limit: int = Query(500, ge=1, le=500, description="Max data points"),
 ) -> list[GlobeDataPoint]:
-    """Return globe data points — city-level from GEO API when available,
-    falling back to DOC API articles grouped by location."""
+    """Return globe data points — city-level from ingestion cache,
+    falling back to live GDELT fetch."""
     from app.services.gdelt import fetch_geo_points
+    from app.services.ingestion import GEO_CACHE_KEY
 
+    # 1. Prefer ingestion-cached city-level data (refreshed every 15 min)
+    geo_cached = await get_cached(GEO_CACHE_KEY)
+    if geo_cached:
+        points = [GlobeDataPoint(**p) for p in geo_cached]
+        points.sort(key=lambda p: p.article_count, reverse=True)
+        return points[:limit]
+
+    # 2. Live fetch (GKG → GEO 2.0 → DOC fallback)
     points = await fetch_geo_points(timespan=timespan)
     points.sort(key=lambda p: p.article_count, reverse=True)
     return points[:limit]
