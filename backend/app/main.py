@@ -10,8 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.routers.news import router as news_router
-from app.services.cache import close_redis, get_redis, invalidate
+from app.services.cache import close_redis, get_redis
 from app.services.database import close_pool, get_pool
+from app.services.ingestion import run_ingestion_cycle
+from app.services.scheduler import start_scheduler, stop_scheduler
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -49,32 +51,28 @@ app.include_router(news_router)
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def startup() -> None:
-    """Warm up Redis, database, and GDELT cache on startup."""
+    """Warm up connections and kick off the GDELT ingestion pipeline."""
     logger.info("Starting Orbis API …")
     await get_redis()
     await get_pool()
 
-    # Flush old AI summaries so updated prompt takes effect
-    await invalidate("summary:*")
-
-    # Pre-warm the globe news cache so first request is instant
+    # Run one immediate ingestion so the DB has data, then start the
+    # periodic scheduler.  Fire-and-forget so startup isn't blocked.
     import asyncio
-    from app.services.gdelt import fetch_geo_points
 
-    async def _warm_cache():
-        try:
-            points = await fetch_geo_points(query="sourcelang:english", timespan="24h")
-            logger.info("Cache warm-up complete: %d globe points loaded.", len(points))
-        except Exception:
-            logger.warning("Cache warm-up failed — first request will be slower.", exc_info=True)
+    async def _initial_ingest():
+        count = await run_ingestion_cycle()
+        logger.info("Initial ingestion complete: %d articles.", count)
 
-    asyncio.create_task(_warm_cache())
+    asyncio.create_task(_initial_ingest())
+    start_scheduler()
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    """Release Redis and database connections on shutdown."""
+    """Stop scheduler and release connections on shutdown."""
     logger.info("Shutting down Orbis API …")
+    await stop_scheduler()
     await close_redis()
     await close_pool()
 

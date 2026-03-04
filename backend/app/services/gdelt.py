@@ -116,7 +116,7 @@ async def fetch_articles(
 
     cache_k = _cache_key("gdelt:doc", q=search_query, ts=timespan, mr=str(max_records))
     cached = await get_cached(cache_k)
-    if cached is not None:
+    if cached:
         return [NewsArticle(**a) for a in cached]
 
     params: dict[str, Any] = {
@@ -133,8 +133,10 @@ async def fetch_articles(
     # Drop articles without a valid location — they cannot be plotted.
     articles = [a for a in articles if a.latitude != 0.0 or a.longitude != 0.0]
 
-    # Cache the result.
-    await set_cached(cache_k, [a.model_dump() for a in articles], settings.gdelt_cache_ttl)
+    # Only cache non-empty results — a transient GDELT outage should not
+    # poison the cache for hours.
+    if articles:
+        await set_cached(cache_k, [a.model_dump() for a in articles], settings.gdelt_cache_ttl)
     return articles
 
 
@@ -151,6 +153,8 @@ def _parse_doc_response(data: Any) -> list[NewsArticle]:
 
     now = datetime.now(timezone.utc)
     articles: list[NewsArticle] = []
+    if raw_articles:
+        logger.info("GDELT DOC sample article keys: %s", list(raw_articles[0].keys()))
     for item in raw_articles:
         try:
             title = item.get("title", "").strip()
@@ -286,6 +290,38 @@ def _parse_geo_response(data: Any) -> list[GlobeDataPoint]:
     return points
 
 
+def _articles_to_globe_points(articles: list[NewsArticle]) -> list[GlobeDataPoint]:
+    """Convert DOC API articles into GlobeDataPoints grouped by location.
+
+    Used as a fallback when the GEO API is unavailable.  Groups articles
+    by their (lat, lng) centroid and produces one point per location.
+    """
+    from collections import defaultdict
+
+    buckets: dict[tuple[float, float], list[NewsArticle]] = defaultdict(list)
+    for a in articles:
+        if a.latitude == 0.0 and a.longitude == 0.0:
+            continue
+        buckets[(a.latitude, a.longitude)].append(a)
+
+    points: list[GlobeDataPoint] = []
+    for (lat, lng), group in buckets.items():
+        top = group[0]
+        topic_tags = top.topic_tags
+        points.append(
+            GlobeDataPoint(
+                lat=lat,
+                lng=lng,
+                weight=min(len(group) * 10, 500),
+                article_count=len(group),
+                top_headline=top.title,
+                topic=topic_tags[0] if topic_tags else "general",
+                location_name=top.country_code,
+            )
+        )
+    return points
+
+
 async def fetch_geo_points(
     query: str = "",
     timespan: str = "24h",
@@ -294,12 +330,14 @@ async def fetch_geo_points(
 
     Returns city-level GeoJSON data with coordinates and article counts.
     Results are cached in Redis for ``settings.gdelt_cache_ttl`` seconds.
+
+    Falls back to DOC API articles (country-level) when GEO API is down.
     """
     search_query = query or "sourcelang:english"
 
     cache_k = _cache_key("gdelt:geo", q=search_query, ts=timespan)
     cached = await get_cached(cache_k)
-    if cached is not None:
+    if cached:
         return [GlobeDataPoint(**p) for p in cached]
 
     params: dict[str, Any] = {
@@ -312,6 +350,20 @@ async def fetch_geo_points(
     data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
     points = _parse_geo_response(data)
 
-    # Cache the result.
-    await set_cached(cache_k, [p.model_dump() for p in points], settings.gdelt_cache_ttl)
+    # Fallback: when GEO API is down, derive globe points from DOC API
+    # articles.  Drop the sourcelang:english filter so we get global
+    # coverage (65+ languages) instead of mostly US sources.
+    if not points:
+        logger.warning("GEO API returned 0 points — falling back to DOC API.")
+        articles = await fetch_articles(
+            query="",  # no language filter → global coverage
+            timespan=timespan,
+            max_records=250,
+        )
+        points = _articles_to_globe_points(articles)
+
+    # Only cache non-empty results — a transient GDELT outage should not
+    # poison the cache for hours.
+    if points:
+        await set_cached(cache_k, [p.model_dump() for p in points], settings.gdelt_geo_cache_ttl)
     return points

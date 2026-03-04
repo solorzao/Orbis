@@ -10,6 +10,7 @@ All public functions are importable via:
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -26,6 +27,7 @@ __all__ = [
     "get_articles_in_bounds",
     "upsert_articles",
     "get_topic_counts",
+    "get_globe_points",
 ]
 
 logger = logging.getLogger("orbis.database")
@@ -192,7 +194,7 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                     article.get("region", ""),
                     article.get("topic_tags", []),
                     article.get("sentiment_score", 0.0),
-                    article.get("entities", "{}"),
+                    json.dumps(article.get("entities", {})),
                     article.get("image_url"),
                 )
                 count += 1
@@ -204,6 +206,72 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
 # ---------------------------------------------------------------------------
 # Analytics helpers
 # ---------------------------------------------------------------------------
+
+
+async def get_globe_points(
+    *,
+    timespan_hours: int = 24,
+    cell_size: float = 2.0,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Return clustered globe points from the database.
+
+    Groups articles into grid cells of *cell_size* degrees, picking the
+    most recent headline and dominant topic per cell.
+    """
+    pool = await get_pool()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
+
+    base_query = """
+        WITH clustered AS (
+            SELECT
+                ROUND(latitude / $2) * $2 + $2 / 2  AS lat,
+                ROUND(longitude / $2) * $2 + $2 / 2 AS lng,
+                title,
+                topic_tags,
+                region,
+                published_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ROUND(latitude / $2), ROUND(longitude / $2)
+                    ORDER BY published_at DESC
+                ) AS rn
+            FROM articles
+            {time_filter}
+        )
+        SELECT
+            lat,
+            lng,
+            COUNT(*) AS article_count,
+            MAX(CASE WHEN rn = 1 THEN title END) AS top_headline,
+            MAX(CASE WHEN rn = 1 THEN topic_tags END) AS topic_tags,
+            MAX(CASE WHEN rn = 1 THEN region END) AS location_name
+        FROM clustered
+        GROUP BY lat, lng
+        ORDER BY article_count DESC
+        LIMIT $3
+    """
+
+    # Try with time filter first, fall back to all data if empty
+    query = base_query.format(time_filter="WHERE published_at >= $1")
+    rows = await pool.fetch(query, cutoff, cell_size, limit)
+
+    if not rows:
+        logger.warning("No articles in last %dh — falling back to all data.", timespan_hours)
+        query_all = base_query.format(time_filter="")
+        rows = await pool.fetch(query_all, cutoff, cell_size, limit)
+    results = []
+    for row in rows:
+        tags = row["topic_tags"] or []
+        results.append({
+            "lat": row["lat"],
+            "lng": row["lng"],
+            "weight": min(row["article_count"] * 10, 500),
+            "article_count": row["article_count"],
+            "top_headline": row["top_headline"] or "",
+            "topic": tags[0] if tags else "general",
+            "location_name": row["location_name"] or "",
+        })
+    return results
 
 
 async def get_topic_counts() -> dict[str, int]:

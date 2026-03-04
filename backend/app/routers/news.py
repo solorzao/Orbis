@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from collections import defaultdict
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
 
+from app.config import settings
 from app.models.news import (
     ClusterSummaryResponse,
     GlobeDataPoint,
@@ -14,7 +16,8 @@ from app.models.news import (
     TopicCount,
 )
 from app.services.ai_summary import summarise_cluster
-from app.services.gdelt import fetch_articles, fetch_geo_points
+from app.services.cache import get_cached, set_cached
+from app.services.database import get_globe_points, get_nearby_articles, get_topic_counts
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +25,6 @@ router = APIRouter(prefix="/api", tags=["news"])
 
 # Frontend sends "Climate" but classifier uses "environment"
 _TOPIC_ALIASES = {"climate": "environment"}
-
-# Map frontend topic names to GDELT search keywords for server-side filtering
-_TOPIC_TO_GDELT_QUERY: dict[str, str] = {
-    "conflict": "war OR attack OR military OR conflict",
-    "politics": "president OR election OR government OR parliament",
-    "economy": "economy OR market OR trade OR financial",
-    "technology": "tech OR ai OR cyber OR digital",
-    "health": "health OR virus OR hospital OR vaccine",
-    "environment": "climate OR pollution OR energy OR wildfire",
-}
 
 
 def _resolve_topic(topic: str | None) -> str | None:
@@ -41,40 +34,58 @@ def _resolve_topic(topic: str | None) -> str | None:
     return _TOPIC_ALIASES.get(lower, lower)
 
 
-def _build_location_query(location_name: str | None, topic: str | None = None) -> str:
-    """Build a GDELT DOC query scoped to a location and optional topic.
+def _parse_timespan(timespan: str) -> int:
+    """Convert a timespan string like '24h' or '48h' to integer hours."""
+    s = timespan.strip().lower()
+    if s.endswith("h"):
+        try:
+            return int(s[:-1])
+        except ValueError:
+            pass
+    return 24
 
-    Combines location keywords with topic keywords so GDELT returns
-    articles that are both about the place AND the topic.
-    """
-    parts: list[str] = []
 
-    if location_name:
-        city = location_name.split(",")[0].strip()
-        if city:
-            parts.append(f'"{city}"')
-
-    if topic:
-        topic_keywords = _TOPIC_TO_GDELT_QUERY.get(topic)
-        if topic_keywords:
-            parts.append(f"({topic_keywords})")
-
-    parts.append("sourcelang:english")
-    return " ".join(parts)
+def _row_to_article(row: dict) -> NewsArticle:
+    """Convert a database row dict to a NewsArticle model."""
+    return NewsArticle(
+        id=str(row.get("id", "")),
+        title=row.get("title", ""),
+        summary=row.get("summary"),
+        source_url=row.get("source_url", ""),
+        source_name=row.get("source_name", ""),
+        source_language=row.get("source_language", "en"),
+        published_at=row.get("published_at", datetime.now(timezone.utc)),
+        ingested_at=row.get("ingested_at", datetime.now(timezone.utc)),
+        latitude=row.get("latitude", 0.0),
+        longitude=row.get("longitude", 0.0),
+        country_code=row.get("country_code", ""),
+        region=row.get("region", ""),
+        topic_tags=row.get("topic_tags", []),
+        sentiment_score=row.get("sentiment_score", 0.0),
+        entities=json.loads(row["entities"]) if isinstance(row.get("entities"), str) else row.get("entities", {}),
+    )
 
 
 @router.get("/news", response_model=list[GlobeDataPoint])
 async def get_globe_data(
-    timespan: str = Query("24h", description="GDELT timespan, e.g. 24h, 48h"),
+    timespan: str = Query("24h", description="Timespan, e.g. 24h, 48h"),
     limit: int = Query(500, ge=1, le=500, description="Max data points"),
 ) -> list[GlobeDataPoint]:
-    """Return all globe data points from the GDELT GEO 2.0 API.
+    """Return globe data points — city-level from GEO API when available,
+    falling back to database clusters otherwise."""
+    from app.services.ingestion import GEO_CACHE_KEY
 
-    Returns all topics — filtering is done client-side for instant switching.
-    """
-    points = await fetch_geo_points(query="sourcelang:english", timespan=timespan)
-    points.sort(key=lambda p: p.article_count, reverse=True)
-    return points[:limit]
+    # Prefer city-level GEO data (populated by ingestion)
+    geo_cached = await get_cached(GEO_CACHE_KEY)
+    if geo_cached:
+        points = [GlobeDataPoint(**p) for p in geo_cached]
+        points.sort(key=lambda p: p.article_count, reverse=True)
+        return points[:limit]
+
+    # Fallback: clustered DB data (country-level)
+    hours = _parse_timespan(timespan)
+    rows = await get_globe_points(timespan_hours=hours, limit=limit)
+    return [GlobeDataPoint(**r) for r in rows]
 
 
 _MAX_CLUSTER_ARTICLES = 10
@@ -86,20 +97,26 @@ async def get_cluster_articles(
     lng: float = Query(..., description="Longitude of cluster center"),
     radius: float = Query(5.0, description="Search radius in degrees"),
     topic: str | None = Query(None, description="Optional topic filter"),
-    location_name: str | None = Query(None, description="Location name from GEO API"),
+    location_name: str | None = Query(None, description="Location name"),
 ) -> list[NewsArticle]:
-    """Return full articles near a given lat/lng point.
-
-    Used when a user clicks a dot on the globe.  Searches GDELT with the
-    location name AND topic keywords so articles match both place and topic.
-    """
+    """Return full articles near a given lat/lng point from the database."""
     resolved = _resolve_topic(topic)
-    gdelt_query = _build_location_query(location_name, topic=resolved)
-    # Fetch more than we need so post-filtering by classifier still yields results
-    articles = await fetch_articles(query=gdelt_query, max_records=15)
+
+    # Convert radius in degrees to rough km (1 deg ≈ 111 km)
+    radius_km = radius * 111.0
+    rows = await get_nearby_articles(lat, lng, radius_km=radius_km, limit=50)
+    articles = [_row_to_article(r) for r in rows]
 
     if resolved:
-        articles = [a for a in articles if resolved in a.topic_tags]
+        filtered = [a for a in articles if resolved in a.topic_tags]
+        if filtered:
+            articles = filtered
+        else:
+            logger.info(
+                "Topic filter '%s' matched 0 of %d articles — returning unfiltered",
+                resolved,
+                len(articles),
+            )
 
     return articles[:_MAX_CLUSTER_ARTICLES]
 
@@ -110,15 +127,19 @@ async def get_cluster_summary(
     lng: float = Query(..., description="Longitude of cluster center"),
     radius: float = Query(5.0, description="Search radius in degrees"),
     topic: str | None = Query(None, description="Optional topic filter"),
-    location_name: str | None = Query(None, description="Location name from GEO API"),
+    location_name: str | None = Query(None, description="Location name"),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
-    gdelt_query = _build_location_query(location_name, topic=resolved)
-    articles = await fetch_articles(query=gdelt_query, max_records=15)
+
+    radius_km = radius * 111.0
+    rows = await get_nearby_articles(lat, lng, radius_km=radius_km, limit=50)
+    articles = [_row_to_article(r) for r in rows]
 
     if resolved:
-        articles = [a for a in articles if resolved in a.topic_tags]
+        filtered = [a for a in articles if resolved in a.topic_tags]
+        if filtered:
+            articles = filtered
 
     nearby = articles[:_MAX_CLUSTER_ARTICLES]
 
@@ -133,15 +154,17 @@ async def get_cluster_summary(
 
 @router.get("/topics", response_model=list[TopicCount])
 async def get_topics() -> list[TopicCount]:
-    """Return available topic categories with article counts."""
-    articles = await fetch_articles()
-    counts: dict[str, int] = defaultdict(int)
-    for a in articles:
-        if a.topic_tags:
-            for tag in a.topic_tags:
-                counts[tag] += 1
-        else:
-            counts["general"] += 1
+    """Return available topic categories with article counts from the database."""
+    cache_k = "db:topics"
+    cached = await get_cached(cache_k)
+    if cached:
+        return [TopicCount(**t) for t in cached]
+
+    counts = await get_topic_counts()
     result = [TopicCount(topic=t, count=c) for t, c in counts.items()]
     result.sort(key=lambda t: t.count, reverse=True)
+
+    if result:
+        await set_cached(cache_k, [t.model_dump() for t in result], settings.db_cache_ttl)
+
     return result

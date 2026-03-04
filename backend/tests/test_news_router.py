@@ -1,4 +1,4 @@
-"""Tests for the news router endpoints."""
+"""Tests for the news router endpoints (database-backed)."""
 
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -7,25 +7,26 @@ from datetime import datetime, timezone
 from app.models.news import GlobeDataPoint, NewsArticle
 
 
-def _make_globe_point(topic: str = "general", lat: float = 40.0, lng: float = -74.0, **overrides):
-    base = dict(
+def _make_globe_row(topic: str = "general", lat: float = 40.0, lng: float = -74.0, count: int = 3):
+    """Create a dict matching get_globe_points() output."""
+    return dict(
         lat=lat,
         lng=lng,
-        weight=10.0,
-        article_count=3,
+        weight=min(count * 10, 500),
+        article_count=count,
         top_headline="Test headline",
         topic=topic,
         location_name="Test City",
     )
-    base.update(overrides)
-    return GlobeDataPoint(**base)
 
 
-def _make_article(title: str, topic_tags: list[str], lat: float = 40.0, lng: float = -74.0, country_code: str = "US"):
+def _make_db_row(title: str = "Test", topic_tags=None, lat: float = 40.0, lng: float = -74.0):
+    """Create a dict matching a database article row."""
     now = datetime.now(timezone.utc)
-    return NewsArticle(
-        id="test",
+    return dict(
+        id="abc-123",
         title=title,
+        summary=None,
         source_url="https://example.com",
         source_name="example.com",
         source_language="en",
@@ -33,95 +34,135 @@ def _make_article(title: str, topic_tags: list[str], lat: float = 40.0, lng: flo
         ingested_at=now,
         latitude=lat,
         longitude=lng,
-        country_code=country_code,
-        topic_tags=topic_tags,
+        country_code="US",
+        region="",
+        topic_tags=topic_tags or ["general"],
+        sentiment_score=0.0,
+        entities={},
+        image_url=None,
     )
+
+
+# Disable caching for all router tests
+@pytest.fixture(autouse=True)
+def _no_cache():
+    with patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=None), \
+         patch("app.routers.news.set_cached", new_callable=AsyncMock):
+        yield
 
 
 class TestGetGlobeData:
     @pytest.mark.asyncio
-    async def test_returns_geo_points(self):
+    async def test_returns_globe_points(self):
         from app.routers.news import get_globe_data
 
-        geo_points = [
-            _make_globe_point("conflict", lat=33.0, lng=44.0),
-            _make_globe_point("economy", lat=51.0, lng=-0.1),
+        rows = [
+            _make_globe_row("conflict", lat=33.0, lng=44.0),
+            _make_globe_row("economy", lat=51.0, lng=-0.1),
         ]
 
-        with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=geo_points):
-            points = await get_globe_data(topic=None, timespan="24h", limit=100)
+        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=rows):
+            points = await get_globe_data(timespan="24h", limit=100)
             assert len(points) == 2
-
-    @pytest.mark.asyncio
-    async def test_topic_filter_builds_gdelt_query(self):
-        from app.routers.news import get_globe_data
-
-        geo_points = [_make_globe_point("conflict")]
-
-        with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=geo_points) as mock_fetch:
-            await get_globe_data(topic="Conflict", timespan="24h", limit=100)
-            call_args = mock_fetch.call_args
-            query = call_args[1].get("query") or call_args[0][0] if call_args[0] else call_args[1]["query"]
-            assert "war" in query.lower() or "conflict" in query.lower()
+            assert points[0].topic == "conflict"
 
     @pytest.mark.asyncio
     async def test_limit_caps_results(self):
         from app.routers.news import get_globe_data
 
-        geo_points = [_make_globe_point(article_count=i) for i in range(10)]
+        rows = [_make_globe_row(count=i + 1) for i in range(10)]
 
-        with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=geo_points):
-            points = await get_globe_data(topic=None, timespan="24h", limit=3)
-            assert len(points) == 3
+        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=rows):
+            points = await get_globe_data(timespan="24h", limit=3)
+            # get_globe_points handles the limit in SQL, but we pass it through
+            assert len(points) == 10  # limit is passed to DB, not post-filtered
 
     @pytest.mark.asyncio
-    async def test_climate_maps_to_environment(self):
-        """Frontend sends 'Climate' which should resolve to 'environment' topic alias."""
+    async def test_timespan_parsed_to_hours(self):
         from app.routers.news import get_globe_data
 
-        with patch("app.routers.news.fetch_geo_points", new_callable=AsyncMock, return_value=[]) as mock_fetch:
-            await get_globe_data(topic="Climate", timespan="24h", limit=100)
-            call_args = mock_fetch.call_args
-            query = call_args[1].get("query") or call_args[0][0] if call_args[0] else call_args[1]["query"]
-            assert "climate" in query.lower() or "energy" in query.lower()
+        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[]) as mock_get:
+            await get_globe_data(timespan="48h", limit=100)
+            mock_get.assert_called_once_with(timespan_hours=48, limit=100)
 
 
 class TestGetClusterArticles:
     @pytest.mark.asyncio
-    async def test_passes_location_name_to_gdelt_query(self):
+    async def test_returns_articles_from_db(self):
         from app.routers.news import get_cluster_articles
 
-        articles = [_make_article("Tehran protest", ["politics"])]
+        rows = [_make_db_row("Tehran protest", ["politics"])]
 
-        with patch("app.routers.news.fetch_articles", new_callable=AsyncMock, return_value=articles) as mock_fetch:
+        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
-                lat=35.7, lng=51.4, radius=5.0, topic=None,
-                location_name="Tehran, Tehran, Iran",
+                lat=35.7, lng=51.4, radius=5.0, topic=None, location_name=None,
             )
-            # Should query GDELT with the city name
-            query = mock_fetch.call_args[1].get("query") or mock_fetch.call_args[0][0]
-            assert "Tehran" in query
+            assert len(result) == 1
+            assert result[0].title == "Tehran protest"
+
+    @pytest.mark.asyncio
+    async def test_radius_converted_to_km(self):
+        from app.routers.news import get_cluster_articles
+
+        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=[]) as mock_nearby:
+            await get_cluster_articles(
+                lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name=None,
+            )
+            # 5 degrees * 111 km/degree = 555 km
+            call_kwargs = mock_nearby.call_args
+            assert call_kwargs[1]["radius_km"] == pytest.approx(555.0)
+
+    @pytest.mark.asyncio
+    async def test_topic_filter_applied(self):
+        from app.routers.news import get_cluster_articles
+
+        rows = [
+            _make_db_row("Economy article", ["economy"]),
+            _make_db_row("Conflict article", ["conflict"]),
+        ]
+
+        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
+            result = await get_cluster_articles(
+                lat=40.0, lng=-74.0, radius=5.0, topic="conflict", location_name=None,
+            )
+            assert len(result) == 1
+            assert result[0].title == "Conflict article"
+
+    @pytest.mark.asyncio
+    async def test_topic_filter_fallback_when_no_match(self):
+        from app.routers.news import get_cluster_articles
+
+        rows = [_make_db_row("General article", ["general"])]
+
+        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
+            result = await get_cluster_articles(
+                lat=40.0, lng=-74.0, radius=5.0, topic="conflict", location_name=None,
+            )
+            # Falls back to unfiltered when topic matches nothing
             assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_caps_results_at_max(self):
         from app.routers.news import get_cluster_articles, _MAX_CLUSTER_ARTICLES
 
-        articles = [_make_article(f"Article {i}", ["general"]) for i in range(50)]
+        rows = [_make_db_row(f"Article {i}") for i in range(50)]
 
-        with patch("app.routers.news.fetch_articles", new_callable=AsyncMock, return_value=articles):
+        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
-                lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name="New York",
+                lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name=None,
             )
             assert len(result) == _MAX_CLUSTER_ARTICLES
 
-    @pytest.mark.asyncio
-    async def test_no_location_uses_default_query(self):
-        from app.routers.news import get_cluster_articles
 
-        with patch("app.routers.news.fetch_articles", new_callable=AsyncMock, return_value=[]) as mock_fetch:
-            await get_cluster_articles(
-                lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name=None,
-            )
-            query = mock_fetch.call_args[1].get("query") or mock_fetch.call_args[0][0]
-            assert query == "sourcelang:english"
+class TestGetTopics:
+    @pytest.mark.asyncio
+    async def test_returns_topic_counts(self):
+        from app.routers.news import get_topics
+
+        counts = {"conflict": 50, "economy": 30, "health": 10}
+
+        with patch("app.routers.news.get_topic_counts", new_callable=AsyncMock, return_value=counts):
+            result = await get_topics()
+            assert len(result) == 3
+            assert result[0].topic == "conflict"
+            assert result[0].count == 50
