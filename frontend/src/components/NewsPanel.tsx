@@ -304,24 +304,6 @@ export default function NewsPanel({
                       {article.title}
                     </h3>
 
-                    {/* AI Summary */}
-                    {article.summary && (
-                      <div className="mt-2.5 rounded-lg border border-blue-500/10 bg-blue-500/[0.04] px-3 py-2">
-                        <div className="mb-1 flex items-center gap-1.5">
-                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                            <circle cx="5" cy="5" r="4" stroke="#3B82F6" strokeWidth="1" />
-                            <circle cx="5" cy="5" r="1.5" fill="#3B82F6" />
-                          </svg>
-                          <span className="text-[9px] font-semibold tracking-widest text-blue-400 uppercase">
-                            AI Summary
-                          </span>
-                        </div>
-                        <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
-                          {article.summary}
-                        </p>
-                      </div>
-                    )}
-
                     {/* Source + Time */}
                     <div className="mt-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
