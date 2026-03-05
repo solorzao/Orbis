@@ -61,7 +61,7 @@ export function fetchGlobeNews(timespan = "24h", limit = 500): Promise<ApiGlobeP
 export function fetchClusterArticles(
   lat: number,
   lng: number,
-  radius = 5.0,
+  radius = 0.75,
   topic?: string,
   locationName?: string,
 ): Promise<ApiNewsArticle[]> {
@@ -78,7 +78,7 @@ export function fetchClusterArticles(
 export function fetchClusterSummary(
   lat: number,
   lng: number,
-  radius = 5.0,
+  radius = 0.75,
   locationName?: string,
   topic?: string,
 ): Promise<ApiClusterSummary> {

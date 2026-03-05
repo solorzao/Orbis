@@ -60,7 +60,7 @@ export default function Home() {
         const apiArticles = await fetchClusterArticles(
           point.lat,
           point.lng,
-          5.0,
+          0.75,
           topicFilter,
           point.locationName,
         );
@@ -90,7 +90,7 @@ export default function Home() {
         const result = await fetchClusterSummary(
           point.lat,
           point.lng,
-          5.0,
+          0.75,
           point.locationName,
           topicFilter,
         );
