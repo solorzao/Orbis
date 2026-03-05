@@ -1,133 +1,86 @@
-"""GDELT → PostgreSQL ingestion service.
+"""GDELT raw GKG → PostgreSQL ingestion service.
 
-Periodically fetches articles from the GDELT DOC 2.0 API and city-level
-globe points from the GEO 2.0 API, storing both locally so the app is
-decoupled from GDELT's live availability.
+Periodically downloads the latest GDELT GKG data file (published every
+15 minutes), extracts articles with city-level locations, scrapes their
+titles, and upserts them into the database.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
-from app.config import settings
-from app.models.news import NewsArticle
-from app.services.cache import invalidate, set_cached
+from app.services.cache import invalidate
 from app.services.database import upsert_articles
-from app.services.gdelt import (
-    _fetch_with_retry,
-    _parse_doc_response,
-    _parse_geo_response,
-)
+from app.services.gdelt import fetch_raw_gkg, scrape_titles
+from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger("orbis.ingestion")
 
-# Cache key for GEO-sourced globe points (city-level)
-GEO_CACHE_KEY = "geo:globe_points"
 
-
-async def _ingest_articles() -> int:
-    """Fetch articles from GDELT DOC API and upsert into PostgreSQL."""
-    params = {
-        "query": "sourcelang:english",
-        "mode": "ArtList",
-        "maxrecords": 250,
-        "format": "json",
-        "timespan": "24h",
-    }
-
-    data = await _fetch_with_retry(settings.gdelt_doc_base_url, params)
-    raw_articles: list[NewsArticle] = _parse_doc_response(data)
-
-    articles = [a for a in raw_articles if a.latitude != 0.0 or a.longitude != 0.0]
+async def _ingest_from_raw_gkg() -> int:
+    """Fetch the latest GKG file, scrape titles, and upsert to DB."""
+    articles = await fetch_raw_gkg()
     if not articles:
-        logger.warning("DOC API: 0 geolocated articles.")
+        logger.warning("GKG raw file: 0 city-level articles.")
         return 0
 
+    # Scrape <title> tags from article URLs
+    await scrape_titles(articles)
+
+    # Convert to DB upsert format
     rows = []
     for a in articles:
+        title = a.get("title", "")
+        if not title:
+            continue
+
+        # Sentiment from GKG tone (scale is roughly -10 to +10)
+        tone = a.get("tone", 0.0)
+        sentiment = max(-1.0, min(1.0, tone / 10.0))
+
+        # Topic classification from title
+        topic_tags = classify_topic(title)
+
         rows.append(
             {
-                "title": a.title,
-                "summary": a.summary,
-                "source_url": a.source_url,
-                "source_name": a.source_name,
-                "source_language": a.source_language,
-                "published_at": a.published_at,
-                "latitude": a.latitude,
-                "longitude": a.longitude,
-                "country_code": a.country_code,
-                "region": a.region,
-                "topic_tags": a.topic_tags,
-                "sentiment_score": a.sentiment_score,
-                "entities": a.entities,
-                "image_url": None,
+                "title": title,
+                "summary": None,
+                "source_url": a["url"],
+                "source_name": a.get("domain", ""),
+                "source_language": "en",
+                "published_at": a["published_at"],
+                "latitude": a["lat"],
+                "longitude": a["lng"],
+                "country_code": a.get("country_code", ""),
+                "region": a.get("location_name", ""),
+                "topic_tags": topic_tags,
+                "sentiment_score": sentiment,
+                "entities": {},
+                "image_url": a.get("image_url") or None,
             }
         )
 
+    if not rows:
+        logger.warning("No articles with titles to upsert.")
+        return 0
+
     count = await upsert_articles(rows)
     await invalidate("db:*")
-    logger.info("DOC API: upserted %d articles.", count)
+    logger.info("GKG ingestion: upserted %d articles with city-level coords.", count)
     return count
 
 
-async def _ingest_geo_points() -> int:
-    """Fetch city-level globe points from GDELT and cache them.
-
-    Tries GKG GeoJSON v1 first (reliable), then GEO 2.0 as fallback.
-    """
-    from app.services.gdelt import _parse_gkg_geojson
-
-    # 1. Try GKG GeoJSON v1 — city-level, 2500 features
-    gkg_url = "https://api.gdeltproject.org/api/v1/gkg_geojson"
-    data = await _fetch_with_retry(gkg_url, {})
-    points = _parse_gkg_geojson(data)
-
-    # 2. Fallback to GEO 2.0 API
-    if not points:
-        logger.info("GKG GeoJSON empty — trying GEO 2.0 API.")
-        params = {
-            "query": "sourcelang:english",
-            "mode": "PointData",
-            "format": "GeoJSON",
-            "timespan": "24h",
-        }
-        data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
-        points = _parse_geo_response(data)
-
-    if not points:
-        logger.warning("GEO ingestion: 0 points from all sources.")
-        return 0
-
-    # Cache for 2x the ingestion interval so data survives between cycles
-    ttl = settings.ingestion_interval_seconds * 2
-    await set_cached(GEO_CACHE_KEY, [p.model_dump() for p in points], ttl)
-    logger.info("GEO ingestion: cached %d city-level globe points.", len(points))
-    return len(points)
-
-
 async def run_ingestion_cycle() -> int:
-    """Fetch from both GDELT APIs. Returns number of articles upserted.
+    """Run the ingestion pipeline.  Never raises.
 
-    Never raises — all errors are logged and swallowed so the
-    scheduler can keep running.
+    Downloads the latest GDELT GKG raw data file, extracts articles with
+    city-level locations, scrapes titles, and upserts to PostgreSQL.
     """
     try:
         logger.info("Ingestion cycle starting …")
-
-        # Fetch DOC articles and GEO points in parallel, with a small
-        # delay between them to respect GDELT's rate limit.
-        article_count = await _ingest_articles()
-        await asyncio.sleep(5)  # GDELT rate limit: 1 req per 5 seconds
-        geo_count = await _ingest_geo_points()
-
-        logger.info(
-            "Ingestion cycle complete: %d articles, %d geo points.",
-            article_count,
-            geo_count,
-        )
-        return article_count
-
+        count = await _ingest_from_raw_gkg()
+        logger.info("Ingestion cycle complete: %d articles.", count)
+        return count
     except Exception:
         logger.error("Ingestion cycle failed.", exc_info=True)
         return 0

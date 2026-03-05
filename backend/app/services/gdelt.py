@@ -1,21 +1,21 @@
-"""Client for the GDELT DOC 2.0 and GEO 2.0 APIs."""
+"""Client for GDELT raw data files and APIs."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html as html_mod
+import io
 import logging
-import math
 import re
+import zipfile
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
-from app.config import settings
-from app.models.news import GlobeDataPoint, NewsArticle
-from app.services.cache import get_cached, set_cached
-from app.services.country_centroids import get_centroid, normalize_country
+from app.models.news import NewsArticle
 from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger(__name__)
@@ -136,368 +136,234 @@ def _estimate_sentiment(title: str) -> float:
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 1.5  # seconds
 
+_GKG_LASTUPDATE_URL = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 
-def _cache_key(prefix: str, **kwargs: Any) -> str:
-    """Build a deterministic cache key from query parameters."""
-    raw = "|".join(f"{k}={v}" for k, v in sorted(kwargs.items()))
-    digest = hashlib.sha256(raw.encode()).hexdigest()[:16]
-    return f"{prefix}:{digest}"
+# Max concurrent title-scrape connections
+_SCRAPE_CONCURRENCY = 30
+_SCRAPE_TIMEOUT = 5.0  # seconds per request
+_SCRAPE_MAX_BYTES = 15_000  # only read enough for <title>
 
 
-async def _fetch_with_retry(url: str, params: dict[str, Any]) -> dict | list | None:
-    """GET *url* with exponential back-off.  Returns parsed JSON or None."""
-    import asyncio
-    import json as _json
-
+async def _download_bytes(url: str) -> bytes | None:
+    """Download raw bytes from a URL with retries."""
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url, params=params)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(url)
                 resp.raise_for_status()
-                # Some GDELT endpoints return broken UTF-8; decode leniently
-                text = resp.content.decode("utf-8", errors="replace")
-                return _json.loads(text)
-        except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
+                return resp.content
+        except Exception as exc:
             wait = _BACKOFF_BASE**attempt
             logger.warning(
-                "GDELT request attempt %d/%d failed (%s). Retrying in %.1fs …",
+                "Download attempt %d/%d failed for %s (%s). Retrying in %.1fs …",
                 attempt,
                 _MAX_RETRIES,
+                url.split("/")[-1],
                 exc,
                 wait,
             )
             if attempt < _MAX_RETRIES:
                 await asyncio.sleep(wait)
-    logger.error("GDELT request failed after %d attempts.", _MAX_RETRIES)
+    logger.error("Download failed after %d attempts: %s", _MAX_RETRIES, url)
     return None
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
-async def fetch_articles(
-    query: str = "",
-    timespan: str = "24h",
-    max_records: int = 250,
-) -> list[NewsArticle]:
-    """Fetch articles from the GDELT DOC 2.0 API and return parsed models.
-
-    Results are cached in Redis for ``settings.gdelt_cache_ttl`` seconds.
-    Topic filtering is handled by the router via post-filtering on
-    classified ``topic_tags``, not via the GDELT query.
-    """
-    search_query = query or "sourcelang:english"
-
-    cache_k = _cache_key("gdelt:doc", q=search_query, ts=timespan, mr=str(max_records))
-    cached = await get_cached(cache_k)
-    if cached:
-        return [NewsArticle(**a) for a in cached]
-
-    params: dict[str, Any] = {
-        "query": search_query,
-        "mode": "ArtList",
-        "maxrecords": max_records,
-        "format": "json",
-        "timespan": timespan,
-    }
-
-    data = await _fetch_with_retry(settings.gdelt_doc_base_url, params)
-    articles = _parse_doc_response(data)
-
-    # Drop articles without a valid location — they cannot be plotted.
-    articles = [a for a in articles if a.latitude != 0.0 or a.longitude != 0.0]
-
-    # Only cache non-empty results — a transient GDELT outage should not
-    # poison the cache for hours.
-    if articles:
-        await set_cached(cache_k, [a.model_dump() for a in articles], settings.gdelt_cache_ttl)
-    return articles
-
-
-def _parse_doc_response(data: Any) -> list[NewsArticle]:
-    """Parse the raw JSON from GDELT DOC 2.0 into NewsArticle models."""
-    if data is None:
-        return []
-
-    raw_articles: list[dict] = []
-    if isinstance(data, dict):
-        raw_articles = data.get("articles", [])
-    elif isinstance(data, list):
-        raw_articles = data
-
-    now = datetime.now(timezone.utc)
-    articles: list[NewsArticle] = []
-    if raw_articles:
-        logger.debug("GDELT DOC sample article keys: %s", list(raw_articles[0].keys()))
-    for item in raw_articles:
-        try:
-            title = item.get("title", "").strip()
-            if not title:
-                continue
-            url = item.get("url", "")
-            source = item.get("domain", item.get("source", ""))
-            lang = item.get("language", "en") or "en"
-            raw_tone = item.get("tone")
-            tone: float = 0.0
-            has_tone = False
-            if raw_tone is not None:
-                if isinstance(raw_tone, str) and raw_tone.strip():
-                    try:
-                        tone = float(raw_tone.split(",")[0])
-                        has_tone = True
-                    except (ValueError, IndexError):
-                        pass
-                elif isinstance(raw_tone, (int, float)):
-                    tone = float(raw_tone)
-                    has_tone = True
-
-            date_str = item.get("seendate", "")
-            published_at = _parse_gdelt_date(date_str) if date_str else now
-
-            article_id = hashlib.sha256(url.encode()).hexdigest()[:16]
-
-            # Geo: look up centroid from sourcecountry
-            raw_country = item.get("sourcecountry", "")
-            country_code = normalize_country(raw_country)
-            centroid = get_centroid(raw_country)
-            lat = centroid[0] if centroid else 0.0
-            lng = centroid[1] if centroid else 0.0
-
-            # Topics: classify from title
-            topic_tags = classify_topic(title)
-
-            articles.append(
-                NewsArticle(
-                    id=article_id,
-                    title=title,
-                    source_url=url,
-                    source_name=source,
-                    source_language=lang,
-                    published_at=published_at,
-                    ingested_at=now,
-                    latitude=lat,
-                    longitude=lng,
-                    country_code=country_code,
-                    sentiment_score=(
-                        max(-1.0, min(1.0, tone / 10.0)) if has_tone else _estimate_sentiment(title)
-                    ),
-                    topic_tags=topic_tags,
-                )
-            )
-        except Exception:
-            logger.debug("Skipping unparseable article: %s", item, exc_info=True)
-    return articles
-
-
-def _parse_gdelt_date(date_str: str) -> datetime:
-    """Parse GDELT's ``YYYYMMDDTHHmmSS`` or similar date formats."""
-    stripped = date_str.strip()
-    # Try ISO-style formats first against the original string.
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(stripped, fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    # GDELT's compact format: 20240101T120000Z -> 20240101120000
-    compact = stripped.replace("T", "").replace("Z", "")
+def _parse_gkg_date(date_str: str) -> datetime:
+    """Parse GKG record date (YYYYMMDDHHMMSS format)."""
     try:
-        return datetime.strptime(compact, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        pass
-    return datetime.now(timezone.utc)
+        return datetime.strptime(date_str.strip(), "%Y%m%d%H%M%S").replace(
+            tzinfo=timezone.utc
+        )
+    except (ValueError, AttributeError):
+        return datetime.now(timezone.utc)
+
+
+def _title_from_url(url: str) -> str:
+    """Extract a human-readable fallback title from a URL path."""
+    path = urlparse(url).path.rstrip("/")
+    # Use the last meaningful path segment
+    slug = path.split("/")[-1] if path else ""
+    # Strip common file extensions
+    slug = re.sub(r"\.(html?|php|aspx?)$", "", slug, flags=re.IGNORECASE)
+    # Replace hyphens/underscores with spaces, title-case
+    title = re.sub(r"[-_]+", " ", slug).strip()
+    if len(title) < 5:
+        # Fallback to domain
+        return urlparse(url).netloc
+    return title.title()
 
 
 # ---------------------------------------------------------------------------
-# GEO 2.0 API — city-level globe points
+# Public API — raw GKG data files
 # ---------------------------------------------------------------------------
 
 
-def _extract_titles_from_html(raw_html: str) -> list[str]:
-    """Extract article titles from GDELT GEO html property."""
-    titles = re.findall(r'title="([^"]+)"', raw_html)
-    return [html_mod.unescape(t) for t in titles if t]
+async def fetch_raw_gkg() -> list[dict]:
+    """Download the latest GDELT GKG data file and extract city-level articles.
 
+    Each 15-minute GKG file contains ~1000+ records.  We filter to records
+    with city-level locations (type 3=USCITY or 4=WORLDCITY) and deduplicate
+    by URL, returning ~600 unique articles with city-level coordinates.
 
-def _parse_geo_response(data: Any) -> list[GlobeDataPoint]:
-    """Parse GeoJSON from GDELT GEO 2.0 into GlobeDataPoint models."""
-    if not isinstance(data, dict):
+    Returns a list of dicts with keys:
+        url, domain, lat, lng, location_name, tone, themes,
+        image_url, published_at
+    """
+    # 1. Find the latest GKG file URL
+    index_bytes = await _download_bytes(_GKG_LASTUPDATE_URL)
+    if not index_bytes:
+        logger.error("Could not fetch GDELT lastupdate index.")
         return []
 
-    features = data.get("features", [])
-    points: list[GlobeDataPoint] = []
+    gkg_url = None
+    for line in index_bytes.decode("utf-8", errors="replace").strip().split("\n"):
+        parts = line.strip().split()
+        if len(parts) >= 3 and "gkg" in parts[2].lower():
+            gkg_url = parts[2]
+            break
 
-    for feature in features:
-        try:
-            geom = feature.get("geometry", {})
-            props = feature.get("properties", {})
-            coords = geom.get("coordinates", [])
-
-            if len(coords) < 2:
-                continue
-
-            lng, lat = float(coords[0]), float(coords[1])
-            raw_count = props.get("count", 0)
-            name = props.get("name", "")
-            raw_html = props.get("html", "")
-
-            # Extract headlines and classify topic
-            titles = _extract_titles_from_html(raw_html)
-            top_headline = titles[0] if titles else name
-            topic_tags = classify_topic(top_headline)
-            topic = topic_tags[0] if topic_tags else "general"
-
-            # Scale count: raw values are mention volumes (up to 200K+), use log
-            article_count = max(1, int(math.log2(max(1, raw_count))))
-
-            points.append(
-                GlobeDataPoint(
-                    lat=lat,
-                    lng=lng,
-                    weight=min(raw_count, 500),
-                    article_count=article_count,
-                    top_headline=top_headline,
-                    topic=topic,
-                    location_name=name,
-                )
-            )
-        except Exception:
-            logger.debug("Skipping unparseable GEO feature: %s", feature, exc_info=True)
-
-    return points
-
-
-def _parse_gkg_geojson(data: Any) -> list[GlobeDataPoint]:
-    """Parse GKG GeoJSON (v1) into GlobeDataPoints grouped by location.
-
-    The GKG GeoJSON endpoint returns one feature per mention, so we
-    group by (lat, lng), pick the first headline per location, and
-    count mentions.
-    """
-    if not isinstance(data, dict):
+    if not gkg_url:
+        logger.error("No GKG file URL found in lastupdate index.")
         return []
 
-    from collections import defaultdict
+    # 2. Download and unzip
+    logger.info("Downloading GKG file: %s", gkg_url.split("/")[-1])
+    zip_bytes = await _download_bytes(gkg_url)
+    if not zip_bytes:
+        return []
 
-    features = data.get("features", [])
-    buckets: dict[tuple[float, float], list[dict]] = defaultdict(list)
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        raw = zf.read(zf.namelist()[0]).decode("utf-8", errors="replace")
+    except Exception:
+        logger.error("Failed to unzip GKG file.", exc_info=True)
+        return []
 
-    for feature in features:
-        try:
-            coords = feature.get("geometry", {}).get("coordinates", [])
-            if len(coords) < 2:
-                continue
-            lng, lat = float(coords[0]), float(coords[1])
-            buckets[(lat, lng)].append(feature.get("properties", {}))
-        except Exception:
+    # 3. Parse TSV — one record per document
+    # GKG 2.1 field indices (0-based, tab-delimited):
+    #  0: GKGRECORDID
+    #  1: V2.1DATE (YYYYMMDDHHMMSS)
+    #  3: V2SOURCECOMMONNAME (domain)
+    #  4: V2DOCUMENTIDENTIFIER (article URL)
+    #  7: V1THEMES (semicolon-delimited)
+    #  9: V1LOCATIONS (semicolon-delimited blocks, #-delimited fields)
+    # 15: V1.5TONE (comma-separated: tone, pos, neg, polarity, ...)
+    # 18: V2.1SHARINGIMAGE (URL)
+    articles: dict[str, dict] = {}  # keyed by URL for dedup
+
+    for line in raw.strip().split("\n"):
+        fields = line.split("\t")
+        if len(fields) < 16:
             continue
 
-    points: list[GlobeDataPoint] = []
-    for (lat, lng), props_list in buckets.items():
-        name = props_list[0].get("name", "")
-        themes = props_list[0].get("mentionedthemes", "")
-        topic_tags = classify_topic(name + " " + themes)
-        topic = topic_tags[0] if topic_tags else "general"
-        count = len(props_list)
-
-        points.append(
-            GlobeDataPoint(
-                lat=lat,
-                lng=lng,
-                weight=min(count * 10, 500),
-                article_count=count,
-                top_headline=name,
-                topic=topic,
-                location_name=name,
-            )
-        )
-
-    return points
-
-
-def _articles_to_globe_points(articles: list[NewsArticle]) -> list[GlobeDataPoint]:
-    """Convert DOC API articles into GlobeDataPoints grouped by location.
-
-    Used as a fallback when the GEO API is unavailable.  Groups articles
-    by their (lat, lng) centroid and produces one point per location.
-    """
-    from collections import defaultdict
-
-    buckets: dict[tuple[float, float], list[NewsArticle]] = defaultdict(list)
-    for a in articles:
-        if a.latitude == 0.0 and a.longitude == 0.0:
+        url = fields[4] if len(fields) > 4 else ""
+        if not url or url in articles:
             continue
-        buckets[(a.latitude, a.longitude)].append(a)
 
-    points: list[GlobeDataPoint] = []
-    for (lat, lng), group in buckets.items():
-        top = group[0]
-        topic_tags = top.topic_tags
-        points.append(
-            GlobeDataPoint(
-                lat=lat,
-                lng=lng,
-                weight=min(len(group) * 10, 500),
-                article_count=len(group),
-                top_headline=top.title,
-                topic=topic_tags[0] if topic_tags else "general",
-                location_name=top.country_code,
-            )
-        )
-    return points
+        # Find first city-level location (type 3 or 4)
+        locations_raw = fields[9] if len(fields) > 9 else ""
+        if not locations_raw:
+            continue
 
+        city_loc = None
+        for loc_block in locations_raw.split(";"):
+            parts = loc_block.split("#")
+            # Fields: Type#FullName#CountryCode#ADM1Code#Lat#Lng#FeatureID
+            if len(parts) >= 7 and parts[0] in ("3", "4"):
+                try:
+                    lat = float(parts[4])
+                    lng = float(parts[5])
+                    city_loc = {
+                        "fullname": parts[1],
+                        "country_code": parts[2],
+                        "lat": lat,
+                        "lng": lng,
+                    }
+                    break
+                except (ValueError, IndexError):
+                    continue
 
-async def fetch_geo_points(
-    query: str = "",
-    timespan: str = "24h",
-) -> list[GlobeDataPoint]:
-    """Fetch city-level globe points from GDELT.
+        if not city_loc:
+            continue
 
-    Tries these sources in order:
-    1. GKG GeoJSON v1 API (city-level, 2500 features)
-    2. GEO 2.0 API (city-level, when available)
-    3. DOC API articles grouped by country (fallback)
+        # Extract tone (first value in comma-separated V1.5TONE)
+        tone_raw = fields[15] if len(fields) > 15 else ""
+        tone = 0.0
+        if tone_raw:
+            try:
+                tone = float(tone_raw.split(",")[0])
+            except (ValueError, IndexError):
+                pass
 
-    Results are cached in Redis.
-    """
-    cache_k = _cache_key("gdelt:geo", ts=timespan)
-    cached = await get_cached(cache_k)
-    if cached:
-        return [GlobeDataPoint(**p) for p in cached]
+        domain = fields[3] if len(fields) > 3 else ""
+        themes = fields[7] if len(fields) > 7 else ""
+        image_url = fields[18].strip() if len(fields) > 18 else ""
+        date_str = fields[1] if len(fields) > 1 else ""
 
-    # 1. Try GKG GeoJSON v1 — returns 2500 city-level features
-    gkg_url = "https://api.gdeltproject.org/api/v1/gkg_geojson"
-    data = await _fetch_with_retry(gkg_url, {})
-    points = _parse_gkg_geojson(data)
-
-    # 2. Try GEO 2.0 API
-    if not points:
-        logger.info("GKG GeoJSON returned 0 — trying GEO 2.0 API.")
-        search_query = query or "sourcelang:english"
-        params: dict[str, Any] = {
-            "query": search_query,
-            "mode": "PointData",
-            "format": "GeoJSON",
-            "timespan": timespan,
+        articles[url] = {
+            "url": url,
+            "domain": domain,
+            "lat": city_loc["lat"],
+            "lng": city_loc["lng"],
+            "location_name": city_loc["fullname"],
+            "country_code": city_loc["country_code"],
+            "tone": tone,
+            "themes": themes,
+            "image_url": image_url if image_url.startswith("http") else "",
+            "published_at": _parse_gkg_date(date_str),
         }
-        data = await _fetch_with_retry(settings.gdelt_geo_base_url, params)
-        points = _parse_geo_response(data)
 
-    # 3. Fallback: DOC API articles grouped by country
-    if not points:
-        logger.warning("No geo data — falling back to DOC API.")
-        articles = await fetch_articles(
-            query="",
-            timespan=timespan,
-            max_records=250,
-        )
-        points = _articles_to_globe_points(articles)
+    logger.info(
+        "GKG raw file: %d records, %d with city-level locations.",
+        len(raw.strip().split("\n")),
+        len(articles),
+    )
+    return list(articles.values())
 
-    if points:
-        await set_cached(
-            cache_k,
-            [p.model_dump() for p in points],
-            settings.gdelt_geo_cache_ttl,
-        )
-    return points
+
+async def scrape_titles(articles: list[dict]) -> list[dict]:
+    """Concurrently scrape <title> tags from article URLs.
+
+    For each article dict, adds a ``title`` key with the scraped title
+    or a fallback derived from the URL path.
+    """
+    semaphore = asyncio.Semaphore(_SCRAPE_CONCURRENCY)
+
+    async def _scrape_one(article: dict) -> None:
+        url = article["url"]
+        async with semaphore:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=_SCRAPE_TIMEOUT,
+                    follow_redirects=True,
+                    max_redirects=3,
+                ) as client:
+                    resp = await client.get(url)
+                    # Only read enough bytes for <title>
+                    text = resp.content[:_SCRAPE_MAX_BYTES].decode(
+                        "utf-8", errors="replace"
+                    )
+                    match = re.search(
+                        r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL
+                    )
+                    if match:
+                        title = html_mod.unescape(match.group(1)).strip()
+                        # Skip generic/useless titles
+                        if len(title) > 5 and "cloudflare" not in title.lower():
+                            article["title"] = title[:300]
+                            return
+            except Exception:
+                pass  # Fall through to URL-based title
+
+            article["title"] = _title_from_url(url)
+
+    await asyncio.gather(*[_scrape_one(a) for a in articles])
+
+    scraped = sum(1 for a in articles if a.get("title") != _title_from_url(a["url"]))
+    logger.info(
+        "Title scraping: %d/%d scraped, %d from URL fallback.",
+        scraped,
+        len(articles),
+        len(articles) - scraped,
+    )
+    return articles

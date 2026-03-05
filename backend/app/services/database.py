@@ -24,6 +24,7 @@ __all__ = [
     "close_pool",
     "get_articles",
     "get_nearby_articles",
+    "get_articles_by_country",
     "get_articles_in_bounds",
     "upsert_articles",
     "get_topic_counts",
@@ -124,6 +125,28 @@ async def get_nearby_articles(
     return [dict(r) for r in rows]
 
 
+async def get_articles_by_country(
+    country_code: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Find articles matching a country code."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT id, title, summary, source_url, source_name, source_language,
+               published_at, ingested_at, latitude, longitude, country_code,
+               region, topic_tags, sentiment_score, entities, image_url
+        FROM articles
+        WHERE country_code = $1
+        ORDER BY published_at DESC
+        LIMIT $2
+        """,
+        country_code,
+        limit,
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_articles_in_bounds(
     min_lat: float,
     min_lng: float,
@@ -178,9 +201,15 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                     ON CONFLICT (source_url) DO UPDATE SET
                         title = EXCLUDED.title,
                         summary = EXCLUDED.summary,
+                        latitude = EXCLUDED.latitude,
+                        longitude = EXCLUDED.longitude,
+                        location = EXCLUDED.location,
+                        country_code = EXCLUDED.country_code,
+                        region = EXCLUDED.region,
                         sentiment_score = EXCLUDED.sentiment_score,
                         topic_tags = EXCLUDED.topic_tags,
-                        entities = EXCLUDED.entities
+                        entities = EXCLUDED.entities,
+                        image_url = EXCLUDED.image_url
                     """,
                     article.get("title", ""),
                     article.get("summary"),
