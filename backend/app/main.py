@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.routers.news import router as news_router
-from app.services.cache import close_redis, get_redis
+from app.services.cache import close_redis, get_redis, invalidate
 from app.services.database import close_pool, get_pool
 from app.services.ingestion import run_ingestion_cycle
 from app.services.scheduler import start_scheduler, stop_scheduler
@@ -55,6 +55,19 @@ async def startup() -> None:
     logger.info("Starting Orbis API …")
     await get_redis()
     await get_pool()
+
+    # Clean up stale country-centroid articles left by the old DOC API
+    # pipeline (they have empty region fields).
+    try:
+        pool = await get_pool()
+        deleted = await pool.fetchval(
+            "WITH d AS (DELETE FROM articles WHERE region = '' OR region IS NULL RETURNING 1) SELECT COUNT(*) FROM d"
+        )
+        if deleted:
+            logger.info("Cleaned up %d stale country-centroid articles.", deleted)
+            await invalidate("db:*")
+    except Exception:
+        logger.warning("Stale article cleanup failed.", exc_info=True)
 
     # Run one immediate ingestion so the DB has data, then start the
     # periodic scheduler.  Fire-and-forget so startup isn't blocked.
