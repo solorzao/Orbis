@@ -17,7 +17,7 @@ from app.models.news import (
 )
 from app.services.ai_summary import summarise_cluster
 from app.services.cache import get_cached, set_cached
-from app.services.database import get_globe_points, get_nearby_articles, get_topic_counts
+from app.services.database import get_articles_in_bounds, get_globe_points, get_nearby_articles, get_topic_counts
 
 logger = logging.getLogger(__name__)
 
@@ -96,23 +96,19 @@ async def get_globe_data(
 
 _MAX_CLUSTER_ARTICLES = 10
 
+# Grid cell size must match get_globe_points() call in get_globe_data().
+_CELL_SIZE = 1.0
 
-@router.get("/news/cluster", response_model=list[NewsArticle])
-async def get_cluster_articles(
-    lat: float = Query(..., description="Latitude of cluster center"),
-    lng: float = Query(..., description="Longitude of cluster center"),
-    radius: float = Query(5.0, description="Search radius in degrees"),
-    topic: str | None = Query(None, description="Optional topic filter"),
-    location_name: str | None = Query(None, description="Location name"),
-) -> list[NewsArticle]:
-    """Return full articles near a given lat/lng point from the database."""
-    resolved = _resolve_topic(topic)
 
-    # Convert radius in degrees to rough km (1 deg ≈ 111 km)
-    radius_km = radius * 111.0
-    rows = await get_nearby_articles(lat, lng, radius_km=radius_km, limit=50)
+async def _fetch_cell_articles(lat: float, lng: float, topic: str | None) -> list[NewsArticle]:
+    """Fetch articles within the grid cell containing (lat, lng)."""
+    half = _CELL_SIZE / 2.0
+    rows = await get_articles_in_bounds(
+        lat - half, lng - half, lat + half, lng + half, limit=50,
+    )
     articles = [_row_to_article(r) for r in rows]
 
+    resolved = _resolve_topic(topic)
     if resolved:
         filtered = [a for a in articles if resolved in a.topic_tags]
         if filtered:
@@ -124,6 +120,19 @@ async def get_cluster_articles(
                 len(articles),
             )
 
+    return articles
+
+
+@router.get("/news/cluster", response_model=list[NewsArticle])
+async def get_cluster_articles(
+    lat: float = Query(..., description="Latitude of cluster center"),
+    lng: float = Query(..., description="Longitude of cluster center"),
+    radius: float = Query(0.75, description="Deprecated — ignored, uses grid cell"),
+    topic: str | None = Query(None, description="Optional topic filter"),
+    location_name: str | None = Query(None, description="Location name"),
+) -> list[NewsArticle]:
+    """Return full articles in the grid cell around (lat, lng)."""
+    articles = await _fetch_cell_articles(lat, lng, topic)
     return articles[:_MAX_CLUSTER_ARTICLES]
 
 
@@ -131,22 +140,13 @@ async def get_cluster_articles(
 async def get_cluster_summary(
     lat: float = Query(..., description="Latitude of cluster center"),
     lng: float = Query(..., description="Longitude of cluster center"),
-    radius: float = Query(5.0, description="Search radius in degrees"),
+    radius: float = Query(0.75, description="Deprecated — ignored, uses grid cell"),
     topic: str | None = Query(None, description="Optional topic filter"),
     location_name: str | None = Query(None, description="Location name"),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
-
-    radius_km = radius * 111.0
-    rows = await get_nearby_articles(lat, lng, radius_km=radius_km, limit=50)
-    articles = [_row_to_article(r) for r in rows]
-
-    if resolved:
-        filtered = [a for a in articles if resolved in a.topic_tags]
-        if filtered:
-            articles = filtered
-
+    articles = await _fetch_cell_articles(lat, lng, resolved)
     nearby = articles[:_MAX_CLUSTER_ARTICLES]
 
     summary_text = await summarise_cluster(

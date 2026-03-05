@@ -108,24 +108,27 @@ class TestGetClusterArticles:
 
         rows = [_make_db_row("Tehran protest", ["politics"])]
 
-        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
-                lat=35.7, lng=51.4, radius=5.0, topic=None, location_name=None,
+                lat=35.7, lng=51.4, topic=None, location_name=None,
             )
             assert len(result) == 1
             assert result[0].title == "Tehran protest"
 
     @pytest.mark.asyncio
-    async def test_radius_converted_to_km(self):
-        from app.routers.news import get_cluster_articles
+    async def test_uses_grid_cell_bounds(self):
+        from app.routers.news import get_cluster_articles, _CELL_SIZE
 
-        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=[]) as mock_nearby:
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]) as mock_bounds:
             await get_cluster_articles(
-                lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name=None,
+                lat=40.5, lng=-74.5, topic=None, location_name=None,
             )
-            # 5 degrees * 111 km/degree = 555 km
-            call_kwargs = mock_nearby.call_args
-            assert call_kwargs[1]["radius_km"] == pytest.approx(555.0)
+            args = mock_bounds.call_args[0]
+            half = _CELL_SIZE / 2.0
+            assert args[0] == pytest.approx(40.5 - half)  # min_lat
+            assert args[1] == pytest.approx(-74.5 - half)  # min_lng
+            assert args[2] == pytest.approx(40.5 + half)   # max_lat
+            assert args[3] == pytest.approx(-74.5 + half)  # max_lng
 
     @pytest.mark.asyncio
     async def test_topic_filter_applied(self):
@@ -136,9 +139,9 @@ class TestGetClusterArticles:
             _make_db_row("Conflict article", ["conflict"]),
         ]
 
-        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
-                lat=40.0, lng=-74.0, radius=5.0, topic="conflict", location_name=None,
+                lat=40.0, lng=-74.0, topic="conflict", location_name=None,
             )
             assert len(result) == 1
             assert result[0].title == "Conflict article"
@@ -149,9 +152,9 @@ class TestGetClusterArticles:
 
         rows = [_make_db_row("General article", ["general"])]
 
-        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
-                lat=40.0, lng=-74.0, radius=5.0, topic="conflict", location_name=None,
+                lat=40.0, lng=-74.0, topic="conflict", location_name=None,
             )
             # Falls back to unfiltered when topic matches nothing
             assert len(result) == 1
@@ -162,9 +165,9 @@ class TestGetClusterArticles:
 
         rows = [_make_db_row(f"Article {i}") for i in range(50)]
 
-        with patch("app.routers.news.get_nearby_articles", new_callable=AsyncMock, return_value=rows):
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
-                lat=40.0, lng=-74.0, radius=5.0, topic=None, location_name=None,
+                lat=40.0, lng=-74.0, topic=None, location_name=None,
             )
             assert len(result) == _MAX_CLUSTER_ARTICLES
 

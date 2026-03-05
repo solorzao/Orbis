@@ -187,8 +187,12 @@ def _title_from_url(url: str) -> str:
     slug = re.sub(r"\.(html?|php|aspx?)$", "", slug, flags=re.IGNORECASE)
     # Replace hyphens/underscores with spaces, title-case
     title = re.sub(r"[-_]+", " ", slug).strip()
-    if len(title) < 5:
-        # Fallback to domain
+    # Reject if too short, mostly digits/hex, or looks like a UUID/hash
+    if (
+        len(title) < 5
+        or re.fullmatch(r"[\da-fA-F\s\-]{8,}", title)
+        or sum(c.isdigit() for c in title) > len(title) * 0.5
+    ):
         return urlparse(url).netloc
     return title.title()
 
