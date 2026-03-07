@@ -94,8 +94,6 @@ async def get_globe_data(
     return points
 
 
-_MAX_CLUSTER_ARTICLES = 10
-
 # Grid cell size must match get_globe_points() call in get_globe_data().
 _CELL_SIZE = 1.0
 
@@ -130,10 +128,12 @@ async def get_cluster_articles(
     radius: float = Query(0.75, description="Deprecated — ignored, uses grid cell"),
     topic: str | None = Query(None, description="Optional topic filter"),
     location_name: str | None = Query(None, description="Location name"),
+    offset: int = Query(0, ge=0, description="Number of articles to skip"),
+    limit: int = Query(10, ge=1, le=50, description="Max articles to return"),
 ) -> list[NewsArticle]:
     """Return full articles in the grid cell around (lat, lng)."""
     articles = await _fetch_cell_articles(lat, lng, topic)
-    return articles[:_MAX_CLUSTER_ARTICLES]
+    return articles[offset:offset + limit]
 
 
 @router.get("/news/summary", response_model=ClusterSummaryResponse)
@@ -147,7 +147,7 @@ async def get_cluster_summary(
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
     articles = await _fetch_cell_articles(lat, lng, resolved)
-    nearby = articles[:_MAX_CLUSTER_ARTICLES]
+    nearby = articles[:10]
 
     summary_text = await summarise_cluster(
         nearby,

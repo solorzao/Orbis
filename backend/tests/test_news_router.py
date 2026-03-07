@@ -111,6 +111,7 @@ class TestGetClusterArticles:
         with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
                 lat=35.7, lng=51.4, topic=None, location_name=None,
+                offset=0, limit=10,
             )
             assert len(result) == 1
             assert result[0].title == "Tehran protest"
@@ -122,6 +123,7 @@ class TestGetClusterArticles:
         with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]) as mock_bounds:
             await get_cluster_articles(
                 lat=40.5, lng=-74.5, topic=None, location_name=None,
+                offset=0, limit=10,
             )
             args = mock_bounds.call_args[0]
             half = _CELL_SIZE / 2.0
@@ -142,6 +144,7 @@ class TestGetClusterArticles:
         with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
                 lat=40.0, lng=-74.0, topic="conflict", location_name=None,
+                offset=0, limit=10,
             )
             assert len(result) == 1
             assert result[0].title == "Conflict article"
@@ -155,21 +158,50 @@ class TestGetClusterArticles:
         with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
                 lat=40.0, lng=-74.0, topic="conflict", location_name=None,
+                offset=0, limit=10,
             )
             # Falls back to unfiltered when topic matches nothing
             assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_caps_results_at_max(self):
-        from app.routers.news import get_cluster_articles, _MAX_CLUSTER_ARTICLES
+    async def test_caps_results_at_default_limit(self):
+        from app.routers.news import get_cluster_articles
 
         rows = [_make_db_row(f"Article {i}") for i in range(50)]
 
         with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
             result = await get_cluster_articles(
                 lat=40.0, lng=-74.0, topic=None, location_name=None,
+                offset=0, limit=10,
             )
-            assert len(result) == _MAX_CLUSTER_ARTICLES
+            assert len(result) == 10
+
+    @pytest.mark.asyncio
+    async def test_offset_skips_articles(self):
+        from app.routers.news import get_cluster_articles
+
+        rows = [_make_db_row(f"Article {i}") for i in range(20)]
+
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
+            result = await get_cluster_articles(
+                lat=40.0, lng=-74.0, topic=None, location_name=None,
+                offset=5, limit=3,
+            )
+            assert len(result) == 3
+            assert result[0].title == "Article 5"
+
+    @pytest.mark.asyncio
+    async def test_default_offset_is_zero(self):
+        from app.routers.news import get_cluster_articles
+
+        rows = [_make_db_row(f"Article {i}") for i in range(5)]
+
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows):
+            result = await get_cluster_articles(
+                lat=40.0, lng=-74.0, topic=None, location_name=None,
+                offset=0, limit=10,
+            )
+            assert result[0].title == "Article 0"
 
 
 class TestGetTopics:
