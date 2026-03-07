@@ -29,6 +29,7 @@ __all__ = [
     "upsert_articles",
     "get_topic_counts",
     "get_globe_points",
+    "get_hourly_density",
 ]
 
 logger = logging.getLogger("orbis.database")
@@ -153,6 +154,8 @@ async def get_articles_in_bounds(
     max_lat: float,
     max_lng: float,
     limit: int = 200,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Return articles inside a lat/lng bounding box (for globe viewport)."""
     pool = await get_pool()
@@ -164,7 +167,15 @@ async def get_articles_in_bounds(
         max_lng,
         limit,
     )
-    return [dict(r) for r in rows]
+    result = [dict(r) for r in rows]
+    if start_time and end_time:
+        result = [
+            r for r in result
+            if start_time
+            <= r.get("published_at", datetime.min.replace(tzinfo=timezone.utc))
+            <= end_time
+        ]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +253,8 @@ async def get_globe_points(
     timespan_hours: int = 24,
     cell_size: float = 2.0,
     limit: int = 500,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Return clustered globe points from the database.
 
@@ -249,23 +262,34 @@ async def get_globe_points(
     most recent headline and dominant topic per cell.
     """
     pool = await get_pool()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
 
-    base_query = """
+    if start_time and end_time:
+        time_filter = "WHERE published_at BETWEEN $1 AND $2"
+        cell_param = "$3"
+        limit_param = "$4"
+        base_params: list[Any] = [start_time, end_time]
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
+        time_filter = "WHERE published_at >= $1"
+        cell_param = "$2"
+        limit_param = "$3"
+        base_params = [cutoff]
+
+    base_query = f"""
         WITH clustered AS (
             SELECT
-                FLOOR(latitude / $2) * $2 + $2 / 2  AS lat,
-                FLOOR(longitude / $2) * $2 + $2 / 2 AS lng,
+                FLOOR(latitude / {cell_param}) * {cell_param} + {cell_param} / 2  AS lat,
+                FLOOR(longitude / {cell_param}) * {cell_param} + {cell_param} / 2 AS lng,
                 title,
                 topic_tags,
                 region,
                 published_at,
                 ROW_NUMBER() OVER (
-                    PARTITION BY FLOOR(latitude / $2), FLOOR(longitude / $2)
+                    PARTITION BY FLOOR(latitude / {cell_param}), FLOOR(longitude / {cell_param})
                     ORDER BY published_at DESC
                 ) AS rn
             FROM articles
-            {time_filter}
+            {{time_filter}}
         )
         SELECT
             lat,
@@ -277,17 +301,17 @@ async def get_globe_points(
         FROM clustered
         GROUP BY lat, lng
         ORDER BY article_count DESC
-        LIMIT $3
+        LIMIT {limit_param}
     """
 
     # Try with time filter first, fall back to all data if empty
-    query = base_query.format(time_filter="WHERE published_at >= $1")
-    rows = await pool.fetch(query, cutoff, cell_size, limit)
+    query = base_query.format(time_filter=time_filter)
+    rows = await pool.fetch(query, *base_params, cell_size, limit)
 
     if not rows:
         logger.warning("No articles in last %dh — falling back to all data.", timespan_hours)
         query_all = base_query.format(time_filter="")
-        rows = await pool.fetch(query_all, cutoff, cell_size, limit)
+        rows = await pool.fetch(query_all, *base_params, cell_size, limit)
     results = []
     for row in rows:
         tags = row["topic_tags"] or []
@@ -303,6 +327,24 @@ async def get_globe_points(
             }
         )
     return results
+
+
+async def get_hourly_density(*, timespan_hours: int = 24) -> dict[int, int]:
+    """Return article counts bucketed by hour for the last N hours."""
+    pool = await get_pool()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
+    rows = await pool.fetch(
+        """
+        SELECT EXTRACT(HOUR FROM published_at) AS hour,
+               COUNT(*) AS count
+        FROM articles
+        WHERE published_at >= $1
+        GROUP BY hour
+        ORDER BY hour
+        """,
+        cutoff,
+    )
+    return {int(r["hour"]): int(r["count"]) for r in rows}
 
 
 async def get_topic_counts() -> dict[str, int]:

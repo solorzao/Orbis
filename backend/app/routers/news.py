@@ -12,12 +12,13 @@ from app.config import settings
 from app.models.news import (
     ClusterSummaryResponse,
     GlobeDataPoint,
+    HourlyDensity,
     NewsArticle,
     TopicCount,
 )
 from app.services.ai_summary import summarise_cluster
 from app.services.cache import get_cached, set_cached
-from app.services.database import get_articles_in_bounds, get_globe_points, get_nearby_articles, get_topic_counts
+from app.services.database import get_articles_in_bounds, get_globe_points, get_hourly_density, get_nearby_articles, get_topic_counts
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,17 @@ def _resolve_topic(topic: str | None) -> str | None:
         return None
     lower = topic.lower()
     return _TOPIC_ALIASES.get(lower, lower)
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO 8601 datetime string to a timezone-aware datetime."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _parse_timespan(timespan: str) -> int:
@@ -74,17 +86,22 @@ def _row_to_article(row: dict) -> NewsArticle:
 async def get_globe_data(
     timespan: str = Query("24h", description="Timespan, e.g. 24h, 48h"),
     limit: int = Query(500, ge=1, le=500, description="Max data points"),
+    start_time: str | None = Query(None, description="ISO start time"),
+    end_time: str | None = Query(None, description="ISO end time"),
 ) -> list[GlobeDataPoint]:
     """Return globe data points clustered from articles in the database."""
     hours = _parse_timespan(timespan)
+    start_dt = _parse_iso(start_time)
+    end_dt = _parse_iso(end_time)
 
-    cache_k = f"db:globe:{hours}:{limit}"
+    cache_k = f"db:globe:{start_time or hours}:{end_time or ''}:{limit}"
     cached = await get_cached(cache_k)
     if cached:
         return [GlobeDataPoint(**p) for p in cached]
 
     rows = await get_globe_points(
-        timespan_hours=hours, cell_size=1.0, limit=limit
+        timespan_hours=hours, cell_size=1.0, limit=limit,
+        start_time=start_dt, end_time=end_dt,
     )
     points = [GlobeDataPoint(**r) for r in rows]
 
@@ -98,11 +115,18 @@ async def get_globe_data(
 _CELL_SIZE = 1.0
 
 
-async def _fetch_cell_articles(lat: float, lng: float, topic: str | None) -> list[NewsArticle]:
+async def _fetch_cell_articles(
+    lat: float,
+    lng: float,
+    topic: str | None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+) -> list[NewsArticle]:
     """Fetch articles within the grid cell containing (lat, lng)."""
     half = _CELL_SIZE / 2.0
     rows = await get_articles_in_bounds(
         lat - half, lng - half, lat + half, lng + half, limit=50,
+        start_time=start_time, end_time=end_time,
     )
     articles = [_row_to_article(r) for r in rows]
 
@@ -130,9 +154,13 @@ async def get_cluster_articles(
     location_name: str | None = Query(None, description="Location name"),
     offset: int = Query(0, ge=0, description="Number of articles to skip"),
     limit: int = Query(10, ge=1, le=50, description="Max articles to return"),
+    start_time: str | None = Query(None, description="ISO start time"),
+    end_time: str | None = Query(None, description="ISO end time"),
 ) -> list[NewsArticle]:
     """Return full articles in the grid cell around (lat, lng)."""
-    articles = await _fetch_cell_articles(lat, lng, topic)
+    start_dt = _parse_iso(start_time)
+    end_dt = _parse_iso(end_time)
+    articles = await _fetch_cell_articles(lat, lng, topic, start_time=start_dt, end_time=end_dt)
     return articles[offset:offset + limit]
 
 
@@ -162,6 +190,22 @@ async def get_cluster_summary(
         article_count=len(nearby),
         summary=summary_text,
     )
+
+
+@router.get("/news/density", response_model=list[HourlyDensity])
+async def get_article_density() -> list[HourlyDensity]:
+    """Return article counts per hour for the time slider sparkline."""
+    cache_k = "db:density"
+    cached = await get_cached(cache_k)
+    if cached:
+        return [HourlyDensity(**d) for d in cached]
+
+    data = await get_hourly_density()
+    result = [HourlyDensity(hour=h, count=data.get(h, 0)) for h in range(24)]
+
+    if result:
+        await set_cached(cache_k, [d.model_dump() for d in result], settings.db_cache_ttl)
+    return result
 
 
 @router.get("/topics", response_model=list[TopicCount])

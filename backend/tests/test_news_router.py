@@ -204,6 +204,28 @@ class TestGetClusterArticles:
             assert result[0].title == "Article 0"
 
 
+class TestGetDensity:
+    @pytest.mark.asyncio
+    async def test_returns_24_hourly_buckets(self):
+        from app.routers.news import get_article_density
+
+        mock_data = {0: 5, 6: 20, 12: 50, 18: 30}
+
+        with patch(
+            "app.routers.news.get_hourly_density",
+            new_callable=AsyncMock,
+            return_value=mock_data,
+        ):
+            result = await get_article_density()
+            assert len(result) == 24
+            assert result[0].hour == 0
+            assert result[0].count == 5
+            assert result[1].hour == 1
+            assert result[1].count == 0  # missing hours filled with 0
+            assert result[12].hour == 12
+            assert result[12].count == 50
+
+
 class TestGetTopics:
     @pytest.mark.asyncio
     async def test_returns_topic_counts(self):

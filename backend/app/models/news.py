@@ -63,3 +63,10 @@ class TopicCount(BaseModel):
 
     topic: str
     count: int
+
+
+class HourlyDensity(BaseModel):
+    """Article count for a single hour bucket."""
+
+    hour: int
+    count: int
