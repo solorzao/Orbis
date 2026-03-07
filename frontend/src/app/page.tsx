@@ -129,30 +129,51 @@ export default function Home() {
       updatePanel(panelId, { loadingMore: true });
 
       const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
+      const isFiltered = filters && (filters.sentiment || filters.search || filters.topics.length > 0);
+      // When filters are active, use single in-panel topic for backend filter
+      const inPanelTopic = filters?.topics?.length === 1 ? filters.topics[0] : undefined;
 
       try {
-        // When filters are active, load ALL articles so client-side
-        // filtering works on the full dataset (clearing filters restores all).
-        // When no filters, append the next batch as usual.
-        const isFiltered = filters && (filters.sentiment || filters.search || filters.topics.length > 0);
         const apiArticles = await fetchClusterArticles(
           panel.point.lat,
           panel.point.lng,
           0.75,
-          topicFilter,
+          isFiltered ? (inPanelTopic || topicFilter) : topicFilter,
           panel.point.locationName,
           isFiltered ? 0 : panel.articles.length,
           isFiltered ? 50 : 20,
           timeRange?.startTime,
           timeRange?.endTime,
+          isFiltered ? (filters.sentiment || undefined) : undefined,
+          isFiltered ? (filters.search || undefined) : undefined,
         );
-        const mapped = mapArticles(apiArticles);
-        const allArticles = isFiltered ? mapped : [...panel.articles, ...mapped];
-        updatePanel(panelId, {
-          articles: allArticles,
-          point: { ...panel.point, articles: allArticles, count: isFiltered ? allArticles.length : panel.point.count },
-          loadingMore: false,
-        });
+        let mapped = mapArticles(apiArticles);
+
+        // Backend only supports single topic — apply multi-topic client-side
+        if (isFiltered && filters.topics.length > 1) {
+          mapped = mapped.filter((a) => a.topicTags.some((t) => filters.topics.includes(t)));
+        }
+
+        if (isFiltered) {
+          // Merge server-filtered results with existing articles (deduplicate by id).
+          // This preserves already-loaded articles so clearing filters still works.
+          const existingIds = new Set(panel.articles.map((a) => a.id));
+          const newArticles = mapped.filter((a) => !existingIds.has(a.id));
+          const allArticles = [...panel.articles, ...newArticles];
+          updatePanel(panelId, {
+            articles: allArticles,
+            point: { ...panel.point, articles: allArticles },
+            loadingMore: false,
+          });
+        } else {
+          // Unfiltered: append next batch
+          const allArticles = [...panel.articles, ...mapped];
+          updatePanel(panelId, {
+            articles: allArticles,
+            point: { ...panel.point, articles: allArticles },
+            loadingMore: false,
+          });
+        }
       } catch {
         updatePanel(panelId, { loadingMore: false });
       }
