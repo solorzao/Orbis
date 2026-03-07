@@ -24,10 +24,9 @@ export function getPrimaryTopicColor(article: NewsArticle): string {
 }
 
 export function getSentimentColor(score: number): string {
-  if (score >= 0.5) return "#10B981"; // green
-  if (score >= 0) return "#F59E0B"; // amber
-  if (score >= -0.5) return "#F97316"; // orange
-  return "#EF4444"; // red
+  if (score >= 0.5) return "#10B981"; // green — positive
+  if (score >= 0) return "#F59E0B"; // amber — neutral
+  return "#EF4444"; // red — negative
 }
 
 /**

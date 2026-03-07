@@ -34,8 +34,7 @@ function timeAgo(dateString: string): string {
 function sentimentLabel(score: number): string {
   if (score >= 0.5) return "Positive";
   if (score >= 0) return "Neutral";
-  if (score >= -0.5) return "Negative";
-  return "Critical";
+  return "Negative";
 }
 
 function ArticleSkeleton({ delay = 0 }: { delay?: number }) {
