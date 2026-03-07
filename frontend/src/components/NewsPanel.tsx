@@ -559,8 +559,8 @@ export default function NewsPanel({
                   <p className="text-sm text-[var(--text-muted)]">No stories match the selected filters.</p>
                 </div>
               )}
-              {/* Show more button — hidden when filters are active since we can't know if remaining articles match */}
-              {!articlesLoading && !hasActiveFilters && point.articles.length > 0 &&
+              {/* Show more button — visible as long as there are unloaded articles */}
+              {!articlesLoading && point.articles.length > 0 &&
                 point.articles.length < point.count && (
                 <div className="mt-3 flex justify-center">
                   <button
