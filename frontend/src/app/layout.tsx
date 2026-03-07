@@ -23,7 +23,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Orbis — Global News Intelligence",
+  title: "Orbis — Every Story, Everywhere",
   description: "Explore the world's news on an interactive 3D globe",
   icons: {
     icon: "/favicon.ico",
