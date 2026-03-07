@@ -30,6 +30,13 @@ export default function TimeSlider({
 
   const isFullRange = rangeStart === 24 && rangeEnd === 0;
 
+  const presets = [
+    { label: "1h", hours: 1 },
+    { label: "6h", hours: 6 },
+    { label: "12h", hours: 12 },
+    { label: "24h", hours: 24 },
+  ] as const;
+
   // Convert hours-ago to ISO string
   const hoursAgoToISO = useCallback((hoursAgo: number): string => {
     const d = new Date(Date.now() - hoursAgo * 3600000);
@@ -83,6 +90,19 @@ export default function TimeSlider({
     setRangeEnd(0);
     onChange(null);
   }, [onChange]);
+
+  const handlePreset = useCallback(
+    (hours: number) => {
+      if (hours === 24) {
+        handleReset();
+      } else {
+        setRangeStart(hours);
+        setRangeEnd(0);
+        emitChange(hours, 0);
+      }
+    },
+    [handleReset, emitChange],
+  );
 
   // Sparkline max for scaling
   const maxCount = useMemo(
@@ -145,6 +165,25 @@ export default function TimeSlider({
             <span className="text-[var(--text-secondary)]">{totalStories} stories</span>
             <span className="text-[var(--text-muted)]">|</span>
             <span className="text-[var(--text-secondary)]">{totalLocations} locations</span>
+            <span className="text-[var(--text-muted)]">|</span>
+            <span className="flex items-center gap-1">
+              {presets.map(({ label, hours }) => {
+                const isActive = rangeStart === hours && rangeEnd === 0;
+                return (
+                  <button
+                    key={label}
+                    onClick={() => handlePreset(hours)}
+                    className={`rounded-full px-2 py-0.5 text-[9px] font-semibold tracking-wide transition-colors ${
+                      isActive
+                        ? "bg-blue-500/20 text-blue-400"
+                        : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[var(--text-secondary)] font-medium">
