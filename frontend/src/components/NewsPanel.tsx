@@ -284,82 +284,84 @@ export default function NewsPanel({
             )}
 
             {/* In-panel filters */}
-            {point.articles.length > 10 && (
-              <div className="mb-3 flex flex-wrap items-center gap-1.5">
-                {/* Topic pills */}
-                <button
-                  onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
-                  className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
-                    !hasActiveFilters
-                      ? "bg-blue-500/20 text-blue-400"
-                      : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                  }`}
-                >
-                  All
-                </button>
-                {availableTopics.map((topic) => (
+            {point.articles.length > 0 && (
+              <div className="mb-3 space-y-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {/* Topic pills */}
                   <button
-                    key={topic}
-                    onClick={() => {
-                      setSelectedTopics((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(topic)) next.delete(topic);
-                        else next.add(topic);
-                        return next;
-                      });
-                    }}
+                    onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
                     className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
-                      selectedTopics.has(topic)
+                      !hasActiveFilters
                         ? "bg-blue-500/20 text-blue-400"
                         : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
                     }`}
                   >
-                    {topic}
+                    All
                   </button>
-                ))}
+                  {availableTopics.map((topic) => (
+                    <button
+                      key={topic}
+                      onClick={() => {
+                        setSelectedTopics((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(topic)) next.delete(topic);
+                          else next.add(topic);
+                          return next;
+                        });
+                      }}
+                      className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                        selectedTopics.has(topic)
+                          ? "bg-blue-500/20 text-blue-400"
+                          : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                      }`}
+                    >
+                      {topic}
+                    </button>
+                  ))}
 
-                {/* Sentiment dots */}
-                <span className="mx-1 text-[var(--text-muted)]">|</span>
-                {[
-                  { key: "positive", color: "#10B981", title: "Positive" },
-                  { key: "neutral", color: "#F59E0B", title: "Neutral" },
-                  { key: "negative", color: "#EF4444", title: "Negative" },
-                ].map(({ key, color, title }) => (
-                  <button
-                    key={key}
-                    onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
-                    title={title}
-                    className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
-                      selectedSentiment === key
-                        ? ""
-                        : "opacity-50 hover:opacity-80"
-                    }`}
-                    style={{
-                      ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
-                    }}
-                  >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: color }}
-                    />
-                  </button>
-                ))}
+                  {/* Sentiment dots */}
+                  <span className="mx-1 text-[var(--text-muted)]">|</span>
+                  {[
+                    { key: "positive", color: "#10B981", title: "Positive" },
+                    { key: "neutral", color: "#F59E0B", title: "Neutral" },
+                    { key: "negative", color: "#EF4444", title: "Negative" },
+                  ].map(({ key, color, title }) => (
+                    <button
+                      key={key}
+                      onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
+                      title={title}
+                      className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
+                        selectedSentiment === key
+                          ? ""
+                          : "opacity-50 hover:opacity-80"
+                      }`}
+                      style={{
+                        ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
+                      }}
+                    >
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: color }}
+                      />
+                    </button>
+                  ))}
+                </div>
 
                 {/* Title search */}
-                <div className="relative ml-auto">
+                <div className="relative">
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search..."
-                    className="h-6 w-28 rounded-full border border-[var(--border-subtle)] bg-[var(--inset-highlight)] pl-6 pr-2 text-[10px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-all focus:w-40 focus:border-blue-500/30"
+                    placeholder="Search headlines..."
+                    className="h-7 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--inset-highlight)] pl-7 pr-3 text-[11px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-colors focus:border-blue-500/30"
                   />
                   <svg
-                    width="10"
-                    height="10"
+                    width="12"
+                    height="12"
                     viewBox="0 0 10 10"
                     fill="none"
-                    className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
                   >
                     <circle cx="4.5" cy="4.5" r="3" stroke="currentColor" strokeWidth="1.2" />
                     <path d="M7 7L9 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
