@@ -37,7 +37,7 @@ def _resolve_topic(topic: str | None) -> str | None:
 
 def _parse_iso(value: str | None) -> datetime | None:
     """Parse an ISO 8601 datetime string to a timezone-aware datetime."""
-    if not value:
+    if not isinstance(value, str):
         return None
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))

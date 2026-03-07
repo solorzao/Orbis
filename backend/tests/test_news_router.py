@@ -83,7 +83,8 @@ class TestGetGlobeData:
         ) as mock_db:
             await get_globe_data(timespan="24h", limit=3)
             mock_db.assert_called_once_with(
-                timespan_hours=24, cell_size=1.0, limit=3
+                timespan_hours=24, cell_size=1.0, limit=3,
+                start_time=None, end_time=None,
             )
 
     @pytest.mark.asyncio
@@ -97,8 +98,27 @@ class TestGetGlobeData:
         ) as mock_db:
             await get_globe_data(timespan="48h", limit=100)
             mock_db.assert_called_once_with(
-                timespan_hours=48, cell_size=1.0, limit=100
+                timespan_hours=48, cell_size=1.0, limit=100,
+                start_time=None, end_time=None,
             )
+
+    @pytest.mark.asyncio
+    async def test_passes_start_end_time_to_db(self):
+        from app.routers.news import get_globe_data
+
+        with patch(
+            "app.routers.news.get_globe_points",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_db:
+            await get_globe_data(
+                timespan="24h", limit=100,
+                start_time="2026-03-07T14:00:00Z",
+                end_time="2026-03-07T18:00:00Z",
+            )
+            call_kwargs = mock_db.call_args[1]
+            assert call_kwargs["start_time"].hour == 14
+            assert call_kwargs["end_time"].hour == 18
 
 
 class TestGetClusterArticles:
@@ -202,6 +222,21 @@ class TestGetClusterArticles:
                 offset=0, limit=10,
             )
             assert result[0].title == "Article 0"
+
+    @pytest.mark.asyncio
+    async def test_passes_start_end_time_to_bounds(self):
+        from app.routers.news import get_cluster_articles
+
+        with patch("app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]) as mock_bounds:
+            await get_cluster_articles(
+                lat=40.0, lng=-74.0, topic=None, location_name=None,
+                offset=0, limit=10,
+                start_time="2026-03-07T10:00:00Z",
+                end_time="2026-03-07T12:00:00Z",
+            )
+            call_kwargs = mock_bounds.call_args[1]
+            assert call_kwargs["start_time"].hour == 10
+            assert call_kwargs["end_time"].hour == 12
 
 
 class TestGetDensity:
