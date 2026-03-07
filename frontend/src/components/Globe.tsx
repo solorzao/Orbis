@@ -15,7 +15,7 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  const { resolvedTheme } = useTheme();
+  const { theme: resolvedTheme } = useTheme();
 
   const onPointClickRef = useRef(onPointClick);
   onPointClickRef.current = onPointClick;
