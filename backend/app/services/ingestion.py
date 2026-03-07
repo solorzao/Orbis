@@ -8,6 +8,7 @@ titles, and upserts them into the database.
 from __future__ import annotations
 
 import logging
+import re
 
 from app.services.cache import invalidate
 from app.services.database import upsert_articles
@@ -15,6 +16,21 @@ from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger("orbis.ingestion")
+
+# Pattern: "Headline : NPR", "Headline | WXXJ News", "Headline - The Post"
+_OUTLET_SEP = re.compile(r"\s+[|:–—-]\s+")
+
+
+def _dedup_key(title: str) -> str:
+    """Normalize a title for dedup by stripping the trailing outlet name."""
+    # Split on the last separator; if suffix is short it's likely an outlet name
+    parts = list(_OUTLET_SEP.finditer(title))
+    if parts:
+        last = parts[-1]
+        suffix = title[last.end():]
+        if len(suffix) < 40:
+            title = title[:last.start()]
+    return title.strip().lower()
 
 
 async def _ingest_from_raw_gkg() -> int:
@@ -35,8 +51,8 @@ async def _ingest_from_raw_gkg() -> int:
         if not title:
             continue
 
-        # Deduplicate: keep first article per normalized title
-        norm = title.strip().lower()
+        # Deduplicate: strip outlet suffix so syndicated copies collapse
+        norm = _dedup_key(title)
         if norm in seen_titles:
             continue
         seen_titles.add(norm)

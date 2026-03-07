@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
@@ -28,6 +29,32 @@ router = APIRouter(prefix="/api", tags=["news"])
 
 # Frontend sends "Climate" but classifier uses "environment"
 _TOPIC_ALIASES = {"climate": "environment"}
+
+
+_OUTLET_SEP = re.compile(r"\s+[|:–—-]\s+")
+
+
+def _dedup_key(title: str) -> str:
+    """Normalize a title for dedup by stripping the trailing outlet name."""
+    parts = list(_OUTLET_SEP.finditer(title))
+    if parts:
+        last = parts[-1]
+        suffix = title[last.end():]
+        if len(suffix) < 40:
+            title = title[:last.start()]
+    return title.strip().lower()
+
+
+def _deduplicate_articles(articles: list) -> list:
+    """Remove syndicated duplicates, keeping the first (most recent) per title."""
+    seen: set[str] = set()
+    result = []
+    for a in articles:
+        key = _dedup_key(a.title)
+        if key not in seen:
+            seen.add(key)
+            result.append(a)
+    return result
 
 
 def _resolve_topic(topic: str | None) -> str | None:
@@ -135,7 +162,7 @@ async def _fetch_cell_articles(
         lat - half, lng - half, lat + half, lng + half, limit=50,
         start_time=start_time, end_time=end_time,
     )
-    articles = [_row_to_article(r) for r in rows]
+    articles = _deduplicate_articles([_row_to_article(r) for r in rows])
 
     resolved = _resolve_topic(topic)
     if resolved:
