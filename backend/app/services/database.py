@@ -254,14 +254,14 @@ async def get_globe_points(
     base_query = """
         WITH clustered AS (
             SELECT
-                ROUND(latitude / $2) * $2 + $2 / 2  AS lat,
-                ROUND(longitude / $2) * $2 + $2 / 2 AS lng,
+                FLOOR(latitude / $2) * $2 + $2 / 2  AS lat,
+                FLOOR(longitude / $2) * $2 + $2 / 2 AS lng,
                 title,
                 topic_tags,
                 region,
                 published_at,
                 ROW_NUMBER() OVER (
-                    PARTITION BY ROUND(latitude / $2), ROUND(longitude / $2)
+                    PARTITION BY FLOOR(latitude / $2), FLOOR(longitude / $2)
                     ORDER BY published_at DESC
                 ) AS rn
             FROM articles
