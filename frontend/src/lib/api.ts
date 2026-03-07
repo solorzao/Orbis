@@ -1,4 +1,5 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 export interface ApiGlobePoint {
   lat: number;
@@ -47,7 +48,9 @@ async function apiFetch<T>(path: string, params?: Record<string, string>): Promi
       if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
     });
   }
-  const res = await fetch(url.toString());
+  const headers: Record<string, string> = {};
+  if (API_KEY) headers["X-API-Key"] = API_KEY;
+  const res = await fetch(url.toString(), { headers });
   if (!res.ok) {
     throw new Error(`API ${res.status}: ${res.statusText}`);
   }
@@ -135,9 +138,11 @@ export async function fetchSelectionSummary(
   locationName?: string,
 ): Promise<ApiSelectionSummary> {
   const url = new URL("/api/news/summarize-selection", API_BASE);
+  const postHeaders: Record<string, string> = { "Content-Type": "application/json" };
+  if (API_KEY) postHeaders["X-API-Key"] = API_KEY;
   const res = await fetch(url.toString(), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: postHeaders,
     body: JSON.stringify({
       headlines,
       ...(locationName ? { location_name: locationName } : {}),

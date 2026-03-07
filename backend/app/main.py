@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
+from app.middleware.security import SecurityMiddleware
 from app.routers.news import router as news_router
 from app.services.cache import close_redis, get_redis, invalidate
 from app.services.database import close_pool, get_pool
@@ -32,15 +33,18 @@ app = FastAPI(title="Orbis API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "https://*.vercel.app",
         "https://orbisapp.co",
         "https://www.orbisapp.co",
     ],
+    allow_origin_regex=r"https://orbis[a-z0-9-]*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security middleware (API key + rate limiting).
+# Added after CORS so preflight responses include CORS headers.
+app.add_middleware(SecurityMiddleware)
 
 # Register routers.
 app.include_router(news_router)

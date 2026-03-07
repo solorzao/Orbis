@@ -76,7 +76,7 @@ class SelectionSummaryRequest(BaseModel):
     """Request body for summarizing a user-selected set of articles."""
 
     headlines: list[str] = Field(..., min_length=1, max_length=10)
-    location_name: str | None = None
+    location_name: str | None = Field(None, max_length=100)
 
 
 class SelectionSummaryResponse(BaseModel):

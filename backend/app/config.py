@@ -82,6 +82,9 @@ class Settings:
         default_factory=lambda: _env_float("CLUSTER_RESOLUTION_DEG", 2.0)
     )
 
+    # --- Security ---
+    api_key: str = field(default_factory=lambda: _env("ORBIS_API_KEY"))
+
     # --- AI model ---
     haiku_model_id: str = field(
         default_factory=lambda: _env("HAIKU_MODEL_ID", "claude-haiku-4-5-20251001")

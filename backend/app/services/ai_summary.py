@@ -7,6 +7,7 @@ import logging
 import anthropic
 
 from app.config import settings
+from app.middleware.security import has_injection_pattern, sanitise_text
 from app.models.news import NewsArticle
 from app.services.cache import get_cached, set_cached
 
@@ -56,8 +57,14 @@ async def summarise_cluster(
         return str(cached)
 
     # Compose the user message with location context.
-    location = location_name or f"{lat:.1f}°, {lng:.1f}°"
-    lines = [f"- {a.title} ({a.source_name})" for a in articles[:30]]
+    location = sanitise_text(location_name, max_length=100) if location_name else f"{lat:.1f}°, {lng:.1f}°"
+    lines = [
+        f"- {sanitise_text(a.title, max_length=200)} ({sanitise_text(a.source_name, max_length=50)})"
+        for a in articles[:30]
+        if not has_injection_pattern(a.title)
+    ]
+    if not lines:
+        return ""
     user_msg = f"Location: {location}\n\nHeadlines:\n" + "\n".join(lines)
 
     summary = await _call_claude(user_msg, system=_SYSTEM_PROMPT)
@@ -90,8 +97,11 @@ async def summarise_selection(
     if not headlines:
         return ""
 
-    location = f"Location: {location_name}\n\n" if location_name else ""
-    lines = [f"- {h}" for h in headlines[:10]]
+    location = f"Location: {sanitise_text(location_name, max_length=100)}\n\n" if location_name else ""
+    clean = [sanitise_text(h, max_length=200) for h in headlines[:10] if not has_injection_pattern(h)]
+    if not clean:
+        return ""
+    lines = [f"- {h}" for h in clean]
     user_msg = f"{location}Headlines:\n" + "\n".join(lines)
 
     client_msg = await _call_claude(user_msg, system=_SELECTION_SYSTEM_PROMPT)
