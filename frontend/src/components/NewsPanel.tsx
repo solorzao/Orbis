@@ -124,8 +124,13 @@ export default function NewsPanel({
     );
   }, [onFiltersChange, selectedTopics, selectedSentiment, searchQuery, filterSummary]);
 
-  // Clear filter summary when filters change
+  // Clear filter summary when filters change (skip initial mount to preserve restored state)
+  const mountedRef = useRef(false);
   useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
     setFilterSummary(null);
   }, [selectedTopics, selectedSentiment, searchQuery]);
 
