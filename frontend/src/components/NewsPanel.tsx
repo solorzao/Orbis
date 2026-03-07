@@ -444,9 +444,7 @@ export default function NewsPanel({
                   <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1" />
                   <circle cx="5" cy="5" r="1.5" fill="currentColor" />
                 </svg>
-                Summarize {filteredArticles.length > MAX_SUMMARIZE
-                  ? `top ${MAX_SUMMARIZE} of ${filteredArticles.length}`
-                  : `${filteredArticles.length}`} filtered {filteredArticles.length === 1 ? "story" : "stories"}
+                Summarize
               </button>
             )}
 
