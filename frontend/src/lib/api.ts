@@ -54,8 +54,16 @@ async function apiFetch<T>(path: string, params?: Record<string, string>): Promi
   return res.json() as Promise<T>;
 }
 
-export function fetchGlobeNews(timespan = "24h", limit = 500): Promise<ApiGlobePoint[]> {
-  return apiFetch<ApiGlobePoint[]>("/api/news", { timespan, limit: String(limit) });
+export function fetchGlobeNews(
+  timespan = "24h",
+  limit = 500,
+  startTime?: string,
+  endTime?: string,
+): Promise<ApiGlobePoint[]> {
+  const params: Record<string, string> = { timespan, limit: String(limit) };
+  if (startTime) params.start_time = startTime;
+  if (endTime) params.end_time = endTime;
+  return apiFetch<ApiGlobePoint[]>("/api/news", params);
 }
 
 export function fetchClusterArticles(
@@ -66,6 +74,8 @@ export function fetchClusterArticles(
   locationName?: string,
   offset = 0,
   limit = 10,
+  startTime?: string,
+  endTime?: string,
 ): Promise<ApiNewsArticle[]> {
   const params: Record<string, string> = {
     lat: String(lat),
@@ -76,6 +86,8 @@ export function fetchClusterArticles(
   if (locationName) params.location_name = locationName;
   if (offset > 0) params.offset = String(offset);
   if (limit !== 10) params.limit = String(limit);
+  if (startTime) params.start_time = startTime;
+  if (endTime) params.end_time = endTime;
   return apiFetch<ApiNewsArticle[]>("/api/news/cluster", params);
 }
 
@@ -94,6 +106,15 @@ export function fetchClusterSummary(
   if (locationName) params.location_name = locationName;
   if (topic && topic !== "All") params.topic = topic;
   return apiFetch<ApiClusterSummary>("/api/news/summary", params);
+}
+
+export interface ApiHourlyDensity {
+  hour: number;
+  count: number;
+}
+
+export function fetchDensity(): Promise<ApiHourlyDensity[]> {
+  return apiFetch<ApiHourlyDensity[]>("/api/news/density");
 }
 
 export function fetchTopics(): Promise<ApiTopicCount[]> {

@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle, PanelEntry } from "@/types/news";
 import { apiPointsToGlobePoints } from "@/lib/clustering";
-import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
+import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
+import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
 import TopicFilter from "@/components/TopicFilter";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -19,14 +20,25 @@ export default function Home() {
   const [apiError, setApiError] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const [timeRange, setTimeRange] = useState<{ startTime: string; endTime: string } | null>(null);
+  const [density, setDensity] = useState<{ hour: number; count: number }[]>([]);
+
   const MAX_PANELS = 5;
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
 
-  // Fetch all points once on mount
+  // Fetch density on mount
+  useEffect(() => {
+    fetchDensity()
+      .then(setDensity)
+      .catch(() => {});
+  }, []);
+
+  // Fetch globe data on mount and when timeRange changes
   useEffect(() => {
     let cancelled = false;
-    fetchGlobeNews()
+    setLoading(true);
+    fetchGlobeNews("24h", 500, timeRange?.startTime, timeRange?.endTime)
       .then((apiPoints) => {
         if (cancelled) return;
         setAllPoints(apiPointsToGlobePoints(apiPoints));
@@ -42,7 +54,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [timeRange]);
 
   // Filter points client-side — instant, no API call
   const points =
@@ -63,6 +75,10 @@ export default function Home() {
           0.75,
           topicFilter,
           point.locationName,
+          0,
+          10,
+          timeRange?.startTime,
+          timeRange?.endTime,
         );
         const mapped: NewsArticle[] = apiArticles.map((a) => ({
           id: a.id,
@@ -99,7 +115,7 @@ export default function Home() {
         updatePanel(panelId, { summaryLoading: false });
       }
     },
-    [activeTopic, updatePanel],
+    [activeTopic, timeRange, updatePanel],
   );
 
   const handleLoadMore = useCallback(
@@ -119,6 +135,8 @@ export default function Home() {
           panel.point.locationName,
           panel.articles.length, // offset = current count
           20, // batch size
+          timeRange?.startTime,
+          timeRange?.endTime,
         );
         const mapped: NewsArticle[] = apiArticles.map((a) => ({
           id: a.id,
@@ -143,7 +161,7 @@ export default function Home() {
         updatePanel(panelId, { loadingMore: false });
       }
     },
-    [panelQueue, activeTopic, updatePanel],
+    [panelQueue, activeTopic, timeRange, updatePanel],
   );
 
   const handlePointClick = useCallback(
@@ -242,39 +260,16 @@ export default function Home() {
         onLoadMore={handleLoadMore}
       />
 
-      {/* Bottom status bar */}
-      <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-4">
-        <div
-          className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-3 py-1.5 text-[9px] tracking-wider text-[var(--text-secondary)] sm:gap-3 sm:px-4 sm:py-2 sm:text-[10px]"
-          style={{
-            background: "var(--surface-overlay)",
-            backdropFilter: "blur(12px)",
-          }}
-        >
-          <span className="flex items-center gap-1.5">
-            {apiError ? (
-              <span className="text-red-400 text-xs font-semibold tracking-wider">OFFLINE</span>
-            ) : loading ? (
-              <>
-                <span className="h-2 w-2 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
-                <span className="text-blue-400 text-xs font-semibold tracking-wider">LOADING</span>
-              </>
-            ) : (
-              <>
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-                <span className="text-emerald-400 text-xs font-semibold tracking-wider">LIVE</span>
-              </>
-            )}
-          </span>
-          <span className="text-[var(--text-muted)]">|</span>
-          <span>{points.reduce((sum, p) => sum + p.count, 0)} stories tracked</span>
-          <span className="text-[var(--text-muted)]">|</span>
-          <span>{points.length} locations</span>
-        </div>
-      </div>
+      {/* Time Slider + Status */}
+      <TimeSlider
+        density={density}
+        onChange={setTimeRange}
+        totalStories={points.reduce((sum, p) => sum + p.count, 0)}
+        totalLocations={points.length}
+        isLive={!apiError && !loading}
+        isLoading={loading}
+        isOffline={apiError}
+      />
     </main>
   );
 }

@@ -1,0 +1,241 @@
+"use client";
+
+import { useState, useCallback, useRef, useMemo } from "react";
+
+interface TimeSliderProps {
+  density: { hour: number; count: number }[];
+  onChange: (range: { startTime: string; endTime: string } | null) => void;
+  totalStories: number;
+  totalLocations: number;
+  isLive: boolean;
+  isLoading: boolean;
+  isOffline: boolean;
+}
+
+export default function TimeSlider({
+  density,
+  onChange,
+  totalStories,
+  totalLocations,
+  isLoading,
+  isOffline,
+}: TimeSliderProps) {
+  // Range values: 0 = now, 24 = 24h ago
+  // We invert for display: left = oldest (24), right = newest (0)
+  // So rangeStart = hours ago for the START of window (larger number = further back)
+  // rangeEnd = hours ago for the END of window (smaller number = more recent)
+  const [rangeStart, setRangeStart] = useState(24); // 24h ago
+  const [rangeEnd, setRangeEnd] = useState(0); // now
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isFullRange = rangeStart === 24 && rangeEnd === 0;
+
+  // Convert hours-ago to ISO string
+  const hoursAgoToISO = useCallback((hoursAgo: number): string => {
+    const d = new Date(Date.now() - hoursAgo * 3600000);
+    return d.toISOString();
+  }, []);
+
+  // Format hours-ago to display time
+  const formatTime = useCallback((hoursAgo: number): string => {
+    const d = new Date(Date.now() - hoursAgo * 3600000);
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }, []);
+
+  // Debounced callback
+  const emitChange = useCallback(
+    (start: number, end: number) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        if (start === 24 && end === 0) {
+          onChange(null); // full range = no filter
+        } else {
+          onChange({
+            startTime: hoursAgoToISO(start),
+            endTime: hoursAgoToISO(end),
+          });
+        }
+      }, 300);
+    },
+    [onChange, hoursAgoToISO],
+  );
+
+  const handleStartChange = useCallback(
+    (value: number) => {
+      const clamped = Math.max(value, rangeEnd + 1);
+      setRangeStart(clamped);
+      emitChange(clamped, rangeEnd);
+    },
+    [rangeEnd, emitChange],
+  );
+
+  const handleEndChange = useCallback(
+    (value: number) => {
+      const clamped = Math.min(value, rangeStart - 1);
+      setRangeEnd(clamped);
+      emitChange(rangeStart, clamped);
+    },
+    [rangeStart, emitChange],
+  );
+
+  const handleReset = useCallback(() => {
+    setRangeStart(24);
+    setRangeEnd(0);
+    onChange(null);
+  }, [onChange]);
+
+  // Sparkline max for scaling
+  const maxCount = useMemo(
+    () => Math.max(1, ...density.map((d) => d.count)),
+    [density],
+  );
+
+  // Map density to 24 ordered bars (index 0 = 24h ago, index 23 = current hour)
+  const bars = useMemo(() => {
+    const now = new Date();
+    const currentHour = now.getHours();
+    return Array.from({ length: 24 }, (_, i) => {
+      const hour = (currentHour - 23 + i + 24) % 24;
+      const entry = density.find((d) => d.hour === hour);
+      return entry?.count ?? 0;
+    });
+  }, [density]);
+
+  // Tick labels at positions 0, 6, 12, 18, 24
+  const ticks = useMemo(() => {
+    return [24, 18, 12, 6, 0].map((hoursAgo) => ({
+      hoursAgo,
+      label: hoursAgo === 0 ? "Now" : formatTime(hoursAgo),
+      pct: ((24 - hoursAgo) / 24) * 100,
+    }));
+  }, [formatTime]);
+
+  return (
+    <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-4 w-[90vw] max-w-2xl">
+      <div
+        className="rounded-2xl border border-[var(--border-subtle)] px-4 py-3 sm:px-5 sm:py-3.5"
+        style={{
+          background: "var(--surface-overlay)",
+          backdropFilter: "blur(16px) saturate(1.4)",
+        }}
+      >
+        {/* Time label + status */}
+        <div className="mb-2 flex items-center justify-between text-[10px] tracking-wider">
+          <div className="flex items-center gap-2">
+            {/* Status indicator */}
+            <span className="flex items-center gap-1.5">
+              {isOffline ? (
+                <span className="text-red-400 font-semibold">OFFLINE</span>
+              ) : isLoading ? (
+                <>
+                  <span className="h-2 w-2 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
+                  <span className="text-blue-400 font-semibold">LOADING</span>
+                </>
+              ) : (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                  </span>
+                  <span className="text-emerald-400 font-semibold">LIVE</span>
+                </>
+              )}
+            </span>
+            <span className="text-[var(--text-muted)]">|</span>
+            <span className="text-[var(--text-secondary)]">{totalStories} stories</span>
+            <span className="text-[var(--text-muted)]">|</span>
+            <span className="text-[var(--text-secondary)]">{totalLocations} locations</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--text-secondary)] font-medium">
+              {isFullRange
+                ? "Last 24 hours"
+                : `${formatTime(rangeStart)} — ${formatTime(rangeEnd)}`}
+            </span>
+            {!isFullRange && (
+              <button
+                onClick={handleReset}
+                className="text-blue-400 hover:text-blue-300 font-medium"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Sparkline + slider area */}
+        <div className="relative h-10">
+          {/* Sparkline bars */}
+          <div className="absolute inset-x-0 bottom-0 flex h-8 items-end gap-px">
+            {bars.map((count, i) => {
+              const hoursAgo = 24 - i; // bar 0 = 24h ago, bar 23 = now
+              const inRange = hoursAgo <= rangeStart && hoursAgo >= rangeEnd;
+              const height = Math.max(2, (count / maxCount) * 100);
+              return (
+                <div
+                  key={i}
+                  className="flex-1 rounded-t-sm transition-colors duration-150"
+                  style={{
+                    height: `${height}%`,
+                    backgroundColor: inRange
+                      ? "rgba(59, 130, 246, 0.3)"
+                      : "rgba(59, 130, 246, 0.08)",
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          {/* Range highlight */}
+          <div
+            className="absolute bottom-0 h-8 rounded-sm pointer-events-none"
+            style={{
+              left: `${((24 - rangeStart) / 24) * 100}%`,
+              right: `${(rangeEnd / 24) * 100}%`,
+              backgroundColor: "rgba(59, 130, 246, 0.06)",
+              borderLeft: "1px solid rgba(59, 130, 246, 0.4)",
+              borderRight: "1px solid rgba(59, 130, 246, 0.4)",
+            }}
+          />
+
+          {/* Start handle (left -- further back in time) */}
+          <input
+            type="range"
+            min={0}
+            max={24}
+            step={1}
+            value={24 - rangeStart}
+            onChange={(e) => handleStartChange(24 - Number(e.target.value))}
+            className="absolute bottom-0 left-0 w-full h-8 appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-1.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-webkit-slider-thumb]:shadow-[0_0_6px_rgba(59,130,246,0.5)] [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-1.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-400 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab"
+            style={{ zIndex: 2 }}
+          />
+
+          {/* End handle (right -- more recent) */}
+          <input
+            type="range"
+            min={0}
+            max={24}
+            step={1}
+            value={24 - rangeEnd}
+            onChange={(e) => handleEndChange(24 - Number(e.target.value))}
+            className="absolute bottom-0 left-0 w-full h-8 appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-1.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-webkit-slider-thumb]:shadow-[0_0_6px_rgba(59,130,246,0.5)] [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-1.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-400 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab"
+            style={{ zIndex: 2 }}
+          />
+        </div>
+
+        {/* Tick labels */}
+        <div className="relative mt-1 h-3">
+          {ticks.map((tick) => (
+            <span
+              key={tick.hoursAgo}
+              className="absolute text-[8px] text-[var(--text-muted)] -translate-x-1/2"
+              style={{ left: `${tick.pct}%` }}
+            >
+              {tick.label}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
