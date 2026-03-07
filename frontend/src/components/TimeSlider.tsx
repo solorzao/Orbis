@@ -34,7 +34,6 @@ export default function TimeSlider({
     { label: "1h", hours: 1 },
     { label: "6h", hours: 6 },
     { label: "12h", hours: 12 },
-    { label: "24h", hours: 24 },
   ] as const;
 
   // Convert hours-ago to ISO string
@@ -93,15 +92,11 @@ export default function TimeSlider({
 
   const handlePreset = useCallback(
     (hours: number) => {
-      if (hours === 24) {
-        handleReset();
-      } else {
-        setRangeStart(hours);
-        setRangeEnd(0);
-        emitChange(hours, 0);
-      }
+      setRangeStart(hours);
+      setRangeEnd(0);
+      emitChange(hours, 0);
     },
-    [handleReset, emitChange],
+    [emitChange],
   );
 
   // Sparkline max for scaling
