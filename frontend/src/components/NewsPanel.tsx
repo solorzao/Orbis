@@ -325,11 +325,11 @@ export default function NewsPanel({
                     title={title}
                     className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
                       selectedSentiment === key
-                        ? "ring-2 ring-offset-1 ring-offset-transparent"
+                        ? ""
                         : "opacity-50 hover:opacity-80"
                     }`}
                     style={{
-                      ...(selectedSentiment === key ? { ["--tw-ring-color" as string]: color } : {}),
+                      ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
                     }}
                   >
                     <span
@@ -360,12 +360,7 @@ export default function NewsPanel({
                   </p>
                 </div>
               )}
-              {hasActiveFilters && filteredArticles.length === 0 && point.articles.length > 0 && (
-                <div className="rounded-xl border border-[var(--border-subtle)] p-4 text-center" style={{ background: "var(--surface-card)" }}>
-                  <p className="text-sm text-[var(--text-muted)]">No stories match the selected filters.</p>
-                </div>
-              )}
-              <AnimatePresence mode="popLayout">
+              <AnimatePresence>
                 {filteredArticles.map((article, index) => (
                   <motion.article
                     key={article.id}
@@ -448,6 +443,11 @@ export default function NewsPanel({
                   </motion.article>
                 ))}
               </AnimatePresence>
+              {hasActiveFilters && filteredArticles.length === 0 && point.articles.length > 0 && (
+                <div className="rounded-xl border border-[var(--border-subtle)] p-4 text-center" style={{ background: "var(--surface-card)" }}>
+                  <p className="text-sm text-[var(--text-muted)]">No stories match the selected filters.</p>
+                </div>
+              )}
               {/* Show more button */}
               {!articlesLoading && point.articles.length > 0 &&
                 point.articles.length < point.count && (
