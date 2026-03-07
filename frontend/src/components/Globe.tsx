@@ -191,7 +191,7 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
   }, [resolvedTheme, isLoaded]);
 
   return (
-    <div className="fixed inset-0 z-0">
+    <div className="fixed inset-0 z-0 -translate-y-8">
       {/* Radial gradient vignette overlay */}
       <div
         className="pointer-events-none absolute inset-0 z-10"

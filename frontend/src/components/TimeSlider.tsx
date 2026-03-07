@@ -126,7 +126,7 @@ export default function TimeSlider({
   }, [formatTime]);
 
   return (
-    <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-4 w-[90vw] max-w-2xl">
+    <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 w-[90vw] max-w-2xl">
       <div
         className="rounded-2xl border border-[var(--border-subtle)] px-4 py-3 sm:px-5 sm:py-3.5"
         style={{
