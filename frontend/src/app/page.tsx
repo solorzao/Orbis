@@ -129,57 +129,30 @@ export default function Home() {
       updatePanel(panelId, { loadingMore: true });
 
       const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
-      // Merge global topic with in-panel topic filters
-      const inPanelTopic = filters?.topics?.length === 1 ? filters.topics[0] : undefined;
-      const effectiveTopic = inPanelTopic || topicFilter;
 
       try {
-        if (filters && (filters.sentiment || filters.search || filters.topics.length > 0)) {
-          // Filtered load: fetch ALL matching articles from backend and replace
-          const apiArticles = await fetchClusterArticles(
-            panel.point.lat,
-            panel.point.lng,
-            0.75,
-            effectiveTopic,
-            panel.point.locationName,
-            0,  // offset=0: get all matching
-            50, // max limit
-            timeRange?.startTime,
-            timeRange?.endTime,
-            filters.sentiment || undefined,
-            filters.search || undefined,
-          );
-          const mapped = mapArticles(apiArticles);
-          // For multi-topic filter, apply client-side since backend only supports one topic
-          const finalArticles = filters.topics.length > 1
-            ? mapped.filter((a) => a.topicTags.some((t) => filters.topics.includes(t)))
-            : mapped;
-          updatePanel(panelId, {
-            articles: finalArticles,
-            point: { ...panel.point, articles: finalArticles, count: finalArticles.length },
-            loadingMore: false,
-          });
-        } else {
-          // Unfiltered load: append next batch
-          const apiArticles = await fetchClusterArticles(
-            panel.point.lat,
-            panel.point.lng,
-            0.75,
-            topicFilter,
-            panel.point.locationName,
-            panel.articles.length,
-            20,
-            timeRange?.startTime,
-            timeRange?.endTime,
-          );
-          const mapped = mapArticles(apiArticles);
-          const allArticles = [...panel.articles, ...mapped];
-          updatePanel(panelId, {
-            articles: allArticles,
-            point: { ...panel.point, articles: allArticles },
-            loadingMore: false,
-          });
-        }
+        // When filters are active, load ALL articles so client-side
+        // filtering works on the full dataset (clearing filters restores all).
+        // When no filters, append the next batch as usual.
+        const isFiltered = filters && (filters.sentiment || filters.search || filters.topics.length > 0);
+        const apiArticles = await fetchClusterArticles(
+          panel.point.lat,
+          panel.point.lng,
+          0.75,
+          topicFilter,
+          panel.point.locationName,
+          isFiltered ? 0 : panel.articles.length,
+          isFiltered ? 50 : 20,
+          timeRange?.startTime,
+          timeRange?.endTime,
+        );
+        const mapped = mapArticles(apiArticles);
+        const allArticles = isFiltered ? mapped : [...panel.articles, ...mapped];
+        updatePanel(panelId, {
+          articles: allArticles,
+          point: { ...panel.point, articles: allArticles, count: isFiltered ? allArticles.length : panel.point.count },
+          loadingMore: false,
+        });
       } catch {
         updatePanel(panelId, { loadingMore: false });
       }
