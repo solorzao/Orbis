@@ -212,6 +212,13 @@ export default function Home() {
     setExpandedPanelId(panelId);
   }, []);
 
+  const handleFiltersChange = useCallback(
+    (panelId: string, filters: PanelFilters, filterSummary: string | null) => {
+      updatePanel(panelId, { filters, filterSummary });
+    },
+    [updatePanel],
+  );
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[var(--bg-page)]">
       {/* Globe */}
@@ -254,6 +261,7 @@ export default function Home() {
         onClosePanel={handleClosePanel}
         onMinimizePanel={handleMinimizePanel}
         onLoadMore={handleLoadMore}
+        onFiltersChange={handleFiltersChange}
       />
 
       {/* Time Slider + Status */}

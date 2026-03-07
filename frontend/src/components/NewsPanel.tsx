@@ -15,6 +15,9 @@ interface NewsPanelProps {
   clusterSummary?: string | null;
   summaryLoading?: boolean;
   articlesLoading?: boolean;
+  savedFilters?: PanelFilters;
+  savedFilterSummary?: string | null;
+  onFiltersChange?: (filters: PanelFilters, filterSummary: string | null) => void;
 }
 
 function timeAgo(dateString: string): string {
@@ -98,21 +101,28 @@ export default function NewsPanel({
   clusterSummary,
   summaryLoading,
   articlesLoading,
+  savedFilters,
+  savedFilterSummary,
+  onFiltersChange,
 }: NewsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
-  const [selectedSentiment, setSelectedSentiment] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterSummary, setFilterSummary] = useState<string | null>(null);
+  const [selectedTopics, setSelectedTopics] = useState<Set<string>>(
+    () => new Set(savedFilters?.topics ?? [])
+  );
+  const [selectedSentiment, setSelectedSentiment] = useState<string | null>(
+    savedFilters?.sentiment ?? null
+  );
+  const [searchQuery, setSearchQuery] = useState(savedFilters?.search ?? "");
+  const [filterSummary, setFilterSummary] = useState<string | null>(savedFilterSummary ?? null);
   const [filterSummaryLoading, setFilterSummaryLoading] = useState(false);
 
-  // Reset filters when point changes
-  useEffect(() => {
-    setSelectedTopics(new Set());
-    setSelectedSentiment(null);
-    setSearchQuery("");
-    setFilterSummary(null);
-  }, [point?.id]);
+  // Save filter state to parent on minimize/close so it persists
+  const saveFilters = useCallback(() => {
+    onFiltersChange?.(
+      { topics: Array.from(selectedTopics), sentiment: selectedSentiment, search: searchQuery },
+      filterSummary,
+    );
+  }, [onFiltersChange, selectedTopics, selectedSentiment, searchQuery, filterSummary]);
 
   // Clear filter summary when filters change
   useEffect(() => {
@@ -167,12 +177,17 @@ export default function NewsPanel({
     }
   }, [canSummarize, filterSummaryLoading, filteredArticles, point?.locationName]);
 
+  const handleMinimize = useCallback(() => {
+    saveFilters();
+    if (onMinimize) onMinimize();
+    else onClose();
+  }, [saveFilters, onMinimize, onClose]);
+
   // Click outside to minimize (or close if no minimize handler)
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
-        if (onMinimize) onMinimize();
-        else onClose();
+        handleMinimize();
       }
     }
     if (point) {
@@ -185,19 +200,18 @@ export default function NewsPanel({
         document.removeEventListener("mousedown", handleClickOutside);
       };
     }
-  }, [point, onClose, onMinimize]);
+  }, [point, handleMinimize]);
 
   // ESC key to minimize (or close if no minimize handler)
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        if (onMinimize) onMinimize();
-        else onClose();
+        handleMinimize();
       }
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose, onMinimize]);
+  }, [handleMinimize]);
 
   return (
     <AnimatePresence>
@@ -233,7 +247,7 @@ export default function NewsPanel({
             <div className="flex items-center gap-1.5">
               {onMinimize && (
                 <button
-                  onClick={onMinimize}
+                  onClick={handleMinimize}
                   className="group flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-muted)] transition-colors hover:border-blue-500/30 hover:text-[var(--text-secondary)]"
                   aria-label="Minimize panel"
                 >

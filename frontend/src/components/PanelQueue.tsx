@@ -12,6 +12,7 @@ interface PanelQueueProps {
   onClosePanel: (panelId: string) => void;
   onMinimizePanel: () => void;
   onLoadMore: (panelId: string, filters?: PanelFilters) => void;
+  onFiltersChange: (panelId: string, filters: PanelFilters, filterSummary: string | null) => void;
 }
 
 export default function PanelQueue({
@@ -21,6 +22,7 @@ export default function PanelQueue({
   onClosePanel,
   onMinimizePanel,
   onLoadMore,
+  onFiltersChange,
 }: PanelQueueProps) {
   const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
   const minimizedPanels = panelQueue.filter((p) => p.panelId !== expandedPanelId);
@@ -40,6 +42,9 @@ export default function PanelQueue({
             clusterSummary={expandedPanel.clusterSummary}
             summaryLoading={expandedPanel.summaryLoading}
             articlesLoading={expandedPanel.articlesLoading}
+            savedFilters={expandedPanel.filters}
+            savedFilterSummary={expandedPanel.filterSummary}
+            onFiltersChange={(filters, filterSummary) => onFiltersChange(expandedPanel.panelId, filters, filterSummary)}
           />
         )}
       </AnimatePresence>

@@ -49,4 +49,6 @@ export interface PanelEntry {
   summaryLoading: boolean;
   createdAt: number;
   loadingMore?: boolean;
+  filters?: PanelFilters;
+  filterSummary?: string | null;
 }
