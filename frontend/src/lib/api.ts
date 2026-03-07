@@ -120,3 +120,27 @@ export function fetchDensity(): Promise<ApiHourlyDensity[]> {
 export function fetchTopics(): Promise<ApiTopicCount[]> {
   return apiFetch<ApiTopicCount[]>("/api/topics");
 }
+
+export interface ApiSelectionSummary {
+  summary: string;
+  article_count: number;
+}
+
+export async function fetchSelectionSummary(
+  headlines: string[],
+  locationName?: string,
+): Promise<ApiSelectionSummary> {
+  const url = new URL("/api/news/summarize-selection", API_BASE);
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      headlines,
+      ...(locationName ? { location_name: locationName } : {}),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`API ${res.status}: ${res.statusText}`);
+  }
+  return res.json() as Promise<ApiSelectionSummary>;
+}

@@ -70,3 +70,17 @@ class HourlyDensity(BaseModel):
 
     hour: int
     count: int
+
+
+class SelectionSummaryRequest(BaseModel):
+    """Request body for summarizing a user-selected set of articles."""
+
+    headlines: list[str] = Field(..., min_length=1, max_length=10)
+    location_name: str | None = None
+
+
+class SelectionSummaryResponse(BaseModel):
+    """Response payload for the selection summary endpoint."""
+
+    summary: str
+    article_count: int

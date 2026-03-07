@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GlobePoint } from "@/types/news";
 import { getSentimentColor } from "@/lib/clustering";
+import { fetchSelectionSummary } from "@/lib/api";
 
 interface NewsPanelProps {
   point: GlobePoint | null;
@@ -103,13 +104,21 @@ export default function NewsPanel({
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedSentiment, setSelectedSentiment] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterSummary, setFilterSummary] = useState<string | null>(null);
+  const [filterSummaryLoading, setFilterSummaryLoading] = useState(false);
 
   // Reset filters when point changes
   useEffect(() => {
     setSelectedTopics(new Set());
     setSelectedSentiment(null);
     setSearchQuery("");
+    setFilterSummary(null);
   }, [point?.id]);
+
+  // Clear filter summary when filters change
+  useEffect(() => {
+    setFilterSummary(null);
+  }, [selectedTopics, selectedSentiment, searchQuery]);
 
   const availableTopics = useMemo(() => {
     if (!point) return [];
@@ -141,6 +150,23 @@ export default function NewsPanel({
   }, [point?.articles, selectedTopics, selectedSentiment, searchQuery]);
 
   const hasActiveFilters = selectedTopics.size > 0 || selectedSentiment !== null || searchQuery.trim() !== "";
+
+  const MAX_SUMMARIZE = 10;
+  const canSummarize = hasActiveFilters && filteredArticles.length >= 2;
+
+  const handleSummarize = useCallback(async () => {
+    if (!canSummarize || filterSummaryLoading) return;
+    setFilterSummaryLoading(true);
+    try {
+      const headlines = filteredArticles.slice(0, MAX_SUMMARIZE).map((a) => `${a.title} (${a.sourceName})`);
+      const result = await fetchSelectionSummary(headlines, point?.locationName);
+      setFilterSummary(result.summary);
+    } catch {
+      setFilterSummary("Summary generation failed.");
+    } finally {
+      setFilterSummaryLoading(false);
+    }
+  }, [canSummarize, filterSummaryLoading, filteredArticles, point?.locationName]);
 
   // Click outside to minimize (or close if no minimize handler)
   useEffect(() => {
@@ -368,6 +394,60 @@ export default function NewsPanel({
                   </svg>
                 </div>
               </div>
+            )}
+
+            {/* Filter summary */}
+            {filterSummaryLoading && (
+              <div className="mb-3 rounded-xl border border-purple-500/10 bg-purple-500/[0.03] p-4">
+                <div className="mb-2.5 flex items-center gap-1.5">
+                  <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-purple-500/30" />
+                  <div className="h-2 w-24 animate-pulse rounded bg-purple-500/20" />
+                </div>
+                <div className="space-y-2">
+                  <div className="h-2 w-full animate-pulse rounded bg-[var(--inset-highlight)]" />
+                  <div className="h-2 w-4/5 animate-pulse rounded bg-[var(--inset-highlight)]" />
+                </div>
+              </div>
+            )}
+            {filterSummary && !filterSummaryLoading && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
+                className="mb-3 rounded-xl border border-purple-500/10 bg-purple-500/[0.04] p-4"
+              >
+                <div className="mb-2 flex items-center gap-1.5">
+                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
+                    <circle cx="5" cy="5" r="4" stroke="#A855F7" strokeWidth="1" />
+                    <circle cx="5" cy="5" r="1.5" fill="#A855F7" />
+                  </svg>
+                  <span className="text-[10px] font-semibold tracking-widest text-purple-400 uppercase">
+                    Filtered Summary
+                  </span>
+                  <span className="text-[9px] text-[var(--text-muted)]">
+                    ({Math.min(filteredArticles.length, MAX_SUMMARIZE)} stories)
+                  </span>
+                </div>
+                <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
+                  {filterSummary}
+                </p>
+              </motion.div>
+            )}
+
+            {/* Summarize button */}
+            {canSummarize && !filterSummary && !filterSummaryLoading && (
+              <button
+                onClick={handleSummarize}
+                className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-purple-500/20 py-2.5 text-[11px] font-medium text-purple-400 transition-colors hover:border-purple-500/40 hover:bg-purple-500/[0.04]"
+              >
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none">
+                  <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1" />
+                  <circle cx="5" cy="5" r="1.5" fill="currentColor" />
+                </svg>
+                Summarize {filteredArticles.length > MAX_SUMMARIZE
+                  ? `top ${MAX_SUMMARIZE} of ${filteredArticles.length}`
+                  : `${filteredArticles.length}`} filtered {filteredArticles.length === 1 ? "story" : "stories"}
+              </button>
             )}
 
             <div className="space-y-3">

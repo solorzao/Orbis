@@ -14,9 +14,11 @@ from app.models.news import (
     GlobeDataPoint,
     HourlyDensity,
     NewsArticle,
+    SelectionSummaryRequest,
+    SelectionSummaryResponse,
     TopicCount,
 )
-from app.services.ai_summary import summarise_cluster
+from app.services.ai_summary import summarise_cluster, summarise_selection
 from app.services.cache import get_cached, set_cached
 from app.services.database import get_articles_in_bounds, get_globe_points, get_hourly_density, get_nearby_articles, get_topic_counts
 
@@ -224,3 +226,16 @@ async def get_topics() -> list[TopicCount]:
         await set_cached(cache_k, [t.model_dump() for t in result], settings.db_cache_ttl)
 
     return result
+
+
+@router.post("/news/summarize-selection", response_model=SelectionSummaryResponse)
+async def summarize_selection(body: SelectionSummaryRequest) -> SelectionSummaryResponse:
+    """Generate an AI summary for a user-selected set of article headlines."""
+    summary_text = await summarise_selection(
+        body.headlines,
+        location_name=body.location_name,
+    )
+    return SelectionSummaryResponse(
+        summary=summary_text,
+        article_count=len(body.headlines),
+    )
