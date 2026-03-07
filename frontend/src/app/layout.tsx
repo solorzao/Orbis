@@ -1,8 +1,14 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono } from "next/font/google";
+import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "@/lib/theme";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
+
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-sans",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+});
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
@@ -33,8 +39,8 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${jetbrainsMono.variable} antialiased`}
-        style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
+        className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} antialiased`}
+        style={{ fontFamily: "var(--font-sans), system-ui, sans-serif" }}
       >
         <ThemeProvider>{children}</ThemeProvider>
         <Analytics />

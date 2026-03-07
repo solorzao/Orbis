@@ -1,11 +1,25 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useTheme } from "@/lib/theme";
 
 export default function ThemeToggle() {
   const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
 
   const toggle = () => setTheme(theme === "dark" ? "light" : "dark");
+
+  // Render placeholder with same dimensions to avoid layout shift
+  if (!mounted) {
+    return (
+      <div
+        className="fixed top-3 right-3 z-50 h-8 w-8 rounded-xl border sm:top-5 sm:right-6 sm:h-9 sm:w-9"
+        style={{ background: "var(--surface-overlay)", borderColor: "var(--border-subtle)" }}
+      />
+    );
+  }
 
   return (
     <button
