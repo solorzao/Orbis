@@ -102,11 +102,13 @@ export default function NewsPanel({
   const panelRef = useRef<HTMLDivElement>(null);
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedSentiment, setSelectedSentiment] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Reset filters when point changes
   useEffect(() => {
     setSelectedTopics(new Set());
     setSelectedSentiment(null);
+    setSearchQuery("");
   }, [point?.id]);
 
   const availableTopics = useMemo(() => {
@@ -131,10 +133,14 @@ export default function NewsPanel({
         return a.sentimentScore < 0; // negative
       });
     }
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      result = result.filter((a) => a.title.toLowerCase().includes(q));
+    }
     return result;
-  }, [point?.articles, selectedTopics, selectedSentiment]);
+  }, [point?.articles, selectedTopics, selectedSentiment, searchQuery]);
 
-  const hasActiveFilters = selectedTopics.size > 0 || selectedSentiment !== null;
+  const hasActiveFilters = selectedTopics.size > 0 || selectedSentiment !== null || searchQuery.trim() !== "";
 
   // Click outside to minimize (or close if no minimize handler)
   useEffect(() => {
@@ -282,7 +288,7 @@ export default function NewsPanel({
               <div className="mb-3 flex flex-wrap items-center gap-1.5">
                 {/* Topic pills */}
                 <button
-                  onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); }}
+                  onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
                   className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
                     !hasActiveFilters
                       ? "bg-blue-500/20 text-blue-400"
@@ -338,6 +344,27 @@ export default function NewsPanel({
                     />
                   </button>
                 ))}
+
+                {/* Title search */}
+                <div className="relative ml-auto">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search..."
+                    className="h-6 w-28 rounded-full border border-[var(--border-subtle)] bg-[var(--inset-highlight)] pl-6 pr-2 text-[10px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-all focus:w-40 focus:border-blue-500/30"
+                  />
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 10 10"
+                    fill="none"
+                    className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+                  >
+                    <circle cx="4.5" cy="4.5" r="3" stroke="currentColor" strokeWidth="1.2" />
+                    <path d="M7 7L9 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </div>
               </div>
             )}
 
