@@ -64,6 +64,8 @@ export function fetchClusterArticles(
   radius = 0.75,
   topic?: string,
   locationName?: string,
+  offset = 0,
+  limit = 10,
 ): Promise<ApiNewsArticle[]> {
   const params: Record<string, string> = {
     lat: String(lat),
@@ -72,6 +74,8 @@ export function fetchClusterArticles(
   };
   if (topic && topic !== "All") params.topic = topic;
   if (locationName) params.location_name = locationName;
+  if (offset > 0) params.offset = String(offset);
+  if (limit !== 10) params.limit = String(limit);
   return apiFetch<ApiNewsArticle[]>("/api/news/cluster", params);
 }
 

@@ -102,6 +102,50 @@ export default function Home() {
     [activeTopic, updatePanel],
   );
 
+  const handleLoadMore = useCallback(
+    async (panelId: string) => {
+      const panel = panelQueue.find((p) => p.panelId === panelId);
+      if (!panel || panel.loadingMore) return;
+
+      updatePanel(panelId, { loadingMore: true });
+
+      const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
+      try {
+        const apiArticles = await fetchClusterArticles(
+          panel.point.lat,
+          panel.point.lng,
+          0.75,
+          topicFilter,
+          panel.point.locationName,
+          panel.articles.length, // offset = current count
+          20, // batch size
+        );
+        const mapped: NewsArticle[] = apiArticles.map((a) => ({
+          id: a.id,
+          title: a.title,
+          summary: a.summary ?? undefined,
+          sourceUrl: a.source_url,
+          sourceName: a.source_name,
+          publishedAt: a.published_at,
+          latitude: a.latitude,
+          longitude: a.longitude,
+          countryCode: a.country_code,
+          topicTags: a.topic_tags,
+          sentimentScore: a.sentiment_score,
+        }));
+        const allArticles = [...panel.articles, ...mapped];
+        updatePanel(panelId, {
+          articles: allArticles,
+          point: { ...panel.point, articles: allArticles },
+          loadingMore: false,
+        });
+      } catch {
+        updatePanel(panelId, { loadingMore: false });
+      }
+    },
+    [panelQueue, activeTopic, updatePanel],
+  );
+
   const handlePointClick = useCallback(
     (point: GlobePoint) => {
       // Check if already in queue
@@ -195,6 +239,7 @@ export default function Home() {
         onExpandPanel={handleExpandPanel}
         onClosePanel={handleClosePanel}
         onMinimizePanel={handleMinimizePanel}
+        onLoadMore={handleLoadMore}
       />
 
       {/* Bottom status bar */}

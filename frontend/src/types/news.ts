@@ -42,4 +42,5 @@ export interface PanelEntry {
   articlesLoading: boolean;
   summaryLoading: boolean;
   createdAt: number;
+  loadingMore?: boolean;
 }

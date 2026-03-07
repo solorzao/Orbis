@@ -11,6 +11,7 @@ interface PanelQueueProps {
   onExpandPanel: (panelId: string) => void;
   onClosePanel: (panelId: string) => void;
   onMinimizePanel: () => void;
+  onLoadMore: (panelId: string) => void;
 }
 
 export default function PanelQueue({
@@ -19,6 +20,7 @@ export default function PanelQueue({
   onExpandPanel,
   onClosePanel,
   onMinimizePanel,
+  onLoadMore,
 }: PanelQueueProps) {
   const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
   const minimizedPanels = panelQueue.filter((p) => p.panelId !== expandedPanelId);
@@ -33,6 +35,8 @@ export default function PanelQueue({
             point={{ ...expandedPanel.point, articles: expandedPanel.articles }}
             onClose={() => onClosePanel(expandedPanel.panelId)}
             onMinimize={onMinimizePanel}
+            onLoadMore={() => onLoadMore(expandedPanel.panelId)}
+            loadingMore={expandedPanel.loadingMore}
             clusterSummary={expandedPanel.clusterSummary}
             summaryLoading={expandedPanel.summaryLoading}
             articlesLoading={expandedPanel.articlesLoading}
