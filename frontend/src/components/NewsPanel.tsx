@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GlobePoint } from "@/types/news";
 import { getSentimentColor } from "@/lib/clustering";
@@ -100,6 +100,41 @@ export default function NewsPanel({
   articlesLoading,
 }: NewsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
+  const [selectedSentiment, setSelectedSentiment] = useState<string | null>(null);
+
+  // Reset filters when point changes
+  useEffect(() => {
+    setSelectedTopics(new Set());
+    setSelectedSentiment(null);
+  }, [point?.id]);
+
+  const availableTopics = useMemo(() => {
+    if (!point) return [];
+    const tags = new Set<string>();
+    point.articles.forEach((a) => a.topicTags.forEach((t) => tags.add(t)));
+    return Array.from(tags).sort();
+  }, [point?.articles]);
+
+  const filteredArticles = useMemo(() => {
+    if (!point) return [];
+    let result = point.articles;
+    if (selectedTopics.size > 0) {
+      result = result.filter((a) =>
+        a.topicTags.some((t) => selectedTopics.has(t))
+      );
+    }
+    if (selectedSentiment) {
+      result = result.filter((a) => {
+        if (selectedSentiment === "positive") return a.sentimentScore >= 0.5;
+        if (selectedSentiment === "neutral") return a.sentimentScore >= 0 && a.sentimentScore < 0.5;
+        return a.sentimentScore < 0; // negative
+      });
+    }
+    return result;
+  }, [point?.articles, selectedTopics, selectedSentiment]);
+
+  const hasActiveFilters = selectedTopics.size > 0 || selectedSentiment !== null;
 
   // Click outside to minimize (or close if no minimize handler)
   useEffect(() => {
@@ -154,7 +189,11 @@ export default function NewsPanel({
           <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-6 py-4">
             <div>
               <h2 className="text-sm font-semibold tracking-widest text-blue-400 uppercase">
-                {point.isCluster ? `${point.count} Stories` : point.articles[0]?.countryCode}
+                {point.isCluster
+                  ? hasActiveFilters
+                    ? `${filteredArticles.length} of ${point.count} Stories`
+                    : `${point.count} Stories`
+                  : point.articles[0]?.countryCode}
               </h2>
               <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                 {point.locationName || `${point.lat.toFixed(2)}°, ${point.lng.toFixed(2)}°`}
@@ -238,6 +277,70 @@ export default function NewsPanel({
               </motion.div>
             )}
 
+            {/* In-panel filters */}
+            {point.articles.length > 10 && (
+              <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                {/* Topic pills */}
+                <button
+                  onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); }}
+                  className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                    !hasActiveFilters
+                      ? "bg-blue-500/20 text-blue-400"
+                      : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                  }`}
+                >
+                  All
+                </button>
+                {availableTopics.map((topic) => (
+                  <button
+                    key={topic}
+                    onClick={() => {
+                      setSelectedTopics((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(topic)) next.delete(topic);
+                        else next.add(topic);
+                        return next;
+                      });
+                    }}
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                      selectedTopics.has(topic)
+                        ? "bg-blue-500/20 text-blue-400"
+                        : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                    }`}
+                  >
+                    {topic}
+                  </button>
+                ))}
+
+                {/* Sentiment dots */}
+                <span className="mx-1 text-[var(--text-muted)]">|</span>
+                {[
+                  { key: "positive", color: "#10B981", title: "Positive" },
+                  { key: "neutral", color: "#F59E0B", title: "Neutral" },
+                  { key: "negative", color: "#EF4444", title: "Negative" },
+                ].map(({ key, color, title }) => (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
+                    title={title}
+                    className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
+                      selectedSentiment === key
+                        ? "ring-2 ring-offset-1 ring-offset-transparent"
+                        : "opacity-50 hover:opacity-80"
+                    }`}
+                    style={{
+                      ...(selectedSentiment === key ? { ["--tw-ring-color" as string]: color } : {}),
+                    }}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: color }}
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="space-y-3">
               {articlesLoading && point.articles.length === 0 && (
                 <>
@@ -257,8 +360,13 @@ export default function NewsPanel({
                   </p>
                 </div>
               )}
+              {hasActiveFilters && filteredArticles.length === 0 && point.articles.length > 0 && (
+                <div className="rounded-xl border border-[var(--border-subtle)] p-4 text-center" style={{ background: "var(--surface-card)" }}>
+                  <p className="text-sm text-[var(--text-muted)]">No stories match the selected filters.</p>
+                </div>
+              )}
               <AnimatePresence mode="popLayout">
-                {point.articles.map((article, index) => (
+                {filteredArticles.map((article, index) => (
                   <motion.article
                     key={article.id}
                     initial={{ opacity: 0, y: 20, scale: 0.97 }}
