@@ -79,7 +79,7 @@ export default function Home() {
         }));
         updatePanel(panelId, {
           articles: mapped,
-          point: { ...point, articles: mapped, count: mapped.length },
+          point: { ...point, articles: mapped },
           articlesLoading: false,
         });
       } catch {
