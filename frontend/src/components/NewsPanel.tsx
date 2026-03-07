@@ -286,41 +286,43 @@ export default function NewsPanel({
             {/* In-panel filters */}
             {point.articles.length > 0 && (
               <div className="mb-3 space-y-2">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {/* Topic pills */}
-                  <button
-                    onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
-                      !hasActiveFilters
-                        ? "bg-blue-500/20 text-blue-400"
-                        : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                    }`}
-                  >
-                    All
-                  </button>
-                  {availableTopics.map((topic) => (
+                <div className="flex items-center gap-1.5">
+                  {/* Topic pills (scrollable) */}
+                  <div className="flex flex-1 items-center gap-1.5 overflow-x-auto">
                     <button
-                      key={topic}
-                      onClick={() => {
-                        setSelectedTopics((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(topic)) next.delete(topic);
-                          else next.add(topic);
-                          return next;
-                        });
-                      }}
-                      className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
-                        selectedTopics.has(topic)
+                      onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                        !hasActiveFilters
                           ? "bg-blue-500/20 text-blue-400"
                           : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
                       }`}
                     >
-                      {topic}
+                      All
                     </button>
-                  ))}
+                    {availableTopics.map((topic) => (
+                      <button
+                        key={topic}
+                        onClick={() => {
+                          setSelectedTopics((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(topic)) next.delete(topic);
+                            else next.add(topic);
+                            return next;
+                          });
+                        }}
+                        className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                          selectedTopics.has(topic)
+                            ? "bg-blue-500/20 text-blue-400"
+                            : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        {topic}
+                      </button>
+                    ))}
+                  </div>
 
-                  {/* Sentiment dots */}
-                  <span className="mx-1 text-[var(--text-muted)]">|</span>
+                  {/* Sentiment dots (pinned right) */}
+                  <span className="mx-0.5 text-[var(--text-muted)]">|</span>
                   {[
                     { key: "positive", color: "#10B981", title: "Positive" },
                     { key: "neutral", color: "#F59E0B", title: "Neutral" },
@@ -330,7 +332,7 @@ export default function NewsPanel({
                       key={key}
                       onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
                       title={title}
-                      className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
+                      className={`shrink-0 flex h-5 w-5 items-center justify-center rounded-full transition-all ${
                         selectedSentiment === key
                           ? ""
                           : "opacity-50 hover:opacity-80"
