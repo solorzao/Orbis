@@ -233,7 +233,10 @@ export default function NewsPanel({
           {/* Header */}
           <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-6 py-4">
             <div>
-              <h2 className="text-sm font-semibold tracking-widest text-blue-400 uppercase">
+              <h2
+                className="text-sm font-semibold tracking-widest text-blue-400 uppercase"
+                style={{ fontFamily: "var(--font-heading), sans-serif" }}
+              >
                 {point.isCluster
                   ? hasActiveFilters
                     ? `${filteredArticles.length} of ${point.count} Stories`

@@ -236,6 +236,7 @@ export default function Home() {
           <h1
             className="text-sm font-bold tracking-[0.2em] text-[var(--text-primary)] uppercase sm:text-lg"
             style={{
+              fontFamily: "var(--font-brand), sans-serif",
               textShadow: "0 0 30px rgba(59, 130, 246, 0.3)",
             }}
           >

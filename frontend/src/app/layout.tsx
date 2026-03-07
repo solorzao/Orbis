@@ -1,13 +1,19 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import { JetBrains_Mono, Orbitron, Space_Grotesk } from "next/font/google";
 import { ThemeProvider } from "@/lib/theme";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
-const spaceGrotesk = Space_Grotesk({
-  variable: "--font-sans",
+const orbitron = Orbitron({
+  variable: "--font-brand",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: ["700"],
+});
+
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-heading",
+  subsets: ["latin"],
+  weight: ["600", "700"],
 });
 
 const jetbrainsMono = JetBrains_Mono({
@@ -39,8 +45,8 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} antialiased`}
-        style={{ fontFamily: "var(--font-sans), system-ui, sans-serif" }}
+        className={`${orbitron.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} antialiased`}
+        style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
       >
         <ThemeProvider>{children}</ThemeProvider>
         <Analytics />
