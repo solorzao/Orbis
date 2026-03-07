@@ -345,32 +345,34 @@ export default function NewsPanel({
                     </button>
                   ))}
 
-                  {/* Sentiment dots (inline with pills) */}
-                  <span className="mx-0.5 text-[var(--text-muted)]">|</span>
-                  {[
-                    { key: "positive", color: "#10B981", title: "Positive" },
-                    { key: "neutral", color: "#F59E0B", title: "Neutral" },
-                    { key: "negative", color: "#EF4444", title: "Negative" },
-                  ].map(({ key, color, title }) => (
-                    <button
-                      key={key}
-                      onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
-                      title={title}
-                      className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
-                        selectedSentiment === key
-                          ? ""
-                          : "opacity-50 hover:opacity-80"
-                      }`}
-                      style={{
-                        ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
-                      }}
-                    >
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: color }}
-                      />
-                    </button>
-                  ))}
+                  {/* Sentiment dots (grouped so they never split across lines) */}
+                  <span className="inline-flex shrink-0 items-center gap-1.5">
+                    <span className="mx-0.5 text-[var(--text-muted)]">|</span>
+                    {[
+                      { key: "positive", color: "#10B981", title: "Positive" },
+                      { key: "neutral", color: "#F59E0B", title: "Neutral" },
+                      { key: "negative", color: "#EF4444", title: "Negative" },
+                    ].map(({ key, color, title }) => (
+                      <button
+                        key={key}
+                        onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
+                        title={title}
+                        className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
+                          selectedSentiment === key
+                            ? ""
+                            : "opacity-50 hover:opacity-80"
+                        }`}
+                        style={{
+                          ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
+                        }}
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: color }}
+                        />
+                      </button>
+                    ))}
+                  </span>
                 </div>
 
                 {/* Title search */}
@@ -570,7 +572,9 @@ export default function NewsPanel({
                         Loading...
                       </>
                     ) : (
-                      `Show more (${point.count - point.articles.length} remaining)`
+                      hasActiveFilters
+                        ? "Load more stories"
+                        : `Show more (${point.count - point.articles.length} remaining)`
                     )}
                   </button>
                 </div>
