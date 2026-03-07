@@ -312,42 +312,10 @@ export default function NewsPanel({
             {/* In-panel filters */}
             {point.articles.length > 0 && (
               <div className="mb-3 space-y-2">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {/* Topic pills */}
-                  <button
-                    onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
-                      !hasActiveFilters
-                        ? "bg-blue-500/20 text-blue-400"
-                        : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                    }`}
-                  >
-                    All
-                  </button>
-                  {availableTopics.map((topic) => (
-                    <button
-                      key={topic}
-                      onClick={() => {
-                        setSelectedTopics((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(topic)) next.delete(topic);
-                          else next.add(topic);
-                          return next;
-                        });
-                      }}
-                      className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
-                        selectedTopics.has(topic)
-                          ? "bg-blue-500/20 text-blue-400"
-                          : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                      }`}
-                    >
-                      {topic}
-                    </button>
-                  ))}
-
-                  {/* Sentiment dots (grouped so they never split across lines) */}
-                  <span className="inline-flex shrink-0 items-center gap-1.5">
-                    <span className="mx-0.5 text-[var(--text-muted)]">|</span>
+                <div className="relative">
+                  {/* Sentiment dots — pinned top-right, always on first line */}
+                  <div className="absolute right-0 top-0 flex items-center gap-1.5">
+                    <span className="text-[var(--text-muted)]">|</span>
                     {[
                       { key: "positive", color: "#10B981", title: "Positive" },
                       { key: "neutral", color: "#F59E0B", title: "Neutral" },
@@ -372,7 +340,41 @@ export default function NewsPanel({
                         />
                       </button>
                     ))}
-                  </span>
+                  </div>
+
+                  {/* Topic pills — wrap freely, with right padding to avoid sentiment dots */}
+                  <div className="flex flex-wrap items-center gap-1.5 pr-24">
+                    <button
+                      onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
+                      className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                        !hasActiveFilters
+                          ? "bg-blue-500/20 text-blue-400"
+                          : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                      }`}
+                    >
+                      All
+                    </button>
+                    {availableTopics.map((topic) => (
+                      <button
+                        key={topic}
+                        onClick={() => {
+                          setSelectedTopics((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(topic)) next.delete(topic);
+                            else next.add(topic);
+                            return next;
+                          });
+                        }}
+                        className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                          selectedTopics.has(topic)
+                            ? "bg-blue-500/20 text-blue-400"
+                            : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        {topic}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Title search */}
@@ -557,8 +559,8 @@ export default function NewsPanel({
                   <p className="text-sm text-[var(--text-muted)]">No stories match the selected filters.</p>
                 </div>
               )}
-              {/* Show more button */}
-              {!articlesLoading && point.articles.length > 0 &&
+              {/* Show more button — hidden when filters are active since we can't know if remaining articles match */}
+              {!articlesLoading && !hasActiveFilters && point.articles.length > 0 &&
                 point.articles.length < point.count && (
                 <div className="mt-3 flex justify-center">
                   <button
@@ -572,9 +574,7 @@ export default function NewsPanel({
                         Loading...
                       </>
                     ) : (
-                      hasActiveFilters
-                        ? "Load more stories"
-                        : `Show more (${point.count - point.articles.length} remaining)`
+                      `Show more (${point.count - point.articles.length} remaining)`
                     )}
                   </button>
                 </div>
