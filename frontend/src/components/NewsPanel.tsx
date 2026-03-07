@@ -286,12 +286,12 @@ export default function NewsPanel({
             {/* In-panel filters */}
             {point.articles.length > 0 && (
               <div className="mb-3 space-y-2">
-                <div className="flex items-center gap-1.5">
-                  {/* Topic pills (scrollable) */}
-                  <div className="flex flex-1 items-center gap-1.5 overflow-x-auto">
+                <div className="flex gap-1.5">
+                  {/* Topic pills (wrap freely) */}
+                  <div className="flex flex-1 flex-wrap items-center gap-1.5">
                     <button
                       onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
-                      className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                      className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
                         !hasActiveFilters
                           ? "bg-blue-500/20 text-blue-400"
                           : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
@@ -310,7 +310,7 @@ export default function NewsPanel({
                             return next;
                           });
                         }}
-                        className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
+                        className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
                           selectedTopics.has(topic)
                             ? "bg-blue-500/20 text-blue-400"
                             : "bg-[var(--inset-highlight)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
@@ -321,32 +321,34 @@ export default function NewsPanel({
                     ))}
                   </div>
 
-                  {/* Sentiment dots (pinned right) */}
-                  <span className="mx-0.5 text-[var(--text-muted)]">|</span>
-                  {[
-                    { key: "positive", color: "#10B981", title: "Positive" },
-                    { key: "neutral", color: "#F59E0B", title: "Neutral" },
-                    { key: "negative", color: "#EF4444", title: "Negative" },
-                  ].map(({ key, color, title }) => (
-                    <button
-                      key={key}
-                      onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
-                      title={title}
-                      className={`shrink-0 flex h-5 w-5 items-center justify-center rounded-full transition-all ${
-                        selectedSentiment === key
-                          ? ""
-                          : "opacity-50 hover:opacity-80"
-                      }`}
-                      style={{
-                        ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
-                      }}
-                    >
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: color }}
-                      />
-                    </button>
-                  ))}
+                  {/* Sentiment dots (pinned top-right) */}
+                  <div className="flex shrink-0 items-center gap-1 self-start pt-0.5">
+                    <span className="mr-0.5 text-[var(--text-muted)]">|</span>
+                    {[
+                      { key: "positive", color: "#10B981", title: "Positive" },
+                      { key: "neutral", color: "#F59E0B", title: "Neutral" },
+                      { key: "negative", color: "#EF4444", title: "Negative" },
+                    ].map(({ key, color, title }) => (
+                      <button
+                        key={key}
+                        onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
+                        title={title}
+                        className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
+                          selectedSentiment === key
+                            ? ""
+                            : "opacity-50 hover:opacity-80"
+                        }`}
+                        style={{
+                          ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
+                        }}
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: color }}
+                        />
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Title search */}
