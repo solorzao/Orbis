@@ -123,8 +123,13 @@ async def _fetch_cell_articles(
     topic: str | None,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
+    sentiment: str | None = None,
+    search: str | None = None,
 ) -> list[NewsArticle]:
-    """Fetch articles within the grid cell containing (lat, lng)."""
+    """Fetch articles within the grid cell containing (lat, lng).
+
+    Applies optional filters for topic, sentiment band, and title search.
+    """
     half = _CELL_SIZE / 2.0
     rows = await get_articles_in_bounds(
         lat - half, lng - half, lat + half, lng + half, limit=50,
@@ -144,6 +149,19 @@ async def _fetch_cell_articles(
                 len(articles),
             )
 
+    if sentiment:
+        s = sentiment.lower()
+        if s == "positive":
+            articles = [a for a in articles if a.sentiment_score >= 0.5]
+        elif s == "neutral":
+            articles = [a for a in articles if 0 <= a.sentiment_score < 0.5]
+        elif s == "negative":
+            articles = [a for a in articles if a.sentiment_score < 0]
+
+    if search:
+        q = search.lower()
+        articles = [a for a in articles if q in a.title.lower()]
+
     return articles
 
 
@@ -158,11 +176,17 @@ async def get_cluster_articles(
     limit: int = Query(10, ge=1, le=50, description="Max articles to return"),
     start_time: str | None = Query(None, description="ISO start time"),
     end_time: str | None = Query(None, description="ISO end time"),
+    sentiment: str | None = Query(None, description="Sentiment band: positive, neutral, negative"),
+    search: str | None = Query(None, description="Title text search"),
 ) -> list[NewsArticle]:
     """Return full articles in the grid cell around (lat, lng)."""
     start_dt = _parse_iso(start_time)
     end_dt = _parse_iso(end_time)
-    articles = await _fetch_cell_articles(lat, lng, topic, start_time=start_dt, end_time=end_dt)
+    articles = await _fetch_cell_articles(
+        lat, lng, topic,
+        start_time=start_dt, end_time=end_dt,
+        sentiment=sentiment, search=search,
+    )
     return articles[offset:offset + limit]
 
 

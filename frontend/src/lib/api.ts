@@ -76,6 +76,8 @@ export function fetchClusterArticles(
   limit = 10,
   startTime?: string,
   endTime?: string,
+  sentiment?: string,
+  search?: string,
 ): Promise<ApiNewsArticle[]> {
   const params: Record<string, string> = {
     lat: String(lat),
@@ -88,6 +90,8 @@ export function fetchClusterArticles(
   if (limit !== 10) params.limit = String(limit);
   if (startTime) params.start_time = startTime;
   if (endTime) params.end_time = endTime;
+  if (sentiment) params.sentiment = sentiment;
+  if (search) params.search = search;
   return apiFetch<ApiNewsArticle[]>("/api/news/cluster", params);
 }
 

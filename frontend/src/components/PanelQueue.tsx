@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence } from "framer-motion";
-import { PanelEntry } from "@/types/news";
+import { PanelEntry, PanelFilters } from "@/types/news";
 import NewsPanel from "@/components/NewsPanel";
 import PanelTab from "@/components/PanelTab";
 
@@ -11,7 +11,7 @@ interface PanelQueueProps {
   onExpandPanel: (panelId: string) => void;
   onClosePanel: (panelId: string) => void;
   onMinimizePanel: () => void;
-  onLoadMore: (panelId: string) => void;
+  onLoadMore: (panelId: string, filters?: PanelFilters) => void;
 }
 
 export default function PanelQueue({
@@ -35,7 +35,7 @@ export default function PanelQueue({
             point={{ ...expandedPanel.point, articles: expandedPanel.articles }}
             onClose={() => onClosePanel(expandedPanel.panelId)}
             onMinimize={onMinimizePanel}
-            onLoadMore={() => onLoadMore(expandedPanel.panelId)}
+            onLoadMore={(filters) => onLoadMore(expandedPanel.panelId, filters)}
             loadingMore={expandedPanel.loadingMore}
             clusterSummary={expandedPanel.clusterSummary}
             summaryLoading={expandedPanel.summaryLoading}

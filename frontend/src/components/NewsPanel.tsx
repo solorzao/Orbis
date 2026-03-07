@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { GlobePoint } from "@/types/news";
+import { GlobePoint, PanelFilters } from "@/types/news";
 import { getSentimentColor } from "@/lib/clustering";
 import { fetchSelectionSummary } from "@/lib/api";
 
@@ -10,7 +10,7 @@ interface NewsPanelProps {
   point: GlobePoint | null;
   onClose: () => void;
   onMinimize?: () => void;
-  onLoadMore?: () => void;
+  onLoadMore?: (filters?: PanelFilters) => void;
   loadingMore?: boolean;
   clusterSummary?: string | null;
   summaryLoading?: boolean;
@@ -564,7 +564,11 @@ export default function NewsPanel({
                 point.articles.length < point.count && (
                 <div className="mt-3 flex justify-center">
                   <button
-                    onClick={onLoadMore}
+                    onClick={() => onLoadMore?.(
+                      hasActiveFilters
+                        ? { topics: Array.from(selectedTopics), sentiment: selectedSentiment, search: searchQuery }
+                        : undefined
+                    )}
                     disabled={loadingMore}
                     className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-4 py-2 text-xs font-medium text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/5 disabled:opacity-50"
                   >
@@ -573,6 +577,8 @@ export default function NewsPanel({
                         <span className="h-3 w-3 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
                         Loading...
                       </>
+                    ) : hasActiveFilters ? (
+                      "Load more stories"
                     ) : (
                       `Show more (${point.count - point.articles.length} remaining)`
                     )}

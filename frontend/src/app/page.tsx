@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Topic, GlobePoint, NewsArticle, PanelEntry } from "@/types/news";
+import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
 import { apiPointsToGlobePoints } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
 import TimeSlider from "@/components/TimeSlider";
@@ -64,6 +64,21 @@ export default function Home() {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
   }, []);
 
+  const mapArticles = (apiArticles: Awaited<ReturnType<typeof fetchClusterArticles>>): NewsArticle[] =>
+    apiArticles.map((a) => ({
+      id: a.id,
+      title: a.title,
+      summary: a.summary ?? undefined,
+      sourceUrl: a.source_url,
+      sourceName: a.source_name,
+      publishedAt: a.published_at,
+      latitude: a.latitude,
+      longitude: a.longitude,
+      countryCode: a.country_code,
+      topicTags: a.topic_tags,
+      sentimentScore: a.sentiment_score,
+    }));
+
   const fetchPanelData = useCallback(
     async (panelId: string, point: GlobePoint) => {
       const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
@@ -80,19 +95,7 @@ export default function Home() {
           timeRange?.startTime,
           timeRange?.endTime,
         );
-        const mapped: NewsArticle[] = apiArticles.map((a) => ({
-          id: a.id,
-          title: a.title,
-          summary: a.summary ?? undefined,
-          sourceUrl: a.source_url,
-          sourceName: a.source_name,
-          publishedAt: a.published_at,
-          latitude: a.latitude,
-          longitude: a.longitude,
-          countryCode: a.country_code,
-          topicTags: a.topic_tags,
-          sentimentScore: a.sentiment_score,
-        }));
+        const mapped = mapArticles(apiArticles);
         updatePanel(panelId, {
           articles: mapped,
           point: { ...point, articles: mapped },
@@ -119,44 +122,64 @@ export default function Home() {
   );
 
   const handleLoadMore = useCallback(
-    async (panelId: string) => {
+    async (panelId: string, filters?: PanelFilters) => {
       const panel = panelQueue.find((p) => p.panelId === panelId);
       if (!panel || panel.loadingMore) return;
 
       updatePanel(panelId, { loadingMore: true });
 
       const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
+      // Merge global topic with in-panel topic filters
+      const inPanelTopic = filters?.topics?.length === 1 ? filters.topics[0] : undefined;
+      const effectiveTopic = inPanelTopic || topicFilter;
+
       try {
-        const apiArticles = await fetchClusterArticles(
-          panel.point.lat,
-          panel.point.lng,
-          0.75,
-          topicFilter,
-          panel.point.locationName,
-          panel.articles.length, // offset = current count
-          20, // batch size
-          timeRange?.startTime,
-          timeRange?.endTime,
-        );
-        const mapped: NewsArticle[] = apiArticles.map((a) => ({
-          id: a.id,
-          title: a.title,
-          summary: a.summary ?? undefined,
-          sourceUrl: a.source_url,
-          sourceName: a.source_name,
-          publishedAt: a.published_at,
-          latitude: a.latitude,
-          longitude: a.longitude,
-          countryCode: a.country_code,
-          topicTags: a.topic_tags,
-          sentimentScore: a.sentiment_score,
-        }));
-        const allArticles = [...panel.articles, ...mapped];
-        updatePanel(panelId, {
-          articles: allArticles,
-          point: { ...panel.point, articles: allArticles },
-          loadingMore: false,
-        });
+        if (filters && (filters.sentiment || filters.search || filters.topics.length > 0)) {
+          // Filtered load: fetch ALL matching articles from backend and replace
+          const apiArticles = await fetchClusterArticles(
+            panel.point.lat,
+            panel.point.lng,
+            0.75,
+            effectiveTopic,
+            panel.point.locationName,
+            0,  // offset=0: get all matching
+            50, // max limit
+            timeRange?.startTime,
+            timeRange?.endTime,
+            filters.sentiment || undefined,
+            filters.search || undefined,
+          );
+          const mapped = mapArticles(apiArticles);
+          // For multi-topic filter, apply client-side since backend only supports one topic
+          const finalArticles = filters.topics.length > 1
+            ? mapped.filter((a) => a.topicTags.some((t) => filters.topics.includes(t)))
+            : mapped;
+          updatePanel(panelId, {
+            articles: finalArticles,
+            point: { ...panel.point, articles: finalArticles, count: finalArticles.length },
+            loadingMore: false,
+          });
+        } else {
+          // Unfiltered load: append next batch
+          const apiArticles = await fetchClusterArticles(
+            panel.point.lat,
+            panel.point.lng,
+            0.75,
+            topicFilter,
+            panel.point.locationName,
+            panel.articles.length,
+            20,
+            timeRange?.startTime,
+            timeRange?.endTime,
+          );
+          const mapped = mapArticles(apiArticles);
+          const allArticles = [...panel.articles, ...mapped];
+          updatePanel(panelId, {
+            articles: allArticles,
+            point: { ...panel.point, articles: allArticles },
+            loadingMore: false,
+          });
+        }
       } catch {
         updatePanel(panelId, { loadingMore: false });
       }

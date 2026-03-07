@@ -34,6 +34,12 @@ export interface GlobePoint {
   topic: Topic;
 }
 
+export interface PanelFilters {
+  topics: string[];
+  sentiment: string | null;
+  search: string;
+}
+
 export interface PanelEntry {
   panelId: string;
   point: GlobePoint;
