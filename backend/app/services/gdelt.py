@@ -178,23 +178,36 @@ def _parse_gkg_date(date_str: str) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def _title_from_url(url: str) -> str:
-    """Extract a human-readable fallback title from a URL path."""
-    path = urlparse(url).path.rstrip("/")
-    # Use the last meaningful path segment
-    slug = path.split("/")[-1] if path else ""
-    # Strip common file extensions
-    slug = re.sub(r"\.(html?|php|aspx?)$", "", slug, flags=re.IGNORECASE)
-    # Replace hyphens/underscores with spaces, title-case
-    title = re.sub(r"[-_]+", " ", slug).strip()
-    # Reject if too short, mostly digits/hex, or looks like a UUID/hash
-    if (
-        len(title) < 5
-        or re.fullmatch(r"[\da-fA-F\s\-]{8,}", title)
-        or sum(c.isdigit() for c in title) > len(title) * 0.5
-    ):
-        return urlparse(url).netloc
-    return title.title()
+def _is_usable_title(title: str) -> bool:
+    """Return False for titles that are clearly not real article headlines."""
+    t = title.lower().strip()
+    # Cloudflare / bot-check pages
+    if any(phrase in t for phrase in (
+        "cloudflare",
+        "just a moment",
+        "please wait",
+        "checking your browser",
+        "access denied",
+        "attention required",
+        "are you a robot",
+        "one moment, please",
+        "loading...",
+        "please enable cookies",
+        "website is unavailable",
+    )):
+        return False
+    # HTTP error pages
+    if re.match(r"^(4\d\d|5\d\d)\b", t):
+        return False
+    # Looks like a hex hash / UUID (e.g. "Article C3E3E6A6 08B2 4876 ...")
+    alphanum = re.sub(r"[\s\-]", "", t)
+    hex_chars = sum(c in "0123456789abcdef" for c in alphanum)
+    if len(alphanum) > 8 and hex_chars / len(alphanum) > 0.7:
+        return False
+    # Starts with "article" followed by hex/digits (GDELT artifact)
+    if re.match(r"^article\s+[\da-f]", t, re.IGNORECASE):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -352,20 +365,17 @@ async def scrape_titles(articles: list[dict]) -> list[dict]:
                     )
                     if match:
                         title = html_mod.unescape(match.group(1)).strip()
-                        # Skip generic/useless titles
-                        if len(title) > 5 and "cloudflare" not in title.lower():
+                        if len(title) > 5 and _is_usable_title(title):
                             article["title"] = title[:300]
                             return
             except Exception:
-                pass  # Fall through to URL-based title
-
-            article["title"] = _title_from_url(url)
+                pass  # title stays empty → article will be dropped
 
     await asyncio.gather(*[_scrape_one(a) for a in articles])
 
-    scraped = sum(1 for a in articles if a.get("title") != _title_from_url(a["url"]))
+    scraped = sum(1 for a in articles if a.get("title"))
     logger.info(
-        "Title scraping: %d/%d scraped, %d from URL fallback.",
+        "Title scraping: %d/%d got usable titles, %d dropped.",
         scraped,
         len(articles),
         len(articles) - scraped,

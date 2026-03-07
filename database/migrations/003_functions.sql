@@ -13,13 +13,16 @@ CREATE OR REPLACE FUNCTION nearby_articles(
 RETURNS SETOF articles
 LANGUAGE sql STABLE
 AS $$
-    SELECT *
-    FROM articles
-    WHERE ST_DWithin(
-        location,
-        ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
-        radius_km * 1000  -- ST_DWithin uses metres for geography
-    )
+    SELECT * FROM (
+        SELECT DISTINCT ON (lower(title)) *
+        FROM articles
+        WHERE ST_DWithin(
+            location,
+            ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
+            radius_km * 1000  -- ST_DWithin uses metres for geography
+        )
+        ORDER BY lower(title), published_at DESC
+    ) deduped
     ORDER BY published_at DESC
     LIMIT limit_count;
 $$;
@@ -37,12 +40,15 @@ CREATE OR REPLACE FUNCTION articles_in_bounds(
 RETURNS SETOF articles
 LANGUAGE sql STABLE
 AS $$
-    SELECT *
-    FROM articles
-    WHERE ST_Within(
-        location::geometry,
-        ST_MakeEnvelope(min_lng, min_lat, max_lng, max_lat, 4326)
-    )
+    SELECT * FROM (
+        SELECT DISTINCT ON (lower(title)) *
+        FROM articles
+        WHERE ST_Within(
+            location::geometry,
+            ST_MakeEnvelope(min_lng, min_lat, max_lng, max_lat, 4326)
+        )
+        ORDER BY lower(title), published_at DESC
+    ) deduped
     ORDER BY published_at DESC
     LIMIT limit_count;
 $$;

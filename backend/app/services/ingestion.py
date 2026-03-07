@@ -27,12 +27,19 @@ async def _ingest_from_raw_gkg() -> int:
     # Scrape <title> tags from article URLs
     await scrape_titles(articles)
 
-    # Convert to DB upsert format
+    # Convert to DB upsert format, deduplicating by normalized title
+    seen_titles: set[str] = set()
     rows = []
     for a in articles:
         title = a.get("title", "")
         if not title:
             continue
+
+        # Deduplicate: keep first article per normalized title
+        norm = title.strip().lower()
+        if norm in seen_titles:
+            continue
+        seen_titles.add(norm)
 
         # Sentiment from GKG tone (scale is roughly -10 to +10)
         tone = a.get("tone", 0.0)

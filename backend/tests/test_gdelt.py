@@ -7,7 +7,7 @@ import zipfile
 
 from app.services.gdelt import (
     _parse_gkg_date,
-    _title_from_url,
+    _is_usable_title,
     fetch_raw_gkg,
     scrape_titles,
 )
@@ -77,25 +77,32 @@ class TestParseGkgDate:
 
 
 # ---------------------------------------------------------------------------
-# _title_from_url
+# _is_usable_title
 # ---------------------------------------------------------------------------
 
 
-class TestTitleFromUrl:
-    def test_extracts_from_slug(self):
-        title = _title_from_url("https://example.com/news/breaking-news-headline")
-        assert "Breaking" in title
-        assert "News" in title
-        assert "Headline" in title
+class TestIsUsableTitle:
+    def test_accepts_normal_headline(self):
+        assert _is_usable_title("Breaking News: Major Event Unfolds") is True
 
-    def test_strips_html_extension(self):
-        title = _title_from_url("https://example.com/story/big-event.html")
-        assert "Big" in title
-        assert ".html" not in title
+    def test_rejects_cloudflare_page(self):
+        assert _is_usable_title("Attention Required! | Cloudflare") is False
 
-    def test_falls_back_to_domain_for_short_paths(self):
-        title = _title_from_url("https://example.com/123")
-        assert "example.com" in title
+    def test_rejects_just_a_moment(self):
+        assert _is_usable_title("Just a moment...") is False
+
+    def test_rejects_access_denied(self):
+        assert _is_usable_title("Access Denied") is False
+
+    def test_rejects_http_error(self):
+        assert _is_usable_title("403 Forbidden") is False
+        assert _is_usable_title("503 Service Unavailable") is False
+
+    def test_rejects_hex_hash_title(self):
+        assert _is_usable_title("Article C3E3E6A6 08B2 4876 98E1 17Ce31993Dab") is False
+
+    def test_rejects_article_hex_pattern(self):
+        assert _is_usable_title("Article 4E1F21C3 394C 492D A1E7 9545273Fa9D3") is False
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +234,7 @@ class TestScrapeTitles:
             assert result[0]["title"] == "Breaking News Story"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_url_title_on_failure(self):
+    async def test_leaves_title_empty_on_failure(self):
         articles = [{"url": "https://example.com/big-news-story", "domain": "example.com"}]
 
         mock_client = AsyncMock()
@@ -237,8 +244,7 @@ class TestScrapeTitles:
 
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await scrape_titles(articles)
-            assert "Big" in result[0]["title"]
-            assert "News" in result[0]["title"]
+            assert not result[0].get("title")
 
     @pytest.mark.asyncio
     async def test_skips_cloudflare_titles(self):
@@ -254,5 +260,5 @@ class TestScrapeTitles:
 
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await scrape_titles(articles)
-            # Should fall back to URL-derived title, not Cloudflare
-            assert "cloudflare" not in result[0]["title"].lower()
+            # Should have no title (article will be dropped by ingestion)
+            assert not result[0].get("title")
