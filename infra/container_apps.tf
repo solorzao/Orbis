@@ -65,6 +65,12 @@ resource "azurerm_container_app" "api" {
   }
 
   secret {
+    name                = "orbis-api-key"
+    key_vault_secret_id = azurerm_key_vault_secret.orbis_api_key.id
+    identity            = azurerm_user_assigned_identity.orbis_api.id
+  }
+
+  secret {
     name  = "ghcr-password"
     value = var.ghcr_password
   }
@@ -113,6 +119,11 @@ resource "azurerm_container_app" "api" {
       env {
         name        = "OPENAI_API_KEY"
         secret_name = "openai-api-key"
+      }
+
+      env {
+        name        = "ORBIS_API_KEY"
+        secret_name = "orbis-api-key"
       }
     }
   }

@@ -56,6 +56,12 @@ variable "openai_api_key" {
   sensitive   = true
 }
 
+variable "orbis_api_key" {
+  description = "Shared API key for frontend-to-backend auth (X-API-Key header)"
+  type        = string
+  sensitive   = true
+}
+
 variable "environment" {
   description = "Deployment environment (dev or prod)"
   type        = string

@@ -73,3 +73,11 @@ resource "azurerm_key_vault_secret" "openai_api_key" {
 
   depends_on = [azurerm_role_assignment.deployer_secrets]
 }
+
+resource "azurerm_key_vault_secret" "orbis_api_key" {
+  name         = "orbis-api-key"
+  value        = var.orbis_api_key
+  key_vault_id = azurerm_key_vault.orbis.id
+
+  depends_on = [azurerm_role_assignment.deployer_secrets]
+}
