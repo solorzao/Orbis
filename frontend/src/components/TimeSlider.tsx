@@ -171,8 +171,8 @@ export default function TimeSlider({
         {/* Time label + status */}
         <div className="mb-2 text-[10px] tracking-wider">
           {/* Row 1: status + date/time (always visible) */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 shrink-0">
               {/* Status indicator */}
               <span className="flex items-center gap-1.5">
                 {isOffline ? (
