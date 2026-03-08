@@ -321,7 +321,7 @@ export default function Home() {
       {/* Agent Toggle */}
       <button
         onClick={() => setAgentOpen((o) => !o)}
-        className="fixed bottom-3 left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-6 sm:left-6 sm:h-12 sm:w-12"
+        className="fixed bottom-[7.5rem] left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-[5.5rem] sm:left-6 sm:h-12 sm:w-12"
         style={{
           background: "var(--surface-overlay)",
           backdropFilter: "blur(12px)",
