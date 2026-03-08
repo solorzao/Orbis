@@ -10,8 +10,9 @@ from __future__ import annotations
 import logging
 import re
 
+from app.config import settings
 from app.services.cache import invalidate
-from app.services.database import upsert_articles
+from app.services.database import get_pool, upsert_articles
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.topic_classifier import classify_topic
 
@@ -93,15 +94,30 @@ async def _ingest_from_raw_gkg() -> int:
     return count
 
 
+async def _purge_old_articles() -> None:
+    """Delete articles older than the retention window."""
+    pool = await get_pool()
+    status = await pool.execute(
+        "DELETE FROM articles WHERE published_at < NOW() - make_interval(days => $1)",
+        settings.retention_days,
+    )
+    # status is e.g. "DELETE 42"
+    count = int(status.split()[-1])
+    if count:
+        logger.info("Purged %d articles older than %d days.", count, settings.retention_days)
+
+
 async def run_ingestion_cycle() -> int:
     """Run the ingestion pipeline.  Never raises.
 
     Downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
+    Then purges articles outside the retention window.
     """
     try:
         logger.info("Ingestion cycle starting …")
         count = await _ingest_from_raw_gkg()
+        await _purge_old_articles()
         logger.info("Ingestion cycle complete: %d articles.", count)
         return count
     except Exception:
