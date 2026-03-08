@@ -14,9 +14,11 @@ export default function AboutPage() {
   return (
     <main className="about-page">
       <style>{`
+        body:has(.about-page) {
+          overflow: auto;
+        }
         .about-page {
           min-height: 100vh;
-          overflow: auto;
           background: var(--bg-page);
           color: var(--text-primary);
         }
