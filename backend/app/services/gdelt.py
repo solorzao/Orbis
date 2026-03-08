@@ -313,6 +313,10 @@ async def fetch_raw_gkg() -> list[dict]:
                 pass
 
         domain = fields[3] if len(fields) > 3 else ""
+        persons_raw = fields[5] if len(fields) > 5 else ""
+        orgs_raw = fields[6] if len(fields) > 6 else ""
+        persons = [p.strip().title() for p in persons_raw.split(";") if p.strip()] if persons_raw else []
+        organizations = [o.strip().title() for o in orgs_raw.split(";") if o.strip()] if orgs_raw else []
         themes = fields[7] if len(fields) > 7 else ""
         image_url = fields[18].strip() if len(fields) > 18 else ""
         date_str = fields[1] if len(fields) > 1 else ""
@@ -326,6 +330,8 @@ async def fetch_raw_gkg() -> list[dict]:
             "country_code": city_loc["country_code"],
             "tone": tone,
             "themes": themes,
+            "persons": persons,
+            "organizations": organizations,
             "image_url": image_url if image_url.startswith("http") else "",
             "published_at": _parse_gkg_date(date_str),
         }

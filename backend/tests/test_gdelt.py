@@ -32,6 +32,8 @@ def _make_gkg_record(
     domain: str = "example.com",
     date: str = "20260305120000",
     locations: str = "4#Tehran, Tehran, Iran#IR#IR00#35.6944#51.4215#-3039671",
+    persons: str = "",
+    organizations: str = "",
     themes: str = "TAX_FNCACT;GENERAL_GOVERNMENT",
     tone: str = "-2.5,1.0,3.5,0.5",
     image: str = "https://example.com/image.jpg",
@@ -40,7 +42,7 @@ def _make_gkg_record(
 
     GKG 2.1 fields (tab-delimited, 0-indexed):
      0: GKGRECORDID, 1: DATE, 2: SOURCECOLLECTION, 3: DOMAIN,
-     4: URL, 5: V1COUNTS, 6: V2.1COUNTS, 7: V1THEMES,
+     4: URL, 5: V1PERSONS, 6: V1ORGANIZATIONS, 7: V1THEMES,
      8: V2ENHANCEDTHEMES, 9: V1LOCATIONS, 10: V2ENHANCEDLOCATIONS,
      11-14: PERSONS/ORGS, 15: V1.5TONE, 16: DATES, 17: GCAM,
      18: SHARINGIMAGE
@@ -51,6 +53,8 @@ def _make_gkg_record(
     fields[2] = "1"
     fields[3] = domain
     fields[4] = url
+    fields[5] = persons
+    fields[6] = organizations
     fields[7] = themes
     fields[9] = locations
     fields[15] = tone
@@ -209,6 +213,51 @@ class TestFetchRawGkg:
         ):
             articles = await fetch_raw_gkg()
             assert articles[0]["tone"] == pytest.approx(-5.0)
+
+    @pytest.mark.asyncio
+    async def test_fetch_raw_gkg_extracts_persons_and_orgs(self):
+        record = _make_gkg_record(
+            persons="barack obama;angela merkel",
+            organizations="united nations;world bank",
+        )
+        zip_bytes = _make_gkg_zip([record])
+        index_text = "100 abc http://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
+
+        async def mock_download(url):
+            if "lastupdate" in url:
+                return index_text.encode()
+            return zip_bytes
+
+        with patch(
+            "app.services.gdelt._download_bytes",
+            new_callable=AsyncMock,
+            side_effect=mock_download,
+        ):
+            articles = await fetch_raw_gkg()
+            assert len(articles) == 1
+            assert articles[0]["persons"] == ["Barack Obama", "Angela Merkel"]
+            assert articles[0]["organizations"] == ["United Nations", "World Bank"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_raw_gkg_handles_empty_entity_fields(self):
+        record = _make_gkg_record(persons="", organizations="")
+        zip_bytes = _make_gkg_zip([record])
+        index_text = "100 abc http://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
+
+        async def mock_download(url):
+            if "lastupdate" in url:
+                return index_text.encode()
+            return zip_bytes
+
+        with patch(
+            "app.services.gdelt._download_bytes",
+            new_callable=AsyncMock,
+            side_effect=mock_download,
+        ):
+            articles = await fetch_raw_gkg()
+            assert len(articles) == 1
+            assert articles[0]["persons"] == []
+            assert articles[0]["organizations"] == []
 
 
 # ---------------------------------------------------------------------------
