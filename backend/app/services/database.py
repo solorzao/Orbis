@@ -329,20 +329,25 @@ async def get_globe_points(
     return results
 
 
-async def get_hourly_density(*, timespan_hours: int = 24) -> dict[int, int]:
-    """Return article counts bucketed by hour for the last N hours."""
+async def get_hourly_density(*, timespan_hours: int = 24, offset_days: int = 0) -> dict[int, int]:
+    """Return article counts bucketed by hour for a 24h window.
+
+    offset_days=0 means the last 24h, offset_days=1 means 24-48h ago, etc.
+    """
     pool = await get_pool()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
+    window_end = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    window_start = window_end - timedelta(hours=timespan_hours)
     rows = await pool.fetch(
         """
         SELECT EXTRACT(HOUR FROM published_at) AS hour,
                COUNT(*) AS count
         FROM articles
-        WHERE published_at >= $1
+        WHERE published_at >= $1 AND published_at < $2
         GROUP BY hour
         ORDER BY hour
         """,
-        cutoff,
+        window_start,
+        window_end,
     )
     return {int(r["hour"]): int(r["count"]) for r in rows}
 

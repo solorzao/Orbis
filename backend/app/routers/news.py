@@ -246,14 +246,16 @@ async def get_cluster_summary(
 
 
 @router.get("/news/density", response_model=list[HourlyDensity])
-async def get_article_density() -> list[HourlyDensity]:
+async def get_article_density(
+    offset_days: int = Query(0, ge=0, le=6, description="Day offset (0=today, 1=yesterday, …6)"),
+) -> list[HourlyDensity]:
     """Return article counts per hour for the time slider sparkline."""
-    cache_k = "db:density"
+    cache_k = f"db:density:{offset_days}"
     cached = await get_cached(cache_k)
     if cached:
         return [HourlyDensity(**d) for d in cached]
 
-    data = await get_hourly_density()
+    data = await get_hourly_density(offset_days=offset_days)
     result = [HourlyDensity(hour=h, count=data.get(h, 0)) for h in range(24)]
 
     if result:
