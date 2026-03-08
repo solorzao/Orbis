@@ -75,10 +75,27 @@ jobs:
       - name: Install PostgreSQL client
         run: sudo apt-get install -y postgresql-client
 
+      - name: Wait for database connectivity
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          for i in 1 2 3 4 5; do
+            if psql "$DATABASE_URL" -c "SELECT 1" > /dev/null 2>&1; then
+              echo "Database reachable on attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::Could not connect to database after 5 attempts"
+          exit 1
+
       - name: Run pending migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
+          set -euo pipefail
+
           # Ensure tracking table exists (idempotent)
           psql "$DATABASE_URL" -f database/migrations/005_migration_tracking.sql
 
@@ -88,8 +105,9 @@ jobs:
             already=$(psql "$DATABASE_URL" -tAc "SELECT 1 FROM schema_migrations WHERE filename = '$fname'" 2>/dev/null || echo "")
             if [ "$already" != "1" ]; then
               echo "Applying: $fname"
-              psql "$DATABASE_URL" -f "$f"
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
               psql "$DATABASE_URL" -c "INSERT INTO schema_migrations (filename) VALUES ('$fname')"
+              echo "Applied: $fname"
             else
               echo "Skipping (already applied): $fname"
             fi
