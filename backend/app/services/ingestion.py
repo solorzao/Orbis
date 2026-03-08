@@ -14,6 +14,7 @@ from app.config import settings
 from app.services.cache import invalidate
 from app.services.database import get_pool, upsert_articles
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
+from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
 from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger("orbis.ingestion")
@@ -81,6 +82,8 @@ async def _ingest_from_raw_gkg() -> int:
                 "sentiment_score": sentiment,
                 "entities": {},
                 "image_url": a.get("image_url") or None,
+                "persons": a.get("persons", []),
+                "organizations": a.get("organizations", []),
             }
         )
 
@@ -89,6 +92,28 @@ async def _ingest_from_raw_gkg() -> int:
         return 0
 
     count = await upsert_articles(rows)
+
+    # Query back upserted articles to get DB-generated UUIDs for KG population
+    pool = await get_pool()
+    source_urls = [r["source_url"] for r in rows]
+    db_rows = await pool.fetch(
+        "SELECT id, title, source_url, latitude, longitude, region, "
+        "country_code, topic_tags, published_at FROM articles "
+        "WHERE source_url = ANY($1::text[])",
+        source_urls,
+    )
+    # Build a lookup from source_url to DB record
+    db_lookup = {r["source_url"]: dict(r) for r in db_rows}
+    # Merge entity data from ingestion rows into DB records
+    graph_articles = []
+    for row in rows:
+        db_rec = db_lookup.get(row["source_url"])
+        if db_rec:
+            db_rec["persons"] = row.get("persons", [])
+            db_rec["organizations"] = row.get("organizations", [])
+            graph_articles.append(db_rec)
+    await populate_graph(graph_articles)
+
     await invalidate("db:*")
     logger.info("GKG ingestion: upserted %d articles with city-level coords.", count)
     return count
@@ -105,6 +130,7 @@ async def _purge_old_articles() -> None:
     count = int(status.split()[-1])
     if count:
         logger.info("Purged %d articles older than %d days.", count, settings.retention_days)
+    await purge_orphaned_nodes()
 
 
 async def run_ingestion_cycle() -> int:
