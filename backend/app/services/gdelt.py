@@ -313,10 +313,11 @@ async def fetch_raw_gkg() -> list[dict]:
                 pass
 
         domain = fields[3] if len(fields) > 3 else ""
-        persons_raw = fields[5] if len(fields) > 5 else ""
-        orgs_raw = fields[6] if len(fields) > 6 else ""
-        persons = [p.strip().title() for p in persons_raw.split(";") if p.strip()] if persons_raw else []
-        organizations = [o.strip().title() for o in orgs_raw.split(";") if o.strip()] if orgs_raw else []
+        # GKG field 11 = V1PERSONS, field 13 = V1ORGANIZATIONS (semicolon-delimited)
+        persons_raw = fields[11] if len(fields) > 11 else ""
+        orgs_raw = fields[13] if len(fields) > 13 else ""
+        persons = list(dict.fromkeys(p.strip().title() for p in persons_raw.split(";") if p.strip())) if persons_raw else []
+        organizations = list(dict.fromkeys(o.strip().title() for o in orgs_raw.split(";") if o.strip())) if orgs_raw else []
         themes = fields[7] if len(fields) > 7 else ""
         image_url = fields[18].strip() if len(fields) > 18 else ""
         date_str = fields[1] if len(fields) > 1 else ""

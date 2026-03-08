@@ -42,9 +42,10 @@ def _make_gkg_record(
 
     GKG 2.1 fields (tab-delimited, 0-indexed):
      0: GKGRECORDID, 1: DATE, 2: SOURCECOLLECTION, 3: DOMAIN,
-     4: URL, 5: V1PERSONS, 6: V1ORGANIZATIONS, 7: V1THEMES,
+     4: URL, 5: V1COUNTS, 6: V2.1COUNTS, 7: V1THEMES,
      8: V2ENHANCEDTHEMES, 9: V1LOCATIONS, 10: V2ENHANCEDLOCATIONS,
-     11-14: PERSONS/ORGS, 15: V1.5TONE, 16: DATES, 17: GCAM,
+     11: V1PERSONS, 12: V2ENHANCEDPERSONS, 13: V1ORGANIZATIONS,
+     14: V2ENHANCEDORGANIZATIONS, 15: V1.5TONE, 16: DATES, 17: GCAM,
      18: SHARINGIMAGE
     """
     fields = [""] * 19
@@ -53,10 +54,10 @@ def _make_gkg_record(
     fields[2] = "1"
     fields[3] = domain
     fields[4] = url
-    fields[5] = persons
-    fields[6] = organizations
     fields[7] = themes
     fields[9] = locations
+    fields[11] = persons
+    fields[13] = organizations
     fields[15] = tone
     fields[18] = image
     return "\t".join(fields)
