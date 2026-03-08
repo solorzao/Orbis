@@ -130,16 +130,19 @@ def _get_anthropic_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
-def _build_context(retrieval_results: list[dict], max_articles: int | None = None) -> str:
+def _build_context(retrieval_results: list[dict], max_articles: int | None = None) -> tuple[str, list[dict]]:
     """Deduplicate and format retrieval results as numbered entries.
 
     Deduplicates articles by ``source_url`` across all tool results.
+    Returns (context_str, article_index) where article_index is a list
+    of dicts with full metadata keyed by 1-based citation index.
     """
     if max_articles is None:
         max_articles = settings.agent_max_retrieval_results
 
     seen_urls: set[str] = set()
     entries: list[str] = []
+    article_index: list[dict] = []  # 0-based, maps to [1], [2], etc.
 
     for result in retrieval_results:
         data = result.get("result", [])
@@ -178,6 +181,13 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
                 parts.append(f"  Type: {item['type']}")
 
             entries.append("\n".join(parts))
+            article_index.append({
+                "title": title,
+                "url": url,
+                "source_name": item.get("source_name", ""),
+                "lat": item.get("latitude"),
+                "lng": item.get("longitude"),
+            })
 
             if len(entries) >= max_articles:
                 break
@@ -186,7 +196,33 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
 
     context = "\n\n".join(entries) if entries else "(No results found.)"
     logger.info("Built context with %d entries (%d chars)", len(entries), len(context))
-    return context
+    return context, article_index
+
+
+def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[dict]:
+    """Map LLM-generated citations back to full article metadata."""
+    enriched = []
+    for c in raw_citations:
+        idx = c.get("index", 0)
+        if 1 <= idx <= len(article_index):
+            article = article_index[idx - 1]
+            enriched.append({
+                "title": article["title"],
+                "url": article["url"],
+                "source_name": article["source_name"],
+                "lat": article.get("lat") or 0,
+                "lng": article.get("lng") or 0,
+            })
+        else:
+            # Fallback: use whatever the LLM provided
+            enriched.append({
+                "title": c.get("title", ""),
+                "url": c.get("source_url", c.get("url", "")),
+                "source_name": c.get("source_name", ""),
+                "lat": c.get("lat", 0),
+                "lng": c.get("lng", 0),
+            })
+    return enriched
 
 
 # ---------------------------------------------------------------------------
@@ -396,9 +432,10 @@ async def ask(
     retrieval_results = await execute_retrieval(tool_calls)
 
     # Step 3: Build context
-    context = _build_context(retrieval_results)
+    context, article_index = _build_context(retrieval_results)
 
     # Step 4: Synthesize
     result = await synthesize_answer(question, context, conversation_history)
+    result["citations"] = _enrich_citations(result.get("citations", []), article_index)
     result["tools_used"] = [tc["name"] for tc in tool_calls]
     return result

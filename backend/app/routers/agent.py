@@ -16,6 +16,7 @@ from app.middleware.security import has_injection_pattern, sanitise_text
 from app.services.agent import (
     _OFF_TOPIC_ANSWER,
     _build_context,
+    _enrich_citations,
     ask,
     execute_retrieval,
     plan_retrieval,
@@ -198,8 +199,9 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
         retrieval_results = await execute_retrieval(tool_calls)
 
         # Step 3: Build context and synthesize
-        context = _build_context(retrieval_results)
+        context, article_index = _build_context(retrieval_results)
         result = await synthesize_answer(question, context, history)
+        result["citations"] = _enrich_citations(result.get("citations", []), article_index)
         result["tools_used"] = [tc["name"] for tc in tool_calls]
 
         # Step 4: Stream answer text in chunks
