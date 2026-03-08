@@ -223,6 +223,9 @@ async def plan_retrieval(
         )
         text = response.content[0].text.strip()
         logger.info("Planner raw response: %s", text[:500])
+        # Strip markdown code fences the model sometimes wraps around JSON
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         parsed = json.loads(text)
         # Off-topic detection: planner explicitly flags non-news questions
         if parsed.get("off_topic"):
@@ -246,8 +249,25 @@ _OFF_TOPIC_ANSWER = (
 )
 
 
+_STOP_WORDS = {
+    "what", "when", "where", "who", "why", "how", "is", "are", "was", "were",
+    "do", "does", "did", "has", "have", "had", "the", "a", "an", "in", "on",
+    "at", "to", "for", "of", "with", "about", "from", "by", "up", "it",
+    "and", "or", "but", "not", "this", "that", "there", "happened", "today",
+    "tell", "me", "can", "you", "any", "some", "been", "going", "latest",
+    "recent", "news", "currently", "happening",
+}
+
+
+def _extract_keywords(question: str) -> str:
+    """Extract meaningful keywords from a question for fallback search."""
+    words = [w for w in question.split() if w.lower().strip("?,!.") not in _STOP_WORDS]
+    return " ".join(w.strip("?,!.") for w in words)[:200]
+
+
 def _fallback(question: str) -> list[dict]:
-    return [{"name": "keyword_search", "args": {"terms": question}}]
+    terms = _extract_keywords(question)
+    return [{"name": "keyword_search", "args": {"terms": terms or question[:50]}}]
 
 
 _ALLOWED_TIME_RANGES = {
