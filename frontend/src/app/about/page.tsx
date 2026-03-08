@@ -122,22 +122,25 @@ export default function AboutPage() {
         .about-cta-link {
           display: inline-flex;
           align-items: center;
-          gap: 0.5rem;
-          padding: 0.625rem 1.5rem;
-          border-radius: 8px;
+          gap: 0.625rem;
+          padding: 0.75rem 1.75rem;
+          border-radius: 10px;
           background: rgba(59,130,246,0.1);
           border: 1px solid rgba(59,130,246,0.15);
           color: var(--text-secondary);
           text-decoration: none;
-          font-family: var(--font-heading);
+          font-family: var(--font-brand);
           font-size: 0.8125rem;
-          letter-spacing: 0.01em;
+          letter-spacing: 0.04em;
+          box-shadow: 0 2px 12px rgba(59,130,246,0.08);
           transition: all 0.2s;
         }
         .about-cta-link:hover {
           background: rgba(59,130,246,0.18);
           color: var(--text-primary);
-          border-color: rgba(59,130,246,0.25);
+          border-color: rgba(59,130,246,0.3);
+          box-shadow: 0 4px 20px rgba(59,130,246,0.15);
+          transform: translateY(-1px);
         }
       `}</style>
 
