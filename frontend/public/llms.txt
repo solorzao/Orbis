@@ -1,0 +1,30 @@
+# Orbis
+
+> Explore the world's news on an interactive 3D globe.
+
+Orbis is a web application that visualises geolocated world news in real time on an interactive 3D globe. It is designed for curious readers, journalists, analysts, and anyone who wants to understand what is happening around the world at a glance.
+
+## What Orbis Does
+
+- Displays breaking news as points on a 3D globe, updated every 15 minutes
+- Clusters nearby stories so dense regions stay readable at any zoom level
+- Provides AI-generated summaries for clusters of related headlines
+- Lets users filter by topic (conflict, politics, environment, economy, etc.)
+- Links every headline back to its original source for full articles
+
+## Data Sources
+
+- **GDELT Project** — the world's largest open event database, monitoring news from 65 languages and 150+ countries in near-real time
+- **AI Summaries** — powered by Anthropic Claude for natural-language cluster summaries
+
+## Technology
+
+- Frontend: React, Next.js, globe.gl (Three.js), Tailwind CSS
+- Backend: Python FastAPI
+- Database: PostgreSQL with PostGIS and pgvector
+- Hosting: Vercel (frontend), Azure (backend)
+
+## Links
+
+- Website: https://orbisapp.co
+- GitHub: https://github.com/solorzao/Orbis
