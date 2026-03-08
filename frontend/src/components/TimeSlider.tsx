@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 
 interface TimeSliderProps {
   density: { hour: number; count: number }[];
   onChange: (range: { startTime: string; endTime: string } | null) => void;
+  onDayChange: (offsetDays: number) => void;
+  dayOffset: number;
+  hasOlderData: boolean;
   totalStories: number;
   totalLocations: number;
   isLive: boolean;
@@ -15,6 +18,9 @@ interface TimeSliderProps {
 export default function TimeSlider({
   density,
   onChange,
+  onDayChange,
+  dayOffset,
+  hasOlderData,
   totalStories,
   totalLocations,
   isLoading,
@@ -38,9 +44,10 @@ export default function TimeSlider({
 
   // Convert hours-ago to ISO string
   const hoursAgoToISO = useCallback((hoursAgo: number): string => {
-    const d = new Date(Date.now() - hoursAgo * 3600000);
+    const windowEnd = new Date(Date.now() - dayOffset * 86400000);
+    const d = new Date(windowEnd.getTime() - hoursAgo * 3600000);
     return d.toISOString();
-  }, []);
+  }, [dayOffset]);
 
   // Format hours-ago to display time
   const formatTime = useCallback((hoursAgo: number): string => {
@@ -53,7 +60,7 @@ export default function TimeSlider({
     (start: number, end: number) => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
-        if (start === 24 && end === 0) {
+        if (start === 24 && end === 0 && dayOffset === 0) {
           onChange(null); // full range = no filter
         } else {
           onChange({
@@ -63,7 +70,7 @@ export default function TimeSlider({
         }
       }, 300);
     },
-    [onChange, hoursAgoToISO],
+    [onChange, hoursAgoToISO, dayOffset],
   );
 
   const handleStartChange = useCallback(
@@ -99,6 +106,18 @@ export default function TimeSlider({
     [emitChange],
   );
 
+  const windowLabel = useMemo(() => {
+    if (dayOffset === 0) return "Today";
+    if (dayOffset === 1) return "Yesterday";
+    const d = new Date(Date.now() - dayOffset * 86400000);
+    return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  }, [dayOffset]);
+
+  useEffect(() => {
+    setRangeStart(24);
+    setRangeEnd(0);
+  }, [dayOffset]);
+
   // Sparkline max for scaling
   const maxCount = useMemo(
     () => Math.max(1, ...density.map((d) => d.count)),
@@ -126,7 +145,22 @@ export default function TimeSlider({
   }, [formatTime]);
 
   return (
-    <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 w-[90vw] max-w-2xl">
+    <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 flex items-center gap-2">
+      {/* Left arrow — previous day */}
+      <button
+        onClick={() => onDayChange(dayOffset + 1)}
+        disabled={!hasOlderData || dayOffset >= 6}
+        className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] text-[var(--text-muted)] transition-all hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-20 disabled:pointer-events-none"
+        style={{ background: "var(--surface-overlay)", backdropFilter: "blur(12px)" }}
+        aria-label="Previous day"
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 2L4 7l5 5" />
+        </svg>
+      </button>
+
+      {/* Slider panel */}
+      <div className="w-[80vw] max-w-2xl">
       <div
         className="rounded-2xl border border-[var(--border-subtle)] px-4 py-3 sm:px-5 sm:py-3.5"
         style={{
@@ -183,8 +217,8 @@ export default function TimeSlider({
           <div className="flex items-center gap-2">
             <span className="text-[var(--text-secondary)] font-medium">
               {isFullRange
-                ? "Last 24 hours"
-                : `${formatTime(rangeStart)} — ${formatTime(rangeEnd)}`}
+                ? windowLabel
+                : `${windowLabel} · ${formatTime(rangeStart)} — ${formatTime(rangeEnd)}`}
             </span>
             {!isFullRange && (
               <button
@@ -270,6 +304,20 @@ export default function TimeSlider({
           ))}
         </div>
       </div>
+      </div>
+
+      {/* Right arrow — next day */}
+      <button
+        onClick={() => onDayChange(dayOffset - 1)}
+        disabled={dayOffset <= 0}
+        className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] text-[var(--text-muted)] transition-all hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-20 disabled:pointer-events-none"
+        style={{ background: "var(--surface-overlay)", backdropFilter: "blur(12px)" }}
+        aria-label="Next day"
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 2l5 5-5 5" />
+        </svg>
+      </button>
     </div>
   );
 }
