@@ -41,7 +41,8 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
   const onGlobeActionRef = useRef(onGlobeAction);
   onGlobeActionRef.current = onGlobeAction;
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+  const apiKey = process.env.NEXT_PUBLIC_API_KEY || "";
 
   const ask = useCallback(
     async (question: string) => {
@@ -71,7 +72,10 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
       try {
         const res = await fetch(`${apiBase}/api/agent/ask/stream`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiKey ? { "X-API-Key": apiKey } : {}),
+          },
           body: JSON.stringify({
             question: question.trim(),
             conversation_id: conversationIdRef.current,
