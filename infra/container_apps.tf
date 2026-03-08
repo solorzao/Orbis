@@ -125,6 +125,11 @@ resource "azurerm_container_app" "api" {
         name        = "ORBIS_API_KEY"
         secret_name = "orbis-api-key"
       }
+
+      env {
+        name  = "AGENT_ENABLED"
+        value = var.agent_enabled
+      }
     }
   }
 

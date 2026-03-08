@@ -68,6 +68,7 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
 _PATH_GROUPS: dict[str, str] = {
     "/api/news/summary": "ai",
     "/api/news/summarize-selection": "ai",
+    "/api/agent/ask": "ai",
 }
 
 

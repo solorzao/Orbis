@@ -7,11 +7,12 @@ import logging
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
+from app.middleware.security import has_injection_pattern, sanitise_text
 from app.services.agent import (
     _build_context,
     ask,
@@ -30,8 +31,15 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 # Request / response models
 # ---------------------------------------------------------------------------
 
+_UUID_RE = __import__("re").compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+_MAX_QUESTION_LENGTH = 500
+
+
 class AskRequest(BaseModel):
-    question: str
+    question: str = Field(..., min_length=1, max_length=_MAX_QUESTION_LENGTH)
     conversation_id: str | None = None
 
 
@@ -41,6 +49,29 @@ class AskResponse(BaseModel):
     citations: list = []
     globe_actions: list = []
     tools_used: list = []
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+def _validate_request(body: AskRequest) -> str:
+    """Sanitize question and validate conversation_id. Returns clean question."""
+    if not settings.agent_enabled:
+        raise HTTPException(status_code=503, detail="Agent chat is temporarily disabled.")
+
+    if body.conversation_id and not _UUID_RE.match(body.conversation_id):
+        raise HTTPException(status_code=422, detail="conversation_id must be a valid UUID.")
+
+    question = sanitise_text(body.question, max_length=_MAX_QUESTION_LENGTH)
+    if not question:
+        raise HTTPException(status_code=422, detail="Question is empty after sanitization.")
+
+    if has_injection_pattern(question):
+        logger.warning("Blocked prompt injection attempt: %s", question[:80])
+        raise HTTPException(status_code=400, detail="Your question could not be processed.")
+
+    return question
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +133,12 @@ async def _save_history(
 @router.post("/ask", response_model=AskResponse)
 async def ask_endpoint(body: AskRequest) -> AskResponse:
     """Answer a question using the full agent pipeline."""
+    question = _validate_request(body)
     conv_id, history = await _load_history(body.conversation_id)
 
-    result = await ask(body.question, history)
+    result = await ask(question, history)
 
-    await _save_history(conv_id, history, body.question, result["answer"])
+    await _save_history(conv_id, history, question, result["answer"])
 
     return AskResponse(
         conversation_id=conv_id,
@@ -124,12 +156,13 @@ async def ask_endpoint(body: AskRequest) -> AskResponse:
 @router.post("/ask/stream")
 async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
     """Stream the agent pipeline as SSE events."""
+    question = _validate_request(body)
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         conv_id, history = await _load_history(body.conversation_id)
 
         # Step 1: Plan
-        tool_calls = await plan_retrieval(body.question, history)
+        tool_calls = await plan_retrieval(question, history)
         yield {
             "event": "planning",
             "data": json.dumps({"tools": [tc["name"] for tc in tool_calls]}),
@@ -145,7 +178,7 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
 
         # Step 3: Build context and synthesize
         context = _build_context(retrieval_results)
-        result = await synthesize_answer(body.question, context, history)
+        result = await synthesize_answer(question, context, history)
         result["tools_used"] = [tc["name"] for tc in tool_calls]
 
         # Step 4: Stream answer text in chunks
@@ -159,7 +192,7 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
             }
 
         # Step 5: Save history
-        await _save_history(conv_id, history, body.question, answer_text)
+        await _save_history(conv_id, history, question, answer_text)
 
         # Step 6: Done
         yield {

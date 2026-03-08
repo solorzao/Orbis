@@ -42,7 +42,7 @@ export default function Home() {
     }
   }, []);
 
-  const { messages: agentMessages, isLoading: agentLoading, activeTools, ask: agentAsk, stop: agentStop, clear: agentClear } = useAgent({ onGlobeAction: handleGlobeAction });
+  const { messages: agentMessages, isLoading: agentLoading, isDisabled: agentDisabled, activeTools, ask: agentAsk, stop: agentStop, clear: agentClear } = useAgent({ onGlobeAction: handleGlobeAction });
 
   const handleCitationClick = useCallback((citation: Citation) => {
     if (globeControlsRef.current) {
@@ -320,6 +320,7 @@ export default function Home() {
           <AgentPanel
             messages={agentMessages}
             isLoading={agentLoading}
+            isDisabled={agentDisabled}
             activeTools={activeTools}
             onAsk={agentAsk}
             onStop={agentStop}

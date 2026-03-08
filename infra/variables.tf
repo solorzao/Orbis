@@ -62,6 +62,12 @@ variable "orbis_api_key" {
   sensitive   = true
 }
 
+variable "agent_enabled" {
+  description = "Enable the AI agent chat feature (set to false to disable and stop API costs)"
+  type        = string
+  default     = "true"
+}
+
 variable "environment" {
   description = "Deployment environment (dev or prod)"
   type        = string

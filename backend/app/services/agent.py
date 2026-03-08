@@ -225,6 +225,32 @@ def _fallback(question: str) -> list[dict]:
     return [{"name": "keyword_search", "args": {"terms": question}}]
 
 
+_ALLOWED_TIME_RANGES = {
+    "1 hour", "6 hours", "12 hours", "24 hours", "48 hours", "7 days",
+}
+
+
+def _sanitize_tool_args(name: str, args: dict) -> dict:
+    """Clamp and sanitize LLM-generated tool arguments."""
+    clean = {}
+    for k, v in args.items():
+        if isinstance(v, str):
+            clean[k] = v[:200].strip()
+        elif isinstance(v, (int, float)):
+            clean[k] = v
+
+    if "limit" in clean:
+        clean["limit"] = max(1, min(int(clean["limit"]), 20))
+    if "depth" in clean:
+        clean["depth"] = max(1, min(int(clean["depth"]), 3))
+    if "hours" in clean:
+        clean["hours"] = max(1, min(int(clean["hours"]), 168))
+    if "time_range" in clean and clean["time_range"] not in _ALLOWED_TIME_RANGES:
+        clean["time_range"] = "24 hours"
+
+    return clean
+
+
 async def execute_retrieval(tool_calls: list[dict]) -> list[dict]:
     """Run planned retrieval tool calls in parallel.
 
@@ -234,7 +260,7 @@ async def execute_retrieval(tool_calls: list[dict]) -> list[dict]:
 
     async def _run(call: dict) -> dict:
         name = call["name"]
-        args = call.get("args", {})
+        args = _sanitize_tool_args(name, call.get("args", {}))
         fn = _TOOL_DISPATCH.get(name)
         if fn is None:
             return {"tool": name, "error": f"Unknown tool: {name}"}
@@ -254,7 +280,7 @@ async def synthesize_answer(
     context: str,
     conversation_history: list[dict] | None = None,
 ) -> dict:
-    """Use Sonnet to produce a cited answer with globe actions.
+    """Use Haiku to produce a cited answer with globe actions.
 
     Returns ``{"answer": str, "citations": list, "globe_actions": list}``.
     """
@@ -269,7 +295,7 @@ async def synthesize_answer(
     try:
         client = _get_anthropic_client()
         response = await client.messages.create(
-            model=settings.sonnet_model_id,
+            model=settings.haiku_model_id,
             max_tokens=1024,
             system=_SYNTHESIS_SYSTEM,
             messages=messages,

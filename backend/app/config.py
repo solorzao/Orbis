@@ -90,6 +90,11 @@ class Settings:
     # --- Security ---
     api_key: str = field(default_factory=lambda: _env("ORBIS_API_KEY"))
 
+    # --- Feature flags ---
+    agent_enabled: bool = field(
+        default_factory=lambda: _env("AGENT_ENABLED", "true").lower() in ("true", "1", "yes")
+    )
+
     # --- AI model ---
     haiku_model_id: str = field(
         default_factory=lambda: _env("HAIKU_MODEL_ID", "claude-haiku-4-5-20251001")

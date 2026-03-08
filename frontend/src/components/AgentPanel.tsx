@@ -16,6 +16,7 @@ const TOOL_LABELS: Record<string, string> = {
 interface AgentPanelProps {
   messages: AgentMessageType[];
   isLoading: boolean;
+  isDisabled?: boolean;
   activeTools: string[];
   onAsk: (question: string) => void;
   onStop: () => void;
@@ -27,6 +28,7 @@ interface AgentPanelProps {
 export default function AgentPanel({
   messages,
   isLoading,
+  isDisabled = false,
   activeTools,
   onAsk,
   onStop,
@@ -46,7 +48,7 @@ export default function AgentPanel({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || isDisabled) return;
     onAsk(input.trim());
     setInput("");
   };
@@ -116,9 +118,16 @@ export default function AgentPanel({
         </div>
       </div>
 
+      {/* Disabled banner */}
+      {isDisabled && (
+        <div className="mx-4 mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-center text-xs leading-relaxed text-amber-300">
+          The agent is temporarily unavailable. Please try again later.
+        </div>
+      )}
+
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-        {messages.length === 0 && (
+        {messages.length === 0 && !isDisabled && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <span className="text-4xl">🌍</span>
             <h3 className="text-sm font-semibold text-[var(--text-primary)]">
@@ -175,7 +184,7 @@ export default function AgentPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about global events..."
-            disabled={isLoading}
+            disabled={isLoading || isDisabled}
             className="flex-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-overlay)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-colors focus:border-blue-500/40 disabled:opacity-50"
           />
           {isLoading ? (

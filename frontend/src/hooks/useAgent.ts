@@ -34,6 +34,7 @@ interface UseAgentOptions {
 export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDisabled, setIsDisabled] = useState(false);
   const [activeTools, setActiveTools] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef(crypto.randomUUID());
@@ -77,6 +78,11 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
           }),
           signal: controller.signal,
         });
+
+        if (res.status === 503) {
+          setIsDisabled(true);
+          throw new Error("Agent is temporarily disabled.");
+        }
 
         if (!res.ok || !res.body) {
           throw new Error(`HTTP ${res.status}`);
@@ -191,5 +197,5 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
     conversationIdRef.current = crypto.randomUUID();
   }, []);
 
-  return { messages, isLoading, activeTools, ask, stop, clear };
+  return { messages, isLoading, isDisabled, activeTools, ask, stop, clear };
 }
