@@ -10,196 +10,153 @@ export const metadata: Metadata = {
   },
 };
 
-const features = [
-  {
-    icon: "&#127758;",
-    title: "Real-time news data",
-    description:
-      "Sourced from the GDELT Project — the world\u2019s largest open event database, monitoring news from 65+ languages and 150+ countries.",
-  },
-  {
-    icon: "&#11044;",
-    title: "Smart clustering",
-    description:
-      "Nearby stories group together at low zoom levels so the globe stays readable, and expand as you zoom in.",
-  },
-  {
-    icon: "&#9889;",
-    title: "AI summaries",
-    description:
-      "Cluster summaries powered by Anthropic Claude help you understand regional narratives at a glance.",
-  },
-  {
-    icon: "&#9881;",
-    title: "Topic filters",
-    description:
-      "Focus on conflict, politics, environment, economy, and more.",
-  },
-];
-
 export default function AboutPage() {
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        overflow: "auto",
-        background: "var(--bg-page)",
-      }}
-    >
-      {/* Hero */}
-      <div
-        style={{
-          position: "relative",
-          padding: "5rem 1.5rem 4rem",
-          textAlign: "center",
-          background:
-            "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59,130,246,0.12), transparent)",
-        }}
-      >
-        <Link
-          href="/"
-          style={{
-            position: "absolute",
-            top: "1.5rem",
-            left: "1.5rem",
-            color: "var(--text-muted)",
-            textDecoration: "none",
-            fontSize: "0.875rem",
-            padding: "0.375rem 0.75rem",
-            borderRadius: "6px",
-            border: "1px solid var(--border-subtle)",
-            background: "var(--surface-card)",
-            transition: "border-color 0.2s",
-          }}
-        >
-          &larr; Back to Globe
+    <main className="about-page">
+      <style>{`
+        .about-page {
+          min-height: 100vh;
+          overflow: auto;
+          background: var(--bg-page);
+          color: var(--text-primary);
+        }
+        .about-hero {
+          max-width: 640px;
+          margin: 0 auto;
+          padding: 5rem 1.5rem 3rem;
+          text-align: center;
+        }
+        .about-back {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.375rem;
+          color: var(--text-muted);
+          text-decoration: none;
+          font-size: 0.8125rem;
+          margin-bottom: 3rem;
+          transition: color 0.15s;
+        }
+        .about-back:hover { color: var(--text-secondary); }
+        .about-title {
+          font-family: var(--font-brand);
+          font-size: clamp(2.25rem, 5vw, 3rem);
+          margin: 0 0 0.5rem;
+          letter-spacing: -0.02em;
+        }
+        .about-tagline {
+          font-size: 1.125rem;
+          color: var(--text-secondary);
+          margin: 0 0 1.5rem;
+          font-family: var(--font-heading);
+        }
+        .about-desc {
+          color: var(--text-muted);
+          font-size: 0.9375rem;
+          line-height: 1.75;
+          margin: 0;
+        }
+        .about-features {
+          max-width: 640px;
+          margin: 0 auto;
+          padding: 0 1.5rem 3rem;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1px;
+          background: var(--border-subtle);
+          border: 1px solid var(--border-subtle);
+          border-radius: 12px;
+          overflow: hidden;
+        }
+        @media (max-width: 480px) {
+          .about-features { grid-template-columns: 1fr; }
+        }
+        .about-feature {
+          padding: 1.5rem;
+          background: var(--bg-page);
+        }
+        .about-feature-title {
+          font-size: 0.875rem;
+          font-family: var(--font-heading);
+          margin: 0 0 0.375rem;
+          color: var(--text-primary);
+        }
+        .about-feature-desc {
+          font-size: 0.8125rem;
+          line-height: 1.6;
+          color: var(--text-secondary);
+          margin: 0;
+        }
+        .about-cta {
+          text-align: center;
+          padding: 3rem 1.5rem 4rem;
+        }
+        .about-cta-link {
+          display: inline-block;
+          padding: 0.625rem 1.75rem;
+          border-radius: 8px;
+          background: rgba(59,130,246,0.12);
+          border: 1px solid var(--border-accent);
+          color: var(--text-primary);
+          text-decoration: none;
+          font-family: var(--font-heading);
+          font-size: 0.875rem;
+          transition: background 0.15s;
+        }
+        .about-cta-link:hover {
+          background: rgba(59,130,246,0.2);
+        }
+      `}</style>
+
+      <div className="about-hero">
+        <Link href="/" className="about-back">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 12L6 8l4-4" />
+          </svg>
+          Back to Globe
         </Link>
 
-        <div
-          style={{
-            width: 64,
-            height: 64,
-            margin: "0 auto 1.5rem",
-            borderRadius: "50%",
-            background:
-              "linear-gradient(135deg, rgba(59,130,246,0.3), rgba(59,130,246,0.08))",
-            border: "1px solid var(--border-accent)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: "1.75rem",
-          }}
-          dangerouslySetInnerHTML={{ __html: "&#127758;" }}
-        />
-
-        <h1
-          style={{
-            fontFamily: "var(--font-brand)",
-            fontSize: "clamp(2rem, 5vw, 3.5rem)",
-            margin: "0 0 0.75rem",
-            letterSpacing: "-0.02em",
-          }}
-        >
-          Orbis
-        </h1>
-        <p
-          style={{
-            fontSize: "1.25rem",
-            color: "var(--text-secondary)",
-            margin: "0 0 1.5rem",
-            fontFamily: "var(--font-heading)",
-          }}
-        >
-          Every Story, Everywhere.
-        </p>
-        <p
-          style={{
-            maxWidth: 560,
-            margin: "0 auto",
-            color: "var(--text-muted)",
-            fontSize: "1rem",
-            lineHeight: 1.7,
-          }}
-        >
+        <h1 className="about-title">Orbis</h1>
+        <p className="about-tagline">Every Story, Everywhere.</p>
+        <p className="about-desc">
           An interactive 3D globe that visualises geolocated world news in real
           time. Spin the globe, zoom into regions, and explore headlines updated
-          every 15 minutes — with AI-generated summaries to help you make sense
-          of it all.
+          every 15&nbsp;minutes&nbsp;&mdash; with AI-generated summaries to help you
+          make sense of it all.
         </p>
       </div>
 
-      {/* Feature cards */}
-      <div
-        style={{
-          maxWidth: 880,
-          margin: "0 auto",
-          padding: "0 1.5rem 4rem",
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-          gap: "1rem",
-        }}
-      >
-        {features.map((f) => (
-          <div
-            key={f.title}
-            style={{
-              padding: "1.5rem",
-              borderRadius: "12px",
-              background: "var(--surface-card)",
-              border: "1px solid var(--border-subtle)",
-              transition: "border-color 0.2s",
-            }}
-          >
-            <div
-              style={{ fontSize: "1.5rem", marginBottom: "0.75rem" }}
-              dangerouslySetInnerHTML={{ __html: f.icon }}
-            />
-            <h3
-              style={{
-                fontSize: "1rem",
-                fontFamily: "var(--font-heading)",
-                margin: "0 0 0.5rem",
-              }}
-            >
-              {f.title}
-            </h3>
-            <p
-              style={{
-                color: "var(--text-secondary)",
-                fontSize: "0.875rem",
-                lineHeight: 1.6,
-                margin: 0,
-              }}
-            >
-              {f.description}
-            </p>
-          </div>
-        ))}
+      <div className="about-features">
+        <div className="about-feature">
+          <h3 className="about-feature-title">Real-time news data</h3>
+          <p className="about-feature-desc">
+            Sourced from the GDELT Project&nbsp;&mdash; monitoring news from
+            65+ languages and 150+ countries.
+          </p>
+        </div>
+        <div className="about-feature">
+          <h3 className="about-feature-title">Smart clustering</h3>
+          <p className="about-feature-desc">
+            Nearby stories group together at low zoom levels and expand as you
+            zoom in.
+          </p>
+        </div>
+        <div className="about-feature">
+          <h3 className="about-feature-title">AI summaries</h3>
+          <p className="about-feature-desc">
+            Cluster summaries powered by Anthropic Claude help you understand
+            regional narratives at a glance.
+          </p>
+        </div>
+        <div className="about-feature">
+          <h3 className="about-feature-title">Topic filters</h3>
+          <p className="about-feature-desc">
+            Focus on conflict, politics, environment, economy, and more.
+          </p>
+        </div>
       </div>
 
-      {/* CTA */}
-      <div
-        style={{
-          textAlign: "center",
-          padding: "2rem 1.5rem 4rem",
-          borderTop: "1px solid var(--border-subtle)",
-        }}
-      >
-        <Link
-          href="/"
-          style={{
-            display: "inline-block",
-            padding: "0.75rem 2rem",
-            borderRadius: "8px",
-            background: "rgba(59,130,246,0.15)",
-            border: "1px solid var(--border-accent)",
-            color: "var(--text-primary)",
-            textDecoration: "none",
-            fontFamily: "var(--font-heading)",
-            fontSize: "0.9375rem",
-            transition: "background 0.2s",
-          }}
-        >
+      <div className="about-cta">
+        <Link href="/" className="about-cta-link">
           Explore the Globe
         </Link>
       </div>
