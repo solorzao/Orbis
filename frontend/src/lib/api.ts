@@ -120,8 +120,10 @@ export interface ApiHourlyDensity {
   count: number;
 }
 
-export function fetchDensity(): Promise<ApiHourlyDensity[]> {
-  return apiFetch<ApiHourlyDensity[]>("/api/news/density");
+export function fetchDensity(offsetDays = 0): Promise<ApiHourlyDensity[]> {
+  const params: Record<string, string> = {};
+  if (offsetDays > 0) params.offset_days = String(offsetDays);
+  return apiFetch<ApiHourlyDensity[]>("/api/news/density", params);
 }
 
 export function fetchTopics(): Promise<ApiTopicCount[]> {
