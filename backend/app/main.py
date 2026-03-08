@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.middleware.security import SecurityMiddleware
+from app.routers.agent import router as agent_router
 from app.routers.news import router as news_router
 from app.services.cache import close_redis, get_redis
 from app.services.database import close_pool, get_pool
@@ -48,6 +49,7 @@ app.add_middleware(SecurityMiddleware)
 
 # Register routers.
 app.include_router(news_router)
+app.include_router(agent_router)
 
 
 # ---------------------------------------------------------------------------

@@ -94,6 +94,11 @@ class Settings:
     haiku_model_id: str = field(
         default_factory=lambda: _env("HAIKU_MODEL_ID", "claude-haiku-4-5-20251001")
     )
+    sonnet_model_id: str = field(
+        default_factory=lambda: _env("SONNET_MODEL_ID", "claude-sonnet-4-5-20241022")
+    )
+    agent_max_retrieval_results: int = 20
+    agent_conversation_ttl: int = 3600  # 1 hour
 
 
 settings = Settings()
