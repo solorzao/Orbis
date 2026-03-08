@@ -85,6 +85,7 @@ async def _ingest_from_raw_gkg() -> int:
                 "image_url": a.get("image_url") or None,
                 "persons": a.get("persons", []),
                 "organizations": a.get("organizations", []),
+                "mentioned_locations": a.get("mentioned_locations", []),
             }
         )
 
@@ -112,6 +113,7 @@ async def _ingest_from_raw_gkg() -> int:
         if db_rec:
             db_rec["persons"] = row.get("persons", [])
             db_rec["organizations"] = row.get("organizations", [])
+            db_rec["mentioned_locations"] = row.get("mentioned_locations", [])
             graph_articles.append(db_rec)
     await populate_graph(graph_articles)
 

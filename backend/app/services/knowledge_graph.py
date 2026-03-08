@@ -160,7 +160,38 @@ async def populate_graph(articles: list[dict]) -> int:
                     )
                     edge_count += 1
 
-                # 6. CO_MENTIONED edges between all entity pairs
+                # 6. Upsert mentioned LOCATION nodes + MENTIONED_IN edges
+                mentioned_locations = article.get("mentioned_locations", [])
+                for loc in mentioned_locations:
+                    loc_name = loc.get("name", "")
+                    if not loc_name:
+                        continue
+                    loc_node_id = await conn.fetchval(
+                        "INSERT INTO kg_nodes (type, name, metadata) "
+                        "VALUES ($1, $2, $3::jsonb) "
+                        "ON CONFLICT (type, name) DO UPDATE "
+                        "SET metadata = kg_nodes.metadata || $3::jsonb "
+                        "RETURNING id",
+                        "LOCATION",
+                        loc_name,
+                        json.dumps({
+                            "lat": loc.get("lat"),
+                            "lng": loc.get("lng"),
+                            "country_code": loc.get("country_code", ""),
+                        }),
+                    )
+                    await conn.execute(
+                        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, weight, article_id) "
+                        "VALUES ($1, $2, $3, 1, $4)",
+                        loc_node_id,
+                        article_node_id,
+                        "MENTIONED_IN",
+                        article_id,
+                    )
+                    edge_count += 1
+                    entity_node_ids.append(loc_node_id)
+
+                # 7. CO_MENTIONED edges between all entity pairs
                 for node_a, node_b in combinations(entity_node_ids, 2):
                     # Try to increment weight on an existing edge first
                     updated = await conn.execute(

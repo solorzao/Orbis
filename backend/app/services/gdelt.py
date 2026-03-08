@@ -283,22 +283,39 @@ async def fetch_raw_gkg() -> list[dict]:
             continue
 
         city_loc = None
+        # Collect all mentioned countries/locations for knowledge graph
+        mentioned_locations: list[dict] = []
+        seen_countries: set[str] = set()
         for loc_block in locations_raw.split(";"):
             parts = loc_block.split("#")
             # Fields: Type#FullName#CountryCode#ADM1Code#Lat#Lng#FeatureID
-            if len(parts) >= 7 and parts[0] in ("3", "4"):
-                try:
-                    lat = float(parts[4])
-                    lng = float(parts[5])
-                    city_loc = {
-                        "fullname": parts[1],
-                        "country_code": parts[2],
-                        "lat": lat,
-                        "lng": lng,
-                    }
-                    break
-                except (ValueError, IndexError):
-                    continue
+            if len(parts) < 7:
+                continue
+            loc_type = parts[0]
+            try:
+                lat = float(parts[4])
+                lng = float(parts[5])
+            except (ValueError, IndexError):
+                continue
+
+            # Use first city-level location as article geolocation
+            if loc_type in ("3", "4") and city_loc is None:
+                city_loc = {
+                    "fullname": parts[1],
+                    "country_code": parts[2],
+                    "lat": lat,
+                    "lng": lng,
+                }
+
+            # Collect country-level mentions (type 1) for KG
+            if loc_type == "1" and parts[2] not in seen_countries:
+                seen_countries.add(parts[2])
+                mentioned_locations.append({
+                    "name": parts[1].strip(),
+                    "country_code": parts[2],
+                    "lat": lat,
+                    "lng": lng,
+                })
 
         if not city_loc:
             continue
@@ -333,6 +350,7 @@ async def fetch_raw_gkg() -> list[dict]:
             "themes": themes,
             "persons": persons,
             "organizations": organizations,
+            "mentioned_locations": mentioned_locations,
             "image_url": image_url if image_url.startswith("http") else "",
             "published_at": _parse_gkg_date(date_str),
         }
