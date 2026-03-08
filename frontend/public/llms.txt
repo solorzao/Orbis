@@ -11,6 +11,7 @@ Orbis is a web application that visualises geolocated world news in real time on
 - Provides AI-generated summaries for clusters of related headlines
 - Lets users filter by topic (conflict, politics, environment, economy, etc.)
 - Links every headline back to its original source for full articles
+- Orbis Agent: ask questions about world events in plain language and get cited, sourced answers with globe navigation
 
 ## Data Sources
 

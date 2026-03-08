@@ -206,6 +206,18 @@ export default function AboutPage() {
             </p>
           </div>
         </div>
+        <div className="about-feature">
+          <span className="about-feature-num">05</span>
+          <div className="about-feature-content">
+            <h3 className="about-feature-title">Orbis Agent</h3>
+            <p className="about-feature-desc">
+              Ask questions about world events in plain language. The agent
+              searches articles, explores entity relationships, and identifies
+              trends&nbsp;&mdash; then answers with cited sources and highlights
+              relevant locations on the globe.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="about-cta">
