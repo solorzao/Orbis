@@ -67,7 +67,7 @@ export default function PanelQueue({
           </div>
 
           {/* Mobile: vertical stack on right, under category bar */}
-          <div className="fixed right-3 top-16 z-40 flex flex-col gap-2 sm:hidden">
+          <div className="fixed right-3 top-28 z-40 flex flex-col gap-2 sm:hidden">
             <AnimatePresence>
               {minimizedPanels.map((entry) => (
                 <PanelTab
