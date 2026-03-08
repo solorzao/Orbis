@@ -315,6 +315,9 @@ async def synthesize_answer(
             messages=messages,
         )
         text = response.content[0].text.strip()
+        # Strip markdown code fences the model sometimes adds
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
         try:
             parsed = json.loads(text)
