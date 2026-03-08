@@ -218,7 +218,7 @@ export default function TimeSlider({
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[var(--text-secondary)] font-medium">
+              <span className="text-[var(--text-secondary)] font-medium" suppressHydrationWarning>
                 {isFullRange
                   ? windowLabel
                   : `${windowLabel} · ${formatTime(rangeStart)} — ${formatTime(rangeEnd)}`}
@@ -321,6 +321,7 @@ export default function TimeSlider({
               key={tick.hoursAgo}
               className="absolute text-[8px] text-[var(--text-muted)] -translate-x-1/2"
               style={{ left: `${tick.pct}%` }}
+              suppressHydrationWarning
             >
               {tick.label}
             </span>

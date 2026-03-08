@@ -31,12 +31,15 @@ function getInitialChoice(): ThemeChoice {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeChoice>(getInitialChoice);
+  const [theme, setThemeState] = useState<ThemeChoice>("dark");
 
-  // Apply theme on mount
+  // Hydrate real theme on mount (avoids SSR mismatch)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
+    const real = getInitialChoice();
+    setThemeState(real);
+    applyTheme(real);
+  }, []);
 
   const setTheme = useCallback((newTheme: ThemeChoice) => {
     setThemeState(newTheme);

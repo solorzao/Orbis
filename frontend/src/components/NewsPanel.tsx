@@ -550,7 +550,7 @@ export default function NewsPanel({
                           {article.sourceName}
                         </span>
                         <span className="text-[var(--text-muted)]">&middot;</span>
-                        <span className="text-xs text-[var(--text-muted)]">
+                        <span className="text-xs text-[var(--text-muted)]" suppressHydrationWarning>
                           {timeAgo(article.publishedAt)}
                         </span>
                       </div>
