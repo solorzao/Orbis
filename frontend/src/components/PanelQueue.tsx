@@ -66,8 +66,8 @@ export default function PanelQueue({
             </AnimatePresence>
           </div>
 
-          {/* Mobile: horizontal row at bottom */}
-          <div className="fixed bottom-14 left-0 right-0 z-40 flex gap-1.5 overflow-x-auto px-3 sm:hidden">
+          {/* Mobile: vertical stack on right, under category bar */}
+          <div className="fixed right-3 top-16 z-40 flex flex-col gap-2 sm:hidden">
             <AnimatePresence>
               {minimizedPanels.map((entry) => (
                 <PanelTab
