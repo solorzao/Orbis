@@ -1,0 +1,201 @@
+"""Tests for the agent retrieval functions."""
+
+import uuid
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+def _fake_embedding(dim: int = 1536) -> list[float]:
+    return [0.01 * (i % 100) for i in range(dim)]
+
+
+class TestSemanticSearch:
+    @pytest.mark.asyncio
+    async def test_semantic_search_queries_by_embedding(self):
+        from app.services.retrieval import semantic_search
+
+        article_id = uuid.uuid4()
+        db_rows = [
+            {
+                "id": article_id,
+                "title": "Climate summit begins",
+                "source_url": "https://example.com/1",
+                "source_name": "Example News",
+                "latitude": 48.8,
+                "longitude": 2.3,
+                "published_at": "2026-03-01T00:00:00Z",
+                "sentiment_score": 0.5,
+                "distance": 0.12,
+            }
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(return_value=db_rows)
+
+        emb_obj = MagicMock()
+        emb_obj.embedding = _fake_embedding()
+        mock_response = MagicMock()
+        mock_response.data = [emb_obj]
+
+        mock_client = AsyncMock()
+        mock_client.embeddings.create = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "app.services.retrieval._get_openai_client",
+            return_value=mock_client,
+        ), patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            results = await semantic_search("climate change")
+
+        assert len(results) == 1
+        assert results[0]["title"] == "Climate summit begins"
+        mock_client.embeddings.create.assert_called_once()
+        mock_pool.fetch.assert_called_once()
+
+
+class TestGraphTraverse:
+    @pytest.mark.asyncio
+    async def test_graph_traverse_returns_connected_nodes(self):
+        from app.services.retrieval import graph_traverse
+
+        node_id = uuid.uuid4()
+        connected_id = uuid.uuid4()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"id": node_id})
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": connected_id,
+                    "type": "PERSON",
+                    "name": "Jane Doe",
+                    "rel_type": "MENTIONED_IN",
+                    "depth": 1,
+                }
+            ]
+        )
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            results = await graph_traverse("John Doe")
+
+        assert len(results) == 1
+        assert results[0]["name"] == "Jane Doe"
+        assert results[0]["rel_type"] == "MENTIONED_IN"
+
+
+class TestKeywordSearch:
+    @pytest.mark.asyncio
+    async def test_keyword_search_filters_articles(self):
+        from app.services.retrieval import keyword_search
+
+        article_id = uuid.uuid4()
+        db_rows = [
+            {
+                "id": article_id,
+                "title": "Election results announced",
+                "source_url": "https://example.com/2",
+                "source_name": "News Outlet",
+                "latitude": 38.9,
+                "longitude": -77.0,
+                "published_at": "2026-03-01T00:00:00Z",
+                "sentiment_score": 0.2,
+                "topic_tags": ["politics"],
+                "country_code": "US",
+            }
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(return_value=db_rows)
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            results = await keyword_search(terms="election", topic="politics")
+
+        assert len(results) == 1
+        assert results[0]["title"] == "Election results announced"
+        mock_pool.fetch.assert_called_once()
+        # Verify the query received both filter params plus the limit
+        call_args = mock_pool.fetch.call_args
+        assert call_args[0][1] == "election"  # terms param
+        assert call_args[0][2] == "politics"  # topic param
+
+
+class TestTrendingTopics:
+    @pytest.mark.asyncio
+    async def test_trending_topics_returns_counts(self):
+        from app.services.retrieval import trending_topics
+
+        db_rows = [
+            {"topic": "politics", "count": 42},
+            {"topic": "climate", "count": 31},
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(return_value=db_rows)
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            results = await trending_topics(hours=12)
+
+        assert len(results) == 2
+        assert results[0]["topic"] == "politics"
+        assert results[0]["count"] == 42
+        mock_pool.fetch.assert_called_once()
+        # Verify hours param was passed
+        assert mock_pool.fetch.call_args[0][1] == 12
+
+
+class TestEntityLookup:
+    @pytest.mark.asyncio
+    async def test_entity_lookup_finds_node_and_connections(self):
+        from app.services.retrieval import entity_lookup
+
+        node_id = uuid.uuid4()
+        conn_id = uuid.uuid4()
+
+        node_row = {
+            "id": node_id,
+            "type": "ORGANIZATION",
+            "name": "United Nations",
+            "metadata": '{"abbrev": "UN"}',
+        }
+        conn_rows = [
+            {
+                "id": conn_id,
+                "type": "PERSON",
+                "name": "Secretary General",
+                "rel_type": "LEADS",
+                "metadata": "{}",
+            }
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value=node_row)
+        mock_pool.fetch = AsyncMock(return_value=conn_rows)
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            result = await entity_lookup("United Nations")
+
+        assert result["node"]["name"] == "United Nations"
+        assert len(result["connections"]) == 1
+        assert result["connections"][0]["rel_type"] == "LEADS"
+        mock_pool.fetchrow.assert_called_once()
+        mock_pool.fetch.assert_called_once()
