@@ -10,131 +10,199 @@ export const metadata: Metadata = {
   },
 };
 
+const features = [
+  {
+    icon: "&#127758;",
+    title: "Real-time news data",
+    description:
+      "Sourced from the GDELT Project — the world\u2019s largest open event database, monitoring news from 65+ languages and 150+ countries.",
+  },
+  {
+    icon: "&#11044;",
+    title: "Smart clustering",
+    description:
+      "Nearby stories group together at low zoom levels so the globe stays readable, and expand as you zoom in.",
+  },
+  {
+    icon: "&#9889;",
+    title: "AI summaries",
+    description:
+      "Cluster summaries powered by Anthropic Claude help you understand regional narratives at a glance.",
+  },
+  {
+    icon: "&#9881;",
+    title: "Topic filters",
+    description:
+      "Focus on conflict, politics, environment, economy, and more.",
+  },
+];
+
 export default function AboutPage() {
   return (
     <main
       style={{
-        maxWidth: 720,
-        margin: "0 auto",
-        padding: "4rem 1.5rem",
-        color: "var(--text-primary)",
-        lineHeight: 1.7,
+        minHeight: "100vh",
         overflow: "auto",
-        height: "100vh",
+        background: "var(--bg-page)",
       }}
     >
-      <Link
-        href="/"
+      {/* Hero */}
+      <div
         style={{
-          color: "var(--text-muted)",
-          textDecoration: "none",
-          fontSize: "0.875rem",
+          position: "relative",
+          padding: "5rem 1.5rem 4rem",
+          textAlign: "center",
+          background:
+            "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59,130,246,0.12), transparent)",
         }}
       >
-        &larr; Back to Globe
-      </Link>
-
-      <h1
-        style={{
-          fontFamily: "var(--font-brand)",
-          fontSize: "2.5rem",
-          marginTop: "2rem",
-          marginBottom: "0.5rem",
-        }}
-      >
-        Orbis
-      </h1>
-      <p
-        style={{
-          fontSize: "1.25rem",
-          color: "var(--text-secondary)",
-          marginBottom: "2.5rem",
-        }}
-      >
-        Every Story, Everywhere.
-      </p>
-
-      <section style={{ marginBottom: "2rem" }}>
-        <h2 style={{ fontSize: "1.25rem", marginBottom: "0.75rem" }}>
-          What is Orbis?
-        </h2>
-        <p style={{ color: "var(--text-secondary)" }}>
-          Orbis is an interactive 3D globe that visualises geolocated world news
-          in real time. Headlines from around the world appear as points on the
-          globe, updated every 15 minutes. You can spin the globe, zoom into
-          regions, and click on clusters to read AI-generated summaries and
-          original source articles.
-        </p>
-      </section>
-
-      <section style={{ marginBottom: "2rem" }}>
-        <h2 style={{ fontSize: "1.25rem", marginBottom: "0.75rem" }}>
-          How it works
-        </h2>
-        <ul
+        <Link
+          href="/"
           style={{
-            color: "var(--text-secondary)",
-            paddingLeft: "1.25rem",
+            position: "absolute",
+            top: "1.5rem",
+            left: "1.5rem",
+            color: "var(--text-muted)",
+            textDecoration: "none",
+            fontSize: "0.875rem",
+            padding: "0.375rem 0.75rem",
+            borderRadius: "6px",
+            border: "1px solid var(--border-subtle)",
+            background: "var(--surface-card)",
+            transition: "border-color 0.2s",
           }}
         >
-          <li style={{ marginBottom: "0.5rem" }}>
-            <strong style={{ color: "var(--text-primary)" }}>
-              Real-time news data
-            </strong>{" "}
-            — sourced from the GDELT Project, the world&apos;s largest open
-            event database monitoring news from 65+ languages and 150+ countries.
-          </li>
-          <li style={{ marginBottom: "0.5rem" }}>
-            <strong style={{ color: "var(--text-primary)" }}>
-              Smart clustering
-            </strong>{" "}
-            — nearby stories group together at low zoom levels so the globe
-            stays readable, and expand as you zoom in.
-          </li>
-          <li style={{ marginBottom: "0.5rem" }}>
-            <strong style={{ color: "var(--text-primary)" }}>
-              AI summaries
-            </strong>{" "}
-            — powered by Anthropic Claude, cluster summaries help you understand
-            regional narratives at a glance.
-          </li>
-          <li style={{ marginBottom: "0.5rem" }}>
-            <strong style={{ color: "var(--text-primary)" }}>
-              Topic filters
-            </strong>{" "}
-            — focus on conflict, politics, environment, economy, and more.
-          </li>
-        </ul>
-      </section>
+          &larr; Back to Globe
+        </Link>
 
-      <section style={{ marginBottom: "2rem" }}>
-        <h2 style={{ fontSize: "1.25rem", marginBottom: "0.75rem" }}>
-          Technology
-        </h2>
-        <p style={{ color: "var(--text-secondary)" }}>
-          Built with Next.js and globe.gl (Three.js) on the frontend, Python
-          FastAPI on the backend, and PostgreSQL with PostGIS and pgvector for
-          geospatial and semantic search. Hosted on Vercel and Azure.
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            margin: "0 auto 1.5rem",
+            borderRadius: "50%",
+            background:
+              "linear-gradient(135deg, rgba(59,130,246,0.3), rgba(59,130,246,0.08))",
+            border: "1px solid var(--border-accent)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "1.75rem",
+          }}
+          dangerouslySetInnerHTML={{ __html: "&#127758;" }}
+        />
+
+        <h1
+          style={{
+            fontFamily: "var(--font-brand)",
+            fontSize: "clamp(2rem, 5vw, 3.5rem)",
+            margin: "0 0 0.75rem",
+            letterSpacing: "-0.02em",
+          }}
+        >
+          Orbis
+        </h1>
+        <p
+          style={{
+            fontSize: "1.25rem",
+            color: "var(--text-secondary)",
+            margin: "0 0 1.5rem",
+            fontFamily: "var(--font-heading)",
+          }}
+        >
+          Every Story, Everywhere.
         </p>
-      </section>
+        <p
+          style={{
+            maxWidth: 560,
+            margin: "0 auto",
+            color: "var(--text-muted)",
+            fontSize: "1rem",
+            lineHeight: 1.7,
+          }}
+        >
+          An interactive 3D globe that visualises geolocated world news in real
+          time. Spin the globe, zoom into regions, and explore headlines updated
+          every 15 minutes — with AI-generated summaries to help you make sense
+          of it all.
+        </p>
+      </div>
 
-      <section style={{ marginBottom: "2rem" }}>
-        <h2 style={{ fontSize: "1.25rem", marginBottom: "0.75rem" }}>
-          Open source
-        </h2>
-        <p style={{ color: "var(--text-secondary)" }}>
-          Orbis is open source on{" "}
-          <a
-            href="https://github.com/solorzao/Orbis"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: "var(--text-primary)", textDecoration: "underline" }}
+      {/* Feature cards */}
+      <div
+        style={{
+          maxWidth: 880,
+          margin: "0 auto",
+          padding: "0 1.5rem 4rem",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          gap: "1rem",
+        }}
+      >
+        {features.map((f) => (
+          <div
+            key={f.title}
+            style={{
+              padding: "1.5rem",
+              borderRadius: "12px",
+              background: "var(--surface-card)",
+              border: "1px solid var(--border-subtle)",
+              transition: "border-color 0.2s",
+            }}
           >
-            GitHub
-          </a>
-          .
-        </p>
-      </section>
+            <div
+              style={{ fontSize: "1.5rem", marginBottom: "0.75rem" }}
+              dangerouslySetInnerHTML={{ __html: f.icon }}
+            />
+            <h3
+              style={{
+                fontSize: "1rem",
+                fontFamily: "var(--font-heading)",
+                margin: "0 0 0.5rem",
+              }}
+            >
+              {f.title}
+            </h3>
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: "0.875rem",
+                lineHeight: 1.6,
+                margin: 0,
+              }}
+            >
+              {f.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* CTA */}
+      <div
+        style={{
+          textAlign: "center",
+          padding: "2rem 1.5rem 4rem",
+          borderTop: "1px solid var(--border-subtle)",
+        }}
+      >
+        <Link
+          href="/"
+          style={{
+            display: "inline-block",
+            padding: "0.75rem 2rem",
+            borderRadius: "8px",
+            background: "rgba(59,130,246,0.15)",
+            border: "1px solid var(--border-accent)",
+            color: "var(--text-primary)",
+            textDecoration: "none",
+            fontFamily: "var(--font-heading)",
+            fontSize: "0.9375rem",
+            transition: "background 0.2s",
+          }}
+        >
+          Explore the Globe
+        </Link>
+      </div>
     </main>
   );
 }

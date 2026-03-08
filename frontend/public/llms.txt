@@ -17,14 +17,6 @@ Orbis is a web application that visualises geolocated world news in real time on
 - **GDELT Project** — the world's largest open event database, monitoring news from 65 languages and 150+ countries in near-real time
 - **AI Summaries** — powered by Anthropic Claude for natural-language cluster summaries
 
-## Technology
-
-- Frontend: React, Next.js, globe.gl (Three.js), Tailwind CSS
-- Backend: Python FastAPI
-- Database: PostgreSQL with PostGIS and pgvector
-- Hosting: Vercel (frontend), Azure (backend)
-
 ## Links
 
 - Website: https://orbisapp.co
-- GitHub: https://github.com/solorzao/Orbis
