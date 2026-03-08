@@ -93,10 +93,12 @@ _TOOL_DISPATCH: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 _PLANNING_SYSTEM = (
-    "You are a retrieval planner for a news intelligence system. "
+    "You are a retrieval planner for a news intelligence system called Orbis. "
     "Given a user question, decide which 1-3 retrieval tools to call.\n\n"
     "Available tools:\n{tool_list}\n\n"
-    "Respond with ONLY valid JSON: {{\"tools\": [{{\"name\": \"...\", \"args\": {{...}}}}]}}\n"
+    "If the question is NOT about news, world events, geopolitics, or current "
+    "affairs, respond with: {{\"tools\": [], \"off_topic\": true}}\n\n"
+    "Otherwise respond with ONLY valid JSON: {{\"tools\": [{{\"name\": \"...\", \"args\": {{...}}}}]}}\n"
     "Do not include any other text."
 )
 
@@ -106,6 +108,8 @@ _SYNTHESIS_SYSTEM = (
     "Cite sources with [N] where N is the numbered entry. "
     "If relevant locations are mentioned, include globe_actions so the UI "
     "can highlight them.\n\n"
+    "If the question is not about news, world events, or current affairs, "
+    "politely decline and suggest the user ask about global news instead.\n\n"
     "Respond with ONLY valid JSON:\n"
     '{{"answer": "your answer with [N] citations", '
     '"citations": [{{"index": N, "title": "...", "source_url": "..."}}], '
@@ -210,6 +214,9 @@ async def plan_retrieval(
         )
         text = response.content[0].text.strip()
         parsed = json.loads(text)
+        # Off-topic detection: planner explicitly flags non-news questions
+        if parsed.get("off_topic"):
+            return []
         tools = parsed.get("tools", [])
         if not tools:
             raise ValueError("Empty tools list")
@@ -219,6 +226,13 @@ async def plan_retrieval(
     except Exception:
         logger.warning("Plan retrieval failed -- falling back to keyword search.", exc_info=True)
         return _fallback(question)
+
+
+_OFF_TOPIC_ANSWER = (
+    "I'm designed to help with news and world events. "
+    "Try asking about something happening in the world — "
+    "conflicts, politics, economics, natural disasters, and more."
+)
 
 
 def _fallback(question: str) -> list[dict]:
@@ -330,6 +344,15 @@ async def ask(
     """
     # Step 1: Plan
     tool_calls = await plan_retrieval(question, conversation_history)
+
+    # Off-topic: skip retrieval + synthesis entirely (saves 2 API calls)
+    if not tool_calls:
+        return {
+            "answer": _OFF_TOPIC_ANSWER,
+            "citations": [],
+            "globe_actions": [],
+            "tools_used": [],
+        }
 
     # Step 2: Retrieve
     retrieval_results = await execute_retrieval(tool_calls)

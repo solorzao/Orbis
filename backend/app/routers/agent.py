@@ -14,6 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.config import settings
 from app.middleware.security import has_injection_pattern, sanitise_text
 from app.services.agent import (
+    _OFF_TOPIC_ANSWER,
     _build_context,
     ask,
     execute_retrieval,
@@ -163,6 +164,26 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
 
         # Step 1: Plan
         tool_calls = await plan_retrieval(question, history)
+
+        # Off-topic: skip retrieval + synthesis (saves 2 API calls)
+        if not tool_calls:
+            answer_text = _OFF_TOPIC_ANSWER
+            yield {
+                "event": "token",
+                "data": json.dumps({"text": answer_text}),
+            }
+            await _save_history(conv_id, history, question, answer_text)
+            yield {
+                "event": "done",
+                "data": json.dumps({
+                    "conversation_id": conv_id,
+                    "citations": [],
+                    "globe_actions": [],
+                    "tools_used": [],
+                }),
+            }
+            return
+
         yield {
             "event": "planning",
             "data": json.dumps({"tools": [tc["name"] for tc in tool_calls]}),
