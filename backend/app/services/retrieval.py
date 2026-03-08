@@ -7,6 +7,7 @@ trending-topic aggregation, and entity lookup against the Orbis database.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from app.config import settings
@@ -173,8 +174,18 @@ async def keyword_search(
             idx += 1
 
         if time_range:
+            # Convert string interval to timedelta for asyncpg
+            _INTERVAL_MAP = {
+                "1 hour": timedelta(hours=1),
+                "6 hours": timedelta(hours=6),
+                "12 hours": timedelta(hours=12),
+                "24 hours": timedelta(hours=24),
+                "48 hours": timedelta(hours=48),
+                "7 days": timedelta(days=7),
+            }
+            td = _INTERVAL_MAP.get(time_range, timedelta(hours=24))
             conditions.append(f"published_at > NOW() - ${idx}::interval")
-            params.append(time_range)
+            params.append(td)
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
