@@ -184,7 +184,9 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
         if len(entries) >= max_articles:
             break
 
-    return "\n\n".join(entries) if entries else "(No results found.)"
+    context = "\n\n".join(entries) if entries else "(No results found.)"
+    logger.info("Built context with %d entries (%d chars)", len(entries), len(context))
+    return context
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +222,7 @@ async def plan_retrieval(
             messages=messages,
         )
         text = response.content[0].text.strip()
+        logger.info("Planner raw response: %s", text[:500])
         parsed = json.loads(text)
         # Off-topic detection: planner explicitly flags non-news questions
         if parsed.get("off_topic"):
@@ -229,6 +232,7 @@ async def plan_retrieval(
             raise ValueError("Empty tools list")
         # Validate tool names
         valid = [t for t in tools if t.get("name") in _TOOL_DISPATCH]
+        logger.info("Planned tools: %s", [t["name"] for t in valid])
         return valid[:3] if valid else _fallback(question)
     except Exception:
         logger.warning("Plan retrieval failed -- falling back to keyword search.", exc_info=True)
@@ -293,6 +297,10 @@ async def execute_retrieval(tool_calls: list[dict]) -> list[dict]:
             return {"tool": name, "error": str(exc)}
 
     results = await asyncio.gather(*[_run(c) for c in tool_calls])
+    for r in results:
+        data = r.get("result", r.get("error", "?"))
+        count = len(data) if isinstance(data, list) else "n/a"
+        logger.info("Tool %s returned %s results", r.get("tool"), count)
     return list(results)
 
 
