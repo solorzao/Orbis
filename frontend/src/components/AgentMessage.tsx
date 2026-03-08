@@ -49,6 +49,7 @@ export default function AgentMessage({ message, onCitationClick }: AgentMessageP
                 <span className="text-[var(--text-muted)]">
                   {citation.source_name}
                 </span>
+                <svg className="h-2.5 w-2.5 opacity-50" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4.5 1.5H2a.5.5 0 0 0-.5.5v8a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V7.5M7 1.5h3.5V5M6 6l4.5-4.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
             ))}
           </div>

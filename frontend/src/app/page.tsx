@@ -60,8 +60,11 @@ export default function Home() {
   const { messages: agentMessages, isLoading: agentLoading, isDisabled: agentDisabled, activeTools, ask: agentAsk, stop: agentStop, clear: agentClear } = useAgent({ onGlobeAction: handleGlobeAction });
 
   const handleCitationClick = useCallback((citation: Citation) => {
-    if (globeControlsRef.current) {
+    if (globeControlsRef.current && citation.lat && citation.lng) {
       globeControlsRef.current.flyTo(citation.lat, citation.lng, 1.5);
+    }
+    if (citation.url) {
+      window.open(citation.url, "_blank", "noopener,noreferrer");
     }
   }, []);
 
