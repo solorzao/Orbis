@@ -13,6 +13,7 @@ import re
 from app.config import settings
 from app.services.cache import invalidate
 from app.services.database import get_pool, upsert_articles
+from app.services.embeddings import generate_embeddings
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
 from app.services.topic_classifier import classify_topic
@@ -144,6 +145,7 @@ async def run_ingestion_cycle() -> int:
         logger.info("Ingestion cycle starting …")
         count = await _ingest_from_raw_gkg()
         await _purge_old_articles()
+        await generate_embeddings()
         logger.info("Ingestion cycle complete: %d articles.", count)
         return count
     except Exception:

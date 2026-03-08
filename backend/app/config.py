@@ -47,6 +47,8 @@ class Settings:
     # --- AI ---
     anthropic_api_key: str = field(default_factory=lambda: _env("ANTHROPIC_API_KEY"))
     openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))
+    embedding_model: str = "text-embedding-3-small"
+    embedding_batch_size: int = 100
 
     # --- GDELT ---
     gdelt_doc_base_url: str = field(
