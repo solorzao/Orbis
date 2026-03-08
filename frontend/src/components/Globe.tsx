@@ -5,13 +5,18 @@ import type { GlobeInstance } from "globe.gl";
 import { GlobePoint } from "@/types/news";
 import { useTheme } from "@/lib/theme";
 
+interface GlobeControls {
+  flyTo: (lat: number, lng: number, altitude: number) => void;
+}
+
 interface GlobeProps {
   points: GlobePoint[];
   onPointClick: (point: GlobePoint) => void;
   onZoomChange: (altitude: number) => void;
+  onReady?: (controls: GlobeControls) => void;
 }
 
-export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps) {
+export default function Globe({ points, onPointClick, onZoomChange, onReady }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -22,6 +27,9 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
 
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
+
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   const altitudeRef = useRef(2.5);
   const pointsRef = useRef(points);
@@ -140,6 +148,13 @@ export default function Globe({ points, onPointClick, onZoomChange }: GlobeProps
 
     globeRef.current = globe;
     setIsLoaded(true);
+
+    // Expose camera controls to parent
+    onReadyRef.current?.({
+      flyTo: (lat: number, lng: number, altitude: number) => {
+        globeRef.current?.pointOfView({ lat, lng, altitude }, 1500);
+      },
+    });
 
     // Handle resize
     const handleResize = () => {

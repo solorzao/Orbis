@@ -1,14 +1,18 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
+import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
 import { apiPointsToGlobePoints } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
+import { useAgent } from "@/hooks/useAgent";
+import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
 import TopicFilter from "@/components/TopicFilter";
 import ThemeToggle from "@/components/ThemeToggle";
+import AgentPanel from "@/components/AgentPanel";
 
 // Globe requires `window` — load without SSR
 const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
@@ -26,6 +30,25 @@ export default function Home() {
   const MAX_PANELS = 5;
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
+
+  // Agent panel
+  const [agentOpen, setAgentOpen] = useState(false);
+  const globeControlsRef = useRef<{ flyTo: (lat: number, lng: number, altitude: number) => void } | null>(null);
+
+  const handleGlobeAction = useCallback((action: GlobeAction) => {
+    if (action.type === "flyTo" && globeControlsRef.current) {
+      const altitude = action.zoom ? 300 / action.zoom : 2.0;
+      globeControlsRef.current.flyTo(action.lat, action.lng, altitude);
+    }
+  }, []);
+
+  const { messages: agentMessages, isLoading: agentLoading, activeTools, ask: agentAsk, stop: agentStop, clear: agentClear } = useAgent({ onGlobeAction: handleGlobeAction });
+
+  const handleCitationClick = useCallback((citation: Citation) => {
+    if (globeControlsRef.current) {
+      globeControlsRef.current.flyTo(citation.lat, citation.lng, 1.5);
+    }
+  }, []);
 
   // Fetch density on mount
   useEffect(() => {
@@ -222,7 +245,12 @@ export default function Home() {
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[var(--bg-page)]">
       {/* Globe */}
-      <Globe points={points} onPointClick={handlePointClick} onZoomChange={handleZoomChange} />
+      <Globe
+        points={points}
+        onPointClick={handlePointClick}
+        onZoomChange={handleZoomChange}
+        onReady={(controls) => { globeControlsRef.current = controls; }}
+      />
 
       {/* Branding */}
       <div className="fixed top-3 left-3 z-50 flex items-center gap-2 sm:top-5 sm:left-6 sm:gap-3">
@@ -264,6 +292,43 @@ export default function Home() {
         onLoadMore={handleLoadMore}
         onFiltersChange={handleFiltersChange}
       />
+
+      {/* Agent Toggle */}
+      <button
+        onClick={() => setAgentOpen((o) => !o)}
+        className="fixed bottom-3 left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-6 sm:left-6 sm:h-12 sm:w-12"
+        style={{
+          background: "var(--surface-overlay)",
+          backdropFilter: "blur(12px)",
+        }}
+        aria-label="Toggle agent panel"
+      >
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path
+            d="M10 1l2.39 4.84L17.5 6.9l-3.75 3.66.89 5.17L10 13.4l-4.64 2.44.89-5.17L2.5 6.9l5.11-1.06L10 1z"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+            fill="none"
+          />
+        </svg>
+      </button>
+
+      {/* Agent Panel */}
+      <AnimatePresence>
+        {agentOpen && (
+          <AgentPanel
+            messages={agentMessages}
+            isLoading={agentLoading}
+            activeTools={activeTools}
+            onAsk={agentAsk}
+            onStop={agentStop}
+            onClear={agentClear}
+            onCitationClick={handleCitationClick}
+            onClose={() => setAgentOpen(false)}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Time Slider + Status */}
       <TimeSlider
