@@ -303,14 +303,8 @@ export default function Home() {
         }}
         aria-label="Toggle agent panel"
       >
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <path
-            d="M10 1l2.39 4.84L17.5 6.9l-3.75 3.66.89 5.17L10 13.4l-4.64 2.44.89-5.17L2.5 6.9l5.11-1.06L10 1z"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinejoin="round"
-            fill="none"
-          />
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
       </button>
 

@@ -160,7 +160,7 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
     const handleResize = () => {
       if (globeRef.current) {
         globeRef.current.width(window.innerWidth);
-        globeRef.current.height(window.innerHeight);
+        globeRef.current.height(window.innerHeight + 32);
       }
     };
     window.addEventListener("resize", handleResize);
@@ -206,7 +206,7 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
   }, [resolvedTheme, isLoaded]);
 
   return (
-    <div className="fixed inset-0 z-0 -translate-y-8">
+    <div className="fixed inset-0 z-0" style={{ top: "-2rem", bottom: 0 }}>
       {/* Radial gradient vignette overlay */}
       <div
         className="pointer-events-none absolute inset-0 z-10"
