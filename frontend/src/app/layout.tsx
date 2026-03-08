@@ -22,7 +22,8 @@ const jetbrainsMono = JetBrains_Mono({
   weight: ["400", "500", "600", "700"],
 });
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://orbisapp.co";
+const rawUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://orbisapp.co";
+const siteUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
 const title = "Orbis — Every Story, Everywhere";
 const description =
   "Explore the world's news on an interactive 3D globe. Orbis visualises geolocated headlines in real time, powered by GDELT and AI-driven summaries.";
