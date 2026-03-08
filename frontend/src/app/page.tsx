@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
@@ -26,6 +26,8 @@ export default function Home() {
 
   const [timeRange, setTimeRange] = useState<{ startTime: string; endTime: string } | null>(null);
   const [density, setDensity] = useState<{ hour: number; count: number }[]>([]);
+  const [dayOffset, setDayOffset] = useState(0);
+  const [hasOlderData, setHasOlderData] = useState(true);
 
   const MAX_PANELS = 5;
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
@@ -34,6 +36,19 @@ export default function Home() {
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false);
   const globeControlsRef = useRef<{ flyTo: (lat: number, lng: number, altitude: number) => void } | null>(null);
+
+  const handleDayChange = useCallback((newOffset: number) => {
+    const clamped = Math.max(0, Math.min(6, newOffset));
+    setDayOffset(clamped);
+    setTimeRange(null);
+  }, []);
+
+  const dayWindow = useMemo(() => {
+    if (dayOffset === 0) return null;
+    const windowEnd = new Date(Date.now() - dayOffset * 86400000);
+    const windowStart = new Date(windowEnd.getTime() - 86400000);
+    return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
+  }, [dayOffset]);
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     if (action.type === "flyTo" && globeControlsRef.current) {
@@ -50,18 +65,28 @@ export default function Home() {
     }
   }, []);
 
-  // Fetch density on mount
+  // Fetch density when dayOffset changes
   useEffect(() => {
-    fetchDensity()
-      .then(setDensity)
-      .catch(() => {});
-  }, []);
+    fetchDensity(dayOffset)
+      .then((d) => {
+        setDensity(d);
+        if (dayOffset < 6) {
+          fetchDensity(dayOffset + 1).then((older) => {
+            setHasOlderData(older.some((h) => h.count > 0));
+          }).catch(() => setHasOlderData(false));
+        } else {
+          setHasOlderData(false);
+        }
+      })
+      .catch(() => setDensity([]));
+  }, [dayOffset]);
 
-  // Fetch globe data on mount and when timeRange changes
+  // Fetch globe data on mount and when timeRange or dayOffset changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchGlobeNews("24h", 500, timeRange?.startTime, timeRange?.endTime)
+    const effectiveRange = timeRange ?? dayWindow;
+    fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
       .then((apiPoints) => {
         if (cancelled) return;
         setAllPoints(apiPointsToGlobePoints(apiPoints));
@@ -77,7 +102,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [timeRange]);
+  }, [timeRange, dayOffset, dayWindow]);
 
   // Filter points client-side — instant, no API call
   const points =
@@ -115,8 +140,8 @@ export default function Home() {
           point.locationName,
           0,
           10,
-          timeRange?.startTime,
-          timeRange?.endTime,
+          (timeRange ?? dayWindow)?.startTime,
+          (timeRange ?? dayWindow)?.endTime,
         );
         const mapped = mapArticles(apiArticles);
         updatePanel(panelId, {
@@ -141,7 +166,7 @@ export default function Home() {
         updatePanel(panelId, { summaryLoading: false });
       }
     },
-    [activeTopic, timeRange, updatePanel],
+    [activeTopic, timeRange, dayWindow, updatePanel],
   );
 
   const handleLoadMore = useCallback(
@@ -166,8 +191,8 @@ export default function Home() {
           panel.point.locationName,
           isFiltered ? 0 : panel.articles.length,
           isFiltered ? 50 : 20,
-          timeRange?.startTime,
-          timeRange?.endTime,
+          (timeRange ?? dayWindow)?.startTime,
+          (timeRange ?? dayWindow)?.endTime,
         );
         const mapped = mapArticles(apiArticles);
         const allArticles = isFiltered ? mapped : [...panel.articles, ...mapped];
@@ -180,7 +205,7 @@ export default function Home() {
         updatePanel(panelId, { loadingMore: false });
       }
     },
-    [panelQueue, activeTopic, timeRange, updatePanel],
+    [panelQueue, activeTopic, timeRange, dayWindow, updatePanel],
   );
 
   const handlePointClick = useCallback(
@@ -329,9 +354,12 @@ export default function Home() {
       <TimeSlider
         density={density}
         onChange={setTimeRange}
+        onDayChange={handleDayChange}
+        dayOffset={dayOffset}
+        hasOlderData={hasOlderData}
         totalStories={points.reduce((sum, p) => sum + p.count, 0)}
         totalLocations={points.length}
-        isLive={!apiError && !loading}
+        isLive={!apiError && !loading && dayOffset === 0}
         isLoading={loading}
         isOffline={apiError}
       />
