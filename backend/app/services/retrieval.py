@@ -67,10 +67,11 @@ async def graph_traverse(
     entity_name: str,
     rel_type: str | None = None,
     depth: int = 2,
-) -> list[dict]:
+) -> dict:
     """Traverse the knowledge graph starting from *entity_name*.
 
-    Returns connected nodes up to *depth* hops (capped at 3).
+    Returns connected nodes up to *depth* hops (capped at 3), plus the
+    source articles that establish those relationships.
     """
     depth = min(depth, 3)
 
@@ -78,11 +79,12 @@ async def graph_traverse(
         pool = await get_pool()
 
         start = await pool.fetchrow(
-            "SELECT id FROM kg_nodes WHERE name ILIKE '%' || $1 || '%' LIMIT 1",
+            "SELECT id, type, name FROM kg_nodes WHERE name ILIKE '%' || $1 || '%' "
+            "ORDER BY similarity(name, $1) DESC LIMIT 1",
             entity_name,
         )
         if start is None:
-            return []
+            return {"entity": None, "connections": [], "articles": []}
 
         start_id = start["id"]
 
@@ -104,6 +106,8 @@ async def graph_traverse(
                     n.type,
                     n.name,
                     e.rel_type,
+                    e.weight,
+                    e.article_id,
                     1 AS depth
                 FROM kg_edges e
                 JOIN kg_nodes n
@@ -119,6 +123,8 @@ async def graph_traverse(
                     n2.type,
                     n2.name,
                     e2.rel_type,
+                    e2.weight,
+                    e2.article_id,
                     t.depth + 1
                 FROM traverse t
                 JOIN kg_edges e2
@@ -131,16 +137,41 @@ async def graph_traverse(
                 WHERE t.depth < {depth_param}
                 {"AND e2.rel_type = $2" if rel_type else ""}
             )
-            SELECT DISTINCT id, type, name, rel_type, depth
+            SELECT DISTINCT id, type, name, rel_type, weight, article_id, depth
             FROM traverse
+            ORDER BY depth, weight DESC
             LIMIT {limit_param}
         """
 
         rows = await pool.fetch(query, *params)
-        return [dict(r) for r in rows]
+        connections = [dict(r) for r in rows]
+
+        # Collect unique article IDs from traversal edges
+        article_ids = list({r["article_id"] for r in rows if r["article_id"]})
+
+        articles: list[dict] = []
+        if article_ids:
+            art_rows = await pool.fetch(
+                """
+                SELECT id, title, source_url, source_name, latitude, longitude,
+                       published_at, sentiment_score
+                FROM articles
+                WHERE id = ANY($1::uuid[])
+                ORDER BY published_at DESC
+                LIMIT 15
+                """,
+                article_ids,
+            )
+            articles = [dict(r) for r in art_rows]
+
+        return {
+            "entity": {"id": str(start["id"]), "type": start["type"], "name": start["name"]},
+            "connections": connections,
+            "articles": articles,
+        }
     except Exception:
         logger.error("Graph traversal failed.", exc_info=True)
-        return []
+        return {"entity": None, "connections": [], "articles": []}
 
 
 async def keyword_search(
@@ -231,8 +262,8 @@ async def trending_topics(hours: int = 24) -> list[dict]:
 async def entity_lookup(name: str) -> dict:
     """Look up a knowledge-graph entity by fuzzy name match.
 
-    Returns ``{"node": ..., "connections": [...]}`` or
-    ``{"node": None, "connections": []}`` if not found.
+    Returns ``{"node": ..., "connections": [...], "articles": [...]}``
+    or ``{"node": None, "connections": [], "articles": []}`` if not found.
     """
     try:
         pool = await get_pool()
@@ -249,14 +280,14 @@ async def entity_lookup(name: str) -> dict:
         )
 
         if node_row is None:
-            return {"node": None, "connections": []}
+            return {"node": None, "connections": [], "articles": []}
 
         node = dict(node_row)
         node_id = node["id"]
 
         conn_rows = await pool.fetch(
             """
-            SELECT n.id, n.type, n.name, e.rel_type, n.metadata::text
+            SELECT n.id, n.type, n.name, e.rel_type, e.weight, n.metadata::text
             FROM kg_edges e
             JOIN kg_nodes n
                 ON n.id = CASE
@@ -270,7 +301,26 @@ async def entity_lookup(name: str) -> dict:
             node_id,
         )
 
-        return {"node": node, "connections": [dict(r) for r in conn_rows]}
+        # Fetch articles linked to this entity via MENTIONED_IN edges
+        art_rows = await pool.fetch(
+            """
+            SELECT DISTINCT a.id, a.title, a.source_url, a.source_name,
+                   a.latitude, a.longitude, a.published_at, a.sentiment_score
+            FROM kg_edges e
+            JOIN articles a ON a.id = e.article_id
+            WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
+              AND e.article_id IS NOT NULL
+            ORDER BY a.published_at DESC
+            LIMIT 10
+            """,
+            node_id,
+        )
+
+        return {
+            "node": node,
+            "connections": [dict(r) for r in conn_rows],
+            "articles": [dict(r) for r in art_rows],
+        }
     except Exception:
         logger.error("Entity lookup failed.", exc_info=True)
-        return {"node": None, "connections": []}
+        return {"node": None, "connections": [], "articles": []}
