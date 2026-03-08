@@ -170,7 +170,7 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
             answer_text = _OFF_TOPIC_ANSWER
             yield {
                 "event": "token",
-                "data": json.dumps({"text": answer_text}),
+                "data": json.dumps({"token": answer_text}),
             }
             await _save_history(conv_id, history, question, answer_text)
             yield {
@@ -209,7 +209,7 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
             chunk = answer_text[i : i + chunk_size]
             yield {
                 "event": "token",
-                "data": json.dumps({"text": chunk}),
+                "data": json.dumps({"token": chunk}),
             }
 
         # Step 5: Save history
