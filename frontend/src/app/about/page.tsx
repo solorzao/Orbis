@@ -55,55 +55,87 @@ export default function AboutPage() {
           line-height: 1.75;
           margin: 0;
         }
+        .about-divider {
+          max-width: 640px;
+          margin: 0 auto 2.5rem;
+          padding: 0 1.5rem;
+        }
+        .about-divider-line {
+          height: 1px;
+          background: linear-gradient(
+            90deg,
+            transparent,
+            var(--border-subtle) 20%,
+            rgba(59,130,246,0.18) 50%,
+            var(--border-subtle) 80%,
+            transparent
+          );
+        }
         .about-features {
           max-width: 640px;
           margin: 0 auto;
           padding: 0 1.5rem 3rem;
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 1px;
-          background: var(--border-subtle);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          overflow: hidden;
-        }
-        @media (max-width: 480px) {
-          .about-features { grid-template-columns: 1fr; }
+          display: flex;
+          flex-direction: column;
+          gap: 0;
         }
         .about-feature {
-          padding: 1.5rem;
-          background: var(--bg-page);
+          display: flex;
+          gap: 1.25rem;
+          padding: 1.25rem 0;
+          border-bottom: 1px solid var(--border-subtle);
+          align-items: baseline;
+        }
+        .about-feature:last-child {
+          border-bottom: none;
+        }
+        .about-feature-num {
+          font-family: var(--font-mono);
+          font-size: 0.6875rem;
+          color: rgba(59,130,246,0.5);
+          letter-spacing: 0.05em;
+          flex-shrink: 0;
+          width: 1.5rem;
+          padding-top: 0.125rem;
+        }
+        .about-feature-content {
+          flex: 1;
         }
         .about-feature-title {
-          font-size: 0.875rem;
+          font-size: 0.9375rem;
           font-family: var(--font-heading);
-          margin: 0 0 0.375rem;
+          margin: 0 0 0.25rem;
           color: var(--text-primary);
         }
         .about-feature-desc {
           font-size: 0.8125rem;
-          line-height: 1.6;
-          color: var(--text-secondary);
+          line-height: 1.65;
+          color: var(--text-muted);
           margin: 0;
         }
         .about-cta {
           text-align: center;
-          padding: 3rem 1.5rem 4rem;
+          padding: 2rem 1.5rem 4rem;
         }
         .about-cta-link {
-          display: inline-block;
-          padding: 0.625rem 1.75rem;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.625rem 1.5rem;
           border-radius: 8px;
-          background: rgba(59,130,246,0.12);
-          border: 1px solid var(--border-accent);
-          color: var(--text-primary);
+          background: rgba(59,130,246,0.1);
+          border: 1px solid rgba(59,130,246,0.15);
+          color: var(--text-secondary);
           text-decoration: none;
           font-family: var(--font-heading);
-          font-size: 0.875rem;
-          transition: background 0.15s;
+          font-size: 0.8125rem;
+          letter-spacing: 0.01em;
+          transition: all 0.2s;
         }
         .about-cta-link:hover {
-          background: rgba(59,130,246,0.2);
+          background: rgba(59,130,246,0.18);
+          color: var(--text-primary);
+          border-color: rgba(59,130,246,0.25);
         }
       `}</style>
 
@@ -125,39 +157,58 @@ export default function AboutPage() {
         </p>
       </div>
 
+      <div className="about-divider">
+        <div className="about-divider-line" />
+      </div>
+
       <div className="about-features">
         <div className="about-feature">
-          <h3 className="about-feature-title">Real-time news data</h3>
-          <p className="about-feature-desc">
-            Sourced from the GDELT Project&nbsp;&mdash; monitoring news from
-            65+ languages and 150+ countries.
-          </p>
+          <span className="about-feature-num">01</span>
+          <div className="about-feature-content">
+            <h3 className="about-feature-title">Real-time news data</h3>
+            <p className="about-feature-desc">
+              Sourced from the GDELT Project&nbsp;&mdash; the world&apos;s largest open
+              event database, monitoring news from 65+ languages and 150+ countries.
+            </p>
+          </div>
         </div>
         <div className="about-feature">
-          <h3 className="about-feature-title">Smart clustering</h3>
-          <p className="about-feature-desc">
-            Nearby stories group together at low zoom levels and expand as you
-            zoom in.
-          </p>
+          <span className="about-feature-num">02</span>
+          <div className="about-feature-content">
+            <h3 className="about-feature-title">Smart clustering</h3>
+            <p className="about-feature-desc">
+              Nearby stories group together at low zoom levels so the globe stays
+              readable, and expand as you zoom in.
+            </p>
+          </div>
         </div>
         <div className="about-feature">
-          <h3 className="about-feature-title">AI summaries</h3>
-          <p className="about-feature-desc">
-            Cluster summaries powered by Anthropic Claude help you understand
-            regional narratives at a glance.
-          </p>
+          <span className="about-feature-num">03</span>
+          <div className="about-feature-content">
+            <h3 className="about-feature-title">AI summaries</h3>
+            <p className="about-feature-desc">
+              Cluster summaries powered by the latest LLMs help you understand
+              regional narratives at a glance.
+            </p>
+          </div>
         </div>
         <div className="about-feature">
-          <h3 className="about-feature-title">Topic filters</h3>
-          <p className="about-feature-desc">
-            Focus on conflict, politics, environment, economy, and more.
-          </p>
+          <span className="about-feature-num">04</span>
+          <div className="about-feature-content">
+            <h3 className="about-feature-title">Topic filters</h3>
+            <p className="about-feature-desc">
+              Focus on conflict, politics, environment, economy, and more.
+            </p>
+          </div>
         </div>
       </div>
 
       <div className="about-cta">
         <Link href="/" className="about-cta-link">
-          Explore the Globe
+          Explore the World
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 4l4 4-4 4" />
+          </svg>
         </Link>
       </div>
     </main>
