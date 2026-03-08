@@ -169,65 +169,88 @@ export default function TimeSlider({
         }}
       >
         {/* Time label + status */}
-        <div className="mb-2 flex items-center justify-between text-[10px] tracking-wider">
-          <div className="flex items-center gap-2">
-            {/* Status indicator */}
-            <span className="flex items-center gap-1.5">
-              {isOffline ? (
-                <span className="text-red-400 font-semibold">OFFLINE</span>
-              ) : isLoading ? (
-                <>
-                  <span className="h-2 w-2 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
-                  <span className="text-blue-400 font-semibold">LOADING</span>
-                </>
-              ) : (
-                <>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                  </span>
-                  <span className="text-emerald-400 font-semibold">LIVE</span>
-                </>
+        <div className="mb-2 text-[10px] tracking-wider">
+          {/* Row 1: status + date/time (always visible) */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {/* Status indicator */}
+              <span className="flex items-center gap-1.5">
+                {isOffline ? (
+                  <span className="text-red-400 font-semibold">OFFLINE</span>
+                ) : isLoading ? (
+                  <>
+                    <span className="h-2 w-2 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
+                    <span className="text-blue-400 font-semibold">LOADING</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                    </span>
+                    <span className="text-emerald-400 font-semibold">LIVE</span>
+                  </>
+                )}
+              </span>
+              <span className="text-[var(--text-muted)]">|</span>
+              <span className="text-[var(--text-secondary)]">{totalStories} stories</span>
+              <span className="text-[var(--text-muted)]">|</span>
+              <span className="text-[var(--text-secondary)]">{totalLocations} locations</span>
+              {/* Presets inline on desktop */}
+              <span className="hidden sm:inline-flex items-center gap-1">
+                <span className="text-[var(--text-muted)]">|</span>
+                {presets.map(({ label, hours }) => {
+                  const isActive = rangeStart === hours && rangeEnd === 0;
+                  return (
+                    <button
+                      key={label}
+                      onClick={() => handlePreset(hours)}
+                      className={`rounded-full px-2 py-0.5 text-[9px] font-semibold tracking-wide transition-colors ${
+                        isActive
+                          ? "bg-blue-500/20 text-blue-400"
+                          : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[var(--text-secondary)] font-medium">
+                {isFullRange
+                  ? windowLabel
+                  : `${windowLabel} · ${formatTime(rangeStart)} — ${formatTime(rangeEnd)}`}
+              </span>
+              {!isFullRange && (
+                <button
+                  onClick={handleReset}
+                  className="text-blue-400 hover:text-blue-300 font-medium"
+                >
+                  Reset
+                </button>
               )}
-            </span>
-            <span className="text-[var(--text-muted)]">|</span>
-            <span className="text-[var(--text-secondary)]">{totalStories} stories</span>
-            <span className="text-[var(--text-muted)]">|</span>
-            <span className="text-[var(--text-secondary)]">{totalLocations} locations</span>
-            <span className="text-[var(--text-muted)]">|</span>
-            <span className="flex items-center gap-1">
-              {presets.map(({ label, hours }) => {
-                const isActive = rangeStart === hours && rangeEnd === 0;
-                return (
-                  <button
-                    key={label}
-                    onClick={() => handlePreset(hours)}
-                    className={`rounded-full px-2 py-0.5 text-[9px] font-semibold tracking-wide transition-colors ${
-                      isActive
-                        ? "bg-blue-500/20 text-blue-400"
-                        : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[var(--text-secondary)] font-medium">
-              {isFullRange
-                ? windowLabel
-                : `${windowLabel} · ${formatTime(rangeStart)} — ${formatTime(rangeEnd)}`}
-            </span>
-            {!isFullRange && (
-              <button
-                onClick={handleReset}
-                className="text-blue-400 hover:text-blue-300 font-medium"
-              >
-                Reset
-              </button>
-            )}
+          {/* Row 2: presets on mobile only */}
+          <div className="flex items-center gap-1 mt-1.5 sm:hidden">
+            {presets.map(({ label, hours }) => {
+              const isActive = rangeStart === hours && rangeEnd === 0;
+              return (
+                <button
+                  key={label}
+                  onClick={() => handlePreset(hours)}
+                  className={`rounded-full px-2.5 py-0.5 text-[9px] font-semibold tracking-wide transition-colors ${
+                    isActive
+                      ? "bg-blue-500/20 text-blue-400"
+                      : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
