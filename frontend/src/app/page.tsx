@@ -330,6 +330,7 @@ export default function Home() {
           backdropFilter: "blur(12px)",
         }}
         aria-label="Toggle agent panel"
+        data-testid="agent-toggle"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 15a2 2 0 0 0 2 2h12l4 4V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />

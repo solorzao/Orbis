@@ -145,7 +145,7 @@ export default function TimeSlider({
   }, [formatTime]);
 
   return (
-    <div className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 flex items-center gap-2">
+    <div data-testid="time-slider" className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 flex items-center gap-2">
       {/* Left arrow — previous day */}
       <button
         onClick={() => onDayChange(dayOffset + 1)}

@@ -59,6 +59,7 @@ export default function AgentPanel({
       animate={{ x: 0 }}
       exit={{ x: "-100%" }}
       transition={{ type: "spring", damping: 28, stiffness: 300 }}
+      data-testid="agent-panel"
       className="fixed left-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-r border-[var(--border-subtle)]"
       style={{
         background: "var(--surface-panel)",
@@ -183,6 +184,7 @@ export default function AgentPanel({
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            data-testid="agent-input"
             placeholder="Ask about global events..."
             disabled={isLoading || isDisabled}
             className="flex-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-overlay)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-colors focus:border-blue-500/40 disabled:opacity-50"
