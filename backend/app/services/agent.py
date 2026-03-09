@@ -451,6 +451,12 @@ def _sanitize_tool_args(name: str, args: dict) -> dict:
             clean[k] = v[:200].strip()
         elif isinstance(v, (int, float)):
             clean[k] = v
+        elif isinstance(v, list):
+            # Sanitize list items (e.g. read_article urls)
+            clean[k] = [
+                item[:500].strip() if isinstance(item, str) else item
+                for item in v[:20]
+            ]
 
     if "limit" in clean:
         clean["limit"] = max(1, min(int(clean["limit"]), 20))
