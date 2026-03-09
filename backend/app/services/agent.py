@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import anthropic
@@ -144,8 +145,10 @@ _PLANNING_SYSTEM = (
     "stories, graph tools are essential.\n"
     "- Use read_article when the user asks for details, specifics, or deeper "
     "context about a story, or says 'tell me more', 'give me more details', "
-    "'what exactly happened'. Combine it with a search tool so you have URLs "
-    "to read. Do NOT use read_article for simple overview questions.\n\n"
+    "'what exactly happened'. For follow-up questions, you can use read_article "
+    "alone — article URLs from the previous answer will be used automatically. "
+    "For new questions, combine it with a search tool so you have URLs to read. "
+    "Do NOT use read_article for simple overview questions.\n\n"
     "If the question is NOT about news, world events, geopolitics, or current "
     "affairs, respond with: {{\"tools\": [], \"off_topic\": true}}\n\n"
     "Otherwise respond with ONLY valid JSON: {{\"tools\": [{{\"name\": \"...\", \"args\": {{...}}}}]}}\n"
@@ -296,6 +299,24 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
                 _add_article(item)
                 if len(entries) >= max_articles:
                     break
+
+    # Add standalone scraped articles that weren't matched to any search result
+    for url, sc in scraped_text.items():
+        if url not in seen_urls and len(entries) < max_articles:
+            seen_urls.add(url)
+            idx = len(entries) + 1
+            title = sc.get("title", "") or url
+            quality = sc.get("quality", "unknown")
+            parts_list = [f"[{idx}] {title}", f"  URL: {url}"]
+            parts_list.append(f"  Content ({quality}):\n    {sc['text'][:2000]}")
+            entries.append("\n".join(parts_list))
+            article_index.append({
+                "title": title,
+                "url": url,
+                "source_name": "",
+                "lat": None,
+                "lng": None,
+            })
 
     # Combine graph relationship map + numbered article entries
     parts = []
@@ -540,6 +561,29 @@ def _collect_urls(retrieval_results: list[dict]) -> list[str]:
     return urls
 
 
+def _collect_urls_from_history(history: list[dict]) -> list[str]:
+    """Extract article URLs from previous assistant messages in conversation history.
+
+    Looks for the ``[Sources: url1, url2, ...]`` block appended by ``_save_history``.
+    Returns URLs from the most recent assistant message that has them.
+    """
+    urls: list[str] = []
+    seen: set[str] = set()
+    for msg in reversed(history or []):
+        if msg.get("role") != "assistant":
+            continue
+        match = re.search(r"\[Sources: ([^\]]+)\]", msg.get("content", ""))
+        if match:
+            for url in match.group(1).split(", "):
+                url = url.strip()
+                if url and url.startswith("http") and url not in seen:
+                    seen.add(url)
+                    urls.append(url)
+            if urls:
+                break
+    return urls
+
+
 async def ask(
     question: str,
     conversation_history: list[dict] | None = None,
@@ -570,6 +614,9 @@ async def ask(
     # Step 3: Read articles (second pass) — inject URLs from first-pass results
     if wants_read:
         urls = _collect_urls(retrieval_results)
+        # Fallback: use URLs from conversation history if first-pass had none
+        if not urls:
+            urls = _collect_urls_from_history(conversation_history)
         if urls:
             read_results = await execute_retrieval([
                 {"name": "read_article", "args": {"urls": urls[:5], "question": question}}

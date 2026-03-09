@@ -17,6 +17,7 @@ from app.services.agent import (
     _OFF_TOPIC_ANSWER,
     _build_context,
     _collect_urls,
+    _collect_urls_from_history,
     _enrich_citations,
     ask,
     execute_retrieval,
@@ -109,10 +110,21 @@ async def _save_history(
     history: list[dict],
     question: str,
     answer: str,
+    citations: list[dict] | None = None,
 ) -> None:
-    """Append the latest exchange and persist to Redis (last 10 messages)."""
+    """Append the latest exchange and persist to Redis (last 10 messages).
+
+    Embeds citation URLs in the assistant message so follow-up questions
+    can discover them via ``_collect_urls_from_history``.
+    """
     history.append({"role": "user", "content": question})
-    history.append({"role": "assistant", "content": answer})
+    # Append citation URLs so follow-up read_article calls can find them
+    answer_to_store = answer
+    if citations:
+        url_list = [c["url"] for c in citations if c.get("url")]
+        if url_list:
+            answer_to_store = answer + "\n\n[Sources: " + ", ".join(url_list) + "]"
+    history.append({"role": "assistant", "content": answer_to_store})
     # Keep last 10 messages (5 exchanges)
     history = history[-10:]
 
@@ -141,7 +153,7 @@ async def ask_endpoint(body: AskRequest) -> AskResponse:
 
     result = await ask(question, history)
 
-    await _save_history(conv_id, history, question, result["answer"])
+    await _save_history(conv_id, history, question, result["answer"], result.get("citations"))
 
     return AskResponse(
         conversation_id=conv_id,
@@ -203,6 +215,9 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
         # Step 2b: Read articles (second pass)
         if wants_read:
             urls = _collect_urls(retrieval_results)
+            # Fallback: use URLs from conversation history if first-pass had none
+            if not urls:
+                urls = _collect_urls_from_history(history)
             if urls:
                 yield {"event": "retrieving", "data": json.dumps({"tool": "read_article"})}
                 read_results = await execute_retrieval([
@@ -227,7 +242,7 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
             }
 
         # Step 5: Save history
-        await _save_history(conv_id, history, question, answer_text)
+        await _save_history(conv_id, history, question, answer_text, result.get("citations"))
 
         # Step 6: Done
         yield {
