@@ -149,7 +149,7 @@ export default function AboutPage() {
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M10 12L6 8l4-4" />
           </svg>
-          Back to Globe
+          Back
         </Link>
 
         <h1 className="about-title">Orbis</h1>

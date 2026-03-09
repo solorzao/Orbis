@@ -21,36 +21,28 @@ export default function ThemeToggle() {
   // Render placeholder with same dimensions to avoid layout shift
   if (!mounted) {
     return (
-      <div
-        className="fixed top-3 right-3 z-50 flex items-center gap-1 rounded-xl border px-1 sm:top-5 sm:right-6"
-        style={pillStyle}
-      >
-        <div className="h-8 w-14 sm:h-9" />
-        <div className="h-6 w-px" style={{ background: "var(--border-subtle)" }} />
-        <div className="h-8 w-8 sm:h-9 sm:w-9" />
+      <div className="fixed top-3 right-3 z-50 flex items-center gap-2 sm:top-5 sm:right-6">
+        <div className="h-8 w-10 sm:h-9" />
+        <div className="h-8 w-8 rounded-xl border sm:h-9 sm:w-9" style={pillStyle} />
       </div>
     );
   }
 
   return (
-    <div
-      className="fixed top-3 right-3 z-50 flex items-center gap-1 rounded-xl border px-1 sm:top-5 sm:right-6"
-      style={pillStyle}
-    >
+    <div className="fixed top-3 right-3 z-50 flex items-center gap-2 sm:top-5 sm:right-6">
       <Link
         href="/about"
-        className="flex h-8 items-center px-2 text-xs transition-colors sm:h-9"
+        className="flex h-8 items-center text-xs transition-colors hover:text-[var(--text-secondary)] sm:h-9"
         style={{ color: "var(--text-muted)", textDecoration: "none" }}
         title="About Orbis"
       >
         About
       </Link>
 
-      <div className="h-4 w-px" style={{ background: "var(--border-subtle)" }} />
-
       <button
         onClick={toggle}
-        className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors sm:h-9 sm:w-9"
+        className="flex h-8 w-8 items-center justify-center rounded-xl border transition-colors sm:h-9 sm:w-9"
+        style={pillStyle}
         aria-label={`Theme: ${theme}. Click to switch.`}
         title={`Theme: ${theme}`}
       >
