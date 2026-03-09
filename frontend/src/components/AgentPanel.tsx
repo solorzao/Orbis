@@ -11,6 +11,7 @@ const TOOL_LABELS: Record<string, string> = {
   keyword_search: "Keyword search",
   trending_topics: "Checking trends",
   entity_lookup: "Looking up entity",
+  read_article: "Reading articles",
 };
 
 interface AgentPanelProps {

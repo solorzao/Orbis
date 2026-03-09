@@ -83,6 +83,28 @@ RETRIEVAL_TOOLS: list[dict] = [
             "name": {"type": "string", "description": "Entity name to look up"},
         },
     },
+    {
+        "name": "read_article",
+        "description": (
+            "Fetch and read the full text of news articles by their URLs. "
+            "Use this when the user asks for details, specifics, deeper context, "
+            "or says 'tell me more' about a story. Do NOT use for simple "
+            "'what happened' questions where headlines suffice. This tool is "
+            "slower (fetches web pages) so only use when detail is needed. "
+            "Requires URLs from previously retrieved articles."
+        ),
+        "parameters": {
+            "urls": {
+                "type": "array",
+                "description": "List of article source_url strings to read (max 5)",
+                "items": {"type": "string"},
+            },
+            "question": {
+                "type": "string",
+                "description": "The user's question, used to prioritise relevant content",
+            },
+        },
+    },
 ]
 
 # Map tool names to actual retrieval functions
@@ -92,6 +114,7 @@ _TOOL_DISPATCH: dict[str, Any] = {
     "keyword_search": retrieval.keyword_search,
     "trending_topics": retrieval.trending_topics,
     "entity_lookup": retrieval.entity_lookup,
+    "read_article": retrieval.read_article,
 }
 
 # ---------------------------------------------------------------------------
@@ -118,7 +141,11 @@ _PLANNING_SYSTEM = (
     "- Use graph_traverse when you want to explore broader relationship "
     "networks (e.g. all entities connected to a person, multi-hop links).\n"
     "- For questions about patterns, networks, or recurring actors across "
-    "stories, graph tools are essential.\n\n"
+    "stories, graph tools are essential.\n"
+    "- Use read_article when the user asks for details, specifics, or deeper "
+    "context about a story, or says 'tell me more', 'give me more details', "
+    "'what exactly happened'. Combine it with a search tool so you have URLs "
+    "to read. Do NOT use read_article for simple overview questions.\n\n"
     "If the question is NOT about news, world events, geopolitics, or current "
     "affairs, respond with: {{\"tools\": [], \"off_topic\": true}}\n\n"
     "Otherwise respond with ONLY valid JSON: {{\"tools\": [{{\"name\": \"...\", \"args\": {{...}}}}]}}\n"
@@ -135,6 +162,10 @@ _SYNTHESIS_SYSTEM = (
     "relationships (e.g. CO_MENTIONED, MENTIONED_IN). Use this to explain "
     "how people, organizations, and locations are connected. When describing "
     "relationships, cite the numbered articles that establish them.\n\n"
+    "Some articles include extracted body text with a quality tag "
+    "(full/partial/meta_only). Use this text to provide richer, more detailed "
+    "answers. For meta_only sources, note that you have limited information "
+    "from that source.\n\n"
     "If the question is not about news, world events, or current affairs, "
     "politely decline and suggest the user ask about global news instead.\n\n"
     "Respond with ONLY valid JSON:\n"
@@ -195,6 +226,12 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
         if item.get("count") is not None:
             parts.append(f"  Count: {item['count']}")
 
+        # Attach scraped article text if available
+        if url and url in scraped_text:
+            sc = scraped_text[url]
+            quality = sc.get("quality", "unknown")
+            parts.append(f"  Content ({quality}):\n    {sc['text'][:2000]}")
+
         entries.append("\n".join(parts))
         article_index.append({
             "title": title,
@@ -204,9 +241,22 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
             "lng": item.get("longitude"),
         })
 
+    # Collect scraped article text keyed by URL for enriching entries
+    scraped_text: dict[str, dict] = {}
+    for result in retrieval_results:
+        if result.get("tool") == "read_article" and isinstance(result.get("result"), list):
+            for item in result["result"]:
+                url = item.get("url", "")
+                if url and item.get("text"):
+                    scraped_text[url] = item
+
     for result in retrieval_results:
         tool_name = result.get("tool", "")
         data = result.get("result", [])
+
+        # Skip read_article — its text is merged into article entries below
+        if tool_name == "read_article":
+            continue
 
         # --- Graph tools: format relationship map + linked articles ---
         if tool_name in ("graph_traverse", "entity_lookup") and isinstance(data, dict):
@@ -469,6 +519,27 @@ async def synthesize_answer(
         }
 
 
+def _collect_urls(retrieval_results: list[dict]) -> list[str]:
+    """Extract unique article URLs from first-pass retrieval results."""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for result in retrieval_results:
+        data = result.get("result", [])
+        # Graph tools return dicts with an "articles" list
+        if isinstance(data, dict):
+            items = data.get("articles", [])
+        elif isinstance(data, list):
+            items = data
+        else:
+            continue
+        for item in items:
+            url = item.get("source_url", "")
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
 async def ask(
     question: str,
     conversation_history: list[dict] | None = None,
@@ -489,13 +560,26 @@ async def ask(
             "tools_used": [],
         }
 
-    # Step 2: Retrieve
-    retrieval_results = await execute_retrieval(tool_calls)
+    # Separate read_article (second-pass) from first-pass tools
+    first_pass = [tc for tc in tool_calls if tc["name"] != "read_article"]
+    wants_read = any(tc["name"] == "read_article" for tc in tool_calls)
 
-    # Step 3: Build context
+    # Step 2: Retrieve (first pass)
+    retrieval_results = list(await execute_retrieval(first_pass)) if first_pass else []
+
+    # Step 3: Read articles (second pass) — inject URLs from first-pass results
+    if wants_read:
+        urls = _collect_urls(retrieval_results)
+        if urls:
+            read_results = await execute_retrieval([
+                {"name": "read_article", "args": {"urls": urls[:5], "question": question}}
+            ])
+            retrieval_results.extend(read_results)
+
+    # Step 4: Build context
     context, article_index = _build_context(retrieval_results)
 
-    # Step 4: Synthesize
+    # Step 5: Synthesize
     result = await synthesize_answer(question, context, conversation_history)
     result["citations"] = _enrich_citations(result.get("citations", []), article_index)
     result["tools_used"] = [tc["name"] for tc in tool_calls]

@@ -16,6 +16,7 @@ from app.middleware.security import has_injection_pattern, sanitise_text
 from app.services.agent import (
     _OFF_TOPIC_ANSWER,
     _build_context,
+    _collect_urls,
     _enrich_citations,
     ask,
     execute_retrieval,
@@ -190,13 +191,24 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
             "data": json.dumps({"tools": [tc["name"] for tc in tool_calls]}),
         }
 
-        # Step 2: Retrieve (emit one event per tool)
-        for tc in tool_calls:
-            yield {
-                "event": "retrieving",
-                "data": json.dumps({"tool": tc["name"]}),
-            }
-        retrieval_results = await execute_retrieval(tool_calls)
+        # Separate read_article (second-pass) from first-pass tools
+        first_pass = [tc for tc in tool_calls if tc["name"] != "read_article"]
+        wants_read = any(tc["name"] == "read_article" for tc in tool_calls)
+
+        # Step 2: Retrieve first-pass tools
+        for tc in first_pass:
+            yield {"event": "retrieving", "data": json.dumps({"tool": tc["name"]})}
+        retrieval_results = list(await execute_retrieval(first_pass)) if first_pass else []
+
+        # Step 2b: Read articles (second pass)
+        if wants_read:
+            urls = _collect_urls(retrieval_results)
+            if urls:
+                yield {"event": "retrieving", "data": json.dumps({"tool": "read_article"})}
+                read_results = await execute_retrieval([
+                    {"name": "read_article", "args": {"urls": urls[:5], "question": question}}
+                ])
+                retrieval_results.extend(read_results)
 
         # Step 3: Build context and synthesize
         context, article_index = _build_context(retrieval_results)

@@ -1,17 +1,20 @@
 """Retrieval functions for the Orbis embedded agent.
 
 Provides semantic search, knowledge-graph traversal, keyword filtering,
-trending-topic aggregation, and entity lookup against the Orbis database.
+trending-topic aggregation, entity lookup, and article text extraction
+against the Orbis database.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
 
 from app.config import settings
 from app.services.database import get_pool
+from app.services.scraper import extract_article_text
 
 logger = logging.getLogger("orbis.retrieval")
 
@@ -324,3 +327,29 @@ async def entity_lookup(name: str) -> dict:
     except Exception:
         logger.error("Entity lookup failed.", exc_info=True)
         return {"node": None, "connections": [], "articles": []}
+
+
+async def read_article(
+    urls: list[str],
+    question: str | None = None,
+) -> list[dict]:
+    """Fetch and extract article text from up to 5 URLs concurrently.
+
+    Returns a list of ``{"url", "title", "text", "quality"}`` dicts.
+    Quality is one of: ``"full"``, ``"partial"``, ``"meta_only"``, ``"failed"``.
+    """
+    urls = urls[:5]
+    keywords = question.split() if question else []
+
+    results = await asyncio.gather(
+        *[extract_article_text(url, keywords) for url in urls],
+        return_exceptions=True,
+    )
+
+    out: list[dict] = []
+    for r in results:
+        if isinstance(r, Exception):
+            logger.warning("read_article task failed: %s", r)
+            continue
+        out.append(r)
+    return out
