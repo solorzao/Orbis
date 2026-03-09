@@ -530,13 +530,27 @@ async def synthesize_answer(
 
         try:
             parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # LLM sometimes outputs prose before/after JSON — extract the JSON block
+            json_match = re.search(r"\{[\s\S]*\"answer\"[\s\S]*\}", text)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    parsed = None
+            else:
+                parsed = None
+
+        if parsed and "answer" in parsed:
             return {
-                "answer": parsed.get("answer", text),
+                "answer": parsed["answer"],
                 "citations": parsed.get("citations", []),
                 "globe_actions": parsed.get("globe_actions", []),
             }
-        except json.JSONDecodeError:
-            return {"answer": text, "citations": [], "globe_actions": []}
+        # Fallback: strip any trailing JSON block and use the prose as the answer
+        clean_text = re.sub(r"```json\s*\{[\s\S]*\}\s*```", "", text).strip()
+        clean_text = re.sub(r"\{[\s\S]*\"answer\"[\s\S]*\}\s*$", "", clean_text).strip()
+        return {"answer": clean_text or text, "citations": [], "globe_actions": []}
     except Exception:
         logger.error("Synthesis failed.", exc_info=True)
         return {
