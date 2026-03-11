@@ -16,6 +16,7 @@ from app.services.database import get_pool, upsert_articles
 from app.services.embeddings import generate_embeddings
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
+from app.services.ml_models import classify_topics_ml, analyze_sentiment_ml
 from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger("orbis.ingestion")
@@ -49,6 +50,7 @@ async def _ingest_from_raw_gkg() -> int:
     # Convert to DB upsert format, deduplicating by normalized title
     seen_titles: set[str] = set()
     rows = []
+    tones: list[float] = []
     for a in articles:
         title = a.get("title", "")
         if not title:
@@ -60,13 +62,11 @@ async def _ingest_from_raw_gkg() -> int:
             continue
         seen_titles.add(norm)
 
-        # Sentiment from GKG tone (scale is roughly -10 to +10)
-        tone = a.get("tone", 0.0)
-        sentiment = max(-1.0, min(1.0, tone / 10.0))
+        # Placeholders — overwritten by batch ML classification below
+        topic_tags = ["general"]
+        sentiment = 0.0
 
-        # Topic classification from title
-        topic_tags = classify_topic(title)
-
+        tones.append(a.get("tone", 0.0))
         rows.append(
             {
                 "title": title,
@@ -88,6 +88,20 @@ async def _ingest_from_raw_gkg() -> int:
                 "mentioned_locations": a.get("mentioned_locations", []),
             }
         )
+
+    # Batch ML classification (replaces per-article keyword matching)
+    if settings.ml_classification_enabled:
+        titles = [r["title"] for r in rows]
+        all_topics = classify_topics_ml(titles)
+        all_sentiments = analyze_sentiment_ml(titles)
+        for row, topics, sent in zip(rows, all_topics, all_sentiments):
+            row["topic_tags"] = topics
+            row["sentiment_score"] = sent
+    else:
+        # Fallback: keyword topic + GDELT tone
+        for row, tone in zip(rows, tones):
+            row["topic_tags"] = classify_topic(row["title"])
+            row["sentiment_score"] = max(-1.0, min(1.0, tone / 10.0))
 
     if not rows:
         logger.warning("No articles with titles to upsert.")

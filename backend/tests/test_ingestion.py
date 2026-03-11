@@ -6,6 +6,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
+from app.config import settings
+
 
 def _make_gkg_article(url="https://example.com/story", title="Test Headline"):
     """Build a dict as fetch_raw_gkg would return."""
@@ -39,12 +41,14 @@ def _mock_db_row(source_url="https://example.com/story"):
     }
 
 
-def _common_patches(articles):
+def _common_patches(articles, ml_enabled=True):
     """Return a dict of common patches for _ingest_from_raw_gkg tests."""
     mock_pool = AsyncMock()
     mock_pool.fetch = AsyncMock(return_value=[_mock_db_row(a["url"]) for a in articles])
 
-    return {
+    titled = [a for a in articles if a.get("title")]
+
+    patches = {
         "fetch_raw_gkg": patch(
             "app.services.ingestion.fetch_raw_gkg",
             new_callable=AsyncMock,
@@ -74,7 +78,24 @@ def _common_patches(articles):
             new_callable=AsyncMock,
             return_value=0,
         ),
+        "ml_enabled": patch.object(
+            settings,
+            "ml_classification_enabled",
+            ml_enabled,
+        ),
     }
+
+    if ml_enabled:
+        patches["classify_topics_ml"] = patch(
+            "app.services.ingestion.classify_topics_ml",
+            return_value=[["politics"]] * len(titled),
+        )
+        patches["analyze_sentiment_ml"] = patch(
+            "app.services.ingestion.analyze_sentiment_ml",
+            return_value=[0.5] * len(titled),
+        )
+
+    return patches
 
 
 class TestIngestFromRawGkg:
@@ -88,7 +109,9 @@ class TestIngestFromRawGkg:
         with patches["fetch_raw_gkg"], patches["scrape_titles"], \
              patches["upsert_articles"] as mock_upsert, \
              patches["invalidate"] as mock_invalidate, \
-             patches["get_pool"], patches["populate_graph"]:
+             patches["get_pool"], patches["populate_graph"], \
+             patches["ml_enabled"], patches["classify_topics_ml"], \
+             patches["analyze_sentiment_ml"]:
             count = await _ingest_from_raw_gkg()
             assert count == 1
             mock_upsert.assert_called_once()
@@ -123,12 +146,12 @@ class TestIngestFromRawGkg:
 
         articles = [_make_gkg_article()]
         articles[0]["tone"] = -7.5
-        patches = _common_patches(articles)
+        patches = _common_patches(articles, ml_enabled=False)
 
         with patches["fetch_raw_gkg"], patches["scrape_titles"], \
              patches["upsert_articles"] as mock_upsert, \
              patches["invalidate"], patches["get_pool"], \
-             patches["populate_graph"]:
+             patches["populate_graph"], patches["ml_enabled"]:
             await _ingest_from_raw_gkg()
             row = mock_upsert.call_args[0][0][0]
             assert row["sentiment_score"] == pytest.approx(-0.75)
@@ -139,12 +162,12 @@ class TestIngestFromRawGkg:
 
         articles = [_make_gkg_article()]
         articles[0]["tone"] = -15.0  # Beyond scale
-        patches = _common_patches(articles)
+        patches = _common_patches(articles, ml_enabled=False)
 
         with patches["fetch_raw_gkg"], patches["scrape_titles"], \
              patches["upsert_articles"] as mock_upsert, \
              patches["invalidate"], patches["get_pool"], \
-             patches["populate_graph"]:
+             patches["populate_graph"], patches["ml_enabled"]:
             await _ingest_from_raw_gkg()
             row = mock_upsert.call_args[0][0][0]
             assert row["sentiment_score"] == -1.0
@@ -177,3 +200,82 @@ class TestRunIngestionCycle:
         ):
             count = await run_ingestion_cycle()
             assert count == 0
+
+
+class TestMLClassificationIntegration:
+    """Verify that ML classification is wired into the ingestion pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_ml_classification_called_when_enabled(self):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [_make_gkg_article()]
+        patches = _common_patches(articles, ml_enabled=True)
+
+        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
+             patches["upsert_articles"] as mock_upsert, \
+             patches["invalidate"], patches["get_pool"], \
+             patches["populate_graph"], patches["ml_enabled"], \
+             patches["classify_topics_ml"] as mock_topics, \
+             patches["analyze_sentiment_ml"] as mock_sent:
+            await _ingest_from_raw_gkg()
+
+            mock_topics.assert_called_once_with(["Test Headline"])
+            mock_sent.assert_called_once_with(["Test Headline"])
+
+            row = mock_upsert.call_args[0][0][0]
+            assert row["topic_tags"] == ["politics"]
+            assert row["sentiment_score"] == 0.5
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_ml_disabled(self):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [_make_gkg_article()]
+        articles[0]["tone"] = 5.0
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
+             patches["upsert_articles"] as mock_upsert, \
+             patches["invalidate"], patches["get_pool"], \
+             patches["populate_graph"], patches["ml_enabled"]:
+            await _ingest_from_raw_gkg()
+
+            row = mock_upsert.call_args[0][0][0]
+            # Fallback uses GDELT tone normalization
+            assert row["sentiment_score"] == pytest.approx(0.5)
+            # Fallback uses keyword classifier (returns a list of tags)
+            assert isinstance(row["topic_tags"], list)
+
+    @pytest.mark.asyncio
+    async def test_ml_results_applied_to_multiple_articles(self):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [
+            _make_gkg_article(url="https://example.com/a", title="War breaks out"),
+            _make_gkg_article(url="https://example.com/b", title="Stock market soars"),
+        ]
+        patches = _common_patches(articles, ml_enabled=True)
+        # Override ML mocks with specific per-article results
+        patches["classify_topics_ml"] = patch(
+            "app.services.ingestion.classify_topics_ml",
+            return_value=[["conflict"], ["economy"]],
+        )
+        patches["analyze_sentiment_ml"] = patch(
+            "app.services.ingestion.analyze_sentiment_ml",
+            return_value=[-0.8, 0.7],
+        )
+
+        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
+             patches["upsert_articles"] as mock_upsert, \
+             patches["invalidate"], patches["get_pool"], \
+             patches["populate_graph"], patches["ml_enabled"], \
+             patches["classify_topics_ml"], patches["analyze_sentiment_ml"]:
+            await _ingest_from_raw_gkg()
+
+            rows = mock_upsert.call_args[0][0]
+            assert len(rows) == 2
+            assert rows[0]["topic_tags"] == ["conflict"]
+            assert rows[0]["sentiment_score"] == -0.8
+            assert rows[1]["topic_tags"] == ["economy"]
+            assert rows[1]["sentiment_score"] == 0.7
