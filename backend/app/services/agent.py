@@ -519,7 +519,7 @@ async def synthesize_answer(
         client = _get_anthropic_client()
         response = await client.messages.create(
             model=settings.haiku_model_id,
-            max_tokens=1024,
+            max_tokens=4096,
             system=_SYNTHESIS_SYSTEM,
             messages=messages,
         )
@@ -547,7 +547,20 @@ async def synthesize_answer(
                 "citations": parsed.get("citations", []),
                 "globe_actions": parsed.get("globe_actions", []),
             }
-        # Fallback: strip any trailing JSON block and use the prose as the answer
+
+        # Truncated JSON fallback: extract the answer value directly
+        answer_match = re.search(
+            r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL
+        )
+        if answer_match:
+            logger.warning("JSON truncated — extracted answer field via regex.")
+            return {
+                "answer": answer_match.group(1).replace('\\"', '"').replace("\\n", "\n"),
+                "citations": [],
+                "globe_actions": [],
+            }
+
+        # Final fallback: strip any JSON wrapper and use prose as the answer
         clean_text = re.sub(r"```json\s*\{[\s\S]*\}\s*```", "", text).strip()
         clean_text = re.sub(r"\{[\s\S]*\"answer\"[\s\S]*\}\s*$", "", clean_text).strip()
         return {"answer": clean_text or text, "citations": [], "globe_actions": []}
