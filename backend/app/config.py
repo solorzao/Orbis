@@ -50,6 +50,26 @@ class Settings:
     embedding_model: str = "text-embedding-3-small"
     embedding_batch_size: int = 100
 
+    # --- ML classification ---
+    ml_topic_model: str = field(
+        default_factory=lambda: _env(
+            "ML_TOPIC_MODEL", "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
+        )
+    )
+    ml_sentiment_model: str = field(
+        default_factory=lambda: _env(
+            "ML_SENTIMENT_MODEL",
+            "lxyuan/distilbert-base-multilingual-cased-sentiments-student",
+        )
+    )
+    ml_classification_enabled: bool = field(
+        default_factory=lambda: _env("ML_CLASSIFICATION_ENABLED", "true").lower()
+        in ("true", "1", "yes")
+    )
+    ml_batch_size: int = field(
+        default_factory=lambda: _env_int("ML_BATCH_SIZE", 32)
+    )
+
     # --- GDELT ---
     gdelt_doc_base_url: str = field(
         default_factory=lambda: _env(
