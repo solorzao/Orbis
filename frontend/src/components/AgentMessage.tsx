@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 import type { AgentMessage as AgentMessageType, Citation } from "@/hooks/useAgent";
 
 interface AgentMessageProps {
@@ -25,12 +26,22 @@ export default function AgentMessage({ message, onCitationClick }: AgentMessageP
             : "border border-[var(--border-subtle)] bg-[var(--surface-card)] text-[var(--text-secondary)]"
         }`}
       >
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">
-          {message.content}
+        <div className="prose-sm prose-invert max-w-none text-sm leading-relaxed text-inherit">
+          <ReactMarkdown
+            components={{
+              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+              strong: ({ children }) => <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>,
+              ul: ({ children }) => <ul className="mb-2 list-disc pl-4">{children}</ul>,
+              ol: ({ children }) => <ol className="mb-2 list-decimal pl-4">{children}</ol>,
+              li: ({ children }) => <li className="mb-0.5">{children}</li>,
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
           {message.status === "streaming" && (
             <svg className="ml-1 inline-block h-4 w-4 animate-spin text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25" /><path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" /></svg>
           )}
-        </p>
+        </div>
 
         {/* Citations */}
         {message.citations && message.citations.length > 0 && (
