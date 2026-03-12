@@ -7,6 +7,7 @@ titles, and upserts them into the database.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -92,8 +93,10 @@ async def _ingest_from_raw_gkg() -> int:
     # Batch ML classification (replaces per-article keyword matching)
     if settings.ml_classification_enabled:
         titles = [r["title"] for r in rows]
-        all_topics = await classify_topics_ml(titles)
-        all_sentiments = await analyze_sentiment_ml(titles)
+        all_topics, all_sentiments = await asyncio.gather(
+            classify_topics_ml(titles),
+            analyze_sentiment_ml(titles),
+        )
         for row, topics, sent in zip(rows, all_topics, all_sentiments):
             row["topic_tags"] = topics
             row["sentiment_score"] = sent
