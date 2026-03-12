@@ -69,6 +69,12 @@ class Settings:
     ml_batch_size: int = field(
         default_factory=lambda: _env_int("ML_BATCH_SIZE", 32)
     )
+    ml_functions_url: str = field(
+        default_factory=lambda: _env("ML_FUNCTIONS_URL", "")
+    )
+    ml_functions_key: str = field(
+        default_factory=lambda: _env("ML_FUNCTIONS_KEY", "")
+    )
 
     # --- GDELT ---
     gdelt_doc_base_url: str = field(
