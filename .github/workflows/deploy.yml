@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
+      functions: ${{ steps.filter.outputs.functions }}
       database: ${{ steps.filter.outputs.database }}
     steps:
       - uses: actions/checkout@v6
@@ -24,6 +25,8 @@ jobs:
           filters: |
             backend:
               - 'backend/**'
+            functions:
+              - 'functions/**'
             database:
               - 'database/**'
 
@@ -64,6 +67,32 @@ jobs:
           resourceGroup: rg-orbis
           containerAppName: orbis-api
           imageToDeploy: ghcr.io/${{ github.repository_owner }}/orbis-api:${{ github.sha }}
+
+  deploy-functions:
+    name: Deploy ML Functions to Azure
+    needs: changes
+    if: needs.changes.outputs.functions == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Install Azure Functions Core Tools
+        run: |
+          curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
+          sudo mv microsoft.gpg /etc/apt/trusted.gpg.d/microsoft.gpg
+          sudo sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/microsoft-ubuntu-$(lsb_release -cs)-prod $(lsb_release -cs) main" > /etc/apt/sources.list.d/dotnetdev.list'
+          sudo apt-get update
+          sudo apt-get install -y azure-functions-core-tools-4
+      - name: Deploy to Azure Functions
+        working-directory: functions/ml-classify
+        run: |
+          pip install -r requirements.txt
+          func azure functionapp publish orbis-ml-classify --python
 
   run-migrations:
     name: Run Database Migrations
