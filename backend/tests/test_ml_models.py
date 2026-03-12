@@ -1,80 +1,53 @@
 """Tests for ML-based topic classification and sentiment analysis.
 
-All tests mock the HuggingFace pipelines so they run fast without
-downloading models.
+All tests mock HTTP calls to Azure Functions so they run without
+a live function app.
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
-from app.services.ml_models import (
-    _LABEL_TO_TAG,
-    _NLI_LABELS,
-    analyze_sentiment_ml,
-    classify_topics_ml,
-    reset_pipelines,
-)
-
-
-@pytest.fixture(autouse=True)
-def _reset():
-    """Ensure singleton pipelines are clean before each test."""
-    reset_pipelines()
-    yield
-    reset_pipelines()
+from app.services.ml_models import analyze_sentiment_ml, classify_topics_ml
 
 
 # ---------------------------------------------------------------------------
-# Helpers — fake pipeline callables
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_topic_output(labels: list[str], scores: list[float]) -> dict:
-    return {"labels": labels, "scores": scores}
+def _mock_response(json_data: dict, status_code: int = 200) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = json_data
+    resp.raise_for_status = MagicMock()
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "error", request=MagicMock(), response=resp
+        )
+    return resp
 
 
-def _fake_topic_pipeline(texts, *, candidate_labels=None, multi_label=False):
-    """Return a plausible zero-shot output for each text."""
-    results = []
-    for text in (texts if isinstance(texts, list) else [texts]):
-        text_lower = text.lower()
-        scores = []
-        for label in _NLI_LABELS:
-            # Give 0.8 to any label whose Orbis tag appears in the title
-            tag = _LABEL_TO_TAG[label]
-            scores.append(0.8 if tag in text_lower else 0.1)
-        results.append({"labels": _NLI_LABELS, "scores": scores})
-    return results
+def _mock_client(post_return: MagicMock | Exception) -> AsyncMock:
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    if isinstance(post_return, Exception):
+        client.post = AsyncMock(side_effect=post_return)
+    else:
+        client.post = AsyncMock(return_value=post_return)
+    return client
 
 
-def _fake_sentiment_pipeline(texts):
-    """Return fake sentiment scores based on keywords."""
-    results = []
-    for text in texts:
-        text_lower = text.lower()
-        if any(w in text_lower for w in ("great", "victory", "peace", "wonderful")):
-            scores = [
-                {"label": "positive", "score": 0.85},
-                {"label": "neutral", "score": 0.10},
-                {"label": "negative", "score": 0.05},
-            ]
-        elif any(w in text_lower for w in ("war", "crisis", "disaster", "killed")):
-            scores = [
-                {"label": "positive", "score": 0.05},
-                {"label": "neutral", "score": 0.10},
-                {"label": "negative", "score": 0.85},
-            ]
-        else:
-            scores = [
-                {"label": "positive", "score": 0.33},
-                {"label": "neutral", "score": 0.34},
-                {"label": "negative", "score": 0.33},
-            ]
-        results.append(scores)
-    return results
+_ML_SETTINGS = {
+    "ml_classification_enabled": True,
+    "ml_functions_url": "https://my-func.azurewebsites.net/api",
+    "ml_functions_key": "test-key",
+    "ml_batch_size": 100,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -83,62 +56,68 @@ def _fake_sentiment_pipeline(texts):
 
 
 class TestClassifyTopicsMl:
-    def test_empty_input(self):
-        assert classify_topics_ml([]) == []
+    @pytest.mark.asyncio
+    async def test_empty_input(self):
+        assert await classify_topics_ml([]) == []
 
-    @patch("app.services.ml_models._get_topic_pipeline")
-    def test_returns_correct_types_and_shapes(self, mock_get):
-        mock_get.return_value = _fake_topic_pipeline
-        titles = ["conflict in the region", "new technology unveiled", "some random headline"]
-        result = classify_topics_ml(titles)
-
-        assert len(result) == 3
-        for tags in result:
-            assert isinstance(tags, list)
-            for tag in tags:
-                assert isinstance(tag, str)
-
-    @patch("app.services.ml_models._get_topic_pipeline")
-    def test_assigns_matching_topic(self, mock_get):
-        mock_get.return_value = _fake_topic_pipeline
-        result = classify_topics_ml(["conflict escalates in the region"])
-        assert result == [["conflict"]]
-
-    @patch("app.services.ml_models._get_topic_pipeline")
-    def test_assigns_general_when_no_match(self, mock_get):
-        """When no label exceeds threshold, fall back to 'general'."""
-
-        def pipeline_low_scores(texts, *, candidate_labels=None, multi_label=False):
-            return [{"labels": _NLI_LABELS, "scores": [0.1] * len(_NLI_LABELS)} for _ in texts]
-
-        mock_get.return_value = pipeline_low_scores
-        result = classify_topics_ml(["a completely ambiguous headline"])
-        assert result == [["general"]]
-
-    @patch("app.services.ml_models._get_topic_pipeline")
-    def test_fallback_when_pipeline_is_none(self, mock_get):
-        """When the pipeline fails to load (returns None), use keyword fallback."""
-        mock_get.return_value = None
-        result = classify_topics_ml(["President signs new legislation"])
+    @pytest.mark.asyncio
+    async def test_disabled_flag_uses_keyword_fallback(self):
+        with patch("app.services.ml_models.settings") as s:
+            s.ml_classification_enabled = False
+            result = await classify_topics_ml(["President announces new policy"])
         assert "politics" in result[0]
 
-    @patch("app.services.ml_models._get_topic_pipeline")
-    def test_batch_processing_multiple_batches(self, mock_get):
-        """Titles exceeding batch_size are split into multiple batches."""
-        mock_get.return_value = _fake_topic_pipeline
-        titles = [f"headline {i}" for i in range(50)]
-        with patch("app.services.ml_models.settings") as mock_settings:
-            mock_settings.ml_classification_enabled = True
-            mock_settings.ml_batch_size = 10
-            result = classify_topics_ml(titles)
-        assert len(result) == 50
-
-    def test_disabled_flag_uses_keyword_fallback(self):
-        """When ml_classification_enabled is False, use keyword classifier."""
-        with patch("app.services.ml_models.settings") as mock_settings:
-            mock_settings.ml_classification_enabled = False
-            result = classify_topics_ml(["President announces new policy"])
+    @pytest.mark.asyncio
+    async def test_no_url_uses_keyword_fallback(self):
+        with patch("app.services.ml_models.settings") as s:
+            s.ml_classification_enabled = True
+            s.ml_functions_url = ""
+            result = await classify_topics_ml(["President announces new policy"])
         assert "politics" in result[0]
+
+    @pytest.mark.asyncio
+    async def test_calls_function_and_returns_topics(self):
+        resp = _mock_response({"topics": [["politics"], ["economy"]], "timing_ms": 50})
+        client = _mock_client(resp)
+
+        with patch("app.services.ml_models.settings", **_ML_SETTINGS):
+            with patch("app.services.ml_models.httpx.AsyncClient", return_value=client):
+                result = await classify_topics_ml(["title 1", "title 2"])
+
+        assert result == [["politics"], ["economy"]]
+
+    @pytest.mark.asyncio
+    async def test_http_error_falls_back_to_keywords(self):
+        client = _mock_client(httpx.ConnectError("timeout"))
+
+        with patch("app.services.ml_models.settings", **_ML_SETTINGS):
+            with patch("app.services.ml_models.httpx.AsyncClient", return_value=client):
+                result = await classify_topics_ml(["President signs treaty"])
+
+        assert "politics" in result[0]
+
+    @pytest.mark.asyncio
+    async def test_chunked_parallel_calls(self):
+        """Titles exceeding _CHUNK_SIZE are split into parallel HTTP calls."""
+
+        def _dynamic_post(*args, **kwargs):
+            n = len(kwargs.get("json", {}).get("titles", []))
+            return _mock_response({"topics": [["general"]] * n, "timing_ms": 50})
+
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.post = AsyncMock(side_effect=_dynamic_post)
+
+        with patch("app.services.ml_models.settings", **_ML_SETTINGS):
+            with patch("app.services.ml_models.httpx.AsyncClient", return_value=client):
+                with patch("app.services.ml_models._CHUNK_SIZE", 100):
+                    titles = [f"headline {i}" for i in range(250)]
+                    result = await classify_topics_ml(titles)
+
+        assert len(result) == 250
+        # Should have been 3 chunks: 100 + 100 + 50
+        assert client.post.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -147,67 +126,55 @@ class TestClassifyTopicsMl:
 
 
 class TestAnalyzeSentimentMl:
-    def test_empty_input(self):
-        assert analyze_sentiment_ml([]) == []
+    @pytest.mark.asyncio
+    async def test_empty_input(self):
+        assert await analyze_sentiment_ml([]) == []
 
-    @patch("app.services.ml_models._get_sentiment_pipeline")
-    def test_returns_correct_types_and_shapes(self, mock_get):
-        mock_get.return_value = _fake_sentiment_pipeline
-        titles = ["Great news", "War erupts", "Weather today"]
-        result = analyze_sentiment_ml(titles)
-
-        assert len(result) == 3
-        for score in result:
-            assert isinstance(score, float)
-            assert -1.0 <= score <= 1.0
-
-    @patch("app.services.ml_models._get_sentiment_pipeline")
-    def test_positive_headline_scores_positive(self, mock_get):
-        mock_get.return_value = _fake_sentiment_pipeline
-        result = analyze_sentiment_ml(["Great victory for peace"])
-        assert result[0] > 0.0
-
-    @patch("app.services.ml_models._get_sentiment_pipeline")
-    def test_negative_headline_scores_negative(self, mock_get):
-        mock_get.return_value = _fake_sentiment_pipeline
-        result = analyze_sentiment_ml(["War and disaster strike the region"])
-        assert result[0] < 0.0
-
-    @patch("app.services.ml_models._get_sentiment_pipeline")
-    def test_neutral_headline_near_zero(self, mock_get):
-        mock_get.return_value = _fake_sentiment_pipeline
-        result = analyze_sentiment_ml(["Some ordinary headline"])
-        assert abs(result[0]) < 0.1
-
-    @patch("app.services.ml_models._get_sentiment_pipeline")
-    def test_scores_rounded_to_four_decimal_places(self, mock_get):
-        mock_get.return_value = _fake_sentiment_pipeline
-        result = analyze_sentiment_ml(["Great news"])
-        for score in result:
-            # Check that string representation has at most 4 decimal places
-            parts = str(score).split(".")
-            if len(parts) == 2:
-                assert len(parts[1]) <= 4
-
-    @patch("app.services.ml_models._get_sentiment_pipeline")
-    def test_fallback_when_pipeline_is_none(self, mock_get):
-        """When the pipeline fails to load, return 0.0 for all."""
-        mock_get.return_value = None
-        result = analyze_sentiment_ml(["Terrible disaster", "Great victory"])
+    @pytest.mark.asyncio
+    async def test_disabled_flag_returns_zeros(self):
+        with patch("app.services.ml_models.settings") as s:
+            s.ml_classification_enabled = False
+            result = await analyze_sentiment_ml(["Great news", "Bad news"])
         assert result == [0.0, 0.0]
 
-    @patch("app.services.ml_models._get_sentiment_pipeline")
-    def test_batch_processing_multiple_batches(self, mock_get):
-        mock_get.return_value = _fake_sentiment_pipeline
-        titles = [f"headline {i}" for i in range(50)]
-        with patch("app.services.ml_models.settings") as mock_settings:
-            mock_settings.ml_classification_enabled = True
-            mock_settings.ml_batch_size = 10
-            result = analyze_sentiment_ml(titles)
-        assert len(result) == 50
+    @pytest.mark.asyncio
+    async def test_calls_function_and_returns_scores(self):
+        resp = _mock_response({"sentiments": [0.8, -0.5], "timing_ms": 30})
+        client = _mock_client(resp)
 
-    def test_disabled_flag_returns_zeros(self):
-        with patch("app.services.ml_models.settings") as mock_settings:
-            mock_settings.ml_classification_enabled = False
-            result = analyze_sentiment_ml(["Great news", "Bad news"])
+        with patch("app.services.ml_models.settings", **_ML_SETTINGS):
+            with patch("app.services.ml_models.httpx.AsyncClient", return_value=client):
+                result = await analyze_sentiment_ml(["Good news", "Bad news"])
+
+        assert result == [0.8, -0.5]
+
+    @pytest.mark.asyncio
+    async def test_http_error_returns_zeros(self):
+        client = _mock_client(httpx.ConnectError("timeout"))
+
+        with patch("app.services.ml_models.settings", **_ML_SETTINGS):
+            with patch("app.services.ml_models.httpx.AsyncClient", return_value=client):
+                result = await analyze_sentiment_ml(["Good news", "Bad news"])
+
         assert result == [0.0, 0.0]
+
+    @pytest.mark.asyncio
+    async def test_chunked_parallel_calls(self):
+
+        def _dynamic_post(*args, **kwargs):
+            n = len(kwargs.get("json", {}).get("titles", []))
+            return _mock_response({"sentiments": [0.0] * n, "timing_ms": 30})
+
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.post = AsyncMock(side_effect=_dynamic_post)
+
+        with patch("app.services.ml_models.settings", **_ML_SETTINGS):
+            with patch("app.services.ml_models.httpx.AsyncClient", return_value=client):
+                with patch("app.services.ml_models._CHUNK_SIZE", 100):
+                    titles = [f"headline {i}" for i in range(250)]
+                    result = await analyze_sentiment_ml(titles)
+
+        assert len(result) == 250
+        assert client.post.call_count == 3
