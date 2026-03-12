@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-_CHUNK_SIZE = 100  # Max titles per HTTP request (Option C: chunked parallel)
+_CHUNK_SIZE = 500  # Max titles per HTTP request — keep high to avoid multi-instance scale-out
 _HTTP_TIMEOUT = 120.0  # seconds — generous for cold starts
 
 
