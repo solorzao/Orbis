@@ -1,0 +1,3 @@
+azure-functions
+torch>=2.0.0
+transformers>=4.40.0
