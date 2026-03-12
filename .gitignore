@@ -29,5 +29,9 @@ infra/*.tfplan
 # Test results
 frontend/test-results/
 
+# Azure Functions
+local.settings.json
+.python_packages/
+
 # Claude
 .claude/
