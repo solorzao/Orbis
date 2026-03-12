@@ -1,18 +1,18 @@
 """ML-based topic classification and sentiment analysis.
 
-Manages lazy-loaded singleton HuggingFace transformer pipelines for:
-- Zero-shot topic classification (DeBERTa v3)
-- Multilingual sentiment analysis (DistilBERT)
-
-Falls back to keyword-based classification / neutral sentiment on failure.
+When ML_FUNCTIONS_URL is configured, calls Azure Functions for inference.
+Otherwise falls back to keyword-based classification / neutral sentiment.
 Includes detailed performance logging for capacity planning.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
+
+import httpx
 
 from app.config import settings
 from app.services.topic_classifier import classify_topic
@@ -20,94 +20,49 @@ from app.services.topic_classifier import classify_topic
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Label mapping: NLI hypothesis labels → Orbis topic tags
+# Constants
 # ---------------------------------------------------------------------------
-_NLI_LABELS: list[str] = [
-    "armed conflict and war",
-    "politics and government",
-    "economy and financial markets",
-    "technology and innovation",
-    "health and medicine",
-    "environment and climate",
-    "sports",
-]
+_CHUNK_SIZE = 100  # Max titles per HTTP request (Option C: chunked parallel)
+_HTTP_TIMEOUT = 120.0  # seconds — generous for cold starts
 
-_LABEL_TO_TAG: dict[str, str] = {
-    "armed conflict and war": "conflict",
-    "politics and government": "politics",
-    "economy and financial markets": "economy",
-    "technology and innovation": "technology",
-    "health and medicine": "health",
-    "environment and climate": "environment",
-    "sports": "sports",
-}
-
-_TOPIC_THRESHOLD: float = 0.4
 
 # ---------------------------------------------------------------------------
-# Singleton pipeline holders
+# Internal helpers
 # ---------------------------------------------------------------------------
-_topic_pipeline: Any | None = None
-_sentiment_pipeline: Any | None = None
-_topic_load_failed: bool = False
-_sentiment_load_failed: bool = False
 
 
-def _get_topic_pipeline() -> Any | None:
-    """Return the zero-shot classification pipeline, loading it on first call."""
-    global _topic_pipeline, _topic_load_failed
-    if _topic_pipeline is not None:
-        return _topic_pipeline
-    if _topic_load_failed:
-        return None
+async def _call_function(
+    endpoint: str,
+    titles: list[str],
+) -> dict[str, Any] | None:
+    """POST titles to an Azure Function endpoint, return parsed JSON or None."""
+    url = f"{settings.ml_functions_url.rstrip('/')}/{endpoint}"
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if settings.ml_functions_key:
+        headers["x-functions-key"] = settings.ml_functions_key
+
     try:
-        from transformers import pipeline  # type: ignore[import-untyped]
-
-        t0 = time.perf_counter()
-        _topic_pipeline = pipeline(
-            "zero-shot-classification",
-            model=settings.ml_topic_model,
-        )
-        elapsed = time.perf_counter() - t0
-        logger.info(
-            "Topic model loaded in %.2fs  model=%s",
-            elapsed,
-            settings.ml_topic_model,
-        )
-        return _topic_pipeline
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.post(url, json={"titles": titles}, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
     except Exception:
-        _topic_load_failed = True
-        logger.exception("Failed to load topic classification model — falling back to keywords")
-        return None
-
-
-def _get_sentiment_pipeline() -> Any | None:
-    """Return the sentiment analysis pipeline, loading it on first call."""
-    global _sentiment_pipeline, _sentiment_load_failed
-    if _sentiment_pipeline is not None:
-        return _sentiment_pipeline
-    if _sentiment_load_failed:
-        return None
-    try:
-        from transformers import pipeline  # type: ignore[import-untyped]
-
-        t0 = time.perf_counter()
-        _sentiment_pipeline = pipeline(
-            "text-classification",
-            model=settings.ml_sentiment_model,
-            top_k=None,
+        logger.exception(
+            "ML function call failed  endpoint=%s  titles=%d", endpoint, len(titles)
         )
-        elapsed = time.perf_counter() - t0
-        logger.info(
-            "Sentiment model loaded in %.2fs  model=%s",
-            elapsed,
-            settings.ml_sentiment_model,
-        )
-        return _sentiment_pipeline
-    except Exception:
-        _sentiment_load_failed = True
-        logger.exception("Failed to load sentiment model — falling back to 0.0")
         return None
+
+
+async def _call_chunked(
+    endpoint: str,
+    titles: list[str],
+) -> list[dict[str, Any] | None]:
+    """Split titles into chunks and call the function in parallel."""
+    chunks = [titles[i : i + _CHUNK_SIZE] for i in range(0, len(titles), _CHUNK_SIZE)]
+    results = await asyncio.gather(
+        *[_call_function(endpoint, chunk) for chunk in chunks]
+    )
+    return list(results)
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +70,11 @@ def _get_sentiment_pipeline() -> Any | None:
 # ---------------------------------------------------------------------------
 
 
-def classify_topics_ml(titles: list[str]) -> list[list[str]]:
-    """Batch-classify titles into Orbis topic tags using zero-shot NLI.
+async def classify_topics_ml(titles: list[str]) -> list[list[str]]:
+    """Classify titles into Orbis topic tags.
 
-    Returns a list of tag lists (one per title). Falls back to keyword-based
-    classification when the ML model is unavailable or ML is disabled.
+    Routes to Azure Functions when ml_functions_url is set,
+    otherwise falls back to keyword classifier.
     """
     if not titles:
         return []
@@ -127,65 +82,49 @@ def classify_topics_ml(titles: list[str]) -> list[list[str]]:
     if not settings.ml_classification_enabled:
         return [classify_topic(t) for t in titles]
 
-    pipe = _get_topic_pipeline()
-    if pipe is None:
+    if not settings.ml_functions_url:
+        logger.warning("ML enabled but ML_FUNCTIONS_URL not set — using keyword fallback")
         return [classify_topic(t) for t in titles]
 
-    batch_size = settings.ml_batch_size
-    all_results: list[list[str]] = []
-
     t0 = time.perf_counter()
-    for start in range(0, len(titles), batch_size):
-        batch = titles[start : start + batch_size]
-        batch_t0 = time.perf_counter()
-        try:
-            outputs = pipe(batch, candidate_labels=_NLI_LABELS, multi_label=True)
-            # Single-item input returns a dict instead of a list
-            if isinstance(outputs, dict):
-                outputs = [outputs]
-        except Exception:
-            logger.exception(
-                "Topic classification failed for batch %d–%d, falling back to keywords",
-                start,
-                start + len(batch),
+    chunk_results = await _call_chunked("classify-topics", titles)
+
+    all_topics: list[list[str]] = []
+    chunk_start = 0
+    for i, result in enumerate(chunk_results):
+        chunk_end = min(chunk_start + _CHUNK_SIZE, len(titles))
+        chunk_titles = titles[chunk_start:chunk_end]
+
+        if result is not None and "topics" in result:
+            all_topics.extend(result["topics"])
+            logger.info(
+                "Topic chunk %d: %d titles, function reported %dms",
+                i,
+                len(chunk_titles),
+                result.get("timing_ms", 0),
             )
-            all_results.extend(classify_topic(t) for t in batch)
-            continue
+        else:
+            # Fallback to keyword classifier for this chunk
+            logger.warning("Topic chunk %d failed — using keyword fallback for %d titles", i, len(chunk_titles))
+            all_topics.extend(classify_topic(t) for t in chunk_titles)
 
-        batch_elapsed = time.perf_counter() - batch_t0
-        logger.info(
-            "Topic batch %d–%d: %d articles in %.2fs (%.1f articles/s)",
-            start,
-            start + len(batch),
-            len(batch),
-            batch_elapsed,
-            len(batch) / batch_elapsed if batch_elapsed > 0 else 0,
-        )
+        chunk_start = chunk_end
 
-        for output in outputs:
-            tags: list[str] = []
-            for label, score in zip(output["labels"], output["scores"]):
-                if score >= _TOPIC_THRESHOLD:
-                    tag = _LABEL_TO_TAG.get(label)
-                    if tag:
-                        tags.append(tag)
-            all_results.append(tags if tags else ["general"])
-
-    total_elapsed = time.perf_counter() - t0
+    total_ms = round((time.perf_counter() - t0) * 1000)
     logger.info(
-        "Topic classification total: %d articles in %.2fs (%.1f articles/s)",
+        "Topic classification total: %d titles in %dms (%.1f titles/s)",
         len(titles),
-        total_elapsed,
-        len(titles) / total_elapsed if total_elapsed > 0 else 0,
+        total_ms,
+        len(titles) / (total_ms / 1000) if total_ms > 0 else 0,
     )
-    return all_results
+    return all_topics
 
 
-def analyze_sentiment_ml(titles: list[str]) -> list[float]:
-    """Batch-analyze sentiment of titles, returning scores in [-1.0, 1.0].
+async def analyze_sentiment_ml(titles: list[str]) -> list[float]:
+    """Analyze sentiment of titles, returning scores in [-1.0, 1.0].
 
-    Score = P(positive) - P(negative), clamped to [-1, 1], rounded to 4 dp.
-    Falls back to 0.0 when the ML model is unavailable or ML is disabled.
+    Routes to Azure Functions when ml_functions_url is set,
+    otherwise returns 0.0 for all titles.
     """
     if not titles:
         return []
@@ -193,61 +132,38 @@ def analyze_sentiment_ml(titles: list[str]) -> list[float]:
     if not settings.ml_classification_enabled:
         return [0.0] * len(titles)
 
-    pipe = _get_sentiment_pipeline()
-    if pipe is None:
+    if not settings.ml_functions_url:
+        logger.warning("ML enabled but ML_FUNCTIONS_URL not set — returning 0.0 fallback")
         return [0.0] * len(titles)
 
-    batch_size = settings.ml_batch_size
-    all_scores: list[float] = []
-
     t0 = time.perf_counter()
-    for start in range(0, len(titles), batch_size):
-        batch = titles[start : start + batch_size]
-        batch_t0 = time.perf_counter()
-        try:
-            outputs = pipe(batch)
-        except Exception:
-            logger.exception(
-                "Sentiment analysis failed for batch %d–%d, falling back to 0.0",
-                start,
-                start + len(batch),
+    chunk_results = await _call_chunked("analyze-sentiment", titles)
+
+    all_scores: list[float] = []
+    chunk_start = 0
+    for i, result in enumerate(chunk_results):
+        chunk_end = min(chunk_start + _CHUNK_SIZE, len(titles))
+        chunk_titles = titles[chunk_start:chunk_end]
+
+        if result is not None and "sentiments" in result:
+            all_scores.extend(result["sentiments"])
+            logger.info(
+                "Sentiment chunk %d: %d titles, function reported %dms",
+                i,
+                len(chunk_titles),
+                result.get("timing_ms", 0),
             )
-            all_scores.extend(0.0 for _ in batch)
-            continue
+        else:
+            logger.warning("Sentiment chunk %d failed — returning 0.0 for %d titles", i, len(chunk_titles))
+            all_scores.extend(0.0 for _ in chunk_titles)
 
-        batch_elapsed = time.perf_counter() - batch_t0
-        logger.info(
-            "Sentiment batch %d–%d: %d articles in %.2fs (%.1f articles/s)",
-            start,
-            start + len(batch),
-            len(batch),
-            batch_elapsed,
-            len(batch) / batch_elapsed if batch_elapsed > 0 else 0,
-        )
+        chunk_start = chunk_end
 
-        for label_scores in outputs:
-            prob: dict[str, float] = {}
-            for item in label_scores:
-                prob[item["label"].lower()] = item["score"]
-            raw = prob.get("positive", 0.0) - prob.get("negative", 0.0)
-            clamped = max(-1.0, min(1.0, raw))
-            all_scores.append(round(clamped, 4))
-
-    total_elapsed = time.perf_counter() - t0
+    total_ms = round((time.perf_counter() - t0) * 1000)
     logger.info(
-        "Sentiment analysis total: %d articles in %.2fs (%.1f articles/s)",
+        "Sentiment analysis total: %d titles in %dms (%.1f titles/s)",
         len(titles),
-        total_elapsed,
-        len(titles) / total_elapsed if total_elapsed > 0 else 0,
+        total_ms,
+        len(titles) / (total_ms / 1000) if total_ms > 0 else 0,
     )
     return all_scores
-
-
-def reset_pipelines() -> None:
-    """Reset cached pipelines — useful for testing."""
-    global _topic_pipeline, _sentiment_pipeline
-    global _topic_load_failed, _sentiment_load_failed
-    _topic_pipeline = None
-    _sentiment_pipeline = None
-    _topic_load_failed = False
-    _sentiment_load_failed = False
