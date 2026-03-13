@@ -21,7 +21,12 @@ from app.models.news import (
 )
 from app.services.ai_summary import summarise_cluster, summarise_selection
 from app.services.cache import get_cached, set_cached
-from app.services.database import get_articles_in_bounds, get_globe_points, get_hourly_density, get_nearby_articles, get_topic_counts
+from app.services.database import (
+    get_articles_in_bounds,
+    get_globe_points,
+    get_hourly_density,
+    get_topic_counts,
+)
 
 logger = logging.getLogger(__name__)
 

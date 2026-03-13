@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 
 interface TimeSliderProps {
   density: { hour: number; count: number }[];
@@ -32,6 +32,13 @@ export default function TimeSlider({
   // rangeEnd = hours ago for the END of window (smaller number = more recent)
   const [rangeStart, setRangeStart] = useState(24); // 24h ago
   const [rangeEnd, setRangeEnd] = useState(0); // now
+  // Reset range when dayOffset prop changes (React-recommended pattern)
+  const [prevDay, setPrevDay] = useState(dayOffset);
+  if (prevDay !== dayOffset) {
+    setPrevDay(dayOffset);
+    setRangeStart(24);
+    setRangeEnd(0);
+  }
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isFullRange = rangeStart === 24 && rangeEnd === 0;
@@ -106,17 +113,15 @@ export default function TimeSlider({
     [emitChange],
   );
 
+  // Capture "now" in state initializer (allowed to be impure) to keep memo pure.
+  const [mountTs] = useState(() => Date.now());
   const windowLabel = useMemo(() => {
     if (dayOffset === 0) return "Today";
     if (dayOffset === 1) return "Yesterday";
-    const d = new Date(Date.now() - dayOffset * 86400000);
+    const d = new Date(mountTs - dayOffset * 86400000);
     return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-  }, [dayOffset]);
+  }, [dayOffset, mountTs]);
 
-  useEffect(() => {
-    setRangeStart(24);
-    setRangeEnd(0);
-  }, [dayOffset]);
 
   // Sparkline max for scaling
   const maxCount = useMemo(

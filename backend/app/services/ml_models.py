@@ -105,7 +105,10 @@ async def classify_topics_ml(titles: list[str]) -> list[list[str]]:
             )
         else:
             # Fallback to keyword classifier for this chunk
-            logger.warning("Topic chunk %d failed — using keyword fallback for %d titles", i, len(chunk_titles))
+            logger.warning(
+                "Topic chunk %d failed — using keyword fallback for %d titles",
+                i, len(chunk_titles),
+            )
             all_topics.extend(classify_topic(t) for t in chunk_titles)
 
         chunk_start = chunk_end
@@ -154,7 +157,10 @@ async def analyze_sentiment_ml(titles: list[str]) -> list[float]:
                 result.get("timing_ms", 0),
             )
         else:
-            logger.warning("Sentiment chunk %d failed — returning 0.0 for %d titles", i, len(chunk_titles))
+            logger.warning(
+                "Sentiment chunk %d failed — returning 0.0 for %d titles",
+                i, len(chunk_titles),
+            )
             all_scores.extend(0.0 for _ in chunk_titles)
 
         chunk_start = chunk_end

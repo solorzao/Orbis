@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import html as html_mod
 import io
 import logging
 import re
 import zipfile
 from datetime import datetime, timezone
-from typing import Any
-from urllib.parse import urlparse
 
 import httpx
-
-from app.models.news import NewsArticle
-from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger(__name__)
 
@@ -333,8 +327,24 @@ async def fetch_raw_gkg() -> list[dict]:
         # GKG field 11 = V1PERSONS, field 13 = V1ORGANIZATIONS (semicolon-delimited)
         persons_raw = fields[11] if len(fields) > 11 else ""
         orgs_raw = fields[13] if len(fields) > 13 else ""
-        persons = list(dict.fromkeys(p.strip().title() for p in persons_raw.split(";") if p.strip())) if persons_raw else []
-        organizations = list(dict.fromkeys(o.strip().title() for o in orgs_raw.split(";") if o.strip())) if orgs_raw else []
+        persons = (
+            list(dict.fromkeys(
+                p.strip().title()
+                for p in persons_raw.split(";")
+                if p.strip()
+            ))
+            if persons_raw
+            else []
+        )
+        organizations = (
+            list(dict.fromkeys(
+                o.strip().title()
+                for o in orgs_raw.split(";")
+                if o.strip()
+            ))
+            if orgs_raw
+            else []
+        )
         themes = fields[7] if len(fields) > 7 else ""
         image_url = fields[18].strip() if len(fields) > 18 else ""
         date_str = fields[1] if len(fields) > 1 else ""

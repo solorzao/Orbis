@@ -46,7 +46,11 @@ RETRIEVAL_TOOLS: list[dict] = [
         ),
         "parameters": {
             "entity_name": {"type": "string", "description": "Starting entity name"},
-            "rel_type": {"type": "string", "description": "Optional relationship type filter", "default": None},
+            "rel_type": {
+                "type": "string",
+                "description": "Optional relationship type filter",
+                "default": None,
+            },
             "depth": {"type": "integer", "description": "Max traversal depth (1-3)", "default": 2},
         },
     },
@@ -57,18 +61,42 @@ RETRIEVAL_TOOLS: list[dict] = [
             "Supports terms, topic, country code, and time range."
         ),
         "parameters": {
-            "terms": {"type": "string", "description": "Keyword(s) to search in titles", "default": None},
-            "topic": {"type": "string", "description": "Topic tag filter", "default": None},
-            "country": {"type": "string", "description": "Two-letter country code", "default": None},
-            "time_range": {"type": "string", "description": "PostgreSQL interval, e.g. '24 hours'", "default": None},
-            "limit": {"type": "integer", "description": "Max results (default 10)", "default": 10},
+            "terms": {
+                "type": "string",
+                "description": "Keyword(s) to search in titles",
+                "default": None,
+            },
+            "topic": {
+                "type": "string",
+                "description": "Topic tag filter",
+                "default": None,
+            },
+            "country": {
+                "type": "string",
+                "description": "Two-letter country code",
+                "default": None,
+            },
+            "time_range": {
+                "type": "string",
+                "description": "PostgreSQL interval, e.g. '24 hours'",
+                "default": None,
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results (default 10)",
+                "default": 10,
+            },
         },
     },
     {
         "name": "trending_topics",
         "description": "Return the top-20 trending topics over a recent time window.",
         "parameters": {
-            "hours": {"type": "integer", "description": "Lookback window in hours (default 24)", "default": 24},
+            "hours": {
+                "type": "integer",
+                "description": "Lookback window in hours (default 24)",
+                "default": 24,
+            },
         },
     },
     {
@@ -151,7 +179,8 @@ _PLANNING_SYSTEM = (
     "Do NOT use read_article for simple overview questions.\n\n"
     "If the question is NOT about news, world events, geopolitics, or current "
     "affairs, respond with: {{\"tools\": [], \"off_topic\": true}}\n\n"
-    "Otherwise respond with ONLY valid JSON: {{\"tools\": [{{\"name\": \"...\", \"args\": {{...}}}}]}}\n"
+    "Otherwise respond with ONLY valid JSON: "
+    "{{\"tools\": [{{\"name\": \"...\", \"args\": {{...}}}}]}}\n"
     "Do not include any other text."
 )
 
@@ -184,7 +213,10 @@ def _get_anthropic_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
-def _build_context(retrieval_results: list[dict], max_articles: int | None = None) -> tuple[str, list[dict]]:
+def _build_context(
+    retrieval_results: list[dict],
+    max_articles: int | None = None,
+) -> tuple[str, list[dict]]:
     """Deduplicate and format retrieval results as numbered entries.
 
     Handles both article results (from semantic/keyword search) and

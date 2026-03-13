@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import time
@@ -144,7 +143,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
         # --- API key check ---
         if not _check_api_key(request):
-            logger.warning("Rejected request to %s — bad API key from %s", path, _client_ip(request))
+            logger.warning(
+                "Rejected request to %s — bad API key from %s", path, _client_ip(request),
+            )
             return JSONResponse({"detail": "Invalid or missing API key."}, status_code=403)
 
         # --- Rate limiting ---

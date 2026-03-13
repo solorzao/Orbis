@@ -11,7 +11,6 @@ Results are cached in Redis with a 24-hour TTL keyed by URL hash.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from typing import Any
@@ -36,7 +35,11 @@ def _cache_key(url: str) -> str:
     return f"scrape:{h}"
 
 
-def _smart_truncate(text: str, question_keywords: list[str], max_words: int = _MAX_TEXT_WORDS) -> str:
+def _smart_truncate(
+    text: str,
+    question_keywords: list[str],
+    max_words: int = _MAX_TEXT_WORDS,
+) -> str:
     """Truncate text to ~max_words, prioritising keyword-relevant paragraphs.
 
     Splits text into paragraphs, scores each by keyword hits, then assembles
@@ -183,5 +186,8 @@ async def extract_article_text(
     except Exception:
         pass  # caching is best-effort
 
-    logger.info("Extracted %s quality from %s (%d chars)", result["quality"], url, len(result.get("text", "")))
+    logger.info(
+        "Extracted %s quality from %s (%d chars)",
+        result["quality"], url, len(result.get("text", "")),
+    )
     return result

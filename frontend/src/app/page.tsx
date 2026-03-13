@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
@@ -33,6 +33,10 @@ export default function Home() {
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
 
+  // Snapshot of "now" captured at mount and when the user changes the day,
+  // so derived date math stays pure during render.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false);
   const globeControlsRef = useRef<{ flyTo: (lat: number, lng: number, altitude: number) => void } | null>(null);
@@ -41,14 +45,17 @@ export default function Home() {
     const clamped = Math.max(0, Math.min(6, newOffset));
     setDayOffset(clamped);
     setTimeRange(null);
+    setNowTs(Date.now());
+    setLoading(true);
   }, []);
 
-  const dayWindow = useMemo(() => {
-    if (dayOffset === 0) return null;
-    const windowEnd = new Date(Date.now() - dayOffset * 86400000);
-    const windowStart = new Date(windowEnd.getTime() - 86400000);
-    return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
-  }, [dayOffset]);
+  const dayWindow = dayOffset === 0
+    ? null
+    : (() => {
+        const windowEnd = new Date(nowTs - dayOffset * 86400000);
+        const windowStart = new Date(windowEnd.getTime() - 86400000);
+        return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
+      })();
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     if (action.type === "flyTo" && globeControlsRef.current) {
@@ -87,7 +94,6 @@ export default function Home() {
   // Fetch globe data on mount and when timeRange or dayOffset changes
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     const effectiveRange = timeRange ?? dayWindow;
     fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
       .then((apiPoints) => {
@@ -358,7 +364,7 @@ export default function Home() {
       {/* Time Slider + Status */}
       <TimeSlider
         density={density}
-        onChange={setTimeRange}
+        onChange={(range) => { setTimeRange(range); setLoading(true); }}
         onDayChange={handleDayChange}
         dayOffset={dayOffset}
         hasOlderData={hasOlderData}

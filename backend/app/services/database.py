@@ -311,7 +311,7 @@ async def get_globe_points(
     if not rows:
         logger.warning("No articles in last %dh — falling back to all data.", timespan_hours)
         # Rebuild query without time filter and renumber params ($1=cell, $2=limit)
-        fallback_query = f"""
+        fallback_query = """
             WITH clustered AS (
                 SELECT
                     FLOOR(latitude / $1) * $1 + $1 / 2  AS lat,

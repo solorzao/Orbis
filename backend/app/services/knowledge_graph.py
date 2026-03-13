@@ -75,7 +75,8 @@ async def populate_graph(articles: list[dict]) -> int:
                         json.dumps({}),
                     )
                     await conn.execute(
-                        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, weight, article_id) "
+                        "INSERT INTO kg_edges (source_node_id, "
+                        "target_node_id, rel_type, weight, article_id) "
                         "VALUES ($1, $2, $3, 1, $4)",
                         person_node_id,
                         article_node_id,
@@ -100,7 +101,8 @@ async def populate_graph(articles: list[dict]) -> int:
                         json.dumps({}),
                     )
                     await conn.execute(
-                        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, weight, article_id) "
+                        "INSERT INTO kg_edges (source_node_id, "
+                        "target_node_id, rel_type, weight, article_id) "
                         "VALUES ($1, $2, $3, 1, $4)",
                         org_node_id,
                         article_node_id,
@@ -127,7 +129,8 @@ async def populate_graph(articles: list[dict]) -> int:
                         }),
                     )
                     await conn.execute(
-                        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, weight, article_id) "
+                        "INSERT INTO kg_edges (source_node_id, "
+                        "target_node_id, rel_type, weight, article_id) "
                         "VALUES ($1, $2, $3, 1, $4)",
                         article_node_id,
                         location_node_id,
@@ -151,7 +154,8 @@ async def populate_graph(articles: list[dict]) -> int:
                         json.dumps({}),
                     )
                     await conn.execute(
-                        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, weight, article_id) "
+                        "INSERT INTO kg_edges (source_node_id, "
+                        "target_node_id, rel_type, weight, article_id) "
                         "VALUES ($1, $2, $3, 1, $4)",
                         article_node_id,
                         topic_node_id,
@@ -181,7 +185,8 @@ async def populate_graph(articles: list[dict]) -> int:
                         }),
                     )
                     await conn.execute(
-                        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, weight, article_id) "
+                        "INSERT INTO kg_edges (source_node_id, "
+                        "target_node_id, rel_type, weight, article_id) "
                         "VALUES ($1, $2, $3, 1, $4)",
                         loc_node_id,
                         article_node_id,
@@ -203,7 +208,8 @@ async def populate_graph(articles: list[dict]) -> int:
                     )
                     if updated == "UPDATE 0":
                         await conn.execute(
-                            "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, weight, article_id) "
+                            "INSERT INTO kg_edges (source_node_id, "
+                        "target_node_id, rel_type, weight, article_id) "
                             "VALUES ($1, $2, $3, 1, $4)",
                             node_a,
                             node_b,
