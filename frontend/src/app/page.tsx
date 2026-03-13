@@ -287,14 +287,14 @@ export default function Home() {
           src="/Orbis_logo_50_resize.png"
           alt="Orbis"
           className="h-7 w-7 sm:h-10 sm:w-10"
-          style={{ filter: "drop-shadow(0 0 12px rgba(59, 130, 246, 0.4))" }}
+          style={{ filter: "drop-shadow(0 0 12px rgba(0, 212, 255, 0.5))" }}
         />
         <div>
           <h1
             className="text-sm font-bold tracking-[0.2em] text-[var(--text-primary)] uppercase sm:text-lg"
             style={{
               fontFamily: "var(--font-brand), sans-serif",
-              textShadow: "0 0 30px rgba(59, 130, 246, 0.3)",
+              textShadow: "0 0 30px rgba(0, 212, 255, 0.4)",
             }}
           >
             Orbis

@@ -2,18 +2,19 @@
 
 :root,
 [data-theme="dark"] {
-  --bg-page: #030712;
-  --surface-panel: rgba(8, 12, 24, 0.82);
-  --surface-card: rgba(15, 20, 35, 0.6);
-  --surface-overlay: rgba(8, 12, 24, 0.65);
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-accent: rgba(59, 130, 246, 0.12);
-  --vignette: rgba(3, 7, 18, 0.6);
-  --shadow: rgba(0, 0, 0, 0.4);
-  --inset-highlight: rgba(255, 255, 255, 0.03);
+  --bg-page: #020a10;
+  --surface-panel: rgba(4, 16, 28, 0.88);
+  --surface-card: rgba(6, 20, 36, 0.7);
+  --surface-overlay: rgba(4, 14, 26, 0.75);
+  --text-primary: #c8e6f8;
+  --text-secondary: #6eaac8;
+  --text-muted: #3a7090;
+  --border-subtle: rgba(0, 212, 255, 0.08);
+  --border-accent: rgba(0, 212, 255, 0.2);
+  --vignette: rgba(2, 6, 14, 0.7);
+  --shadow: rgba(0, 0, 0, 0.5);
+  --inset-highlight: rgba(0, 212, 255, 0.04);
+  --accent-cyan: #00d4ff;
 }
 
 [data-theme="light"] {
@@ -63,12 +64,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(0, 212, 255, 0.15);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(59, 130, 246, 0.3);
+  background: rgba(0, 212, 255, 0.3);
 }
 
 /* Shimmer animation for loading skeletons */
@@ -79,6 +80,43 @@ body {
   100% {
     transform: translateX(100%);
   }
+}
+
+/* Holographic scanline overlay */
+@keyframes scanline-sweep {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+.scanlines {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 212, 255, 0.018) 2px,
+    rgba(0, 212, 255, 0.018) 4px
+  );
+}
+
+.scanlines::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 120px;
+  background: linear-gradient(
+    transparent,
+    rgba(0, 212, 255, 0.04),
+    transparent
+  );
+  animation: scanline-sweep 8s linear infinite;
+}
+
+[data-theme="light"] .scanlines {
+  background: none;
+}
+[data-theme="light"] .scanlines::before {
+  display: none;
 }
 
 /* Globe tooltip styling override */
