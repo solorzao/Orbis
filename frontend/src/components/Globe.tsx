@@ -150,8 +150,8 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
 
     // -- Holographic command-center material --
     const mat = globe.globeMaterial();
-    mat.color = new THREE.Color(0x0a1a2e);       // dark navy tint over texture
-    mat.emissive = new THREE.Color(0x063040);     // subtle cyan self-glow
+    mat.color = new THREE.Color(0x0a1a2e); // dark navy tint over texture
+    mat.emissive = new THREE.Color(0x063040); // subtle cyan self-glow
     mat.emissiveIntensity = 0.6;
     mat.shininess = 30;
 

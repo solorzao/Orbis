@@ -43,9 +43,7 @@ test.describe("News Panel", () => {
       const panel = page.getByTestId("news-panel");
       if (await panel.isVisible().catch(() => false)) {
         // Panel opened — verify articles
-        await expect(
-          page.locator(`text=${MOCK_ARTICLES[0].title}`),
-        ).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(`text=${MOCK_ARTICLES[0].title}`)).toBeVisible({ timeout: 5000 });
         return;
       }
     }

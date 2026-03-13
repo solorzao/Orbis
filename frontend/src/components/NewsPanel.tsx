@@ -107,10 +107,10 @@ export default function NewsPanel({
 }: NewsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(
-    () => new Set(savedFilters?.topics ?? [])
+    () => new Set(savedFilters?.topics ?? []),
   );
   const [selectedSentiment, setSelectedSentiment] = useState<string | null>(
-    savedFilters?.sentiment ?? null
+    savedFilters?.sentiment ?? null,
   );
   const [searchQuery, setSearchQuery] = useState(savedFilters?.search ?? "");
   const [filterSummary, setFilterSummary] = useState<string | null>(savedFilterSummary ?? null);
@@ -145,9 +145,7 @@ export default function NewsPanel({
     if (!point) return [];
     let result = point.articles;
     if (selectedTopics.size > 0) {
-      result = result.filter((a) =>
-        a.topicTags.some((t) => selectedTopics.has(t))
-      );
+      result = result.filter((a) => a.topicTags.some((t) => selectedTopics.has(t)));
     }
     if (selectedSentiment) {
       result = result.filter((a) => {
@@ -163,7 +161,8 @@ export default function NewsPanel({
     return result;
   }, [point?.articles, selectedTopics, selectedSentiment, searchQuery]);
 
-  const hasActiveFilters = selectedTopics.size > 0 || selectedSentiment !== null || searchQuery.trim() !== "";
+  const hasActiveFilters =
+    selectedTopics.size > 0 || selectedSentiment !== null || searchQuery.trim() !== "";
 
   const MAX_SUMMARIZE = 10;
   const canSummarize = hasActiveFilters && filteredArticles.length >= 2;
@@ -172,7 +171,9 @@ export default function NewsPanel({
     if (!canSummarize || filterSummaryLoading) return;
     setFilterSummaryLoading(true);
     try {
-      const headlines = filteredArticles.slice(0, MAX_SUMMARIZE).map((a) => `${a.title} (${a.sourceName})`);
+      const headlines = filteredArticles
+        .slice(0, MAX_SUMMARIZE)
+        .map((a) => `${a.title} (${a.sourceName})`);
       const result = await fetchSelectionSummary(headlines, point?.locationName);
       setFilterSummary(result.summary);
     } catch {
@@ -347,12 +348,12 @@ export default function NewsPanel({
                         onClick={() => setSelectedSentiment((prev) => (prev === key ? null : key))}
                         title={title}
                         className={`flex h-5 w-5 items-center justify-center rounded-full transition-all ${
-                          selectedSentiment === key
-                            ? ""
-                            : "opacity-50 hover:opacity-80"
+                          selectedSentiment === key ? "" : "opacity-50 hover:opacity-80"
                         }`}
                         style={{
-                          ...(selectedSentiment === key ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` } : {}),
+                          ...(selectedSentiment === key
+                            ? { boxShadow: `0 0 0 1px transparent, 0 0 0 3px ${color}` }
+                            : {}),
                         }}
                       >
                         <span
@@ -366,7 +367,11 @@ export default function NewsPanel({
                   {/* Topic pills — wrap freely, with right padding to avoid sentiment dots */}
                   <div className="flex flex-wrap items-center gap-1.5 pr-24">
                     <button
-                      onClick={() => { setSelectedTopics(new Set()); setSelectedSentiment(null); setSearchQuery(""); }}
+                      onClick={() => {
+                        setSelectedTopics(new Set());
+                        setSelectedSentiment(null);
+                        setSearchQuery("");
+                      }}
                       className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors ${
                         !hasActiveFilters
                           ? "bg-blue-500/20 text-blue-400"
@@ -415,7 +420,12 @@ export default function NewsPanel({
                     className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
                   >
                     <circle cx="4.5" cy="4.5" r="3" stroke="currentColor" strokeWidth="1.2" />
-                    <path d="M7 7L9 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    <path
+                      d="M7 7L9 9"
+                      stroke="currentColor"
+                      strokeWidth="1.2"
+                      strokeLinecap="round"
+                    />
                   </svg>
                 </div>
               </div>
@@ -576,36 +586,48 @@ export default function NewsPanel({
                 ))}
               </AnimatePresence>
               {hasActiveFilters && filteredArticles.length === 0 && point.articles.length > 0 && (
-                <div className="rounded-xl border border-[var(--border-subtle)] p-4 text-center" style={{ background: "var(--surface-card)" }}>
-                  <p className="text-sm text-[var(--text-muted)]">No stories match the selected filters.</p>
+                <div
+                  className="rounded-xl border border-[var(--border-subtle)] p-4 text-center"
+                  style={{ background: "var(--surface-card)" }}
+                >
+                  <p className="text-sm text-[var(--text-muted)]">
+                    No stories match the selected filters.
+                  </p>
                 </div>
               )}
               {/* Show more button — visible as long as there are unloaded articles */}
-              {!articlesLoading && point.articles.length > 0 &&
+              {!articlesLoading &&
+                point.articles.length > 0 &&
                 point.articles.length < point.count && (
-                <div className="mt-3 flex justify-center">
-                  <button
-                    onClick={() => onLoadMore?.(
-                      hasActiveFilters
-                        ? { topics: Array.from(selectedTopics), sentiment: selectedSentiment, search: searchQuery }
-                        : undefined
-                    )}
-                    disabled={loadingMore}
-                    className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-4 py-2 text-xs font-medium text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/5 disabled:opacity-50"
-                  >
-                    {loadingMore ? (
-                      <>
-                        <span className="h-3 w-3 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
-                        Loading...
-                      </>
-                    ) : hasActiveFilters ? (
-                      "Load more stories"
-                    ) : (
-                      `Show more (${point.count - point.articles.length} remaining)`
-                    )}
-                  </button>
-                </div>
-              )}
+                  <div className="mt-3 flex justify-center">
+                    <button
+                      onClick={() =>
+                        onLoadMore?.(
+                          hasActiveFilters
+                            ? {
+                                topics: Array.from(selectedTopics),
+                                sentiment: selectedSentiment,
+                                search: searchQuery,
+                              }
+                            : undefined,
+                        )
+                      }
+                      disabled={loadingMore}
+                      className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-4 py-2 text-xs font-medium text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/5 disabled:opacity-50"
+                    >
+                      {loadingMore ? (
+                        <>
+                          <span className="h-3 w-3 animate-spin rounded-full border border-blue-400/30 border-t-blue-400" />
+                          Loading...
+                        </>
+                      ) : hasActiveFilters ? (
+                        "Load more stories"
+                      ) : (
+                        `Show more (${point.count - point.articles.length} remaining)`
+                      )}
+                    </button>
+                  </div>
+                )}
             </div>
           </div>
 

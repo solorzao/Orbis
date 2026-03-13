@@ -21,9 +21,7 @@ test.describe("Agent Panel", () => {
   test("agent panel shows empty state prompt", async ({ page }) => {
     await page.getByTestId("agent-toggle").click();
     await expect(page.locator("text=Ask about the news")).toBeVisible();
-    await expect(
-      page.locator("text=Ask questions about global events"),
-    ).toBeVisible();
+    await expect(page.locator("text=Ask questions about global events")).toBeVisible();
   });
 
   test("close button hides agent panel", async ({ page }) => {
@@ -42,14 +40,10 @@ test.describe("Agent Panel", () => {
     await input.press("Enter");
 
     // User message should appear
-    await expect(
-      page.locator("text=What is happening in France?"),
-    ).toBeVisible();
+    await expect(page.locator("text=What is happening in France?")).toBeVisible();
 
     // Assistant response should stream in
-    await expect(
-      page.locator("text=France recently announced"),
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=France recently announced")).toBeVisible({ timeout: 5000 });
   });
 
   test("send button is disabled when input is empty", async ({ page }) => {
@@ -67,9 +61,9 @@ test.describe("Agent Panel", () => {
     await input.press("Enter");
 
     // Wait for the citation pill to appear
-    await expect(
-      page.locator("text=France announces new climate policy"),
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=France announces new climate policy")).toBeVisible({
+      timeout: 5000,
+    });
   });
 
   test("clear button resets conversation", async ({ page }) => {
@@ -100,8 +94,6 @@ test.describe("Agent Panel", () => {
     await input.fill("Test");
     await input.press("Enter");
 
-    await expect(
-      page.locator("text=temporarily unavailable"),
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=temporarily unavailable")).toBeVisible({ timeout: 5000 });
   });
 });

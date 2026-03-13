@@ -161,33 +161,23 @@ export function buildAgentSSE(options: {
  */
 export async function mockAllApiRoutes(page: Page) {
   // Globe points
-  await page.route("**/api/news?*", (route) =>
-    route.fulfill({ json: MOCK_GLOBE_POINTS }),
-  );
+  await page.route("**/api/news?*", (route) => route.fulfill({ json: MOCK_GLOBE_POINTS }));
   await page.route("**/api/news", (route) => {
     if (route.request().url().includes("/api/news/")) return route.fallback();
     return route.fulfill({ json: MOCK_GLOBE_POINTS });
   });
 
   // Cluster articles
-  await page.route("**/api/news/cluster*", (route) =>
-    route.fulfill({ json: MOCK_ARTICLES }),
-  );
+  await page.route("**/api/news/cluster*", (route) => route.fulfill({ json: MOCK_ARTICLES }));
 
   // Cluster summary
-  await page.route("**/api/news/summary*", (route) =>
-    route.fulfill({ json: MOCK_SUMMARY }),
-  );
+  await page.route("**/api/news/summary*", (route) => route.fulfill({ json: MOCK_SUMMARY }));
 
   // Density
-  await page.route("**/api/news/density*", (route) =>
-    route.fulfill({ json: MOCK_DENSITY }),
-  );
+  await page.route("**/api/news/density*", (route) => route.fulfill({ json: MOCK_DENSITY }));
 
   // Topics
-  await page.route("**/api/topics*", (route) =>
-    route.fulfill({ json: MOCK_TOPICS }),
-  );
+  await page.route("**/api/topics*", (route) => route.fulfill({ json: MOCK_TOPICS }));
 
   // Selection summary
   await page.route("**/api/news/summarize-selection*", (route) =>
@@ -200,10 +190,7 @@ export async function mockAllApiRoutes(page: Page) {
 /**
  * Mock the agent streaming endpoint.
  */
-export async function mockAgentRoute(
-  page: Page,
-  options?: Parameters<typeof buildAgentSSE>[0],
-) {
+export async function mockAgentRoute(page: Page, options?: Parameters<typeof buildAgentSSE>[0]) {
   const defaults = {
     answer:
       "Based on my research, France recently announced a new climate policy with ambitious carbon reduction targets.",

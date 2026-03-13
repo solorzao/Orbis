@@ -30,7 +30,9 @@ export default function AgentMessage({ message, onCitationClick }: AgentMessageP
           <ReactMarkdown
             components={{
               p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-              strong: ({ children }) => <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>,
+              strong: ({ children }) => (
+                <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>
+              ),
               ul: ({ children }) => <ul className="mb-2 list-disc pl-4">{children}</ul>,
               ol: ({ children }) => <ol className="mb-2 list-decimal pl-4">{children}</ol>,
               li: ({ children }) => <li className="mb-0.5">{children}</li>,
@@ -39,7 +41,16 @@ export default function AgentMessage({ message, onCitationClick }: AgentMessageP
             {message.content}
           </ReactMarkdown>
           {message.status === "streaming" && (
-            <svg className="ml-1 inline-block h-4 w-4 animate-spin text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25" /><path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" /></svg>
+            <svg
+              className="ml-1 inline-block h-4 w-4 animate-spin text-blue-400"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+            >
+              <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+              <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+            </svg>
           )}
         </div>
 
@@ -53,14 +64,24 @@ export default function AgentMessage({ message, onCitationClick }: AgentMessageP
                 className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-blue-500/10 px-2.5 py-1 text-[11px] text-blue-400 transition-colors hover:bg-blue-500/20"
               >
                 <span className="font-semibold">[{i + 1}]</span>
-                <span className="max-w-[180px] truncate">
-                  {citation.title}
-                </span>
+                <span className="max-w-[180px] truncate">{citation.title}</span>
                 <span className="text-[var(--text-muted)]">&mdash;</span>
                 <span className="max-w-[100px] truncate text-[var(--text-muted)]">
                   {citation.source_name}
                 </span>
-                <svg className="h-2.5 w-2.5 opacity-50" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4.5 1.5H2a.5.5 0 0 0-.5.5v8a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V7.5M7 1.5h3.5V5M6 6l4.5-4.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <svg
+                  className="h-2.5 w-2.5 opacity-50"
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <path
+                    d="M4.5 1.5H2a.5.5 0 0 0-.5.5v8a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V7.5M7 1.5h3.5V5M6 6l4.5-4.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
               </button>
             ))}
           </div>

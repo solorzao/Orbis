@@ -57,9 +57,7 @@ test.describe("Time Slider", () => {
     await expect(nextButton).toBeDisabled();
   });
 
-  test("next day button navigates back to Today from Yesterday", async ({
-    page,
-  }) => {
+  test("next day button navigates back to Today from Yesterday", async ({ page }) => {
     // Go to yesterday
     await page.locator('button[aria-label="Previous day"]').click();
     await expect(page.locator("text=Yesterday")).toBeVisible();

@@ -39,7 +39,9 @@ export default function Home() {
 
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false);
-  const globeControlsRef = useRef<{ flyTo: (lat: number, lng: number, altitude: number) => void } | null>(null);
+  const globeControlsRef = useRef<{
+    flyTo: (lat: number, lng: number, altitude: number) => void;
+  } | null>(null);
 
   const handleDayChange = useCallback((newOffset: number) => {
     const clamped = Math.max(0, Math.min(6, newOffset));
@@ -49,13 +51,14 @@ export default function Home() {
     setLoading(true);
   }, []);
 
-  const dayWindow = dayOffset === 0
-    ? null
-    : (() => {
-        const windowEnd = new Date(nowTs - dayOffset * 86400000);
-        const windowStart = new Date(windowEnd.getTime() - 86400000);
-        return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
-      })();
+  const dayWindow =
+    dayOffset === 0
+      ? null
+      : (() => {
+          const windowEnd = new Date(nowTs - dayOffset * 86400000);
+          const windowStart = new Date(windowEnd.getTime() - 86400000);
+          return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
+        })();
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     if (action.type === "flyTo" && globeControlsRef.current) {
@@ -64,7 +67,15 @@ export default function Home() {
     }
   }, []);
 
-  const { messages: agentMessages, isLoading: agentLoading, isDisabled: agentDisabled, activeTools, ask: agentAsk, stop: agentStop, clear: agentClear } = useAgent({ onGlobeAction: handleGlobeAction });
+  const {
+    messages: agentMessages,
+    isLoading: agentLoading,
+    isDisabled: agentDisabled,
+    activeTools,
+    ask: agentAsk,
+    stop: agentStop,
+    clear: agentClear,
+  } = useAgent({ onGlobeAction: handleGlobeAction });
 
   const handleCitationClick = useCallback((citation: Citation) => {
     if (globeControlsRef.current && citation.lat && citation.lng) {
@@ -81,9 +92,11 @@ export default function Home() {
       .then((d) => {
         setDensity(d);
         if (dayOffset < 6) {
-          fetchDensity(dayOffset + 1).then((older) => {
-            setHasOlderData(older.some((h) => h.count > 0));
-          }).catch(() => setHasOlderData(false));
+          fetchDensity(dayOffset + 1)
+            .then((older) => {
+              setHasOlderData(older.some((h) => h.count > 0));
+            })
+            .catch(() => setHasOlderData(false));
         } else {
           setHasOlderData(false);
         }
@@ -122,7 +135,9 @@ export default function Home() {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
   }, []);
 
-  const mapArticles = (apiArticles: Awaited<ReturnType<typeof fetchClusterArticles>>): NewsArticle[] =>
+  const mapArticles = (
+    apiArticles: Awaited<ReturnType<typeof fetchClusterArticles>>,
+  ): NewsArticle[] =>
     apiArticles.map((a) => ({
       id: a.id,
       title: a.title,
@@ -187,7 +202,8 @@ export default function Home() {
       updatePanel(panelId, { loadingMore: true });
 
       const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
-      const isFiltered = filters && (filters.sentiment || filters.search || filters.topics.length > 0);
+      const isFiltered =
+        filters && (filters.sentiment || filters.search || filters.topics.length > 0);
 
       try {
         // When filters are active, load ALL articles (unfiltered) so the
@@ -284,7 +300,9 @@ export default function Home() {
         points={points}
         onPointClick={handlePointClick}
         onZoomChange={handleZoomChange}
-        onReady={(controls) => { globeControlsRef.current = controls; }}
+        onReady={(controls) => {
+          globeControlsRef.current = controls;
+        }}
       />
 
       {/* Branding */}
@@ -339,7 +357,16 @@ export default function Home() {
         aria-label="Toggle agent panel"
         data-testid="agent-toggle"
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M3 15a2 2 0 0 0 2 2h12l4 4V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />
         </svg>
       </button>
@@ -364,7 +391,10 @@ export default function Home() {
       {/* Time Slider + Status */}
       <TimeSlider
         density={density}
-        onChange={(range) => { setTimeRange(range); setLoading(true); }}
+        onChange={(range) => {
+          setTimeRange(range);
+          setLoading(true);
+        }}
         onDayChange={handleDayChange}
         dayOffset={dayOffset}
         hasOlderData={hasOlderData}

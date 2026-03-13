@@ -39,7 +39,10 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
   }, [checkScroll]);
 
   return (
-    <div data-testid="topic-filter" className="fixed top-12 left-1/2 z-40 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 sm:top-6">
+    <div
+      data-testid="topic-filter"
+      className="fixed top-12 left-1/2 z-40 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 sm:top-6"
+    >
       {/* Left fade */}
       {canScrollLeft && (
         <div

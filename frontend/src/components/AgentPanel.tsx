@@ -132,23 +132,17 @@ export default function AgentPanel({
         {messages.length === 0 && !isDisabled && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <span className="text-4xl">🌍</span>
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-              Ask about the news
-            </h3>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Ask about the news</h3>
             <p className="max-w-[260px] text-xs leading-relaxed text-[var(--text-muted)]">
-              Ask questions about global events, trends, and stories. The agent
-              will search articles and navigate the globe for you.
+              Ask questions about global events, trends, and stories. The agent will search articles
+              and navigate the globe for you.
             </p>
           </div>
         )}
 
         <div className="space-y-3">
           {messages.map((msg) => (
-            <AgentMessage
-              key={msg.id}
-              message={msg}
-              onCitationClick={onCitationClick}
-            />
+            <AgentMessage key={msg.id} message={msg} onCitationClick={onCitationClick} />
           ))}
         </div>
 
@@ -198,14 +192,7 @@ export default function AgentPanel({
               aria-label="Stop"
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <rect
-                  x="3"
-                  y="3"
-                  width="8"
-                  height="8"
-                  rx="1"
-                  fill="currentColor"
-                />
+                <rect x="3" y="3" width="8" height="8" rx="1" fill="currentColor" />
               </svg>
             </button>
           ) : (
