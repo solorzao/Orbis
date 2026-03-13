@@ -93,6 +93,7 @@ export default function Home() {
       .then((apiPoints) => {
         if (cancelled) return;
         setAllPoints(apiPointsToGlobePoints(apiPoints));
+        setApiError(false);
       })
       .catch(() => {
         if (cancelled) return;

@@ -310,8 +310,34 @@ async def get_globe_points(
 
     if not rows:
         logger.warning("No articles in last %dh — falling back to all data.", timespan_hours)
-        query_all = base_query.format(time_filter="")
-        rows = await pool.fetch(query_all, *base_params, cell_size, limit)
+        # Rebuild query without time filter and renumber params ($1=cell, $2=limit)
+        fallback_query = f"""
+            WITH clustered AS (
+                SELECT
+                    FLOOR(latitude / $1) * $1 + $1 / 2  AS lat,
+                    FLOOR(longitude / $1) * $1 + $1 / 2 AS lng,
+                    title,
+                    topic_tags,
+                    region,
+                    published_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY FLOOR(latitude / $1), FLOOR(longitude / $1)
+                        ORDER BY published_at DESC
+                    ) AS rn
+                FROM articles
+            )
+            SELECT
+                lat, lng,
+                COUNT(*) AS article_count,
+                MAX(CASE WHEN rn = 1 THEN title END) AS top_headline,
+                MAX(CASE WHEN rn = 1 THEN topic_tags END) AS topic_tags,
+                MAX(CASE WHEN rn = 1 THEN region END) AS location_name
+            FROM clustered
+            GROUP BY lat, lng
+            ORDER BY article_count DESC
+            LIMIT $2
+        """
+        rows = await pool.fetch(fallback_query, cell_size, limit)
     results = []
     for row in rows:
         tags = row["topic_tags"] or []
