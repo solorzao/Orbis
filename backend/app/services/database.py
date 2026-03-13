@@ -170,7 +170,8 @@ async def get_articles_in_bounds(
     result = [dict(r) for r in rows]
     if start_time and end_time:
         result = [
-            r for r in result
+            r
+            for r in result
             if start_time
             <= r.get("published_at", datetime.min.replace(tzinfo=timezone.utc))
             <= end_time

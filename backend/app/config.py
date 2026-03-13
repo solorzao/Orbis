@@ -52,9 +52,7 @@ class Settings:
 
     # --- ML classification ---
     ml_topic_model: str = field(
-        default_factory=lambda: _env(
-            "ML_TOPIC_MODEL", "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
-        )
+        default_factory=lambda: _env("ML_TOPIC_MODEL", "MoritzLaurer/deberta-v3-base-zeroshot-v2.0")
     )
     ml_sentiment_model: str = field(
         default_factory=lambda: _env(
@@ -63,18 +61,13 @@ class Settings:
         )
     )
     ml_classification_enabled: bool = field(
-        default_factory=lambda: _env("ML_CLASSIFICATION_ENABLED", "true").lower()
-        in ("true", "1", "yes")
+        default_factory=lambda: (
+            _env("ML_CLASSIFICATION_ENABLED", "true").lower() in ("true", "1", "yes")
+        )
     )
-    ml_batch_size: int = field(
-        default_factory=lambda: _env_int("ML_BATCH_SIZE", 32)
-    )
-    ml_functions_url: str = field(
-        default_factory=lambda: _env("ML_FUNCTIONS_URL", "")
-    )
-    ml_functions_key: str = field(
-        default_factory=lambda: _env("ML_FUNCTIONS_KEY", "")
-    )
+    ml_batch_size: int = field(default_factory=lambda: _env_int("ML_BATCH_SIZE", 32))
+    ml_functions_url: str = field(default_factory=lambda: _env("ML_FUNCTIONS_URL", ""))
+    ml_functions_key: str = field(default_factory=lambda: _env("ML_FUNCTIONS_KEY", ""))
 
     # --- GDELT ---
     gdelt_doc_base_url: str = field(

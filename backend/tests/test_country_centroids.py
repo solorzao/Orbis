@@ -1,6 +1,6 @@
 """Tests for the country centroid lookup module."""
 
-from app.services.country_centroids import get_centroid, normalize_country, COUNTRY_CENTROIDS
+from app.services.country_centroids import COUNTRY_CENTROIDS, get_centroid, normalize_country
 
 
 def test_known_country_returns_coords():

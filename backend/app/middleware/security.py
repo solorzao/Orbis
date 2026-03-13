@@ -59,8 +59,8 @@ _rate_buckets: dict[str, dict[str, _RateBucket]] = defaultdict(lambda: defaultdi
 
 # Endpoint group → (window_seconds, max_requests)
 _RATE_LIMITS: dict[str, tuple[int, int]] = {
-    "ai": (60, 10),       # 10 AI summary calls per minute per IP
-    "data": (60, 60),     # 60 data calls per minute per IP
+    "ai": (60, 10),  # 10 AI summary calls per minute per IP
+    "data": (60, 60),  # 60 data calls per minute per IP
 }
 
 # Path prefix → group
@@ -144,7 +144,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         # --- API key check ---
         if not _check_api_key(request):
             logger.warning(
-                "Rejected request to %s — bad API key from %s", path, _client_ip(request),
+                "Rejected request to %s — bad API key from %s",
+                path,
+                _client_ip(request),
             )
             return JSONResponse({"detail": "Invalid or missing API key."}, status_code=403)
 

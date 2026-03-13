@@ -24,9 +24,7 @@ logger = logging.getLogger("orbis.scraper")
 _CACHE_TTL = 86400  # 24 hours
 _FETCH_TIMEOUT = 5.0  # seconds per request
 _MAX_TEXT_WORDS = 500
-_USER_AGENT = (
-    "Mozilla/5.0 (compatible; OrbisBot/1.0; +https://orbisapp.co)"
-)
+_USER_AGENT = "Mozilla/5.0 (compatible; OrbisBot/1.0; +https://orbisapp.co)"
 
 
 def _cache_key(url: str) -> str:
@@ -48,7 +46,7 @@ def _smart_truncate(
     """
     paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
     if not paragraphs:
-        return text[:max_words * 7]  # rough char estimate
+        return text[: max_words * 7]  # rough char estimate
 
     # Score paragraphs by keyword relevance
     kw_lower = [k.lower() for k in question_keywords if len(k) > 2]
@@ -78,6 +76,7 @@ def _extract_trafilatura(html: str) -> str | None:
     """Try trafilatura extraction."""
     try:
         import trafilatura
+
         text = trafilatura.extract(html, include_comments=False, include_tables=False)
         return text if text and len(text) > 100 else None
     except Exception:
@@ -89,6 +88,7 @@ def _extract_bs4(html: str) -> str | None:
     """Try BeautifulSoup extraction from <article> or <p> tags."""
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(html, "html.parser")
 
         # Remove script/style
@@ -188,6 +188,8 @@ async def extract_article_text(
 
     logger.info(
         "Extracted %s quality from %s (%d chars)",
-        result["quality"], url, len(result.get("text", "")),
+        result["quality"],
+        url,
+        len(result.get("text", "")),
     )
     return result

@@ -59,6 +59,7 @@ class AskResponse(BaseModel):
 # Input validation
 # ---------------------------------------------------------------------------
 
+
 def _validate_request(body: AskRequest) -> str:
     """Sanitize question and validate conversation_id. Returns clean question."""
     if not settings.agent_enabled:
@@ -81,6 +82,7 @@ def _validate_request(body: AskRequest) -> str:
 # ---------------------------------------------------------------------------
 # Conversation history helpers
 # ---------------------------------------------------------------------------
+
 
 def _conv_key(conversation_id: str) -> str:
     return f"agent:conv:{conversation_id}"
@@ -145,6 +147,7 @@ async def _save_history(
 # Non-streaming endpoint
 # ---------------------------------------------------------------------------
 
+
 @router.post("/ask", response_model=AskResponse)
 async def ask_endpoint(body: AskRequest) -> AskResponse:
     """Answer a question using the full agent pipeline."""
@@ -168,6 +171,7 @@ async def ask_endpoint(body: AskRequest) -> AskResponse:
 # SSE streaming endpoint
 # ---------------------------------------------------------------------------
 
+
 @router.post("/ask/stream")
 async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
     """Stream the agent pipeline as SSE events."""
@@ -189,12 +193,14 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
             await _save_history(conv_id, history, question, answer_text)
             yield {
                 "event": "done",
-                "data": json.dumps({
-                    "conversation_id": conv_id,
-                    "citations": [],
-                    "globe_actions": [],
-                    "tools_used": [],
-                }),
+                "data": json.dumps(
+                    {
+                        "conversation_id": conv_id,
+                        "citations": [],
+                        "globe_actions": [],
+                        "tools_used": [],
+                    }
+                ),
             }
             return
 
@@ -220,9 +226,9 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
                 urls = _collect_urls_from_history(history)
             if urls:
                 yield {"event": "retrieving", "data": json.dumps({"tool": "read_article"})}
-                read_results = await execute_retrieval([
-                    {"name": "read_article", "args": {"urls": urls[:5], "question": question}}
-                ])
+                read_results = await execute_retrieval(
+                    [{"name": "read_article", "args": {"urls": urls[:5], "question": question}}]
+                )
                 retrieval_results.extend(read_results)
 
         # Step 3: Build context and synthesize
@@ -247,12 +253,14 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
         # Step 6: Done
         yield {
             "event": "done",
-            "data": json.dumps({
-                "conversation_id": conv_id,
-                "citations": result.get("citations", []),
-                "globe_actions": result.get("globe_actions", []),
-                "tools_used": result.get("tools_used", []),
-            }),
+            "data": json.dumps(
+                {
+                    "conversation_id": conv_id,
+                    "citations": result.get("citations", []),
+                    "globe_actions": result.get("globe_actions", []),
+                    "tools_used": result.get("tools_used", []),
+                }
+            ),
         }
 
     return EventSourceResponse(event_generator())

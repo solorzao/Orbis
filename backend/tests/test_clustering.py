@@ -39,9 +39,9 @@ class TestClusterArticles:
 
     def test_distant_articles_separate(self):
         articles = [
-            _make_article(40.0, -74.0),   # New York area
-            _make_article(51.5, -0.1),     # London
-            _make_article(-33.9, 151.2),   # Sydney
+            _make_article(40.0, -74.0),  # New York area
+            _make_article(51.5, -0.1),  # London
+            _make_article(-33.9, 151.2),  # Sydney
         ]
         clusters = cluster_articles(articles, resolution=2.0)
         assert len(clusters) == 3

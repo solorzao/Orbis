@@ -44,12 +44,14 @@ async def populate_graph(articles: list[dict]) -> int:
                     "RETURNING id",
                     "ARTICLE",
                     title,
-                    json.dumps({
-                        "url": article.get("source_url", ""),
-                        "lat": article.get("latitude"),
-                        "lng": article.get("longitude"),
-                        "published_at": str(article.get("published_at", "")),
-                    }),
+                    json.dumps(
+                        {
+                            "url": article.get("source_url", ""),
+                            "lat": article.get("latitude"),
+                            "lng": article.get("longitude"),
+                            "published_at": str(article.get("published_at", "")),
+                        }
+                    ),
                 )
 
                 persons = article.get("persons", [])
@@ -122,11 +124,13 @@ async def populate_graph(articles: list[dict]) -> int:
                         "RETURNING id",
                         "LOCATION",
                         region,
-                        json.dumps({
-                            "lat": article.get("latitude"),
-                            "lng": article.get("longitude"),
-                            "country_code": article.get("country_code", ""),
-                        }),
+                        json.dumps(
+                            {
+                                "lat": article.get("latitude"),
+                                "lng": article.get("longitude"),
+                                "country_code": article.get("country_code", ""),
+                            }
+                        ),
                     )
                     await conn.execute(
                         "INSERT INTO kg_edges (source_node_id, "
@@ -178,11 +182,13 @@ async def populate_graph(articles: list[dict]) -> int:
                         "RETURNING id",
                         "LOCATION",
                         loc_name,
-                        json.dumps({
-                            "lat": loc.get("lat"),
-                            "lng": loc.get("lng"),
-                            "country_code": loc.get("country_code", ""),
-                        }),
+                        json.dumps(
+                            {
+                                "lat": loc.get("lat"),
+                                "lng": loc.get("lng"),
+                                "country_code": loc.get("country_code", ""),
+                            }
+                        ),
                     )
                     await conn.execute(
                         "INSERT INTO kg_edges (source_node_id, "
@@ -209,7 +215,7 @@ async def populate_graph(articles: list[dict]) -> int:
                     if updated == "UPDATE 0":
                         await conn.execute(
                             "INSERT INTO kg_edges (source_node_id, "
-                        "target_node_id, rel_type, weight, article_id) "
+                            "target_node_id, rel_type, weight, article_id) "
                             "VALUES ($1, $2, $3, 1, $4)",
                             node_a,
                             node_b,

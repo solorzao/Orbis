@@ -1,17 +1,17 @@
 """Tests for GDELT raw GKG file parsing and title scraping."""
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 import io
 import zipfile
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.services.gdelt import (
-    _parse_gkg_date,
     _is_usable_title,
+    _parse_gkg_date,
     fetch_raw_gkg,
     scrape_titles,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -121,9 +121,7 @@ class TestFetchRawGkg:
         record = _make_gkg_record()
         zip_bytes = _make_gkg_zip([record])
 
-        index_text = (
-            "100 abc123 http://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
-        )
+        index_text = "100 abc123 http://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
 
         async def mock_download(url):
             if "lastupdate" in url:
@@ -147,9 +145,7 @@ class TestFetchRawGkg:
     @pytest.mark.asyncio
     async def test_skips_country_level_locations(self):
         # Type 1 = COUNTRY (should be skipped)
-        record = _make_gkg_record(
-            locations="1#United States#US##37.09#-95.71#US"
-        )
+        record = _make_gkg_record(locations="1#United States#US##37.09#-95.71#US")
         zip_bytes = _make_gkg_zip([record])
         index_text = "100 abc http://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
 

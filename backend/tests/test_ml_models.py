@@ -13,7 +13,6 @@ import pytest
 
 from app.services.ml_models import analyze_sentiment_ml, classify_topics_ml
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

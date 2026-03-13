@@ -32,9 +32,9 @@ def _dedup_key(title: str) -> str:
     parts = list(_OUTLET_SEP.finditer(title))
     if parts:
         last = parts[-1]
-        suffix = title[last.end():]
+        suffix = title[last.end() :]
         if len(suffix) < 40:
-            title = title[:last.start()]
+            title = title[: last.start()]
     return title.strip().lower()
 
 

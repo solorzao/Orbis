@@ -1,6 +1,6 @@
 """Tests for keyword-based topic classification."""
 
-from app.services.topic_classifier import classify_topic, TOPIC_KEYWORDS
+from app.services.topic_classifier import TOPIC_KEYWORDS, classify_topic
 
 
 def test_conflict_keywords():

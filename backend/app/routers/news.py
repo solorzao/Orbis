@@ -44,9 +44,9 @@ def _dedup_key(title: str) -> str:
     parts = list(_OUTLET_SEP.finditer(title))
     if parts:
         last = parts[-1]
-        suffix = title[last.end():]
+        suffix = title[last.end() :]
         if len(suffix) < 40:
-            title = title[:last.start()]
+            title = title[: last.start()]
     return title.strip().lower()
 
 
@@ -134,8 +134,11 @@ async def get_globe_data(
         return [GlobeDataPoint(**p) for p in cached]
 
     rows = await get_globe_points(
-        timespan_hours=hours, cell_size=1.0, limit=limit,
-        start_time=start_dt, end_time=end_dt,
+        timespan_hours=hours,
+        cell_size=1.0,
+        limit=limit,
+        start_time=start_dt,
+        end_time=end_dt,
     )
     points = [GlobeDataPoint(**r) for r in rows]
 
@@ -164,8 +167,13 @@ async def _fetch_cell_articles(
     """
     half = _CELL_SIZE / 2.0
     rows = await get_articles_in_bounds(
-        lat - half, lng - half, lat + half, lng + half, limit=50,
-        start_time=start_time, end_time=end_time,
+        lat - half,
+        lng - half,
+        lat + half,
+        lng + half,
+        limit=50,
+        start_time=start_time,
+        end_time=end_time,
     )
     articles = _deduplicate_articles([_row_to_article(r) for r in rows])
 
@@ -215,11 +223,15 @@ async def get_cluster_articles(
     start_dt = _parse_iso(start_time)
     end_dt = _parse_iso(end_time)
     articles = await _fetch_cell_articles(
-        lat, lng, topic,
-        start_time=start_dt, end_time=end_dt,
-        sentiment=sentiment, search=search,
+        lat,
+        lng,
+        topic,
+        start_time=start_dt,
+        end_time=end_dt,
+        sentiment=sentiment,
+        search=search,
     )
-    return articles[offset:offset + limit]
+    return articles[offset : offset + limit]
 
 
 @router.get("/news/summary", response_model=ClusterSummaryResponse)
