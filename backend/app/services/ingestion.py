@@ -17,7 +17,7 @@ from app.services.database import get_pool, upsert_articles
 from app.services.embeddings import generate_embeddings
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
-from app.services.ml_models import classify_topics_ml, analyze_sentiment_ml
+from app.services.ml_models import analyze_sentiment_ml, classify_topics_ml
 from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger("orbis.ingestion")
@@ -32,9 +32,9 @@ def _dedup_key(title: str) -> str:
     parts = list(_OUTLET_SEP.finditer(title))
     if parts:
         last = parts[-1]
-        suffix = title[last.end():]
+        suffix = title[last.end() :]
         if len(suffix) < 40:
-            title = title[:last.start()]
+            title = title[: last.start()]
     return title.strip().lower()
 
 

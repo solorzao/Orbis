@@ -40,13 +40,15 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
     if (!containerRef.current || globeRef.current) return;
 
     const GlobeGL = (await import("globe.gl")).default;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const THREE = await import("three" as any);
 
     const globe = new GlobeGL(containerRef.current)
       .backgroundColor("rgba(0,0,0,0)")
       .globeImageUrl("//unpkg.com/three-globe/example/img/earth-night.jpg")
       .bumpImageUrl("//unpkg.com/three-globe/example/img/earth-topology.png")
-      .atmosphereColor("#1a3a5c")
-      .atmosphereAltitude(0.15)
+      .atmosphereColor("#00d4ff")
+      .atmosphereAltitude(0.25)
       .showAtmosphere(true)
       .pointsData([])
       .pointLat("lat")
@@ -94,9 +96,9 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
       .hexTopColor((d: object) => {
         const h = d as { sumWeight: number };
         const intensity = Math.min(1, h.sumWeight / 30);
-        return `rgba(59, 130, 246, ${0.06 + intensity * 0.2})`;
+        return `rgba(0, 212, 255, ${0.04 + intensity * 0.18})`;
       })
-      .hexSideColor(() => "rgba(0,0,0,0)")
+      .hexSideColor(() => "rgba(0, 212, 255, 0.03)")
       .hexBinMerge(false)
       .hexLabel("")
       .pointLabel((d: object) => {
@@ -145,6 +147,13 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
     };
     container.addEventListener("mousedown", stopAutoRotate);
     container.addEventListener("touchstart", stopAutoRotate);
+
+    // -- Holographic command-center material --
+    const mat = globe.globeMaterial();
+    mat.color = new THREE.Color(0x0a1a2e); // dark navy tint over texture
+    mat.emissive = new THREE.Color(0x063040); // subtle cyan self-glow
+    mat.emissiveIntensity = 0.6;
+    mat.shininess = 30;
 
     globeRef.current = globe;
     setIsLoaded(true);
@@ -202,7 +211,19 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
           ? "//unpkg.com/three-globe/example/img/earth-night.jpg"
           : "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg",
       )
-      .atmosphereColor(isDark ? "#1a3a5c" : "#87CEEB");
+      .atmosphereColor(isDark ? "#00d4ff" : "#87CEEB");
+
+    // Re-apply holographic material for dark mode
+    const mat = globeRef.current.globeMaterial();
+    if (isDark) {
+      mat.color?.set(0x0a1a2e);
+      mat.emissive?.set(0x063040);
+      mat.emissiveIntensity = 0.6;
+    } else {
+      mat.color?.set(0xffffff);
+      mat.emissive?.set(0x000000);
+      mat.emissiveIntensity = 0;
+    }
   }, [resolvedTheme, isLoaded]);
 
   return (
@@ -214,6 +235,8 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
           background: "radial-gradient(ellipse at center, transparent 40%, var(--vignette) 100%)",
         }}
       />
+      {/* Holographic scanline overlay */}
+      <div className="scanlines pointer-events-none absolute inset-0 z-[11]" />
       <div ref={containerRef} className="h-full w-full" />
     </div>
   );

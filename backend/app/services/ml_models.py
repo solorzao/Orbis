@@ -47,9 +47,7 @@ async def _call_function(
             resp.raise_for_status()
             return resp.json()
     except Exception:
-        logger.exception(
-            "ML function call failed  endpoint=%s  titles=%d", endpoint, len(titles)
-        )
+        logger.exception("ML function call failed  endpoint=%s  titles=%d", endpoint, len(titles))
         return None
 
 
@@ -59,9 +57,7 @@ async def _call_chunked(
 ) -> list[dict[str, Any] | None]:
     """Split titles into chunks and call the function in parallel."""
     chunks = [titles[i : i + _CHUNK_SIZE] for i in range(0, len(titles), _CHUNK_SIZE)]
-    results = await asyncio.gather(
-        *[_call_function(endpoint, chunk) for chunk in chunks]
-    )
+    results = await asyncio.gather(*[_call_function(endpoint, chunk) for chunk in chunks])
     return list(results)
 
 
@@ -105,7 +101,11 @@ async def classify_topics_ml(titles: list[str]) -> list[list[str]]:
             )
         else:
             # Fallback to keyword classifier for this chunk
-            logger.warning("Topic chunk %d failed — using keyword fallback for %d titles", i, len(chunk_titles))
+            logger.warning(
+                "Topic chunk %d failed — using keyword fallback for %d titles",
+                i,
+                len(chunk_titles),
+            )
             all_topics.extend(classify_topic(t) for t in chunk_titles)
 
         chunk_start = chunk_end
@@ -154,7 +154,11 @@ async def analyze_sentiment_ml(titles: list[str]) -> list[float]:
                 result.get("timing_ms", 0),
             )
         else:
-            logger.warning("Sentiment chunk %d failed — returning 0.0 for %d titles", i, len(chunk_titles))
+            logger.warning(
+                "Sentiment chunk %d failed — returning 0.0 for %d titles",
+                i,
+                len(chunk_titles),
+            )
             all_scores.extend(0.0 for _ in chunk_titles)
 
         chunk_start = chunk_end

@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import html as html_mod
 import io
 import logging
 import re
 import zipfile
 from datetime import datetime, timezone
-from typing import Any
-from urllib.parse import urlparse
 
 import httpx
-
-from app.models.news import NewsArticle
-from app.services.topic_classifier import classify_topic
 
 logger = logging.getLogger(__name__)
 
@@ -171,9 +165,7 @@ async def _download_bytes(url: str) -> bytes | None:
 def _parse_gkg_date(date_str: str) -> datetime:
     """Parse GKG record date (YYYYMMDDHHMMSS format)."""
     try:
-        return datetime.strptime(date_str.strip(), "%Y%m%d%H%M%S").replace(
-            tzinfo=timezone.utc
-        )
+        return datetime.strptime(date_str.strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
     except (ValueError, AttributeError):
         return datetime.now(timezone.utc)
 
@@ -182,19 +174,22 @@ def _is_usable_title(title: str) -> bool:
     """Return False for titles that are clearly not real article headlines."""
     t = title.lower().strip()
     # Cloudflare / bot-check pages
-    if any(phrase in t for phrase in (
-        "cloudflare",
-        "just a moment",
-        "please wait",
-        "checking your browser",
-        "access denied",
-        "attention required",
-        "are you a robot",
-        "one moment, please",
-        "loading...",
-        "please enable cookies",
-        "website is unavailable",
-    )):
+    if any(
+        phrase in t
+        for phrase in (
+            "cloudflare",
+            "just a moment",
+            "please wait",
+            "checking your browser",
+            "access denied",
+            "attention required",
+            "are you a robot",
+            "one moment, please",
+            "loading...",
+            "please enable cookies",
+            "website is unavailable",
+        )
+    ):
         return False
     # HTTP error pages
     if re.match(r"^(4\d\d|5\d\d)\b", t):
@@ -310,12 +305,14 @@ async def fetch_raw_gkg() -> list[dict]:
             # Collect country-level mentions (type 1) for KG
             if loc_type == "1" and parts[2] not in seen_countries:
                 seen_countries.add(parts[2])
-                mentioned_locations.append({
-                    "name": parts[1].strip(),
-                    "country_code": parts[2],
-                    "lat": lat,
-                    "lng": lng,
-                })
+                mentioned_locations.append(
+                    {
+                        "name": parts[1].strip(),
+                        "country_code": parts[2],
+                        "lat": lat,
+                        "lng": lng,
+                    }
+                )
 
         if not city_loc:
             continue
@@ -333,8 +330,16 @@ async def fetch_raw_gkg() -> list[dict]:
         # GKG field 11 = V1PERSONS, field 13 = V1ORGANIZATIONS (semicolon-delimited)
         persons_raw = fields[11] if len(fields) > 11 else ""
         orgs_raw = fields[13] if len(fields) > 13 else ""
-        persons = list(dict.fromkeys(p.strip().title() for p in persons_raw.split(";") if p.strip())) if persons_raw else []
-        organizations = list(dict.fromkeys(o.strip().title() for o in orgs_raw.split(";") if o.strip())) if orgs_raw else []
+        persons = (
+            list(dict.fromkeys(p.strip().title() for p in persons_raw.split(";") if p.strip()))
+            if persons_raw
+            else []
+        )
+        organizations = (
+            list(dict.fromkeys(o.strip().title() for o in orgs_raw.split(";") if o.strip()))
+            if orgs_raw
+            else []
+        )
         themes = fields[7] if len(fields) > 7 else ""
         image_url = fields[18].strip() if len(fields) > 18 else ""
         date_str = fields[1] if len(fields) > 1 else ""
@@ -382,12 +387,8 @@ async def scrape_titles(articles: list[dict]) -> list[dict]:
                 ) as client:
                     resp = await client.get(url)
                     # Only read enough bytes for <title>
-                    text = resp.content[:_SCRAPE_MAX_BYTES].decode(
-                        "utf-8", errors="replace"
-                    )
-                    match = re.search(
-                        r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL
-                    )
+                    text = resp.content[:_SCRAPE_MAX_BYTES].decode("utf-8", errors="replace")
+                    match = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
                     if match:
                         title = html_mod.unescape(match.group(1)).strip()
                         if len(title) > 5 and _is_usable_title(title):

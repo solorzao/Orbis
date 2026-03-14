@@ -1,9 +1,9 @@
 """Tests for the agent retrieval functions."""
 
 import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _fake_embedding(dim: int = 1536) -> list[float]:
@@ -41,13 +41,16 @@ class TestSemanticSearch:
         mock_client = AsyncMock()
         mock_client.embeddings.create = AsyncMock(return_value=mock_response)
 
-        with patch(
-            "app.services.retrieval._get_openai_client",
-            return_value=mock_client,
-        ), patch(
-            "app.services.retrieval.get_pool",
-            new_callable=AsyncMock,
-            return_value=mock_pool,
+        with (
+            patch(
+                "app.services.retrieval._get_openai_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.retrieval.get_pool",
+                new_callable=AsyncMock,
+                return_value=mock_pool,
+            ),
         ):
             results = await semantic_search("climate change")
 
@@ -64,31 +67,49 @@ class TestGraphTraverse:
 
         node_id = uuid.uuid4()
         connected_id = uuid.uuid4()
+        article_id = uuid.uuid4()
+
+        start_row = {"id": node_id, "type": "PERSON", "name": "John Doe"}
+        conn_rows = [
+            {
+                "id": connected_id,
+                "type": "PERSON",
+                "name": "Jane Doe",
+                "rel_type": "MENTIONED_IN",
+                "weight": 1.0,
+                "article_id": article_id,
+                "depth": 1,
+            }
+        ]
+        art_rows = [
+            {
+                "id": article_id,
+                "title": "Article about John",
+                "source_url": "https://example.com/1",
+                "source_name": "Example",
+                "latitude": 40.0,
+                "longitude": -74.0,
+                "published_at": "2026-03-01T00:00:00Z",
+                "sentiment_score": 0.5,
+            }
+        ]
 
         mock_pool = AsyncMock()
-        mock_pool.fetchrow = AsyncMock(return_value={"id": node_id})
-        mock_pool.fetch = AsyncMock(
-            return_value=[
-                {
-                    "id": connected_id,
-                    "type": "PERSON",
-                    "name": "Jane Doe",
-                    "rel_type": "MENTIONED_IN",
-                    "depth": 1,
-                }
-            ]
-        )
+        mock_pool.fetchrow = AsyncMock(return_value=start_row)
+        mock_pool.fetch = AsyncMock(side_effect=[conn_rows, art_rows])
 
         with patch(
             "app.services.retrieval.get_pool",
             new_callable=AsyncMock,
             return_value=mock_pool,
         ):
-            results = await graph_traverse("John Doe")
+            result = await graph_traverse("John Doe")
 
-        assert len(results) == 1
-        assert results[0]["name"] == "Jane Doe"
-        assert results[0]["rel_type"] == "MENTIONED_IN"
+        assert result["entity"]["name"] == "John Doe"
+        assert len(result["connections"]) == 1
+        assert result["connections"][0]["name"] == "Jane Doe"
+        assert result["connections"][0]["rel_type"] == "MENTIONED_IN"
+        assert len(result["articles"]) == 1
 
 
 class TestKeywordSearch:
@@ -166,6 +187,7 @@ class TestEntityLookup:
 
         node_id = uuid.uuid4()
         conn_id = uuid.uuid4()
+        article_id = uuid.uuid4()
 
         node_row = {
             "id": node_id,
@@ -179,13 +201,26 @@ class TestEntityLookup:
                 "type": "PERSON",
                 "name": "Secretary General",
                 "rel_type": "LEADS",
+                "weight": 1.0,
                 "metadata": "{}",
+            }
+        ]
+        art_rows = [
+            {
+                "id": article_id,
+                "title": "UN Summit",
+                "source_url": "https://example.com/un",
+                "source_name": "News",
+                "latitude": 40.7,
+                "longitude": -74.0,
+                "published_at": "2026-03-01T00:00:00Z",
+                "sentiment_score": 0.3,
             }
         ]
 
         mock_pool = AsyncMock()
         mock_pool.fetchrow = AsyncMock(return_value=node_row)
-        mock_pool.fetch = AsyncMock(return_value=conn_rows)
+        mock_pool.fetch = AsyncMock(side_effect=[conn_rows, art_rows])
 
         with patch(
             "app.services.retrieval.get_pool",
@@ -197,5 +232,6 @@ class TestEntityLookup:
         assert result["node"]["name"] == "United Nations"
         assert len(result["connections"]) == 1
         assert result["connections"][0]["rel_type"] == "LEADS"
+        assert len(result["articles"]) == 1
         mock_pool.fetchrow.assert_called_once()
-        mock_pool.fetch.assert_called_once()
+        assert mock_pool.fetch.call_count == 2

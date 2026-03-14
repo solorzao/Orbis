@@ -121,9 +121,7 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
                   const token: string = data.token || "";
                   setMessages((prev) =>
                     prev.map((m) =>
-                      m.id === assistantId
-                        ? { ...m, content: m.content + token }
-                        : m,
+                      m.id === assistantId ? { ...m, content: m.content + token } : m,
                     ),
                   );
                 } else if (currentEvent === "done") {
@@ -161,9 +159,7 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
         // If we finished reading without a done event, mark complete
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId && m.status === "streaming"
-              ? { ...m, status: "complete" }
-              : m,
+            m.id === assistantId && m.status === "streaming" ? { ...m, status: "complete" } : m,
           ),
         );
       } catch (err) {
@@ -173,8 +169,7 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
               m.id === assistantId
                 ? {
                     ...m,
-                    content:
-                      m.content || "Something went wrong. Please try again.",
+                    content: m.content || "Something went wrong. Please try again.",
                     status: "error",
                   }
                 : m,

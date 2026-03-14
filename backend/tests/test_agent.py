@@ -69,7 +69,14 @@ async def test_synthesize_answer_returns_structured_response():
 def test_retrieval_tools_schema():
     """RETRIEVAL_TOOLS should contain all 5 retrieval functions."""
     names = {t["name"] for t in RETRIEVAL_TOOLS}
-    expected = {"semantic_search", "graph_traverse", "keyword_search", "trending_topics", "entity_lookup"}
+    expected = {
+        "semantic_search",
+        "graph_traverse",
+        "keyword_search",
+        "trending_topics",
+        "entity_lookup",
+        "read_article",
+    }
     assert names == expected
 
     # Each tool should have description and parameters

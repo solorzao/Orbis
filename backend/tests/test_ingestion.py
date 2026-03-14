@@ -1,10 +1,10 @@
 """Tests for the raw GKG → PostgreSQL ingestion service."""
 
 import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
 
 from app.config import settings
 
@@ -106,12 +106,17 @@ class TestIngestFromRawGkg:
         articles = [_make_gkg_article()]
         patches = _common_patches(articles)
 
-        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
-             patches["upsert_articles"] as mock_upsert, \
-             patches["invalidate"] as mock_invalidate, \
-             patches["get_pool"], patches["populate_graph"], \
-             patches["ml_enabled"], patches["classify_topics_ml"], \
-             patches["analyze_sentiment_ml"]:
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"] as mock_invalidate,
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+            patches["classify_topics_ml"],
+            patches["analyze_sentiment_ml"],
+        ):
             count = await _ingest_from_raw_gkg()
             assert count == 1
             mock_upsert.assert_called_once()
@@ -148,10 +153,15 @@ class TestIngestFromRawGkg:
         articles[0]["tone"] = -7.5
         patches = _common_patches(articles, ml_enabled=False)
 
-        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
-             patches["upsert_articles"] as mock_upsert, \
-             patches["invalidate"], patches["get_pool"], \
-             patches["populate_graph"], patches["ml_enabled"]:
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
             await _ingest_from_raw_gkg()
             row = mock_upsert.call_args[0][0][0]
             assert row["sentiment_score"] == pytest.approx(-0.75)
@@ -164,10 +174,15 @@ class TestIngestFromRawGkg:
         articles[0]["tone"] = -15.0  # Beyond scale
         patches = _common_patches(articles, ml_enabled=False)
 
-        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
-             patches["upsert_articles"] as mock_upsert, \
-             patches["invalidate"], patches["get_pool"], \
-             patches["populate_graph"], patches["ml_enabled"]:
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
             await _ingest_from_raw_gkg()
             row = mock_upsert.call_args[0][0][0]
             assert row["sentiment_score"] == -1.0
@@ -178,13 +193,16 @@ class TestRunIngestionCycle:
     async def test_happy_path(self):
         from app.services.ingestion import run_ingestion_cycle
 
-        with patch(
-            "app.services.ingestion._ingest_from_raw_gkg",
-            new_callable=AsyncMock,
-            return_value=50,
-        ), patch(
-            "app.services.ingestion._purge_old_articles",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "app.services.ingestion._ingest_from_raw_gkg",
+                new_callable=AsyncMock,
+                return_value=50,
+            ),
+            patch(
+                "app.services.ingestion._purge_old_articles",
+                new_callable=AsyncMock,
+            ),
         ):
             count = await run_ingestion_cycle()
             assert count == 50
@@ -212,12 +230,17 @@ class TestMLClassificationIntegration:
         articles = [_make_gkg_article()]
         patches = _common_patches(articles, ml_enabled=True)
 
-        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
-             patches["upsert_articles"] as mock_upsert, \
-             patches["invalidate"], patches["get_pool"], \
-             patches["populate_graph"], patches["ml_enabled"], \
-             patches["classify_topics_ml"] as mock_topics, \
-             patches["analyze_sentiment_ml"] as mock_sent:
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+            patches["classify_topics_ml"] as mock_topics,
+            patches["analyze_sentiment_ml"] as mock_sent,
+        ):
             await _ingest_from_raw_gkg()
 
             mock_topics.assert_called_once_with(["Test Headline"])
@@ -235,10 +258,15 @@ class TestMLClassificationIntegration:
         articles[0]["tone"] = 5.0
         patches = _common_patches(articles, ml_enabled=False)
 
-        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
-             patches["upsert_articles"] as mock_upsert, \
-             patches["invalidate"], patches["get_pool"], \
-             patches["populate_graph"], patches["ml_enabled"]:
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
             await _ingest_from_raw_gkg()
 
             row = mock_upsert.call_args[0][0][0]
@@ -266,11 +294,17 @@ class TestMLClassificationIntegration:
             return_value=[-0.8, 0.7],
         )
 
-        with patches["fetch_raw_gkg"], patches["scrape_titles"], \
-             patches["upsert_articles"] as mock_upsert, \
-             patches["invalidate"], patches["get_pool"], \
-             patches["populate_graph"], patches["ml_enabled"], \
-             patches["classify_topics_ml"], patches["analyze_sentiment_ml"]:
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+            patches["classify_topics_ml"],
+            patches["analyze_sentiment_ml"],
+        ):
             await _ingest_from_raw_gkg()
 
             rows = mock_upsert.call_args[0][0]

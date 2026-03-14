@@ -44,7 +44,9 @@ export default function PanelQueue({
             articlesLoading={expandedPanel.articlesLoading}
             savedFilters={expandedPanel.filters}
             savedFilterSummary={expandedPanel.filterSummary}
-            onFiltersChange={(filters, filterSummary) => onFiltersChange(expandedPanel.panelId, filters, filterSummary)}
+            onFiltersChange={(filters, filterSummary) =>
+              onFiltersChange(expandedPanel.panelId, filters, filterSummary)
+            }
           />
         )}
       </AnimatePresence>

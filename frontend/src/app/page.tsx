@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
@@ -33,22 +33,32 @@ export default function Home() {
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
 
+  // Snapshot of "now" captured at mount and when the user changes the day,
+  // so derived date math stays pure during render.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false);
-  const globeControlsRef = useRef<{ flyTo: (lat: number, lng: number, altitude: number) => void } | null>(null);
+  const globeControlsRef = useRef<{
+    flyTo: (lat: number, lng: number, altitude: number) => void;
+  } | null>(null);
 
   const handleDayChange = useCallback((newOffset: number) => {
     const clamped = Math.max(0, Math.min(6, newOffset));
     setDayOffset(clamped);
     setTimeRange(null);
+    setNowTs(Date.now());
+    setLoading(true);
   }, []);
 
-  const dayWindow = useMemo(() => {
-    if (dayOffset === 0) return null;
-    const windowEnd = new Date(Date.now() - dayOffset * 86400000);
-    const windowStart = new Date(windowEnd.getTime() - 86400000);
-    return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
-  }, [dayOffset]);
+  const dayWindow =
+    dayOffset === 0
+      ? null
+      : (() => {
+          const windowEnd = new Date(nowTs - dayOffset * 86400000);
+          const windowStart = new Date(windowEnd.getTime() - 86400000);
+          return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
+        })();
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     if (action.type === "flyTo" && globeControlsRef.current) {
@@ -57,7 +67,15 @@ export default function Home() {
     }
   }, []);
 
-  const { messages: agentMessages, isLoading: agentLoading, isDisabled: agentDisabled, activeTools, ask: agentAsk, stop: agentStop, clear: agentClear } = useAgent({ onGlobeAction: handleGlobeAction });
+  const {
+    messages: agentMessages,
+    isLoading: agentLoading,
+    isDisabled: agentDisabled,
+    activeTools,
+    ask: agentAsk,
+    stop: agentStop,
+    clear: agentClear,
+  } = useAgent({ onGlobeAction: handleGlobeAction });
 
   const handleCitationClick = useCallback((citation: Citation) => {
     if (globeControlsRef.current && citation.lat && citation.lng) {
@@ -74,9 +92,11 @@ export default function Home() {
       .then((d) => {
         setDensity(d);
         if (dayOffset < 6) {
-          fetchDensity(dayOffset + 1).then((older) => {
-            setHasOlderData(older.some((h) => h.count > 0));
-          }).catch(() => setHasOlderData(false));
+          fetchDensity(dayOffset + 1)
+            .then((older) => {
+              setHasOlderData(older.some((h) => h.count > 0));
+            })
+            .catch(() => setHasOlderData(false));
         } else {
           setHasOlderData(false);
         }
@@ -87,7 +107,6 @@ export default function Home() {
   // Fetch globe data on mount and when timeRange or dayOffset changes
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     const effectiveRange = timeRange ?? dayWindow;
     fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
       .then((apiPoints) => {
@@ -116,7 +135,9 @@ export default function Home() {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
   }, []);
 
-  const mapArticles = (apiArticles: Awaited<ReturnType<typeof fetchClusterArticles>>): NewsArticle[] =>
+  const mapArticles = (
+    apiArticles: Awaited<ReturnType<typeof fetchClusterArticles>>,
+  ): NewsArticle[] =>
     apiArticles.map((a) => ({
       id: a.id,
       title: a.title,
@@ -181,7 +202,8 @@ export default function Home() {
       updatePanel(panelId, { loadingMore: true });
 
       const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
-      const isFiltered = filters && (filters.sentiment || filters.search || filters.topics.length > 0);
+      const isFiltered =
+        filters && (filters.sentiment || filters.search || filters.topics.length > 0);
 
       try {
         // When filters are active, load ALL articles (unfiltered) so the
@@ -278,7 +300,9 @@ export default function Home() {
         points={points}
         onPointClick={handlePointClick}
         onZoomChange={handleZoomChange}
-        onReady={(controls) => { globeControlsRef.current = controls; }}
+        onReady={(controls) => {
+          globeControlsRef.current = controls;
+        }}
       />
 
       {/* Branding */}
@@ -287,14 +311,14 @@ export default function Home() {
           src="/Orbis_logo_50_resize.png"
           alt="Orbis"
           className="h-7 w-7 sm:h-10 sm:w-10"
-          style={{ filter: "drop-shadow(0 0 12px rgba(59, 130, 246, 0.4))" }}
+          style={{ filter: "drop-shadow(0 0 12px rgba(0, 212, 255, 0.5))" }}
         />
         <div>
           <h1
             className="text-sm font-bold tracking-[0.2em] text-[var(--text-primary)] uppercase sm:text-lg"
             style={{
               fontFamily: "var(--font-brand), sans-serif",
-              textShadow: "0 0 30px rgba(59, 130, 246, 0.3)",
+              textShadow: "0 0 30px rgba(0, 212, 255, 0.4)",
             }}
           >
             Orbis
@@ -333,7 +357,16 @@ export default function Home() {
         aria-label="Toggle agent panel"
         data-testid="agent-toggle"
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M3 15a2 2 0 0 0 2 2h12l4 4V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />
         </svg>
       </button>
@@ -358,7 +391,10 @@ export default function Home() {
       {/* Time Slider + Status */}
       <TimeSlider
         density={density}
-        onChange={setTimeRange}
+        onChange={(range) => {
+          setTimeRange(range);
+          setLoading(true);
+        }}
         onDayChange={handleDayChange}
         dayOffset={dayOffset}
         hasOlderData={hasOlderData}

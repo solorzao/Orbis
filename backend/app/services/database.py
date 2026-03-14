@@ -170,7 +170,8 @@ async def get_articles_in_bounds(
     result = [dict(r) for r in rows]
     if start_time and end_time:
         result = [
-            r for r in result
+            r
+            for r in result
             if start_time
             <= r.get("published_at", datetime.min.replace(tzinfo=timezone.utc))
             <= end_time
@@ -311,7 +312,7 @@ async def get_globe_points(
     if not rows:
         logger.warning("No articles in last %dh — falling back to all data.", timespan_hours)
         # Rebuild query without time filter and renumber params ($1=cell, $2=limit)
-        fallback_query = f"""
+        fallback_query = """
             WITH clustered AS (
                 SELECT
                     FLOOR(latitude / $1) * $1 + $1 / 2  AS lat,

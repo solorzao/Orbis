@@ -146,7 +146,16 @@ export default function AboutPage() {
 
       <div className="about-hero">
         <Link href="/" className="about-back">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M10 12L6 8l4-4" />
           </svg>
           Back
@@ -155,10 +164,9 @@ export default function AboutPage() {
         <h1 className="about-title">Orbis</h1>
         <p className="about-tagline">Every Story, Everywhere.</p>
         <p className="about-desc">
-          An interactive 3D globe that visualises geolocated world news in real
-          time. Spin the globe, zoom into regions, and explore headlines updated
-          every 15&nbsp;minutes&nbsp;&mdash; with AI-generated summaries to help you
-          make sense of it all.
+          An interactive 3D globe that visualises geolocated world news in real time. Spin the
+          globe, zoom into regions, and explore headlines updated every 15&nbsp;minutes&nbsp;&mdash;
+          with AI-generated summaries to help you make sense of it all.
         </p>
       </div>
 
@@ -172,8 +180,8 @@ export default function AboutPage() {
           <div className="about-feature-content">
             <h3 className="about-feature-title">Real-time news data</h3>
             <p className="about-feature-desc">
-              Sourced from the GDELT Project&nbsp;&mdash; the world&apos;s largest open
-              event database, monitoring news from 65+ languages and 150+ countries.
+              Sourced from the GDELT Project&nbsp;&mdash; the world&apos;s largest open event
+              database, monitoring news from 65+ languages and 150+ countries.
             </p>
           </div>
         </div>
@@ -182,8 +190,8 @@ export default function AboutPage() {
           <div className="about-feature-content">
             <h3 className="about-feature-title">Smart clustering</h3>
             <p className="about-feature-desc">
-              Nearby stories group together at low zoom levels so the globe stays
-              readable, and expand as you zoom in.
+              Nearby stories group together at low zoom levels so the globe stays readable, and
+              expand as you zoom in.
             </p>
           </div>
         </div>
@@ -192,8 +200,8 @@ export default function AboutPage() {
           <div className="about-feature-content">
             <h3 className="about-feature-title">AI summaries</h3>
             <p className="about-feature-desc">
-              Cluster summaries powered by the latest LLMs help you understand
-              regional narratives at a glance.
+              Cluster summaries powered by the latest LLMs help you understand regional narratives
+              at a glance.
             </p>
           </div>
         </div>
@@ -211,10 +219,9 @@ export default function AboutPage() {
           <div className="about-feature-content">
             <h3 className="about-feature-title">Orbis Agent</h3>
             <p className="about-feature-desc">
-              Ask questions about world events in plain language. The agent
-              searches articles, explores entity relationships, and identifies
-              trends&nbsp;&mdash; then answers with cited sources and highlights
-              relevant locations on the globe.
+              Ask questions about world events in plain language. The agent searches articles,
+              explores entity relationships, and identifies trends&nbsp;&mdash; then answers with
+              cited sources and highlights relevant locations on the globe.
             </p>
           </div>
         </div>
@@ -223,7 +230,16 @@ export default function AboutPage() {
       <div className="about-cta">
         <Link href="/" className="about-cta-link">
           Explore the World
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M6 4l4 4-4 4" />
           </svg>
         </Link>

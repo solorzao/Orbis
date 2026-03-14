@@ -46,7 +46,11 @@ RETRIEVAL_TOOLS: list[dict] = [
         ),
         "parameters": {
             "entity_name": {"type": "string", "description": "Starting entity name"},
-            "rel_type": {"type": "string", "description": "Optional relationship type filter", "default": None},
+            "rel_type": {
+                "type": "string",
+                "description": "Optional relationship type filter",
+                "default": None,
+            },
             "depth": {"type": "integer", "description": "Max traversal depth (1-3)", "default": 2},
         },
     },
@@ -57,18 +61,42 @@ RETRIEVAL_TOOLS: list[dict] = [
             "Supports terms, topic, country code, and time range."
         ),
         "parameters": {
-            "terms": {"type": "string", "description": "Keyword(s) to search in titles", "default": None},
-            "topic": {"type": "string", "description": "Topic tag filter", "default": None},
-            "country": {"type": "string", "description": "Two-letter country code", "default": None},
-            "time_range": {"type": "string", "description": "PostgreSQL interval, e.g. '24 hours'", "default": None},
-            "limit": {"type": "integer", "description": "Max results (default 10)", "default": 10},
+            "terms": {
+                "type": "string",
+                "description": "Keyword(s) to search in titles",
+                "default": None,
+            },
+            "topic": {
+                "type": "string",
+                "description": "Topic tag filter",
+                "default": None,
+            },
+            "country": {
+                "type": "string",
+                "description": "Two-letter country code",
+                "default": None,
+            },
+            "time_range": {
+                "type": "string",
+                "description": "PostgreSQL interval, e.g. '24 hours'",
+                "default": None,
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results (default 10)",
+                "default": 10,
+            },
         },
     },
     {
         "name": "trending_topics",
         "description": "Return the top-20 trending topics over a recent time window.",
         "parameters": {
-            "hours": {"type": "integer", "description": "Lookback window in hours (default 24)", "default": 24},
+            "hours": {
+                "type": "integer",
+                "description": "Lookback window in hours (default 24)",
+                "default": 24,
+            },
         },
     },
     {
@@ -150,8 +178,9 @@ _PLANNING_SYSTEM = (
     "For new questions, combine it with a search tool so you have URLs to read. "
     "Do NOT use read_article for simple overview questions.\n\n"
     "If the question is NOT about news, world events, geopolitics, or current "
-    "affairs, respond with: {{\"tools\": [], \"off_topic\": true}}\n\n"
-    "Otherwise respond with ONLY valid JSON: {{\"tools\": [{{\"name\": \"...\", \"args\": {{...}}}}]}}\n"
+    'affairs, respond with: {{"tools": [], "off_topic": true}}\n\n'
+    "Otherwise respond with ONLY valid JSON: "
+    '{{"tools": [{{"name": "...", "args": {{...}}}}]}}\n'
     "Do not include any other text."
 )
 
@@ -184,7 +213,10 @@ def _get_anthropic_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
-def _build_context(retrieval_results: list[dict], max_articles: int | None = None) -> tuple[str, list[dict]]:
+def _build_context(
+    retrieval_results: list[dict],
+    max_articles: int | None = None,
+) -> tuple[str, list[dict]]:
     """Deduplicate and format retrieval results as numbered entries.
 
     Handles both article results (from semantic/keyword search) and
@@ -236,13 +268,15 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
             parts.append(f"  Content ({quality}):\n    {sc['text'][:2000]}")
 
         entries.append("\n".join(parts))
-        article_index.append({
-            "title": title,
-            "url": url,
-            "source_name": item.get("source_name", ""),
-            "lat": item.get("latitude"),
-            "lng": item.get("longitude"),
-        })
+        article_index.append(
+            {
+                "title": title,
+                "url": url,
+                "source_name": item.get("source_name", ""),
+                "lat": item.get("latitude"),
+                "lng": item.get("longitude"),
+            }
+        )
 
     # Collect scraped article text keyed by URL for enriching entries
     scraped_text: dict[str, dict] = {}
@@ -310,13 +344,15 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
             parts_list = [f"[{idx}] {title}", f"  URL: {url}"]
             parts_list.append(f"  Content ({quality}):\n    {sc['text'][:2000]}")
             entries.append("\n".join(parts_list))
-            article_index.append({
-                "title": title,
-                "url": url,
-                "source_name": "",
-                "lat": None,
-                "lng": None,
-            })
+            article_index.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "source_name": "",
+                    "lat": None,
+                    "lng": None,
+                }
+            )
 
     # Combine graph relationship map + numbered article entries
     parts = []
@@ -326,8 +362,12 @@ def _build_context(retrieval_results: list[dict], max_articles: int | None = Non
         parts.append("\n\n".join(entries))
 
     context = "\n\n".join(parts) if parts else "(No results found.)"
-    logger.info("Built context with %d entries, %d graph sections (%d chars)",
-                len(entries), len(graph_sections), len(context))
+    logger.info(
+        "Built context with %d entries, %d graph sections (%d chars)",
+        len(entries),
+        len(graph_sections),
+        len(context),
+    )
     return context, article_index
 
 
@@ -338,22 +378,26 @@ def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[di
         idx = c.get("index", 0)
         if 1 <= idx <= len(article_index):
             article = article_index[idx - 1]
-            enriched.append({
-                "title": article["title"],
-                "url": article["url"],
-                "source_name": article["source_name"],
-                "lat": article.get("lat") or 0,
-                "lng": article.get("lng") or 0,
-            })
+            enriched.append(
+                {
+                    "title": article["title"],
+                    "url": article["url"],
+                    "source_name": article["source_name"],
+                    "lat": article.get("lat") or 0,
+                    "lng": article.get("lng") or 0,
+                }
+            )
         else:
             # Fallback: use whatever the LLM provided
-            enriched.append({
-                "title": c.get("title", ""),
-                "url": c.get("source_url", c.get("url", "")),
-                "source_name": c.get("source_name", ""),
-                "lat": c.get("lat", 0),
-                "lng": c.get("lng", 0),
-            })
+            enriched.append(
+                {
+                    "title": c.get("title", ""),
+                    "url": c.get("source_url", c.get("url", "")),
+                    "source_name": c.get("source_name", ""),
+                    "lat": c.get("lat", 0),
+                    "lng": c.get("lng", 0),
+                }
+            )
     return enriched
 
 
@@ -418,12 +462,59 @@ _OFF_TOPIC_ANSWER = (
 
 
 _STOP_WORDS = {
-    "what", "when", "where", "who", "why", "how", "is", "are", "was", "were",
-    "do", "does", "did", "has", "have", "had", "the", "a", "an", "in", "on",
-    "at", "to", "for", "of", "with", "about", "from", "by", "up", "it",
-    "and", "or", "but", "not", "this", "that", "there", "happened", "today",
-    "tell", "me", "can", "you", "any", "some", "been", "going", "latest",
-    "recent", "news", "currently", "happening",
+    "what",
+    "when",
+    "where",
+    "who",
+    "why",
+    "how",
+    "is",
+    "are",
+    "was",
+    "were",
+    "do",
+    "does",
+    "did",
+    "has",
+    "have",
+    "had",
+    "the",
+    "a",
+    "an",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "about",
+    "from",
+    "by",
+    "up",
+    "it",
+    "and",
+    "or",
+    "but",
+    "not",
+    "this",
+    "that",
+    "there",
+    "happened",
+    "today",
+    "tell",
+    "me",
+    "can",
+    "you",
+    "any",
+    "some",
+    "been",
+    "going",
+    "latest",
+    "recent",
+    "news",
+    "currently",
+    "happening",
 }
 
 
@@ -439,7 +530,12 @@ def _fallback(question: str) -> list[dict]:
 
 
 _ALLOWED_TIME_RANGES = {
-    "1 hour", "6 hours", "12 hours", "24 hours", "48 hours", "7 days",
+    "1 hour",
+    "6 hours",
+    "12 hours",
+    "24 hours",
+    "48 hours",
+    "7 days",
 }
 
 
@@ -453,10 +549,7 @@ def _sanitize_tool_args(name: str, args: dict) -> dict:
             clean[k] = v
         elif isinstance(v, list):
             # Sanitize list items (e.g. read_article urls)
-            clean[k] = [
-                item[:500].strip() if isinstance(item, str) else item
-                for item in v[:20]
-            ]
+            clean[k] = [item[:500].strip() if isinstance(item, str) else item for item in v[:20]]
 
     if "limit" in clean:
         clean["limit"] = max(1, min(int(clean["limit"]), 20))
@@ -510,10 +603,12 @@ async def synthesize_answer(
     messages: list[dict] = []
     if conversation_history:
         messages.extend(conversation_history[-6:])
-    messages.append({
-        "role": "user",
-        "content": f"Question: {question}\n\nRetrieved context:\n{context}",
-    })
+    messages.append(
+        {
+            "role": "user",
+            "content": f"Question: {question}\n\nRetrieved context:\n{context}",
+        }
+    )
 
     try:
         client = _get_anthropic_client()
@@ -549,9 +644,7 @@ async def synthesize_answer(
             }
 
         # Truncated JSON fallback: extract the answer value directly
-        answer_match = re.search(
-            r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL
-        )
+        answer_match = re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
         if answer_match:
             logger.warning("JSON truncated — extracted answer field via regex.")
             return {
@@ -651,9 +744,9 @@ async def ask(
         if not urls:
             urls = _collect_urls_from_history(conversation_history)
         if urls:
-            read_results = await execute_retrieval([
-                {"name": "read_article", "args": {"urls": urls[:5], "question": question}}
-            ])
+            read_results = await execute_retrieval(
+                [{"name": "read_article", "args": {"urls": urls[:5], "question": question}}]
+            )
             retrieval_results.extend(read_results)
 
     # Step 4: Build context

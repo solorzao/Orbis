@@ -59,7 +59,9 @@ class TestPopulateGraph:
         pool, conn = _mock_pool()
         article = _make_article(persons=[], organizations=[], topic_tags=[])
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             await populate_graph([article])
 
         # First fetchval call should be for the ARTICLE node
@@ -74,13 +76,17 @@ class TestPopulateGraph:
         pool, conn = _mock_pool()
         article = _make_article(organizations=[], topic_tags=[])
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             edges = await populate_graph([article])
 
         # Should have edges: 2 MENTIONED_IN (persons) + 1 LOCATED_AT + 1 CO_MENTIONED
         # Check that MENTIONED_IN was used in execute calls
         execute_calls = conn.execute.call_args_list
-        mentioned_in_calls = [c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "MENTIONED_IN"]
+        mentioned_in_calls = [
+            c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "MENTIONED_IN"
+        ]
         assert len(mentioned_in_calls) == 2
 
     @pytest.mark.asyncio
@@ -90,11 +96,15 @@ class TestPopulateGraph:
         pool, conn = _mock_pool()
         article = _make_article(persons=[], topic_tags=[])
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             await populate_graph([article])
 
         execute_calls = conn.execute.call_args_list
-        mentioned_in_calls = [c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "MENTIONED_IN"]
+        mentioned_in_calls = [
+            c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "MENTIONED_IN"
+        ]
         assert len(mentioned_in_calls) == 1
 
     @pytest.mark.asyncio
@@ -105,12 +115,16 @@ class TestPopulateGraph:
         # 2 persons + 1 org = 3 entities => C(3,2) = 3 CO_MENTIONED edges
         article = _make_article(topic_tags=[])
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             edges = await populate_graph([article])
 
         # CO_MENTIONED: since execute returns "UPDATE 0", all will INSERT
         execute_calls = conn.execute.call_args_list
-        co_mentioned_calls = [c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "CO_MENTIONED"]
+        co_mentioned_calls = [
+            c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "CO_MENTIONED"
+        ]
         assert len(co_mentioned_calls) == 3
 
     @pytest.mark.asyncio
@@ -120,7 +134,9 @@ class TestPopulateGraph:
         pool, conn = _mock_pool()
         article = _make_article(persons=[], organizations=[], topic_tags=[])
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             await populate_graph([article])
 
         execute_calls = conn.execute.call_args_list
@@ -134,7 +150,9 @@ class TestPopulateGraph:
         pool, conn = _mock_pool()
         article = _make_article(persons=[], organizations=[], topic_tags=["politics", "economy"])
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             await populate_graph([article])
 
         execute_calls = conn.execute.call_args_list
@@ -149,7 +167,9 @@ class TestPopulateGraph:
         # 2 persons + 1 org = 3 MENTIONED_IN + 1 LOCATED_AT + 1 ABOUT_TOPIC + 3 CO_MENTIONED = 8
         article = _make_article()
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             edges = await populate_graph([article])
 
         assert edges == 8
@@ -169,7 +189,9 @@ class TestPopulateGraph:
         article = _make_article()
         article["id"] = None
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             edges = await populate_graph([article])
 
         assert edges == 0
@@ -184,7 +206,9 @@ class TestPurgeOrphanedNodes:
         pool = AsyncMock()
         pool.execute = AsyncMock(return_value="DELETE 5")
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             count = await purge_orphaned_nodes()
 
         assert count == 5
@@ -199,7 +223,9 @@ class TestPurgeOrphanedNodes:
         pool = AsyncMock()
         pool.execute = AsyncMock(return_value="DELETE 0")
 
-        with patch("app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool):
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
             count = await purge_orphaned_nodes()
 
         assert count == 0

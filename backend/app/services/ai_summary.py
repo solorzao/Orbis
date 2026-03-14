@@ -24,7 +24,7 @@ _SYSTEM_PROMPT = (
     "information comes from. Output ONLY plain sentences — no markdown, no "
     "headings, no bold, no bullet points, no labels. Never explain your "
     "reasoning or mention which stories you excluded. If nothing seems "
-    'relevant, just briefly summarize the headlines you have. Respond with '
+    "relevant, just briefly summarize the headlines you have. Respond with "
     'exactly "NONE" (and nothing else) only if the headlines are completely '
     "unrelated gibberish."
 )
@@ -57,9 +57,12 @@ async def summarise_cluster(
         return str(cached)
 
     # Compose the user message with location context.
-    location = sanitise_text(location_name, max_length=100) if location_name else f"{lat:.1f}°, {lng:.1f}°"
+    location = (
+        sanitise_text(location_name, max_length=100) if location_name else f"{lat:.1f}°, {lng:.1f}°"
+    )
     lines = [
-        f"- {sanitise_text(a.title, max_length=200)} ({sanitise_text(a.source_name, max_length=50)})"
+        f"- {sanitise_text(a.title, max_length=200)}"
+        f" ({sanitise_text(a.source_name, max_length=50)})"
         for a in articles[:30]
         if not has_injection_pattern(a.title)
     ]
@@ -97,8 +100,12 @@ async def summarise_selection(
     if not headlines:
         return ""
 
-    location = f"Location: {sanitise_text(location_name, max_length=100)}\n\n" if location_name else ""
-    clean = [sanitise_text(h, max_length=200) for h in headlines[:10] if not has_injection_pattern(h)]
+    location = (
+        f"Location: {sanitise_text(location_name, max_length=100)}\n\n" if location_name else ""
+    )
+    clean = [
+        sanitise_text(h, max_length=200) for h in headlines[:10] if not has_injection_pattern(h)
+    ]
     if not clean:
         return ""
     lines = [f"- {h}" for h in clean]

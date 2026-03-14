@@ -16,7 +16,15 @@ test.describe("Globe Page", () => {
     const filter = page.getByTestId("topic-filter");
     await expect(filter).toBeVisible();
 
-    for (const topic of ["All", "Politics", "Conflict", "Technology", "Climate", "Economy", "Health"]) {
+    for (const topic of [
+      "All",
+      "Politics",
+      "Conflict",
+      "Technology",
+      "Climate",
+      "Economy",
+      "Health",
+    ]) {
       await expect(page.locator("button", { hasText: topic })).toBeVisible();
     }
   });

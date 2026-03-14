@@ -1,9 +1,9 @@
 """Tests for the OpenAI embedding generation service."""
 
 import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _fake_embedding(dim: int = 1536) -> list[float]:
@@ -37,13 +37,16 @@ class TestGenerateEmbeddings:
         mock_client = AsyncMock()
         mock_client.embeddings.create = AsyncMock(return_value=mock_response)
 
-        with patch(
-            "app.services.embeddings._get_openai_client",
-            return_value=mock_client,
-        ), patch(
-            "app.services.embeddings.get_pool",
-            new_callable=AsyncMock,
-            return_value=mock_pool,
+        with (
+            patch(
+                "app.services.embeddings._get_openai_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.embeddings.get_pool",
+                new_callable=AsyncMock,
+                return_value=mock_pool,
+            ),
         ):
             count = await generate_embeddings()
 
