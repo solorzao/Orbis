@@ -24,11 +24,11 @@ test.describe("Agent Panel", () => {
     await expect(page.locator("text=Ask questions about global events")).toBeVisible();
   });
 
-  test("close button hides agent panel", async ({ page }) => {
+  test("minimize button hides agent panel", async ({ page }) => {
     await page.getByTestId("agent-toggle").click();
     await expect(page.getByTestId("agent-panel")).toBeVisible();
 
-    await page.locator('button[aria-label="Close panel"]').click();
+    await page.locator('button[aria-label="Minimize panel"]').click();
     await expect(page.getByTestId("agent-panel")).not.toBeVisible();
   });
 
