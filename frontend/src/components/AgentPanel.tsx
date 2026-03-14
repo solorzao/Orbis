@@ -100,21 +100,11 @@ export default function AgentPanel({
           <button
             onClick={onClose}
             className="group flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-muted)] transition-colors hover:border-blue-500/30 hover:text-[var(--text-secondary)]"
-            aria-label="Close panel"
+            aria-label="Minimize panel"
+            title="Minimize — reopen with the chat button"
           >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="none"
-              className="transition-transform group-hover:scale-110"
-            >
-              <path
-                d="M1 1L13 13M13 1L1 13"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M2 7h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
           </button>
         </div>

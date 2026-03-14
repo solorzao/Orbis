@@ -347,29 +347,36 @@ export default function Home() {
       />
 
       {/* Agent Toggle */}
-      <button
-        onClick={() => setAgentOpen((o) => !o)}
-        className="fixed bottom-44 left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-8 sm:left-6 sm:h-12 sm:w-12"
-        style={{
-          background: "var(--surface-overlay)",
-          backdropFilter: "blur(12px)",
-        }}
-        aria-label="Toggle agent panel"
-        data-testid="agent-toggle"
-      >
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+      {!agentOpen && (
+        <button
+          onClick={() => setAgentOpen(true)}
+          className="fixed bottom-44 left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-8 sm:left-6 sm:h-12 sm:w-12"
+          style={{
+            background: "var(--surface-overlay)",
+            backdropFilter: "blur(12px)",
+          }}
+          aria-label="Toggle agent panel"
+          data-testid="agent-toggle"
         >
-          <path d="M3 15a2 2 0 0 0 2 2h12l4 4V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />
-        </svg>
-      </button>
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M3 15a2 2 0 0 0 2 2h12l4 4V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />
+          </svg>
+          {agentMessages.length > 0 && (
+            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[9px] font-bold text-white">
+              {agentMessages.length}
+            </span>
+          )}
+        </button>
+      )}
 
       {/* Agent Panel */}
       <AnimatePresence>
