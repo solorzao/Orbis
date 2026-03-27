@@ -19,7 +19,7 @@ test.describe("Time Slider", () => {
   });
 
   test("shows Today label by default", async ({ page }) => {
-    await expect(page.locator("text=Today")).toBeVisible();
+    await expect(page.locator('button[aria-label="Today"]')).toBeVisible();
   });
 
   test("preset buttons are visible", async ({ page }) => {
@@ -44,40 +44,38 @@ test.describe("Time Slider", () => {
     await expect(page.locator("button", { hasText: "Reset" })).not.toBeVisible();
   });
 
-  test("previous day button navigates to yesterday", async ({ page }) => {
-    const prevButton = page.locator('button[aria-label="Previous day"]');
-    await expect(prevButton).toBeVisible();
-    await prevButton.click();
+  test("clicking Yday chip navigates to yesterday", async ({ page }) => {
+    const ydayChip = page.locator('button[aria-label="Yesterday"]');
+    await expect(ydayChip).toBeVisible();
+    await ydayChip.click();
 
     await expect(page.locator("text=Yesterday")).toBeVisible();
   });
 
-  test("next day button is disabled on Today", async ({ page }) => {
-    const nextButton = page.locator('button[aria-label="Next day"]');
-    await expect(nextButton).toBeDisabled();
+  test("Today chip is active by default", async ({ page }) => {
+    const todayChip = page.locator('button[aria-label="Today"]');
+    await expect(todayChip).toBeVisible();
+    // Today chip should have the active styling (blue text)
+    await expect(todayChip).toHaveClass(/text-blue-400/);
   });
 
-  test("next day button navigates back to Today from Yesterday", async ({ page }) => {
+  test("clicking Today chip from yesterday navigates back", async ({ page }) => {
     // Go to yesterday
-    await page.locator('button[aria-label="Previous day"]').click();
+    await page.locator('button[aria-label="Yesterday"]').click();
     await expect(page.locator("text=Yesterday")).toBeVisible();
 
     // Go back to today
-    const nextButton = page.locator('button[aria-label="Next day"]');
-    await expect(nextButton).toBeEnabled();
-    await nextButton.click();
+    const todayChip = page.locator('button[aria-label="Today"]');
+    await todayChip.click();
 
-    await expect(page.locator("text=Today")).toBeVisible();
+    await expect(todayChip).toHaveClass(/text-blue-400/);
   });
 
-  test("navigating multiple days back shows date label", async ({ page }) => {
-    // Go back 2 days
-    const prevButton = page.locator('button[aria-label="Previous day"]');
-    await prevButton.click();
-    await prevButton.click();
-
-    // Should show a formatted date (not "Today" or "Yesterday")
-    await expect(page.locator("text=Today")).not.toBeVisible();
-    await expect(page.locator("text=Yesterday")).not.toBeVisible();
+  test("day selector chips are visible", async ({ page }) => {
+    // Should have 7 day chips (Today + 6 days back)
+    const todayChip = page.locator('button[aria-label="Today"]');
+    const ydayChip = page.locator('button[aria-label="Yesterday"]');
+    await expect(todayChip).toBeVisible();
+    await expect(ydayChip).toBeVisible();
   });
 });

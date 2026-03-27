@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
@@ -51,14 +51,17 @@ export default function Home() {
     setLoading(true);
   }, []);
 
-  const dayWindow =
-    dayOffset === 0
-      ? null
-      : (() => {
-          const windowEnd = new Date(nowTs - dayOffset * 86400000);
-          const windowStart = new Date(windowEnd.getTime() - 86400000);
-          return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
-        })();
+  const dayWindow = useMemo(
+    () =>
+      dayOffset === 0
+        ? null
+        : (() => {
+            const windowEnd = new Date(nowTs - dayOffset * 86400000);
+            const windowStart = new Date(windowEnd.getTime() - 86400000);
+            return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
+          })(),
+    [dayOffset, nowTs],
+  );
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     if (action.type === "flyTo" && globeControlsRef.current) {
@@ -86,46 +89,62 @@ export default function Home() {
     }
   }, []);
 
-  // Fetch density when dayOffset changes
+  // Fetch density when dayOffset changes (with cancellation to prevent 429s)
   useEffect(() => {
-    fetchDensity(dayOffset)
-      .then((d) => {
-        setDensity(d);
-        if (dayOffset < 6) {
-          fetchDensity(dayOffset + 1)
-            .then((older) => {
-              setHasOlderData(older.some((h) => h.count > 0));
-            })
-            .catch(() => setHasOlderData(false));
-        } else {
-          setHasOlderData(false);
-        }
-      })
-      .catch(() => setDensity([]));
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetchDensity(dayOffset)
+        .then((d) => {
+          if (cancelled) return;
+          setDensity(d);
+          if (dayOffset < 6) {
+            fetchDensity(dayOffset + 1)
+              .then((older) => {
+                if (cancelled) return;
+                setHasOlderData(older.some((h) => h.count > 0));
+              })
+              .catch(() => {
+                if (!cancelled) setHasOlderData(false);
+              });
+          } else {
+            setHasOlderData(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setDensity([]);
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [dayOffset]);
 
   // Fetch globe data on mount and when timeRange or dayOffset changes
   useEffect(() => {
     let cancelled = false;
     const effectiveRange = timeRange ?? dayWindow;
-    fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
-      .then((apiPoints) => {
-        if (cancelled) return;
-        setAllPoints(apiPointsToGlobePoints(apiPoints));
-        setApiError(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setAllPoints([]);
-        setApiError(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const timer = setTimeout(() => {
+      fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
+        .then((apiPoints) => {
+          if (cancelled) return;
+          setAllPoints(apiPointsToGlobePoints(apiPoints));
+          setApiError(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAllPoints([]);
+          setApiError(true);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, 150);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [timeRange, dayOffset, dayWindow]);
+  }, [timeRange, dayWindow]);
 
   // Filter points client-side — instant, no API call
   const points =
