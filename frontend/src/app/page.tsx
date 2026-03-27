@@ -369,7 +369,7 @@ export default function Home() {
       {!agentOpen && (
         <button
           onClick={() => setAgentOpen(true)}
-          className="fixed bottom-44 left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-8 sm:left-6 sm:h-12 sm:w-12"
+          className="fixed bottom-52 left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-8 sm:left-6 sm:h-12 sm:w-12"
           style={{
             background: "var(--surface-overlay)",
             backdropFilter: "blur(12px)",
