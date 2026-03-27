@@ -146,7 +146,9 @@ export default function TimeSlider({
               ? "Today"
               : offset === 1
                 ? "Yesterday"
-                : new Date(mountTs - offset * 86400000).toLocaleDateString([], { weekday: "short" }),
+                : new Date(mountTs - offset * 86400000).toLocaleDateString([], {
+                    weekday: "short",
+                  }),
         };
       }),
     [mountTs],
