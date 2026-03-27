@@ -44,7 +44,7 @@ test.describe("Time Slider", () => {
     await expect(page.locator("button", { hasText: "Reset" })).not.toBeVisible();
   });
 
-  test("clicking Yday chip navigates to yesterday", async ({ page }) => {
+  test("clicking Yesterday chip navigates to yesterday", async ({ page }) => {
     const ydayChip = page.locator('button[aria-label="Yesterday"]');
     await expect(ydayChip).toBeVisible();
     await ydayChip.click();
