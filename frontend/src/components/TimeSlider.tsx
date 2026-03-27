@@ -134,17 +134,23 @@ export default function TimeSlider({
   const windowLabel = useMemo(() => dayLabel(dayOffset), [dayLabel, dayOffset]);
 
   // Day chips for direct day selection (today + 6 days back)
+  // Reversed so past is on the left, present on the right (matches arrow direction)
   const dayChips = useMemo(
     () =>
-      Array.from({ length: 7 }, (_, i) => ({
-        offset: i,
-        label:
-          i === 0
-            ? "Today"
-            : i === 1
-              ? "Yesterday"
-              : new Date(mountTs - i * 86400000).toLocaleDateString([], { weekday: "short" }),
-      })),
+      Array.from({ length: 7 }, (_, i) => {
+        const offset = 6 - i; // 6, 5, 4, 3, 2, 1, 0 (past → present)
+        return {
+          offset,
+          label:
+            offset === 0
+              ? "Today"
+              : offset === 1
+                ? "Yesterday"
+                : new Date(mountTs - offset * 86400000).toLocaleDateString([], {
+                    weekday: "short",
+                  }),
+        };
+      }),
     [mountTs],
   );
 
