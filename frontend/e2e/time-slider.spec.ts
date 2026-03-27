@@ -19,7 +19,7 @@ test.describe("Time Slider", () => {
   });
 
   test("shows Today label by default", async ({ page }) => {
-    await expect(page.locator("text=Today")).toBeVisible();
+    await expect(page.locator('button[aria-label="Today"]')).toBeVisible();
   });
 
   test("preset buttons are visible", async ({ page }) => {
