@@ -49,7 +49,8 @@ test.describe("Time Slider", () => {
     await expect(ydayChip).toBeVisible();
     await ydayChip.click();
 
-    await expect(page.locator("text=Yesterday")).toBeVisible();
+    // Verify the Yesterday chip is now active
+    await expect(ydayChip).toHaveClass(/text-blue-400/);
   });
 
   test("Today chip is active by default", async ({ page }) => {
@@ -61,8 +62,9 @@ test.describe("Time Slider", () => {
 
   test("clicking Today chip from yesterday navigates back", async ({ page }) => {
     // Go to yesterday
-    await page.locator('button[aria-label="Yesterday"]').click();
-    await expect(page.locator("text=Yesterday")).toBeVisible();
+    const ydayChip = page.locator('button[aria-label="Yesterday"]');
+    await ydayChip.click();
+    await expect(ydayChip).toHaveClass(/text-blue-400/);
 
     // Go back to today
     const todayChip = page.locator('button[aria-label="Today"]');
