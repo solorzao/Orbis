@@ -13,10 +13,9 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 const STORAGE_KEY = "orbis-theme";
 
-function getTimeBasedTheme(): ThemeChoice {
+function getSystemTheme(): ThemeChoice {
   if (typeof window === "undefined") return "dark";
-  const hour = new Date().getHours();
-  return hour >= 7 && hour < 19 ? "light" : "dark";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 function applyTheme(theme: ThemeChoice) {
@@ -27,7 +26,7 @@ function getInitialChoice(): ThemeChoice {
   if (typeof window === "undefined") return "dark";
   const stored = localStorage.getItem(STORAGE_KEY) as ThemeChoice | null;
   if (stored && (stored === "light" || stored === "dark")) return stored;
-  return getTimeBasedTheme();
+  return getSystemTheme();
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

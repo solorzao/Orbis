@@ -118,12 +118,28 @@ export default function TimeSlider({
 
   // Capture "now" in state initializer (allowed to be impure) to keep memo pure.
   const [mountTs] = useState(() => Date.now());
-  const windowLabel = useMemo(() => {
-    if (dayOffset === 0) return "Today";
-    if (dayOffset === 1) return "Yesterday";
-    const d = new Date(mountTs - dayOffset * 86400000);
-    return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-  }, [dayOffset, mountTs]);
+
+  const dayLabel = useCallback(
+    (offset: number): string => {
+      if (offset === 0) return "Today";
+      if (offset === 1) return "Yesterday";
+      const d = new Date(mountTs - offset * 86400000);
+      return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    },
+    [mountTs],
+  );
+
+  const windowLabel = useMemo(() => dayLabel(dayOffset), [dayLabel, dayOffset]);
+
+  // Day chips for direct day selection (today + 6 days back)
+  const dayChips = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, i) => ({
+        offset: i,
+        label: i === 0 ? "Today" : i === 1 ? "Yday" : new Date(mountTs - i * 86400000).toLocaleDateString([], { weekday: "short" }),
+      })),
+    [mountTs],
+  );
 
   // Sparkline max for scaling
   const maxCount = useMemo(() => Math.max(1, ...density.map((d) => d.count)), [density]);
@@ -151,29 +167,33 @@ export default function TimeSlider({
   return (
     <div
       data-testid="time-slider"
-      className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 flex items-center gap-2"
+      className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 flex flex-col items-center gap-1.5"
     >
-      {/* Left arrow — previous day */}
-      <button
-        onClick={() => onDayChange(dayOffset + 1)}
-        disabled={!hasOlderData || dayOffset >= 6}
-        className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] text-[var(--text-muted)] transition-all hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-20 disabled:pointer-events-none"
+      {/* Day selector chips */}
+      <div
+        className="flex items-center gap-1 rounded-full border border-[var(--border-subtle)] px-1.5 py-1"
         style={{ background: "var(--surface-overlay)", backdropFilter: "blur(12px)" }}
-        aria-label="Previous day"
       >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 14 14"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M9 2L4 7l5 5" />
-        </svg>
-      </button>
+        {dayChips.map(({ offset, label }) => {
+          const isActive = dayOffset === offset;
+          const isDisabled = offset > 0 && offset > dayOffset && !hasOlderData && offset > dayOffset;
+          return (
+            <button
+              key={offset}
+              onClick={() => onDayChange(offset)}
+              disabled={isDisabled}
+              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-all ${
+                isActive
+                  ? "bg-blue-500/20 text-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.2)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+              } disabled:opacity-20 disabled:pointer-events-none`}
+              aria-label={dayLabel(offset)}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
 
       {/* Slider panel */}
       <div className="w-[80vw] max-w-2xl">
@@ -346,27 +366,6 @@ export default function TimeSlider({
         </div>
       </div>
 
-      {/* Right arrow — next day */}
-      <button
-        onClick={() => onDayChange(dayOffset - 1)}
-        disabled={dayOffset <= 0}
-        className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] text-[var(--text-muted)] transition-all hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-20 disabled:pointer-events-none"
-        style={{ background: "var(--surface-overlay)", backdropFilter: "blur(12px)" }}
-        aria-label="Next day"
-      >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 14 14"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M5 2l5 5-5 5" />
-        </svg>
-      </button>
     </div>
   );
 }
