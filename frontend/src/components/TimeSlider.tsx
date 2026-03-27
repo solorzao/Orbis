@@ -136,7 +136,12 @@ export default function TimeSlider({
     () =>
       Array.from({ length: 7 }, (_, i) => ({
         offset: i,
-        label: i === 0 ? "Today" : i === 1 ? "Yday" : new Date(mountTs - i * 86400000).toLocaleDateString([], { weekday: "short" }),
+        label:
+          i === 0
+            ? "Today"
+            : i === 1
+              ? "Yday"
+              : new Date(mountTs - i * 86400000).toLocaleDateString([], { weekday: "short" }),
       })),
     [mountTs],
   );
@@ -176,7 +181,8 @@ export default function TimeSlider({
       >
         {dayChips.map(({ offset, label }) => {
           const isActive = dayOffset === offset;
-          const isDisabled = offset > 0 && offset > dayOffset && !hasOlderData && offset > dayOffset;
+          const isDisabled =
+            offset > 0 && offset > dayOffset && !hasOlderData && offset > dayOffset;
           return (
             <button
               key={offset}
@@ -365,7 +371,6 @@ export default function TimeSlider({
           </div>
         </div>
       </div>
-
     </div>
   );
 }
