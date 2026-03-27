@@ -43,6 +43,19 @@ export default function Home() {
     flyTo: (lat: number, lng: number, altitude: number) => void;
   } | null>(null);
 
+  // Track time slider height so the chat icon can sit above it on mobile
+  const [sliderHeight, setSliderHeight] = useState(0);
+  const sliderRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sliderRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setSliderHeight(entry.contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const handleDayChange = useCallback((newOffset: number) => {
     const clamped = Math.max(0, Math.min(6, newOffset));
     setDayOffset(clamped);
@@ -369,10 +382,11 @@ export default function Home() {
       {!agentOpen && (
         <button
           onClick={() => setAgentOpen(true)}
-          className="fixed bottom-64 left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-colors hover:border-blue-500/30 hover:bg-blue-500/10 sm:bottom-8 sm:left-6 sm:h-12 sm:w-12"
+          className="fixed left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-all hover:border-blue-500/30 hover:bg-blue-500/10 sm:!bottom-8 sm:left-6 sm:h-12 sm:w-12"
           style={{
             background: "var(--surface-overlay)",
             backdropFilter: "blur(12px)",
+            bottom: `${sliderHeight + 24}px`,
           }}
           aria-label="Toggle agent panel"
           data-testid="agent-toggle"
@@ -429,6 +443,7 @@ export default function Home() {
         isLive={!apiError && !loading && dayOffset === 0}
         isLoading={loading}
         isOffline={apiError}
+        sliderRef={sliderRef}
       />
     </main>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, type RefObject } from "react";
 
 interface TimeSliderProps {
   density: { hour: number; count: number }[];
@@ -13,6 +13,7 @@ interface TimeSliderProps {
   isLive: boolean;
   isLoading: boolean;
   isOffline: boolean;
+  sliderRef?: RefObject<HTMLDivElement | null>;
 }
 
 export default function TimeSlider({
@@ -25,6 +26,7 @@ export default function TimeSlider({
   totalLocations,
   isLoading,
   isOffline,
+  sliderRef,
 }: TimeSliderProps) {
   // Range values: 0 = now, 24 = 24h ago
   // We invert for display: left = oldest (24), right = newest (0)
@@ -171,6 +173,7 @@ export default function TimeSlider({
 
   return (
     <div
+      ref={sliderRef}
       data-testid="time-slider"
       className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 flex flex-col items-center gap-1.5"
     >
