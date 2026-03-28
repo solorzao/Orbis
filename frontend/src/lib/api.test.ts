@@ -28,7 +28,7 @@ describe("fetchGlobeNews", () => {
     const url = new URL(mockFetch.mock.calls[0][0]);
     expect(url.pathname).toBe("/api/news");
     expect(url.searchParams.get("timespan")).toBe("24h");
-    expect(url.searchParams.get("limit")).toBe("1000");
+    expect(url.searchParams.get("limit")).toBe("500");
     expect(url.searchParams.has("topic")).toBe(false);
   });
 
