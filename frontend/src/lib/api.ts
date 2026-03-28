@@ -59,7 +59,7 @@ async function apiFetch<T>(path: string, params?: Record<string, string>): Promi
 
 export function fetchGlobeNews(
   timespan = "24h",
-  limit = 500,
+  limit = 1000,
   startTime?: string,
   endTime?: string,
 ): Promise<ApiGlobePoint[]> {

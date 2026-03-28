@@ -60,7 +60,7 @@ export default function PanelTab({ entry, onExpand, onClose }: PanelTabProps) {
           {shortName}
         </p>
         <p className="text-[9px]" style={{ color: "var(--text-muted)" }}>
-          {isLoading ? "Loading..." : `${entry.articles.length} stories`}
+          {isLoading ? "Loading..." : `${entry.point.count} stories`}
         </p>
       </div>
 

@@ -138,7 +138,7 @@ export default function Home() {
     let cancelled = false;
     const effectiveRange = timeRange ?? dayWindow;
     const timer = setTimeout(() => {
-      fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
+      fetchGlobeNews("24h", 1000, effectiveRange?.startTime, effectiveRange?.endTime)
         .then((apiPoints) => {
           if (cancelled) return;
           setAllPoints(apiPointsToGlobePoints(apiPoints));
