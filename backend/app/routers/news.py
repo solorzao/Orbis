@@ -119,7 +119,7 @@ def _row_to_article(row: dict) -> NewsArticle:
 @router.get("/news", response_model=list[GlobeDataPoint])
 async def get_globe_data(
     timespan: str = Query("24h", description="Timespan, e.g. 24h, 48h"),
-    limit: int = Query(500, ge=1, le=500, description="Max data points"),
+    limit: int = Query(1000, ge=1, le=1000, description="Max data points"),
     start_time: str | None = Query(None, description="ISO start time"),
     end_time: str | None = Query(None, description="ISO end time"),
 ) -> list[GlobeDataPoint]:
