@@ -33,8 +33,8 @@ describe("visitorIp", () => {
     ).toBe("203.0.113.7");
   });
 
-  it("falls back to the first x-forwarded-for entry", () => {
-    expect(visitorIp(new Headers({ "x-forwarded-for": "203.0.113.7, 10.0.0.1" }))).toBe(
+  it("falls back to the rightmost x-forwarded-for entry, not the spoofable leftmost", () => {
+    expect(visitorIp(new Headers({ "x-forwarded-for": "6.6.6.6, 203.0.113.7" }))).toBe(
       "203.0.113.7",
     );
   });

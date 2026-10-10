@@ -22,14 +22,16 @@ export function buildUpstreamUrl(base: string, segments: string[], search: strin
 }
 
 /**
- * The visitor's IP as reported by Vercel's edge, which overwrites any
- * client-supplied value in these headers.
+ * The visitor's IP. Vercel's edge always sets x-real-ip (overwriting any
+ * client-supplied value). Elsewhere, fall back to the rightmost
+ * x-forwarded-for entry: the one the nearest proxy appended. Leftmost
+ * entries are client-supplied and spoofable.
  */
 export function visitorIp(headers: Headers): string | null {
   const realIp = headers.get("x-real-ip");
   if (realIp) return realIp.trim();
   const forwarded = headers.get("x-forwarded-for");
-  return forwarded ? forwarded.split(",")[0].trim() : null;
+  return forwarded ? (forwarded.split(",").at(-1)?.trim() ?? null) : null;
 }
 
 export function upstreamRequestHeaders(incoming: Headers, apiKey: string): Headers {
