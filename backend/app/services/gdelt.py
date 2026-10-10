@@ -9,6 +9,7 @@ import logging
 import re
 import zipfile
 from datetime import datetime, timezone
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -130,12 +131,28 @@ def _estimate_sentiment(title: str) -> float:
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 1.5  # seconds
 
-_GKG_LASTUPDATE_URL = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
+_GKG_LASTUPDATE_URL = "https://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 
 # Max concurrent title-scrape connections
 _SCRAPE_CONCURRENCY = 30
 _SCRAPE_TIMEOUT = 5.0  # seconds per request
 _SCRAPE_MAX_BYTES = 15_000  # only read enough for <title>
+
+
+_GDELT_HOST = "data.gdeltproject.org"
+
+
+def _gdelt_https_url(url: str) -> str | None:
+    """Return *url* upgraded to https if it points at GDELT's data host, else None.
+
+    lastupdate.txt still lists http:// file URLs, but GDELT now redirects them
+    to https. Rewriting up front (rather than following redirects) keeps every
+    request on TLS and pinned to GDELT's host.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or parts.hostname != _GDELT_HOST:
+        return None
+    return urlunsplit(("https", _GDELT_HOST, parts.path, parts.query, ""))
 
 
 async def _download_bytes(url: str) -> bytes | None:
@@ -237,6 +254,12 @@ async def fetch_raw_gkg() -> list[dict]:
     if not gkg_url:
         logger.error("No GKG file URL found in lastupdate index.")
         return []
+
+    safe_url = _gdelt_https_url(gkg_url)
+    if not safe_url:
+        logger.error("Refusing GKG file URL outside %s: %s", _GDELT_HOST, gkg_url)
+        return []
+    gkg_url = safe_url
 
     # 2. Download and unzip
     logger.info("Downloading GKG file: %s", gkg_url.split("/")[-1])
