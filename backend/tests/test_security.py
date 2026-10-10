@@ -33,3 +33,21 @@ class TestClientIp:
 
     def test_falls_back_to_socket_peer(self):
         assert _client_ip(_request({})) == "10.0.0.5"
+
+
+class TestMiddlewareTrust:
+    """The proxy's client-IP header is honoured only for a matched, configured key."""
+
+    def _resolved_ip(self, monkeypatch, configured_key: str, headers: dict[str, str]) -> str:
+        from app.middleware import security
+
+        monkeypatch.setattr(security.settings, "api_key", configured_key)
+        return security._rate_limit_ip(_request(headers))
+
+    def test_trusted_with_matching_key(self, monkeypatch):
+        headers = {"X-API-Key": "k", "X-Orbis-Client-IP": "203.0.113.7"}
+        assert self._resolved_ip(monkeypatch, "k", headers) == "203.0.113.7"
+
+    def test_not_trusted_when_no_key_configured(self, monkeypatch):
+        headers = {"X-Orbis-Client-IP": "203.0.113.7", "X-Forwarded-For": "198.51.100.2"}
+        assert self._resolved_ip(monkeypatch, "", headers) == "198.51.100.2"
