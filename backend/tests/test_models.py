@@ -2,7 +2,9 @@
 
 from datetime import datetime, timezone
 
-from app.models.news import GlobeDataPoint, NewsArticle, NewsCluster
+import pytest
+
+from app.models.news import GlobeDataPoint, NewsArticle, NewsCluster, https_image_url
 
 
 def _make_article(**overrides) -> NewsArticle:
@@ -73,3 +75,62 @@ def test_globe_data_point():
     )
     assert point.article_count == 7
     assert point.topic == "politics"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # Upgrade http, keep https, reject everything that isn't a web URL.
+        ("http://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("https://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("javascript:alert(1)", None),
+        ("", None),
+        (None, None),
+        (123, None),
+        # urlsplit raises ValueError on these; they must not escape.
+        ("http://[cdn.example.com/a.jpg", None),
+        ("http://[example.com]/a.jpg", None),
+        ("http://ex\u2100ample.com/", None),
+        ("http://cdn.example.com:abc/a.jpg", None),
+        # Missing host or scheme.
+        ("http:host", None),
+        ("https:///x", None),
+        ("//host/x", None),
+        ("data:image/png;base64,AA==", None),
+        # Normalisation.
+        ("HTTP://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("  http://cdn.example.com/a.jpg\n", "https://cdn.example.com/a.jpg"),
+        # Control characters and oversized values.
+        ("http://cdn.example.com/a\x00.jpg", None),
+        pytest.param("https://cdn.example.com/" + "a" * 3000, None, id="too-long"),
+        # Userinfo, including the "trusted.com@evil" trick.
+        ("http://user:pass@cdn.example.com/a.jpg", None),
+        ("https://cnn.com@evil.example/a.jpg", None),
+        # IP literals and local-network names.
+        ("https://127.0.0.1/a", None),
+        ("https://[::1]/a", None),
+        ("https://localhost:8080/a", None),
+        ("https://printer.local/a", None),
+        ("https://intranet/a", None),
+        ("https://localhost./a", None),
+        # Ports: http's default port is dropped, other explicit ports are kept.
+        ("http://cdn.example.com:80/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("https://cdn.example.com:8443/a.jpg", "https://cdn.example.com:8443/a.jpg"),
+    ],
+)
+def test_https_image_url(url, expected):
+    assert https_image_url(url) == expected
+
+
+def test_article_image_url_upgraded_to_https():
+    article = _make_article(image_url="http://cdn.example.com/a.jpg")
+    assert article.image_url == "https://cdn.example.com/a.jpg"
+
+
+def test_article_malformed_image_url_becomes_none():
+    article = _make_article(image_url="http://[cdn.example.com/a.jpg")
+    assert article.image_url is None
+
+
+def test_article_image_url_defaults_to_none():
+    assert _make_article().image_url is None

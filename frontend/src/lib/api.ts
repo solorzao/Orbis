@@ -30,7 +30,7 @@ export interface ApiNewsArticle {
   topic_tags: string[];
   sentiment_score: number;
   entities: Record<string, unknown>;
-  image_url: string | null;
+  image_url?: string | null;
 }
 
 export interface ApiClusterSummary {

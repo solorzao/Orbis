@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Query
 
@@ -92,16 +91,6 @@ def _parse_timespan(timespan: str) -> int:
     return 24
 
 
-def _https_image(url: str | None) -> str | None:
-    """Return the image URL over https, or None if it isn't a web URL."""
-    if not url:
-        return None
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        return None
-    return parts._replace(scheme="https").geturl()
-
-
 def _row_to_article(row: dict) -> NewsArticle:
     """Convert a database row dict to a NewsArticle model."""
     return NewsArticle(
@@ -124,7 +113,7 @@ def _row_to_article(row: dict) -> NewsArticle:
             if isinstance(row.get("entities"), str)
             else row.get("entities", {})
         ),
-        image_url=_https_image(row.get("image_url")),
+        image_url=row.get("image_url"),
     )
 
 
