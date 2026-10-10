@@ -4,9 +4,12 @@ import io
 import zipfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+from app.services import gdelt
 from app.services.gdelt import (
+    _download_bytes,
     _is_usable_title,
     _parse_gkg_date,
     fetch_raw_gkg,
@@ -308,3 +311,32 @@ class TestScrapeTitles:
             result = await scrape_titles(articles)
             # Should have no title (article will be dropped by ingestion)
             assert not result[0].get("title")
+
+
+# ---------------------------------------------------------------------------
+# _download_bytes
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadBytes:
+    @pytest.mark.asyncio
+    async def test_follows_http_to_https_redirect(self, monkeypatch):
+        """GDELT now 301-redirects http:// to https://; downloads must follow it."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.scheme == "http":
+                return httpx.Response(
+                    301, headers={"Location": str(request.url.copy_with(scheme="https"))}
+                )
+            return httpx.Response(200, content=b"payload")
+
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(
+            gdelt.httpx,
+            "AsyncClient",
+            lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+        )
+
+        result = await _download_bytes("http://data.gdeltproject.org/gdeltv2/lastupdate.txt")
+
+        assert result == b"payload"

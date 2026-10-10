@@ -130,7 +130,7 @@ def _estimate_sentiment(title: str) -> float:
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 1.5  # seconds
 
-_GKG_LASTUPDATE_URL = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
+_GKG_LASTUPDATE_URL = "https://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 
 # Max concurrent title-scrape connections
 _SCRAPE_CONCURRENCY = 30
@@ -142,7 +142,9 @@ async def _download_bytes(url: str) -> bytes | None:
     """Download raw bytes from a URL with retries."""
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            # GDELT redirects http:// to https://, and the file URLs listed in
+            # lastupdate.txt are still http://, so redirects must be followed.
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 return resp.content
