@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.routers.news import _row_to_article
+
 
 def _make_globe_row(lat: float = 40.0, lng: float = -74.0, count: int = 3, topic: str = "general"):
     """Create a dict matching get_globe_points() output."""
@@ -345,3 +347,42 @@ class TestGetTopics:
             assert len(result) == 3
             assert result[0].topic == "conflict"
             assert result[0].count == 50
+
+
+def test_row_to_article_includes_image_url():
+    row = {
+        "id": "1",
+        "title": "t",
+        "source_url": "https://s",
+        "source_name": "s",
+        "latitude": 1.0,
+        "longitude": 2.0,
+        "image_url": "http://cdn.example.com/a.jpg",
+    }
+    assert _row_to_article(row).image_url == "https://cdn.example.com/a.jpg"
+
+
+@pytest.mark.asyncio
+async def test_cluster_endpoint_survives_malformed_image_url(monkeypatch):
+    """One unparseable image URL must not turn the whole cell into a 500."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import app
+    from app.middleware import security
+
+    monkeypatch.setattr(security.settings, "api_key", "")
+    rows = [
+        {**_make_db_row("Good image"), "image_url": "http://img.example.com/a.jpg"},
+        {**_make_db_row("Bad image"), "image_url": "https://img.example.com[1]/x.jpg"},
+    ]
+
+    with patch(
+        "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows
+    ):
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/news/cluster", params={"lat": 40.0, "lng": -74.0})
+
+    assert resp.status_code == 200
+    images = {a["title"]: a["image_url"] for a in resp.json()}
+    assert images == {"Good image": "https://img.example.com/a.jpg", "Bad image": None}

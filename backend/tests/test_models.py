@@ -2,7 +2,9 @@
 
 from datetime import datetime, timezone
 
-from app.models.news import GlobeDataPoint, NewsArticle, NewsCluster
+import pytest
+
+from app.models.news import GlobeDataPoint, NewsArticle, NewsCluster, https_image_url
 
 
 def _make_article(**overrides) -> NewsArticle:
@@ -73,3 +75,85 @@ def test_globe_data_point():
     )
     assert point.article_count == 7
     assert point.topic == "politics"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # Upgrade http, keep https, reject everything that isn't a web URL.
+        ("http://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("https://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("javascript:alert(1)", None),
+        ("", None),
+        (None, None),
+        (123, None),
+        # urlsplit raises ValueError on these; they must not escape.
+        ("http://[cdn.example.com/a.jpg", None),
+        ("http://[example.com]/a.jpg", None),
+        ("http://ex\u2100ample.com/", None),
+        ("http://cdn.example.com:abc/a.jpg", None),
+        # Missing host or scheme.
+        ("http:host", None),
+        ("https:///x", None),
+        ("//host/x", None),
+        ("data:image/png;base64,AA==", None),
+        # Normalisation.
+        ("HTTP://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("  http://cdn.example.com/a.jpg\n", "https://cdn.example.com/a.jpg"),
+        ("https://cdn.example.com/my image.jpg", "https://cdn.example.com/my%20image.jpg"),
+        # Control characters and oversized values.
+        ("http://cdn.example.com/a\x00.jpg", None),
+        pytest.param("https://cdn.example.com/" + "a" * 3000, None, id="too-long"),
+        # Userinfo, including the "trusted.com@evil" trick.
+        ("http://user:pass@cdn.example.com/a.jpg", None),
+        ("https://cnn.com@evil.example/a.jpg", None),
+        # IP literals and local-network names.
+        ("https://127.0.0.1/a", None),
+        ("https://[::1]/a", None),
+        ("https://localhost:8080/a", None),
+        ("https://printer.local/a", None),
+        ("https://intranet/a", None),
+        ("https://localhost./a", None),
+        # Shorthand IPv4 that browsers parse because the last label is a number.
+        ("https://127.1/a", None),
+        ("https://0x7f.0.0.1/a", None),
+        ("https://2130706433/a", None),
+        ("https://10.1/a", None),
+        ("https://cdn1.example.com/a", "https://cdn1.example.com/a"),
+        ("https://example.co.uk/a", "https://example.co.uk/a"),
+        # Hosts a browser canonicalises differently from Python: percent-escapes,
+        # ideographic and fullwidth dots and letters, and backslashes.
+        ("https://127.0.0%2E1/a.jpg", None),
+        ("https://192.168.1%2e1/admin", None),
+        ("https://foo.local%68ost/a", None),
+        ("https://printer.loc%61l/a", None),
+        ("https://127.0.0。1/a", None),
+        ("https://127.0.0.１/a", None),
+        ("https://foo.ｌocalhost/a", None),
+        ("https://127.0.0.1\\.example.com/a.jpg", None),
+        ("https://localhost\\.example.com/a.jpg", None),
+        # A real IDN is kept exactly as written.
+        ("https://bücher.example/a.jpg", "https://bücher.example/a.jpg"),
+        ("https://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
+        # Ports: http's default port is dropped, other explicit ports are kept.
+        ("http://cdn.example.com:80/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("http://cdn1.example.co.uk:80/a.jpg", "https://cdn1.example.co.uk/a.jpg"),
+        ("https://cdn.example.com:8443/a.jpg", "https://cdn.example.com:8443/a.jpg"),
+    ],
+)
+def test_https_image_url(url, expected):
+    assert https_image_url(url) == expected
+
+
+def test_article_image_url_upgraded_to_https():
+    article = _make_article(image_url="http://cdn.example.com/a.jpg")
+    assert article.image_url == "https://cdn.example.com/a.jpg"
+
+
+def test_article_malformed_image_url_becomes_none():
+    article = _make_article(image_url="http://[cdn.example.com/a.jpg")
+    assert article.image_url is None
+
+
+def test_article_image_url_defaults_to_none():
+    assert _make_article().image_url is None

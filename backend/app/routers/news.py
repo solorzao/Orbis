@@ -113,6 +113,7 @@ def _row_to_article(row: dict) -> NewsArticle:
             if isinstance(row.get("entities"), str)
             else row.get("entities", {})
         ),
+        image_url=row.get("image_url"),
     )
 
 
