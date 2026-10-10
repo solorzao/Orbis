@@ -4,12 +4,10 @@ import io
 import zipfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
-from app.services import gdelt
 from app.services.gdelt import (
-    _download_bytes,
+    _gdelt_https_url,
     _is_usable_title,
     _parse_gkg_date,
     fetch_raw_gkg,
@@ -314,29 +312,48 @@ class TestScrapeTitles:
 
 
 # ---------------------------------------------------------------------------
-# _download_bytes
+# _gdelt_https_url
 # ---------------------------------------------------------------------------
 
 
-class TestDownloadBytes:
-    @pytest.mark.asyncio
-    async def test_follows_http_to_https_redirect(self, monkeypatch):
-        """GDELT now 301-redirects http:// to https://; downloads must follow it."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.scheme == "http":
-                return httpx.Response(
-                    301, headers={"Location": str(request.url.copy_with(scheme="https"))}
-                )
-            return httpx.Response(200, content=b"payload")
-
-        real_client = httpx.AsyncClient
-        monkeypatch.setattr(
-            gdelt.httpx,
-            "AsyncClient",
-            lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+class TestGdeltHttpsUrl:
+    def test_upgrades_http_to_https(self):
+        assert (
+            _gdelt_https_url("http://data.gdeltproject.org/gdeltv2/x.gkg.csv.zip")
+            == "https://data.gdeltproject.org/gdeltv2/x.gkg.csv.zip"
         )
 
-        result = await _download_bytes("http://data.gdeltproject.org/gdeltv2/lastupdate.txt")
+    def test_keeps_https(self):
+        url = "https://data.gdeltproject.org/gdeltv2/x.gkg.csv.zip"
+        assert _gdelt_https_url(url) == url
 
-        assert result == b"payload"
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://169.254.169.254/metadata/identity",
+            "http://data.gdeltproject.org.evil.example/x.zip",
+            "http://user@evil.example/x.zip",
+            "file:///etc/passwd",
+        ],
+    )
+    def test_rejects_other_hosts_and_schemes(self, url):
+        assert _gdelt_https_url(url) is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_raw_gkg_downloads_over_https(self):
+        """lastupdate.txt lists http:// URLs; the file must be fetched via https."""
+        index = b"100 abc http://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
+        mock = AsyncMock(side_effect=[index, None])
+        with patch("app.services.gdelt._download_bytes", mock):
+            await fetch_raw_gkg()
+        assert mock.await_args_list[1].args[0] == (
+            "https://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fetch_raw_gkg_refuses_foreign_host(self):
+        index = b"100 abc http://169.254.169.254/latest.gkg.csv.zip"
+        mock = AsyncMock(side_effect=[index])
+        with patch("app.services.gdelt._download_bytes", mock):
+            assert await fetch_raw_gkg() == []
+        assert mock.await_count == 1
