@@ -98,8 +98,10 @@ resource "azurerm_key_vault_secret" "external" {
   value        = "unset"
   key_vault_id = azurerm_key_vault.orbis.id
 
+  # Fully hands-off after creation: values and metadata are owned by
+  # whoever runs `az keyvault secret set`.
   lifecycle {
-    ignore_changes = [value]
+    ignore_changes = all
   }
 
   depends_on = [azurerm_role_assignment.deployer_secrets]

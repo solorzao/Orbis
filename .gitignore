@@ -35,3 +35,5 @@ local.settings.json
 
 # Claude
 .claude/
+.vercel
+.env*.local
