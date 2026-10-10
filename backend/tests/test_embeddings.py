@@ -158,12 +158,14 @@ class TestGenerateEmbeddings:
 
     @pytest.mark.asyncio
     async def test_generate_embeddings_returns_partial_total_on_unexpected_error(self):
-        pool = _pool(_rows(4))
-        client = _client(side_effect=[_response(2), RuntimeError("boom")])
+        pool = _pool(_rows(6))
+        client = _client(side_effect=[_response(2), RuntimeError("boom"), _response(2)])
 
         count = await _run(client, pool, embedding_batch_size=2)
 
+        # The error in the middle chunk stops the run; the last chunk is never sent.
         assert count == 2
+        assert client.embeddings.create.await_count == 2
         pool.executemany.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -201,3 +203,14 @@ class TestGenerateEmbeddings:
             count = await generate_embeddings()
 
         assert count == 0
+
+
+class TestGetOpenAIClient:
+    def test_client_uses_a_short_timeout(self):
+        from app.config import settings
+        from app.services.embeddings import _get_openai_client
+
+        with patch.object(settings, "openai_api_key", "test-key"):
+            client = _get_openai_client()
+
+        assert client.timeout == 30.0
