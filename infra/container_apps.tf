@@ -17,6 +17,12 @@ resource "azurerm_container_app_environment" "orbis" {
   location                   = azurerm_resource_group.orbis.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.orbis.id
 
+  # Azure adds this profile implicitly; declaring it avoids a perpetual diff.
+  workload_profile {
+    name                  = "Consumption"
+    workload_profile_type = "Consumption"
+  }
+
   tags = {
     project     = "orbis"
     environment = "dev"
@@ -28,6 +34,7 @@ resource "azurerm_container_app" "api" {
   resource_group_name          = azurerm_resource_group.orbis.name
   container_app_environment_id = azurerm_container_app_environment.orbis.id
   revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
 
   tags = {
     project     = "orbis"
