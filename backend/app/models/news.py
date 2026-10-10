@@ -13,16 +13,20 @@ from pydantic import BaseModel, BeforeValidator, Field
 _MAX_IMAGE_URL_LENGTH = 2048
 _UNSAFE_URL_CHARS = re.compile(r"[\x00-\x20\x7f]")
 _LOCAL_HOST_SUFFIXES = (".localhost", ".local", ".internal")
+# The URL Standard's "ends in a number" check: browsers parse such hosts as IPv4.
+_NUMERIC_LABEL = re.compile(r"[0-9]+|0x[0-9a-f]*", re.IGNORECASE)
 
 
 def _is_local_host(host: str) -> bool:
-    """True for IP literals and names that only resolve on a local network."""
+    """True for IP literals (including shorthand IPv4) and local-network names."""
     host = host.rstrip(".")
     try:
         ipaddress.ip_address(host)
         return True
     except ValueError:
         pass
+    if _NUMERIC_LABEL.fullmatch(host.rsplit(".", 1)[-1]):
+        return True
     return host == "localhost" or host.endswith(_LOCAL_HOST_SUFFIXES) or "." not in host
 
 

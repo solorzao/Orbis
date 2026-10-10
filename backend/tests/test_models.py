@@ -113,6 +113,13 @@ def test_globe_data_point():
         ("https://printer.local/a", None),
         ("https://intranet/a", None),
         ("https://localhost./a", None),
+        # Shorthand IPv4 that browsers parse because the last label is a number.
+        ("https://127.1/a", None),
+        ("https://0x7f.0.0.1/a", None),
+        ("https://2130706433/a", None),
+        ("https://10.1/a", None),
+        ("https://cdn1.example.com/a", "https://cdn1.example.com/a"),
+        ("https://example.co.uk/a", "https://example.co.uk/a"),
         # Ports: http's default port is dropped, other explicit ports are kept.
         ("http://cdn.example.com:80/a.jpg", "https://cdn.example.com/a.jpg"),
         ("https://cdn.example.com:8443/a.jpg", "https://cdn.example.com:8443/a.jpg"),
