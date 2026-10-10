@@ -115,9 +115,7 @@ class Settings:
     )
 
     # --- AI model ---
-    haiku_model_id: str = field(
-        default_factory=lambda: _env("HAIKU_MODEL_ID", "claude-haiku-4-5-20251001")
-    )
+    haiku_model_id: str = field(default_factory=lambda: _env("HAIKU_MODEL_ID", "claude-haiku-5-5"))
     sonnet_model_id: str = field(
         default_factory=lambda: _env("SONNET_MODEL_ID", "claude-sonnet-4-5-20241022")
     )

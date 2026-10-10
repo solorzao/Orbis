@@ -16,6 +16,7 @@ import anthropic
 
 from app.config import settings
 from app.services import retrieval
+from app.services.llm import response_text
 
 logger = logging.getLogger("orbis.agent")
 
@@ -429,11 +430,12 @@ async def plan_retrieval(
         client = _get_anthropic_client()
         response = await client.messages.create(
             model=settings.haiku_model_id,
-            max_tokens=512,
+            max_tokens=2048,  # room for adaptive thinking plus the JSON plan
+            output_config={"effort": "low"},
             system=system,
             messages=messages,
         )
-        text = response.content[0].text.strip()
+        text = response_text(response).strip()
         logger.info("Planner raw response: %s", text[:500])
         # Strip markdown code fences the model sometimes wraps around JSON
         if text.startswith("```"):
@@ -614,11 +616,12 @@ async def synthesize_answer(
         client = _get_anthropic_client()
         response = await client.messages.create(
             model=settings.haiku_model_id,
-            max_tokens=4096,
+            max_tokens=8192,  # room for adaptive thinking plus the cited answer
+            output_config={"effort": "medium"},
             system=_SYNTHESIS_SYSTEM,
             messages=messages,
         )
-        text = response.content[0].text.strip()
+        text = response_text(response).strip()
         # Strip markdown code fences the model sometimes adds
         if text.startswith("```"):
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()

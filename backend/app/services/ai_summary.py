@@ -10,6 +10,7 @@ from app.config import settings
 from app.middleware.security import has_injection_pattern, sanitise_text
 from app.models.news import NewsArticle
 from app.services.cache import get_cached, set_cached
+from app.services.llm import response_text
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +129,12 @@ async def _call_claude(user_message: str, system: str | None = None) -> str:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model=settings.haiku_model_id,
-            max_tokens=256,
+            max_tokens=1024,  # room for adaptive thinking plus the short summary
+            output_config={"effort": "low"},
             system=system or _SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
-        # Extract the text from the first content block.
-        text = response.content[0].text if response.content else ""
-        return text.strip()
+        return response_text(response).strip()
     except anthropic.RateLimitError:
         logger.warning("Anthropic rate-limited — returning fallback.")
         return "Summary temporarily unavailable due to rate limits."
