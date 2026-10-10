@@ -22,14 +22,20 @@ def _get_openai_client() -> Any | None:
     try:
         from openai import AsyncOpenAI
 
-        return AsyncOpenAI(api_key=settings.openai_api_key)
+        # A short timeout so a hung call can't stall the ingestion cycle (default is 600 s).
+        return AsyncOpenAI(api_key=settings.openai_api_key, timeout=30.0)
     except ImportError:
         logger.warning("openai package not installed — skipping embeddings.")
         return None
 
 
 async def generate_embeddings() -> int:
-    """Embed articles that lack a vector and store results in PostgreSQL.
+    """Embed the backlog of articles that lack a vector and store results in PostgreSQL.
+
+    Fetches up to ``embedding_max_per_cycle`` unembedded articles, newest
+    first, in a single query, then embeds them in batches of
+    ``embedding_batch_size``. A batch OpenAI rejects as a bad request is
+    skipped; any other error stops the run.
 
     Returns the number of articles successfully embedded.
     """
@@ -37,40 +43,45 @@ async def generate_embeddings() -> int:
     if client is None:
         return 0
 
+    from openai import BadRequestError
+
+    total = 0
     try:
         pool = await get_pool()
-
         rows = await pool.fetch(
             "SELECT id, title FROM articles "
             "WHERE embedding IS NULL "
             "ORDER BY ingested_at DESC "
             "LIMIT $1",
-            settings.embedding_batch_size,
+            settings.embedding_max_per_cycle,
         )
-
-        if not rows:
-            return 0
-
-        titles = [r["title"] for r in rows]
-
-        response = await client.embeddings.create(
-            model=settings.embedding_model,
-            input=titles,
-        )
-
-        updates: list[tuple[str, Any]] = []
-        for row, embedding_obj in zip(rows, response.data):
-            vec_str = "[" + ",".join(str(v) for v in embedding_obj.embedding) + "]"
-            updates.append((vec_str, row["id"]))
-
-        await pool.executemany(
-            "UPDATE articles SET embedding = $1::vector WHERE id = $2",
-            updates,
-        )
-
-        logger.info("Generated embeddings for %d articles.", len(updates))
-        return len(updates)
-
+        size = settings.embedding_batch_size
+        for start in range(0, len(rows), size):
+            chunk = rows[start : start + size]
+            try:
+                response = await client.embeddings.create(
+                    model=settings.embedding_model,
+                    input=[r["title"] for r in chunk],
+                )
+                # %.9g round-trips float32 exactly and is cheaper than str().
+                updates: list[tuple[str, Any]] = [
+                    ("[" + ",".join("%.9g" % v for v in emb.embedding) + "]", row["id"])
+                    for row, emb in zip(chunk, response.data)
+                ]
+                # A response with no vectors leaves nothing to write.
+                if updates:
+                    await pool.executemany(
+                        "UPDATE articles SET embedding = $1::vector WHERE id = $2",
+                        updates,
+                    )
+                    total += len(updates)
+            except BadRequestError as exc:
+                logger.warning(
+                    "OpenAI rejected a batch of %d titles; skipping it: %s", len(chunk), exc
+                )
+        if total:
+            logger.info("Generated embeddings for %d articles.", total)
+        return total
     except Exception:
-        logger.error("Embedding generation failed.", exc_info=True)
-        return 0
+        logger.error("Embedding generation failed after %d articles.", total, exc_info=True)
+        return total
