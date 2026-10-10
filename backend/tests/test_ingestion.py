@@ -134,6 +134,34 @@ class TestIngestFromRawGkg:
             assert row["image_url"] == "https://example.com/img.jpg"
 
     @pytest.mark.asyncio
+    async def test_carries_country_fips_through(self):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [
+            _make_gkg_article(url="https://example.com/a", title="Story in London"),
+            _make_gkg_article(url="https://example.com/b", title="Story without a country"),
+        ]
+        articles[0].update(country_code="GB", country_fips="UK")
+        articles[1].update(country_code="", country_fips=None)
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
+            await _ingest_from_raw_gkg()
+
+        rows = mock_upsert.call_args[0][0]
+        assert (rows[0]["country_code"], rows[0]["country_fips"]) == ("GB", "UK")
+        # '' rather than NULL: NULL means "written before the FIPS to ISO switch".
+        assert (rows[1]["country_code"], rows[1]["country_fips"]) == ("", "")
+
+    @pytest.mark.asyncio
     async def test_returns_zero_on_empty_gkg(self):
         from app.services.ingestion import _ingest_from_raw_gkg
 
@@ -195,6 +223,11 @@ class TestRunIngestionCycle:
 
         with (
             patch(
+                "app.services.ingestion._backfill_iso_country_codes",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
                 "app.services.ingestion._ingest_from_raw_gkg",
                 new_callable=AsyncMock,
                 return_value=50,
@@ -211,13 +244,174 @@ class TestRunIngestionCycle:
     async def test_exception_does_not_crash(self):
         from app.services.ingestion import run_ingestion_cycle
 
-        with patch(
-            "app.services.ingestion._ingest_from_raw_gkg",
-            new_callable=AsyncMock,
-            side_effect=Exception("boom"),
+        with (
+            patch(
+                "app.services.ingestion._backfill_iso_country_codes",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "app.services.ingestion._ingest_from_raw_gkg",
+                new_callable=AsyncMock,
+                side_effect=Exception("boom"),
+            ),
         ):
             count = await run_ingestion_cycle()
             assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_backfill_runs_first(self):
+        from app.services.ingestion import run_ingestion_cycle
+
+        calls: list[str] = []
+
+        def _record(name, result=None):
+            async def _step(*_args):
+                calls.append(name)
+                return result
+
+            return _step
+
+        with (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion._backfill_iso_country_codes",
+                side_effect=_record("backfill", 0),
+            ),
+            patch(
+                "app.services.ingestion._ingest_from_raw_gkg",
+                side_effect=_record("ingest", 5),
+            ),
+            patch(
+                "app.services.ingestion._purge_old_articles",
+                side_effect=_record("purge"),
+            ),
+            patch(
+                "app.services.ingestion.generate_embeddings",
+                side_effect=_record("embed", 0),
+            ),
+        ):
+            assert await run_ingestion_cycle() == 5
+
+        assert calls == ["backfill", "ingest", "purge", "embed"]
+
+    @pytest.mark.asyncio
+    async def test_backfill_failure_does_not_stop_cycle(self):
+        from app.services.ingestion import run_ingestion_cycle
+
+        with (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion._backfill_iso_country_codes",
+                new_callable=AsyncMock,
+                side_effect=Exception("backfill boom"),
+            ),
+            patch(
+                "app.services.ingestion._ingest_from_raw_gkg",
+                new_callable=AsyncMock,
+                return_value=7,
+            ) as mock_ingest,
+            patch(
+                "app.services.ingestion._purge_old_articles",
+                new_callable=AsyncMock,
+            ) as mock_purge,
+            patch(
+                "app.services.ingestion.generate_embeddings",
+                new_callable=AsyncMock,
+                return_value=0,
+            ) as mock_embed,
+        ):
+            count = await run_ingestion_cycle()
+
+        assert count == 7
+        mock_ingest.assert_awaited_once()
+        mock_purge.assert_awaited_once()
+        mock_embed.assert_awaited_once()
+
+
+class _FakeArticlesPool:
+    """In-memory stand-in for the two queries the backfill issues.
+
+    ``rows`` are dicts with ``country_code`` and ``country_fips``. The UPDATE
+    matches with Python ``==``, which treats None like SQL IS NOT DISTINCT FROM.
+    """
+
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+        self.updates: list[tuple] = []
+
+    async def fetch(self, query, *args):
+        assert "country_fips IS NULL" in query
+        codes = {r["country_code"] for r in self.rows if r["country_fips"] is None}
+        return [{"country_code": c} for c in sorted(codes, key=lambda c: c or "")]
+
+    async def execute(self, query, fips, iso, original):
+        assert "IS NOT DISTINCT FROM $3" in query
+        self.updates.append((fips, iso, original))
+        n = 0
+        for r in self.rows:
+            if r["country_fips"] is None and r["country_code"] == original:
+                r["country_fips"], r["country_code"] = fips, iso
+                n += 1
+        return f"UPDATE {n}"
+
+
+class TestBackfillIsoCountryCodes:
+    @pytest.mark.asyncio
+    async def test_converts_pre_switch_fips_rows(self):
+        from app.services.ingestion import _backfill_iso_country_codes
+
+        rows = [
+            {"country_code": "UK", "country_fips": None},
+            {"country_code": "UK", "country_fips": None},
+            {"country_code": "CH", "country_fips": None},
+            {"country_code": "ZZ", "country_fips": None},  # unknown FIPS
+            {"country_code": "GB", "country_fips": "UK"},  # already converted
+        ]
+        pool = _FakeArticlesPool(rows)
+
+        assert await _backfill_iso_country_codes(pool) == 4
+
+        assert rows == [
+            {"country_code": "GB", "country_fips": "UK"},
+            {"country_code": "GB", "country_fips": "UK"},
+            {"country_code": "CN", "country_fips": "CH"},
+            {"country_code": "", "country_fips": "ZZ"},
+            {"country_code": "GB", "country_fips": "UK"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_converts_rows_with_null_country_code(self):
+        from app.services.ingestion import _backfill_iso_country_codes
+
+        rows = [{"country_code": None, "country_fips": None}]
+        pool = _FakeArticlesPool(rows)
+
+        assert await _backfill_iso_country_codes(pool) == 1
+
+        # Matched on the original NULL, and marked converted with ''.
+        assert pool.updates == [("", "", None)]
+        assert rows == [{"country_code": "", "country_fips": ""}]
+
+    @pytest.mark.asyncio
+    async def test_is_idempotent(self):
+        from app.services.ingestion import _backfill_iso_country_codes
+
+        rows = [
+            {"country_code": "SP", "country_fips": None},
+            {"country_code": None, "country_fips": None},
+        ]
+        pool = _FakeArticlesPool(rows)
+
+        assert await _backfill_iso_country_codes(pool) == 2
+        pool.updates.clear()
+
+        assert await _backfill_iso_country_codes(pool) == 0
+        assert pool.updates == []
+        assert rows == [
+            {"country_code": "ES", "country_fips": "SP"},
+            {"country_code": "", "country_fips": ""},
+        ]
 
 
 class TestMLClassificationIntegration:

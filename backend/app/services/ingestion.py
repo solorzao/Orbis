@@ -13,6 +13,7 @@ import re
 
 from app.config import settings
 from app.services.cache import invalidate
+from app.services.country_codes import fips_to_iso2
 from app.services.database import get_pool, upsert_articles
 from app.services.embeddings import generate_embeddings
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
@@ -79,6 +80,9 @@ async def _ingest_from_raw_gkg() -> int:
                 "latitude": a["lat"],
                 "longitude": a["lng"],
                 "country_code": a.get("country_code", ""),
+                # '' not NULL when GKG has no country: NULL means "written before
+                # the FIPS to ISO switch" and is what the backfill looks for.
+                "country_fips": a.get("country_fips") or "",
                 "region": a.get("location_name", ""),
                 "topic_tags": topic_tags,
                 "sentiment_score": sentiment,
@@ -139,6 +143,34 @@ async def _ingest_from_raw_gkg() -> int:
     return count
 
 
+async def _backfill_iso_country_codes(pool) -> int:
+    """Convert rows written before the FIPS to ISO switch (country_fips IS NULL).
+
+    Such rows hold GDELT's FIPS code in country_code. Each distinct value is
+    moved to country_fips and replaced by its ISO code (or '' if unknown).
+    Rows are matched on their original value with IS NOT DISTINCT FROM, so a
+    NULL country_code is converted too (to '') instead of being re-selected
+    every cycle. Once nothing is left, a run is one SELECT that returns no rows.
+    """
+    fips_codes = await pool.fetch(
+        "SELECT DISTINCT country_code FROM articles WHERE country_fips IS NULL"
+    )
+    updated = 0
+    for row in fips_codes:
+        fips = row["country_code"] or ""
+        result = await pool.execute(
+            "UPDATE articles SET country_fips = $1, country_code = $2 "
+            "WHERE country_fips IS NULL AND country_code IS NOT DISTINCT FROM $3",
+            fips,
+            fips_to_iso2(fips),
+            row["country_code"],
+        )
+        updated += int(result.split()[-1])
+    if updated:
+        logger.info("Backfilled ISO country codes for %d articles.", updated)
+    return updated
+
+
 async def _purge_old_articles() -> None:
     """Delete articles older than the retention window."""
     pool = await get_pool()
@@ -156,12 +188,17 @@ async def _purge_old_articles() -> None:
 async def run_ingestion_cycle() -> int:
     """Run the ingestion pipeline.  Never raises.
 
-    Downloads the latest GDELT GKG raw data file, extracts articles with
+    First converts any rows still holding FIPS country codes to ISO. Then
+    downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
     Then purges articles outside the retention window.
     """
     try:
         logger.info("Ingestion cycle starting …")
+        try:
+            await _backfill_iso_country_codes(await get_pool())
+        except Exception:
+            logger.warning("ISO country code backfill failed; continuing.", exc_info=True)
         count = await _ingest_from_raw_gkg()
         await _purge_old_articles()
         await generate_embeddings()

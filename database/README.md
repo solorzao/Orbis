@@ -19,7 +19,8 @@ PostgreSQL schema for the Orbis globe news explorer, powered by **Supabase** wit
 | `location`        | GEOGRAPHY(Point, 4326)  | PostGIS geography for spatial queries |
 | `latitude`        | DOUBLE PRECISION        | Numeric latitude                      |
 | `longitude`       | DOUBLE PRECISION        | Numeric longitude                     |
-| `country_code`    | TEXT                    | ISO 3166-1 alpha-2                    |
+| `country_code`    | TEXT                    | ISO 3166-1 alpha-2 (`''` if unknown)  |
+| `country_fips`    | TEXT                    | Raw GDELT FIPS 10-4 code; NULL = row predates the ISO switch (backfilled by ingestion) |
 | `region`          | TEXT                    | Continent / sub-region                |
 | `topic_tags`      | TEXT[]                  | Array of topic labels                 |
 | `sentiment_score` | DOUBLE PRECISION        | Range roughly -1.0 to 1.0            |
