@@ -240,20 +240,17 @@ async def get_cluster_summary(
     lng: float = Query(..., description="Longitude of cluster center"),
     radius: float = Query(0.75, description="Deprecated — ignored, uses grid cell"),
     topic: str | None = Query(None, description="Optional topic filter"),
-    location_name: str | None = Query(None, description="Location name"),
+    location_name: str | None = Query(
+        None,
+        description="Ignored: the place name is resolved server-side from the cell's articles",
+    ),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
     articles = await _fetch_cell_articles(lat, lng, resolved)
     nearby = articles[:10]
 
-    summary_text = await summarise_cluster(
-        nearby,
-        lat,
-        lng,
-        location_name=location_name,
-        topic=resolved,
-    )
+    summary_text = await summarise_cluster(nearby, lat, lng, topic=resolved)
     return ClusterSummaryResponse(
         lat=lat,
         lng=lng,
