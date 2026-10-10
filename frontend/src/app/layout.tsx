@@ -1,25 +1,27 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Orbitron, Space_Grotesk } from "next/font/google";
+import localFont from "next/font/local";
 import { ThemeProvider } from "@/lib/theme";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
-const orbitron = Orbitron({
+// Self-hosted (latin subset, variable weight) so builds never depend on
+// reaching Google Fonts. Files and OFL licences are in ./fonts.
+const orbitron = localFont({
+  src: "./fonts/orbitron-latin-wght-normal.woff2",
   variable: "--font-brand",
-  subsets: ["latin"],
-  weight: ["700"],
+  weight: "400 900",
 });
 
-const spaceGrotesk = Space_Grotesk({
+const spaceGrotesk = localFont({
+  src: "./fonts/space-grotesk-latin-wght-normal.woff2",
   variable: "--font-heading",
-  subsets: ["latin"],
-  weight: ["600", "700"],
+  weight: "300 700",
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const jetbrainsMono = localFont({
+  src: "./fonts/jetbrains-mono-latin-wght-normal.woff2",
   variable: "--font-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: "100 800",
 });
 
 const rawUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://orbisapp.co";
