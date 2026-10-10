@@ -86,6 +86,31 @@ class TestGenerateEmbeddings:
         assert client.embeddings.create.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_generate_embeddings_stops_when_response_has_no_vectors(self):
+        from app.services.embeddings import generate_embeddings
+
+        batch = [{"id": uuid.uuid4(), "title": f"Headline {i}"} for i in range(2)]
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(return_value=batch)
+        mock_pool.executemany = AsyncMock()
+        response = MagicMock()
+        response.data = []
+        client = AsyncMock()
+        client.embeddings.create = AsyncMock(return_value=response)
+
+        with (
+            patch("app.services.embeddings._get_openai_client", return_value=client),
+            patch(
+                "app.services.embeddings.get_pool", new_callable=AsyncMock, return_value=mock_pool
+            ),
+        ):
+            count = await generate_embeddings()
+
+        assert count == 0
+        assert client.embeddings.create.await_count == 1
+        mock_pool.executemany.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_generate_embeddings_skips_when_no_api_key(self):
         from app.services.embeddings import generate_embeddings
 

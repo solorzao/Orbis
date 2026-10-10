@@ -62,6 +62,10 @@ async def generate_embeddings() -> int:
                 ("[" + ",".join(str(v) for v in emb.embedding) + "]", row["id"])
                 for row, emb in zip(rows, response.data)
             ]
+            # A response with no vectors makes no progress; stop rather than
+            # refetch the same rows forever.
+            if not updates:
+                break
             await pool.executemany(
                 "UPDATE articles SET embedding = $1::vector WHERE id = $2",
                 updates,
