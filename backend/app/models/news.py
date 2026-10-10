@@ -25,6 +25,7 @@ class NewsArticle(BaseModel):
     topic_tags: list[str] = Field(default_factory=list)
     sentiment_score: float = 0.0
     entities: dict = Field(default_factory=dict)
+    image_url: str | None = None
 
 
 class NewsCluster(BaseModel):

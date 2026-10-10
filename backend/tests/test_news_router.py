@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.routers.news import _https_image, _row_to_article
+
 
 def _make_globe_row(lat: float = 40.0, lng: float = -74.0, count: int = 3, topic: str = "general"):
     """Create a dict matching get_globe_points() output."""
@@ -345,3 +347,24 @@ class TestGetTopics:
             assert len(result) == 3
             assert result[0].topic == "conflict"
             assert result[0].count == 50
+
+
+def test_https_image_upgrades_http_and_rejects_other_schemes():
+    assert _https_image("http://cdn.example.com/a.jpg") == "https://cdn.example.com/a.jpg"
+    assert _https_image("https://cdn.example.com/a.jpg") == "https://cdn.example.com/a.jpg"
+    assert _https_image("javascript:alert(1)") is None
+    assert _https_image("") is None
+    assert _https_image(None) is None
+
+
+def test_row_to_article_includes_image_url():
+    row = {
+        "id": "1",
+        "title": "t",
+        "source_url": "https://s",
+        "source_name": "s",
+        "latitude": 1.0,
+        "longitude": 2.0,
+        "image_url": "http://cdn.example.com/a.jpg",
+    }
+    assert _row_to_article(row).image_url == "https://cdn.example.com/a.jpg"
