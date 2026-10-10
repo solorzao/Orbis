@@ -13,12 +13,26 @@ from app.services.agent import (
 )
 
 
-def _make_mock_response(text: str):
-    """Build a mock Anthropic messages response."""
-    content_block = MagicMock()
-    content_block.text = text
+def _block(type_: str, **fields):
+    block = MagicMock()
+    block.type = type_
+    for k, v in fields.items():
+        setattr(block, k, v)
+    return block
+
+
+def _make_mock_response(text: str, *, thinking_first: bool = False, stop_reason: str = "end_turn"):
+    """Build a mock Anthropic messages response.
+
+    Haiku 5.5 thinks by default, so real responses can start with a
+    ``thinking`` block (with empty text) before the answer.
+    """
+    content = [_block("thinking", thinking="", signature="sig")] if thinking_first else []
+    if text:
+        content.append(_block("text", text=text))
     response = MagicMock()
-    response.content = [content_block]
+    response.content = content
+    response.stop_reason = stop_reason
     return response
 
 
@@ -84,3 +98,50 @@ def test_retrieval_tools_schema():
         assert "description" in tool
         assert "parameters" in tool
         assert isinstance(tool["parameters"], dict)
+
+
+@pytest.mark.asyncio
+async def test_plan_retrieval_reads_text_after_thinking_block():
+    """A leading thinking block must not be mistaken for the answer."""
+    haiku_json = '{"tools": [{"name": "keyword_search", "args": {"terms": "flood"}}]}'
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_make_mock_response(haiku_json, thinking_first=True)
+    )
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        result = await plan_retrieval("flood news")
+
+    assert result == [{"name": "keyword_search", "args": {"terms": "flood"}}]
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs["model"] == "claude-haiku-5-5"
+    assert kwargs["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_synthesize_answer_reads_text_after_thinking_block():
+    answer_json = '{"answer": "Floods in Spain [1].", "citations": [], "globe_actions": []}'
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_make_mock_response(answer_json, thinking_first=True)
+    )
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        result = await synthesize_answer("Spain?", "[1] Floods")
+
+    assert result["answer"] == "Floods in Spain [1]."
+
+
+@pytest.mark.asyncio
+async def test_synthesize_answer_handles_refusal():
+    """A refusal (HTTP 200, stop_reason=refusal, no text) returns the polite fallback."""
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_make_mock_response("", thinking_first=True, stop_reason="refusal")
+    )
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        result = await synthesize_answer("anything", "context")
+
+    assert result["answer"] == "I'm sorry, I couldn't generate an answer right now."
+    assert result["citations"] == []
