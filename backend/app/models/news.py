@@ -11,14 +11,24 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, BeforeValidator, Field
 
 _MAX_IMAGE_URL_LENGTH = 2048
-_UNSAFE_URL_CHARS = re.compile(r"[\x00-\x20\x7f]")
+_UNSAFE_URL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+# A plain ASCII hostname; anything else (%, \, brackets) is left over from parsing.
+_ASCII_HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)*\.?")
 _LOCAL_HOST_SUFFIXES = (".localhost", ".local", ".internal")
 # The URL Standard's "ends in a number" check: browsers parse such hosts as IPv4.
 _NUMERIC_LABEL = re.compile(r"[0-9]+|0x[0-9a-f]*", re.IGNORECASE)
 
 
 def _is_local_host(host: str) -> bool:
-    """True for IP literals (including shorthand IPv4) and local-network names."""
+    """True for IP literals (including shorthand IPv4), local-network names,
+    and hosts that don't canonicalise to a plain ASCII hostname."""
+    try:
+        # Maps U+3002/U+FF0E and fullwidth chars; punycodes IDNs.
+        host = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return True
+    if not _ASCII_HOST.fullmatch(host):
+        return True
     host = host.rstrip(".")
     try:
         ipaddress.ip_address(host)
@@ -38,7 +48,7 @@ def https_image_url(url: str | None) -> str | None:
     """
     if not isinstance(url, str) or not url:
         return None
-    url = url.strip()
+    url = url.strip().replace(" ", "%20")
     if len(url) > _MAX_IMAGE_URL_LENGTH or _UNSAFE_URL_CHARS.search(url):
         return None
     try:

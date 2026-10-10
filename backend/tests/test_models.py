@@ -100,6 +100,7 @@ def test_globe_data_point():
         # Normalisation.
         ("HTTP://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
         ("  http://cdn.example.com/a.jpg\n", "https://cdn.example.com/a.jpg"),
+        ("https://cdn.example.com/my image.jpg", "https://cdn.example.com/my%20image.jpg"),
         # Control characters and oversized values.
         ("http://cdn.example.com/a\x00.jpg", None),
         pytest.param("https://cdn.example.com/" + "a" * 3000, None, id="too-long"),
@@ -120,8 +121,23 @@ def test_globe_data_point():
         ("https://10.1/a", None),
         ("https://cdn1.example.com/a", "https://cdn1.example.com/a"),
         ("https://example.co.uk/a", "https://example.co.uk/a"),
+        # Hosts a browser canonicalises differently from Python: percent-escapes,
+        # ideographic and fullwidth dots and letters, and backslashes.
+        ("https://127.0.0%2E1/a.jpg", None),
+        ("https://192.168.1%2e1/admin", None),
+        ("https://foo.local%68ost/a", None),
+        ("https://printer.loc%61l/a", None),
+        ("https://127.0.0。1/a", None),
+        ("https://127.0.0.１/a", None),
+        ("https://foo.ｌocalhost/a", None),
+        ("https://127.0.0.1\\.example.com/a.jpg", None),
+        ("https://localhost\\.example.com/a.jpg", None),
+        # A real IDN is kept exactly as written.
+        ("https://bücher.example/a.jpg", "https://bücher.example/a.jpg"),
+        ("https://cdn.example.com/a.jpg", "https://cdn.example.com/a.jpg"),
         # Ports: http's default port is dropped, other explicit ports are kept.
         ("http://cdn.example.com:80/a.jpg", "https://cdn.example.com/a.jpg"),
+        ("http://cdn1.example.co.uk:80/a.jpg", "https://cdn1.example.co.uk/a.jpg"),
         ("https://cdn.example.com:8443/a.jpg", "https://cdn.example.com:8443/a.jpg"),
     ],
 )
