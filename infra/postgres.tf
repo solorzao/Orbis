@@ -39,7 +39,7 @@ resource "azurerm_postgresql_flexible_server_database" "orbis" {
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.orbis.id
-  value     = "POSTGIS,UUID-OSSP,VECTOR"
+  value     = "POSTGIS,UUID-OSSP,VECTOR,PG_TRGM"
 }
 
 resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
