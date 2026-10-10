@@ -31,18 +31,39 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _clean_place(name: str | None) -> str:
+    """A place name safe to put in a prompt: one line, no injection phrases."""
+    if not name:
+        return ""
+    candidate = " ".join(sanitise_text(name, max_length=100).split())
+    return "" if has_injection_pattern(candidate) else candidate
+
+
+def _cell_place(articles: list[NewsArticle]) -> str:
+    """The cell's place name, taken from its articles the way the globe does.
+
+    Resolved server-side so a client cannot steer a summary that is cached
+    and shown to every visitor of the cell.
+    """
+    for article in articles:
+        place = _clean_place(article.region)
+        if place:
+            return place
+    return ""
+
+
 async def summarise_cluster(
     articles: list[NewsArticle],
     lat: float,
     lng: float,
-    location_name: str | None = None,
     topic: str | None = None,
 ) -> str:
     """Generate a 2-3 sentence summary for a cluster of articles.
 
     Uses Claude Haiku via the Anthropic SDK.  Results are cached in Redis
     for ``settings.summary_cache_ttl`` seconds, keyed by grid cell and
-    topic so that different topic filters get separate summaries.
+    topic so that different topic filters get separate summaries. Every
+    prompt input derives from the cell's articles, so the key is complete.
     """
     if not articles:
         return ""
@@ -60,7 +81,7 @@ async def summarise_cluster(
 
     # Name the place when we know it. Never send raw coordinates: Haiku 5.5
     # narrates working out where they are instead of summarising.
-    location = sanitise_text(location_name, max_length=100) if location_name else ""
+    location = _cell_place(articles)
     lines = [
         f"- {sanitise_text(a.title, max_length=200)}"
         f" ({sanitise_text(a.source_name, max_length=50)})"
@@ -102,9 +123,8 @@ async def summarise_selection(
     if not headlines:
         return ""
 
-    location = (
-        f"Location: {sanitise_text(location_name, max_length=100)}\n\n" if location_name else ""
-    )
+    place = _clean_place(location_name)
+    location = f"Location: {place}\n\n" if place else ""
     clean = [
         sanitise_text(h, max_length=200) for h in headlines[:10] if not has_injection_pattern(h)
     ]
