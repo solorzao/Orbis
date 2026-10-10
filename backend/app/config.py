@@ -52,6 +52,10 @@ class Settings:
     embedding_max_per_cycle: int = field(
         default_factory=lambda: _env_int("EMBEDDING_MAX_PER_CYCLE", 2000)
     )
+    # Global cap on Claude spend per UTC day; AI endpoints fall back past it.
+    llm_daily_budget_usd: float = field(
+        default_factory=lambda: _env_float("LLM_DAILY_BUDGET_USD", 1.0)
+    )
 
     # --- ML classification ---
     ml_topic_model: str = field(

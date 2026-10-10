@@ -3,16 +3,27 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.services import llm_budget
 from app.services.agent import (
     RETRIEVAL_TOOLS,
     _normalize_globe_actions,
     plan_retrieval,
     synthesize_answer,
 )
+
+
+@pytest.fixture(autouse=True)
+def budget(monkeypatch):
+    """Stub the spend counter (tested in test_llm_budget.py) so no test touches Redis."""
+    stub = SimpleNamespace(has_budget=AsyncMock(return_value=True), record=AsyncMock())
+    monkeypatch.setattr(llm_budget, "has_budget", stub.has_budget)
+    monkeypatch.setattr(llm_budget, "record", stub.record)
+    return stub
 
 
 def _block(type_: str, **fields):
@@ -152,6 +163,59 @@ async def test_synthesize_answer_handles_refusal():
 
     assert result["answer"] == "I'm sorry, I couldn't generate an answer right now."
     assert result["citations"] == []
+
+
+@pytest.mark.asyncio
+async def test_plan_retrieval_over_budget_falls_back_without_calling_claude(budget):
+    budget.has_budget.return_value = False
+    mock_client = AsyncMock()
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        result = await plan_retrieval("latest earthquake news")
+
+    mock_client.messages.create.assert_not_called()
+    assert result == [{"name": "keyword_search", "args": {"terms": "earthquake"}}]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_answer_over_budget_returns_fallback_without_calling_claude(budget):
+    budget.has_budget.return_value = False
+    mock_client = AsyncMock()
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        result = await synthesize_answer("Spain?", "[1] Floods")
+
+    mock_client.messages.create.assert_not_called()
+    assert result == {
+        "answer": "I'm sorry, I couldn't generate an answer right now.",
+        "citations": [],
+        "globe_actions": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_plan_retrieval_records_usage(budget):
+    response = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {}}]}')
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=response)
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        await plan_retrieval("flood news")
+
+    budget.record.assert_awaited_once_with(response.usage)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_answer_records_usage_of_a_refusal(budget):
+    """A refusal is billed, so it counts against the budget too."""
+    response = _make_mock_response("", thinking_first=True, stop_reason="refusal")
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=response)
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        await synthesize_answer("anything", "context")
+
+    budget.record.assert_awaited_once_with(response.usage)
 
 
 def test_normalize_globe_actions_adds_fly_to_type():
