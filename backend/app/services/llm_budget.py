@@ -1,7 +1,9 @@
 """Global daily cap on Claude spend, shared across all AI endpoints.
 
-Uses Redis when available (survives restarts), else an in-process counter;
-the API runs as a single replica, so the in-process counter is exact.
+Spend is counted in Redis when available, which survives restarts, and always
+in process memory, which is exact only within one process. Reads take the
+larger of the two, so a failed Redis read or write, an outage or a restart
+never makes today's spend look lower than this process has seen.
 """
 
 from __future__ import annotations
@@ -15,19 +17,37 @@ from app.services.cache import get_redis
 
 logger = logging.getLogger(__name__)
 
-# Claude Haiku 5.5, prompts up to 100K tokens (USD per token)
-_INPUT_PER_TOKEN = 0.10 / 1_000_000
-_OUTPUT_PER_TOKEN = 0.50 / 1_000_000
+# USD per million tokens (input, output) for prompts up to 100K tokens,
+# matched by prefix so dated snapshots (claude-haiku-4-5-20251001) are found.
+_PRICES: dict[str, tuple[float, float]] = {
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-haiku-4-5": (1.00, 5.00),
+}
+# Unknown models fail closed: priced high enough that a model change cannot
+# overspend the cap unnoticed.
+_UNKNOWN_PRICE = (5.00, 25.00)
+
+# Share of the cap for features whose answers serve one visitor (the agent,
+# selection summaries); the rest is kept for the cached cluster summaries.
+UNCACHED_SHARE = 0.7
 
 _memory: dict[str, float] = {}
+_warned_models: set[str] = set()
 
 
-class LLMBudgetExceeded(RuntimeError):
-    """The global daily Claude budget is spent."""
+def _price(model: str) -> tuple[float, float]:
+    for prefix, price in _PRICES.items():
+        if model.startswith(prefix):
+            return price
+    if model not in _warned_models:
+        _warned_models.add(model)
+        logger.warning("No price for model %r; charging $%s/$%s per MTok.", model, *_UNKNOWN_PRICE)
+    return _UNKNOWN_PRICE
 
 
-def cost_usd(usage: Any) -> float:
-    return usage.input_tokens * _INPUT_PER_TOKEN + usage.output_tokens * _OUTPUT_PER_TOKEN
+def cost_usd(usage: Any, model: str) -> float:
+    input_price, output_price = _price(model)
+    return (usage.input_tokens * input_price + usage.output_tokens * output_price) / 1_000_000
 
 
 def _key() -> str:
@@ -39,25 +59,50 @@ async def _spent() -> float:
     r = await get_redis()
     if r is not None:
         try:
-            value = await r.get(key)
-            return float(value or 0)
+            remote = float(await r.get(key) or 0)
         except Exception:
             logger.warning("Budget read from Redis failed; using memory.", exc_info=True)
+        else:
+            _memory[key] = max(_memory.get(key, 0.0), remote)
     return _memory.get(key, 0.0)
 
 
-async def has_budget() -> bool:
-    return await _spent() < settings.llm_daily_budget_usd
+async def has_budget(share: float = 1.0) -> bool:
+    """Whether today's spend is below ``share`` of the daily cap."""
+    return await _spent() < settings.llm_daily_budget_usd * share
 
 
-async def record(usage: Any) -> None:
-    key = _key()
-    amount = cost_usd(usage)
-    _memory[key] = _memory.get(key, 0.0) + amount
-    r = await get_redis()
-    if r is not None:
-        try:
-            await r.incrbyfloat(key, amount)
-            await r.expire(key, 2 * 86400)
-        except Exception:
-            logger.warning("Budget write to Redis failed.", exc_info=True)
+async def record(usage: Any, model: str) -> None:
+    """Add a response's cost to today's spend. Never raises: the response is paid for."""
+    try:
+        key = _key()
+        amount = cost_usd(usage, model)
+        for day in [k for k in _memory if k != key]:
+            del _memory[day]
+        total = _memory[key] = _memory.get(key, 0.0) + amount
+        r = await get_redis()
+        if r is not None:
+            try:
+                remote = float(await r.incrbyfloat(key, amount))
+                await r.expire(key, 2 * 86400)
+            except Exception:
+                logger.warning("Budget write to Redis failed; counted in memory.", exc_info=True)
+            else:
+                total = max(total, remote)
+                _memory[key] = max(_memory.get(key, 0.0), remote)
+
+        logger.info(
+            "Claude usage: %d input + %d output tokens on %s = $%.5f; $%.4f spent today.",
+            usage.input_tokens,
+            usage.output_tokens,
+            model,
+            amount,
+            total,
+        )
+        cap = settings.llm_daily_budget_usd
+        if total - amount < cap <= total:
+            logger.warning(
+                "Daily Claude budget of $%.2f reached; AI features pause until 00:00 UTC.", cap
+            )
+    except Exception:
+        logger.error("Recording Claude usage failed.", exc_info=True)

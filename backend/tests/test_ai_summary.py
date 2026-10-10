@@ -74,7 +74,7 @@ async def test_usage_is_recorded_even_when_claude_refuses(client, budget):
 
     await ai_summary.summarise_selection(["Headline"])
 
-    budget.record.assert_awaited_once_with(response.usage)
+    budget.record.assert_awaited_once_with(response.usage, response.model)
 
 
 def _article(title: str, region: str = ""):
@@ -178,15 +178,45 @@ async def test_failed_cluster_summary_is_shown_but_not_cached(client, set_cached
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        _response([("text", "Floods hit the")], stop_reason="max_tokens"),
+        _response([("thinking", "")]),
+    ],
+    ids=["truncated", "empty"],
+)
+async def test_truncated_or_empty_summary_is_not_cached(client, set_cached, response):
+    client.messages.create.return_value = response
+
+    summary = await ai_summary.summarise_cluster([_article("x")], 38.5, -77.5)
+
+    assert summary == "Summary generation failed."
+    set_cached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_over_budget_skips_claude_and_is_not_cached(client, set_cached, budget):
     """The budget resets at midnight UTC; a cached 'paused' message would outlive that."""
     budget.has_budget.return_value = False
 
     summary = await ai_summary.summarise_cluster([_article("x")], 38.5, -77.5)
 
-    assert summary == "AI summaries are paused until tomorrow (daily limit reached)."
+    assert summary == "AI summaries are paused until 00:00 UTC (daily limit reached)."
     client.messages.create.assert_not_called()
     set_cached.assert_not_awaited()
+    budget.has_budget.assert_awaited_once_with(share=1.0)  # shared by all visitors: full cap
+
+
+@pytest.mark.asyncio
+async def test_selection_summary_may_only_use_its_share(client, budget):
+    budget.has_budget.return_value = False
+
+    summary = await ai_summary.summarise_selection(["Floods in Valencia"])
+
+    assert summary == "AI summaries are paused until 00:00 UTC (daily limit reached)."
+    client.messages.create.assert_not_called()
+    budget.has_budget.assert_awaited_once_with(share=llm_budget.UNCACHED_SHARE)
 
 
 @pytest.mark.asyncio
@@ -203,7 +233,7 @@ async def test_missing_api_key_placeholder_is_not_cached(monkeypatch, set_cached
 def capture(monkeypatch):
     sent = {}
 
-    async def fake_call(user_message, system=None):
+    async def fake_call(user_message, system=None, **_kwargs):
         sent["msg"] = user_message
         return "Summary."
 

@@ -8,13 +8,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.routers.agent import AskRequest, ask_stream_endpoint
 from app.services import llm_budget
 from app.services.agent import (
     RETRIEVAL_TOOLS,
     _normalize_globe_actions,
+    ask,
     plan_retrieval,
     synthesize_answer,
 )
+
+_PAUSED = "AI answers are paused until 00:00 UTC (daily limit reached)."
 
 
 @pytest.fixture(autouse=True)
@@ -166,31 +170,61 @@ async def test_synthesize_answer_handles_refusal():
 
 
 @pytest.mark.asyncio
-async def test_plan_retrieval_over_budget_falls_back_without_calling_claude(budget):
+async def test_ask_over_budget_skips_claude_and_retrieval(budget):
     budget.has_budget.return_value = False
     mock_client = AsyncMock()
 
-    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
-        result = await plan_retrieval("latest earthquake news")
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch("app.services.agent.execute_retrieval", new_callable=AsyncMock) as retrieve,
+    ):
+        result = await ask("latest earthquake news")
 
+    assert result == {"answer": _PAUSED, "citations": [], "globe_actions": [], "tools_used": []}
     mock_client.messages.create.assert_not_called()
-    assert result == [{"name": "keyword_search", "args": {"terms": "earthquake"}}]
+    retrieve.assert_not_called()
+    budget.has_budget.assert_awaited_once_with(share=llm_budget.UNCACHED_SHARE)
 
 
 @pytest.mark.asyncio
-async def test_synthesize_answer_over_budget_returns_fallback_without_calling_claude(budget):
+async def test_admitted_ask_synthesizes_even_if_planning_spent_the_budget(budget):
+    budget.has_budget.side_effect = [True, False]  # a second check would refuse
+    plan = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {"terms": "x"}}]}')
+    answer = _make_mock_response('{"answer": "Floods [1].", "citations": [], "globe_actions": []}')
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=[plan, answer])
+
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch("app.services.agent.execute_retrieval", new_callable=AsyncMock, return_value=[]),
+    ):
+        result = await ask("flood news")
+
+    assert result["answer"] == "Floods [1]."
+    assert mock_client.messages.create.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_over_budget_skips_claude_and_retrieval(budget):
     budget.has_budget.return_value = False
     mock_client = AsyncMock()
 
-    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
-        result = await synthesize_answer("Spain?", "[1] Floods")
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch("app.routers.agent.execute_retrieval", new_callable=AsyncMock) as retrieve,
+        patch("app.routers.agent.get_redis", new_callable=AsyncMock, return_value=None),
+    ):
+        response = await ask_stream_endpoint(AskRequest(question="latest earthquake news"))
+        events = [event async for event in response.body_iterator]
 
+    assert [e["event"] for e in events] == ["token", "done"]  # no planning or retrieving
+    assert json.loads(events[0]["data"]) == {"token": _PAUSED}
+    done = json.loads(events[1]["data"])
+    assert set(done) == {"conversation_id", "citations", "globe_actions", "tools_used"}
+    assert done["citations"] == done["globe_actions"] == done["tools_used"] == []
     mock_client.messages.create.assert_not_called()
-    assert result == {
-        "answer": "I'm sorry, I couldn't generate an answer right now.",
-        "citations": [],
-        "globe_actions": [],
-    }
+    retrieve.assert_not_called()
+    budget.has_budget.assert_awaited_once_with(share=llm_budget.UNCACHED_SHARE)
 
 
 @pytest.mark.asyncio
@@ -202,7 +236,7 @@ async def test_plan_retrieval_records_usage(budget):
     with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
         await plan_retrieval("flood news")
 
-    budget.record.assert_awaited_once_with(response.usage)
+    budget.record.assert_awaited_once_with(response.usage, response.model)
 
 
 @pytest.mark.asyncio
@@ -215,7 +249,7 @@ async def test_synthesize_answer_records_usage_of_a_refusal(budget):
     with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
         await synthesize_answer("anything", "context")
 
-    budget.record.assert_awaited_once_with(response.usage)
+    budget.record.assert_awaited_once_with(response.usage, response.model)
 
 
 def test_normalize_globe_actions_adds_fly_to_type():

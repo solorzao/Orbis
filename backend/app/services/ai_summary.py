@@ -146,7 +146,9 @@ async def summarise_selection(
     user_msg = f"{location}Headlines:\n" + "\n".join(lines)
 
     try:
-        client_msg = await _call_claude(user_msg, system=_SELECTION_SYSTEM_PROMPT)
+        client_msg = await _call_claude(
+            user_msg, system=_SELECTION_SYSTEM_PROMPT, budget_share=llm_budget.UNCACHED_SHARE
+        )
     except SummaryUnavailable as exc:
         return str(exc)
 
@@ -155,18 +157,23 @@ async def summarise_selection(
     return client_msg
 
 
-async def _call_claude(user_message: str, system: str | None = None) -> str:
+async def _call_claude(
+    user_message: str, system: str | None = None, budget_share: float = 1.0
+) -> str:
     """Call the Anthropic messages API.  Returns the text response.
 
+    ``budget_share`` is the share of the daily cap this call may draw on.
     Raises ``SummaryUnavailable`` when there is no summary to return.
     """
     if not settings.anthropic_api_key:
         logger.warning("ANTHROPIC_API_KEY not set — returning placeholder summary.")
         raise SummaryUnavailable("AI summary unavailable (API key not configured).")
 
+    if not await llm_budget.has_budget(share=budget_share):
+        logger.info("Daily Claude budget spent — returning fallback.")
+        raise SummaryUnavailable("AI summaries are paused until 00:00 UTC (daily limit reached).")
+
     try:
-        if not await llm_budget.has_budget():
-            raise llm_budget.LLMBudgetExceeded()
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model=settings.haiku_model_id,
@@ -175,14 +182,17 @@ async def _call_claude(user_message: str, system: str | None = None) -> str:
             system=system or _SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
-        await llm_budget.record(response.usage)  # before response_text: refusals cost too
-        return response_text(response).strip()
-    except llm_budget.LLMBudgetExceeded:
-        logger.warning("Daily Claude budget spent — returning fallback.")
-        raise SummaryUnavailable("AI summaries are paused until tomorrow (daily limit reached).")
+        # Before response_text: refusals are billed too.
+        await llm_budget.record(response.usage, response.model)
+        text = response_text(response).strip()
     except anthropic.RateLimitError:
         logger.warning("Anthropic rate-limited — returning fallback.")
         raise SummaryUnavailable("Summary temporarily unavailable due to rate limits.")
     except Exception:
         logger.error("Anthropic API call failed.", exc_info=True)
         raise SummaryUnavailable("Summary generation failed.")
+
+    if response.stop_reason == "max_tokens" or not text:
+        logger.warning("No usable summary from Claude (stop_reason=%s).", response.stop_reason)
+        raise SummaryUnavailable("Summary generation failed.")
+    return text

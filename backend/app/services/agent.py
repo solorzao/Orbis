@@ -427,8 +427,6 @@ async def plan_retrieval(
     messages.append({"role": "user", "content": question})
 
     try:
-        if not await llm_budget.has_budget():
-            raise llm_budget.LLMBudgetExceeded()
         client = _get_anthropic_client()
         response = await client.messages.create(
             model=settings.haiku_model_id,
@@ -437,7 +435,8 @@ async def plan_retrieval(
             system=system,
             messages=messages,
         )
-        await llm_budget.record(response.usage)  # before response_text: refusals cost too
+        # Before response_text: refusals are billed too.
+        await llm_budget.record(response.usage, response.model)
         text = response_text(response).strip()
         logger.info("Planner raw response: %s", text[:500])
         # Strip markdown code fences the model sometimes wraps around JSON
@@ -454,11 +453,9 @@ async def plan_retrieval(
         valid = [t for t in tools if t.get("name") in _TOOL_DISPATCH]
         logger.info("Planned tools: %s", [t["name"] for t in valid])
         return valid[:3] if valid else _fallback(question)
-    except llm_budget.LLMBudgetExceeded:
-        logger.warning("Daily Claude budget spent -- falling back to keyword search.")
     except Exception:
         logger.warning("Plan retrieval failed -- falling back to keyword search.", exc_info=True)
-    return _fallback(question)
+        return _fallback(question)
 
 
 _OFF_TOPIC_ANSWER = (
@@ -466,6 +463,20 @@ _OFF_TOPIC_ANSWER = (
     "Try asking about something happening in the world — "
     "conflicts, politics, economics, natural disasters, and more."
 )
+
+_PAUSED_ANSWER = "AI answers are paused until 00:00 UTC (daily limit reached)."
+
+
+async def admit_ask() -> bool:
+    """Whether a new ask may start; checked once, before any Claude call.
+
+    An admitted ask always runs to synthesis, even if its planning call takes
+    spend past the cap, so planning is never paid for without an answer.
+    """
+    if await llm_budget.has_budget(share=llm_budget.UNCACHED_SHARE):
+        return True
+    logger.info("Daily Claude budget spent -- answering without AI.")
+    return False
 
 
 _STOP_WORDS = {
@@ -656,8 +667,6 @@ async def synthesize_answer(
     )
 
     try:
-        if not await llm_budget.has_budget():
-            raise llm_budget.LLMBudgetExceeded()
         client = _get_anthropic_client()
         response = await client.messages.create(
             model=settings.haiku_model_id,
@@ -666,7 +675,8 @@ async def synthesize_answer(
             system=_SYNTHESIS_SYSTEM,
             messages=messages,
         )
-        await llm_budget.record(response.usage)  # before response_text: refusals cost too
+        # Before response_text: refusals are billed too.
+        await llm_budget.record(response.usage, response.model)
         text = response_text(response).strip()
         # Strip markdown code fences the model sometimes adds
         if text.startswith("```"):
@@ -706,15 +716,13 @@ async def synthesize_answer(
         clean_text = re.sub(r"```json\s*\{[\s\S]*\}\s*```", "", text).strip()
         clean_text = re.sub(r"\{[\s\S]*\"answer\"[\s\S]*\}\s*$", "", clean_text).strip()
         return {"answer": clean_text or text, "citations": [], "globe_actions": []}
-    except llm_budget.LLMBudgetExceeded:
-        logger.warning("Daily Claude budget spent -- skipping answer synthesis.")
     except Exception:
         logger.error("Synthesis failed.", exc_info=True)
-    return {
-        "answer": "I'm sorry, I couldn't generate an answer right now.",
-        "citations": [],
-        "globe_actions": [],
-    }
+        return {
+            "answer": "I'm sorry, I couldn't generate an answer right now.",
+            "citations": [],
+            "globe_actions": [],
+        }
 
 
 def _collect_urls(retrieval_results: list[dict]) -> list[str]:
@@ -769,6 +777,9 @@ async def ask(
 
     Returns ``{"answer": str, "citations": list, "globe_actions": list, "tools_used": list}``.
     """
+    if not await admit_ask():
+        return {"answer": _PAUSED_ANSWER, "citations": [], "globe_actions": [], "tools_used": []}
+
     # Step 1: Plan
     tool_calls = await plan_retrieval(question, conversation_history)
 
