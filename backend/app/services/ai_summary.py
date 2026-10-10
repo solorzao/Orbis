@@ -51,16 +51,16 @@ async def summarise_cluster(
     cell_lat = int(lat // settings.cluster_resolution_deg)
     cell_lng = int(lng // settings.cluster_resolution_deg)
     topic_suffix = f":{topic}" if topic else ""
-    cache_key = f"summary:{cell_lat}:{cell_lng}{topic_suffix}"
+    # v2: Haiku 5.5 prompt without raw coordinates (older entries narrate them)
+    cache_key = f"summary:v2:{cell_lat}:{cell_lng}{topic_suffix}"
 
     cached = await get_cached(cache_key)
     if cached is not None:
         return str(cached)
 
-    # Compose the user message with location context.
-    location = (
-        sanitise_text(location_name, max_length=100) if location_name else f"{lat:.1f}°, {lng:.1f}°"
-    )
+    # Name the place when we know it. Never send raw coordinates: Haiku 5.5
+    # narrates working out where they are instead of summarising.
+    location = sanitise_text(location_name, max_length=100) if location_name else ""
     lines = [
         f"- {sanitise_text(a.title, max_length=200)}"
         f" ({sanitise_text(a.source_name, max_length=50)})"
@@ -69,7 +69,8 @@ async def summarise_cluster(
     ]
     if not lines:
         return ""
-    user_msg = f"Location: {location}\n\nHeadlines:\n" + "\n".join(lines)
+    header = f"Location: {location}\n\n" if location else ""
+    user_msg = header + "Headlines:\n" + "\n".join(lines)
 
     summary = await _call_claude(user_msg, system=_SYSTEM_PROMPT)
 
