@@ -41,9 +41,6 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
   const onGlobeActionRef = useRef(onGlobeAction);
   onGlobeActionRef.current = onGlobeAction;
 
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-  const apiKey = process.env.NEXT_PUBLIC_API_KEY || "";
-
   const ask = useCallback(
     async (question: string) => {
       if (!question.trim() || isLoading) return;
@@ -70,12 +67,10 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
       abortRef.current = controller;
 
       try {
-        const res = await fetch(`${apiBase}/api/agent/ask/stream`, {
+        // Proxied to the backend by src/app/api/[...path]/route.ts
+        const res = await fetch("/api/agent/ask/stream", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(apiKey ? { "X-API-Key": apiKey } : {}),
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             question: question.trim(),
             conversation_id: conversationIdRef.current,
@@ -182,7 +177,7 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
         abortRef.current = null;
       }
     },
-    [isLoading, apiBase],
+    [isLoading],
   );
 
   const stop = useCallback(() => {

@@ -36,6 +36,14 @@ describe("fetchGlobeNews", () => {
     mockFetch.mockReturnValue(jsonResponse(null, 500));
     await expect(fetchGlobeNews()).rejects.toThrow("API 500");
   });
+
+  it("calls the same-origin proxy and never sends an API key", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    await fetchGlobeNews();
+    const [calledUrl, init] = mockFetch.mock.calls[0];
+    expect(new URL(calledUrl).origin).toBe(window.location.origin);
+    expect(JSON.stringify(init ?? {})).not.toMatch(/x-api-key/i);
+  });
 });
 
 describe("fetchClusterArticles", () => {

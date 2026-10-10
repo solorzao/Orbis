@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import re
 import time
@@ -23,14 +24,21 @@ logger = logging.getLogger(__name__)
 _PUBLIC_PATHS = {"/health", "/docs", "/openapi.json"}
 
 
-def _check_api_key(request: Request) -> bool:
-    """Return True if the request carries a valid API key (or none is configured)."""
+def _has_valid_api_key(request: Request) -> bool:
+    """True only if a key is configured and the request presents it."""
     expected = settings.api_key
     if not expected:
+        return False
+    provided = request.headers.get("X-API-Key", "")
+    return hmac.compare_digest(provided.encode(), expected.encode())
+
+
+def _check_api_key(request: Request) -> bool:
+    """Return True if the request carries a valid API key (or none is configured)."""
+    if not settings.api_key:
         # No key configured → open access (dev mode).
         return True
-    provided = request.headers.get("X-API-Key", "")
-    return provided == expected
+    return _has_valid_api_key(request)
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +88,32 @@ def _get_rate_group(path: str) -> str | None:
     return None
 
 
-def _client_ip(request: Request) -> str:
-    """Best-effort client IP (respects X-Forwarded-For from trusted proxies)."""
+# Set by the frontend's server-side proxy to the visitor's IP. Only honoured
+# on requests that passed the API-key check, since only the proxy holds the key.
+_PROXY_CLIENT_IP_HEADER = "X-Orbis-Client-IP"
+
+
+def _client_ip(request: Request, trusted: bool = False) -> str:
+    """Best-effort client IP for rate limiting and logs.
+
+    *trusted* means the request carried a valid API key, i.e. it came from our
+    proxy, so its client-IP header is believed. Otherwise use the rightmost
+    X-Forwarded-For entry: earlier entries are client-supplied and spoofable,
+    while the Container Apps ingress appends the address it actually saw.
+    """
+    if trusted:
+        proxied = request.headers.get(_PROXY_CLIENT_IP_HEADER, "").strip()
+        if proxied:
+            return proxied
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_ip(request: Request) -> str:
+    """Client IP for rate limiting; trusts the proxy header only for a matched key."""
+    return _client_ip(request, trusted=_has_valid_api_key(request))
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +182,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         group = _get_rate_group(path)
         if group:
             window, limit = _RATE_LIMITS[group]
-            ip = _client_ip(request)
+            ip = _rate_limit_ip(request)
             bucket_key = f"{group}:{ip}"
             bucket = _rate_buckets[group][bucket_key]
             if not bucket.allow(time.time(), window, limit):

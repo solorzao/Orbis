@@ -71,7 +71,7 @@ npm install
 npm run dev
 ```
 
-Set `NEXT_PUBLIC_API_BASE_URL` in `frontend/.env.local` to point at your backend (defaults to `http://localhost:8000`).
+The browser calls same-origin `/api/*`, which Next.js proxies to the backend. Set `ORBIS_API_URL` (defaults to `http://localhost:8000`) and, if the backend has a key, `ORBIS_API_KEY` in `frontend/.env.local`.
 
 ### Backend
 

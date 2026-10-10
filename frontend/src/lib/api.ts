@@ -1,5 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+// Same-origin /api/* routes are proxied to the backend by
+// src/app/api/[...path]/route.ts, which adds the API key server-side.
+function apiUrl(path: string): URL {
+  return new URL(path, window.location.origin);
+}
 
 export interface ApiGlobePoint {
   lat: number;
@@ -42,15 +45,13 @@ export interface ApiTopicCount {
 }
 
 async function apiFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(path, API_BASE);
+  const url = apiUrl(path);
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
     });
   }
-  const headers: Record<string, string> = {};
-  if (API_KEY) headers["X-API-Key"] = API_KEY;
-  const res = await fetch(url.toString(), { headers });
+  const res = await fetch(url.toString());
   if (!res.ok) {
     throw new Error(`API ${res.status}: ${res.statusText}`);
   }
@@ -139,12 +140,10 @@ export async function fetchSelectionSummary(
   headlines: string[],
   locationName?: string,
 ): Promise<ApiSelectionSummary> {
-  const url = new URL("/api/news/summarize-selection", API_BASE);
-  const postHeaders: Record<string, string> = { "Content-Type": "application/json" };
-  if (API_KEY) postHeaders["X-API-Key"] = API_KEY;
+  const url = apiUrl("/api/news/summarize-selection");
   const res = await fetch(url.toString(), {
     method: "POST",
-    headers: postHeaders,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       headlines,
       ...(locationName ? { location_name: locationName } : {}),
