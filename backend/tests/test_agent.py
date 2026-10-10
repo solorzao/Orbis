@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -178,3 +179,27 @@ def test_normalize_globe_actions_drops_invalid_and_caps_at_three():
 def test_normalize_globe_actions_handles_non_list():
     assert _normalize_globe_actions(None) == []
     assert _normalize_globe_actions({"lat": 1}) == []
+
+
+def test_normalize_globe_actions_rejects_bools_and_non_finite():
+    raw = json.loads(
+        '[{"lat": true, "lng": 1}, {"lat": NaN, "lng": 0},'
+        ' {"lat": 0, "lng": Infinity}, {"lat": 0, "lng": 181}]'
+    )
+    assert _normalize_globe_actions(raw) == []
+
+
+def test_normalize_globe_actions_strips_unknown_keys_and_non_string_label():
+    raw = [{"lat": 1, "lng": 2, "label": 5, "zoom": 0.001, "type": "highlight"}]
+    assert _normalize_globe_actions(raw) == [{"type": "flyTo", "lat": 1, "lng": 2, "label": ""}]
+
+
+def test_normalize_globe_actions_collapses_and_truncates_label():
+    label = "Lagos,\n  Nigeria\n" + "x" * 200
+    [action] = _normalize_globe_actions([{"lat": 6.45, "lng": 3.39, "label": label}])
+    assert action["label"] == ("Lagos, Nigeria " + "x" * 200)[:80]
+    assert len(action["label"]) == 80
+
+
+def test_normalize_globe_actions_drops_template_placeholder():
+    assert _normalize_globe_actions([{"lat": 0.0, "lng": 0.0, "label": "..."}]) == []

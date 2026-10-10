@@ -594,13 +594,16 @@ async def execute_retrieval(tool_calls: list[dict]) -> list[dict]:
 
 
 _MAX_GLOBE_ACTIONS = 3
+_MAX_GLOBE_LABEL_LENGTH = 80
 
 
 def _normalize_globe_actions(raw: object) -> list[dict]:
     """Validate model-proposed globe actions and give them the frontend's shape.
 
     The model returns ``{"lat", "lng", "label"}``; the frontend acts on
-    ``{"type": "flyTo", ...}``. Anything malformed or out of range is dropped.
+    ``{"type": "flyTo", ...}``. Anything malformed or out of range is dropped,
+    as is the prompt's ``0, 0`` placeholder. Labels are model-controlled, so
+    they are collapsed to one line and capped in length.
     """
     if not isinstance(raw, list):
         return []
@@ -615,15 +618,14 @@ def _normalize_globe_actions(raw: object) -> list[dict]:
             continue
         if not (-90 <= lat <= 90 and -180 <= lng <= 180):
             continue
+        if lat == 0 and lng == 0:
+            continue  # the schema example in _SYNTHESIS_SYSTEM, copied verbatim
         label = item.get("label")
-        actions.append(
-            {
-                "type": "flyTo",
-                "lat": lat,
-                "lng": lng,
-                "label": label if isinstance(label, str) else "",
-            }
-        )
+        if isinstance(label, str):
+            label = " ".join(label.split())[:_MAX_GLOBE_LABEL_LENGTH]
+        else:
+            label = ""
+        actions.append({"type": "flyTo", "lat": lat, "lng": lng, "label": label})
         if len(actions) == _MAX_GLOBE_ACTIONS:
             break
     return actions

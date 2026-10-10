@@ -138,9 +138,10 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
                     ),
                   );
 
-                  for (const action of globeActions) {
-                    onGlobeActionRef.current?.(action);
-                  }
+                  // Each flyTo starts a camera tween, so dispatching several at
+                  // once would land on the last (least relevant) one.
+                  const [primary] = globeActions;
+                  if (primary) onGlobeActionRef.current?.(primary);
 
                   setActiveTools([]);
                 }
