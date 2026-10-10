@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.services.agent import (
     RETRIEVAL_TOOLS,
+    _normalize_globe_actions,
     plan_retrieval,
     synthesize_answer,
 )
@@ -77,7 +79,12 @@ async def test_synthesize_answer_returns_structured_response():
     assert len(result["citations"]) == 1
     assert result["citations"][0]["source_url"] == "https://example.com"
     assert len(result["globe_actions"]) == 1
-    assert result["globe_actions"][0]["lat"] == 38.0
+    assert result["globe_actions"][0] == {
+        "type": "flyTo",
+        "lat": 38.0,
+        "lng": 34.0,
+        "label": "Turkey",
+    }
 
 
 def test_retrieval_tools_schema():
@@ -145,3 +152,54 @@ async def test_synthesize_answer_handles_refusal():
 
     assert result["answer"] == "I'm sorry, I couldn't generate an answer right now."
     assert result["citations"] == []
+
+
+def test_normalize_globe_actions_adds_fly_to_type():
+    raw = [{"lat": 6.45, "lng": 3.39, "label": "Lagos"}]
+    assert _normalize_globe_actions(raw) == [
+        {"type": "flyTo", "lat": 6.45, "lng": 3.39, "label": "Lagos"}
+    ]
+
+
+def test_normalize_globe_actions_drops_invalid_and_caps_at_three():
+    raw = [
+        {"lat": 95, "lng": 0},  # latitude out of range
+        {"lat": "x", "lng": 1},  # not a number
+        "Lagos",  # not an object
+        {"lat": 1, "lng": 1},
+        {"lat": 2, "lng": 2},
+        {"lat": 3, "lng": 3},
+        {"lat": 4, "lng": 4},
+    ]
+    result = _normalize_globe_actions(raw)
+    assert [a["lat"] for a in result] == [1, 2, 3]
+    assert all(a["type"] == "flyTo" and a["label"] == "" for a in result)
+
+
+def test_normalize_globe_actions_handles_non_list():
+    assert _normalize_globe_actions(None) == []
+    assert _normalize_globe_actions({"lat": 1}) == []
+
+
+def test_normalize_globe_actions_rejects_bools_and_non_finite():
+    raw = json.loads(
+        '[{"lat": true, "lng": 1}, {"lat": NaN, "lng": 0},'
+        ' {"lat": 0, "lng": Infinity}, {"lat": 0, "lng": 181}]'
+    )
+    assert _normalize_globe_actions(raw) == []
+
+
+def test_normalize_globe_actions_strips_unknown_keys_and_non_string_label():
+    raw = [{"lat": 1, "lng": 2, "label": 5, "zoom": 0.001, "type": "highlight"}]
+    assert _normalize_globe_actions(raw) == [{"type": "flyTo", "lat": 1, "lng": 2, "label": ""}]
+
+
+def test_normalize_globe_actions_collapses_and_truncates_label():
+    label = "Lagos,\n  Nigeria\n" + "x" * 200
+    [action] = _normalize_globe_actions([{"lat": 6.45, "lng": 3.39, "label": label}])
+    assert action["label"] == ("Lagos, Nigeria " + "x" * 200)[:80]
+    assert len(action["label"]) == 80
+
+
+def test_normalize_globe_actions_drops_template_placeholder():
+    assert _normalize_globe_actions([{"lat": 0.0, "lng": 0.0, "label": "..."}]) == []
