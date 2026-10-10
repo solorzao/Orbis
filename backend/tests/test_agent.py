@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.routers.agent import AskRequest, ask_stream_endpoint
+from app.routers.agent import AskRequest, ask_endpoint, ask_stream_endpoint
 from app.services import llm_budget
 from app.services.agent import (
+    _OFF_TOPIC_ANSWER,
     RETRIEVAL_TOOLS,
     _normalize_globe_actions,
     ask,
@@ -204,18 +205,29 @@ async def test_admitted_ask_synthesizes_even_if_planning_spent_the_budget(budget
     assert mock_client.messages.create.await_count == 2
 
 
+@pytest.fixture
+def history_store():
+    """Stand-in Redis for conversation history; ``set`` records saves."""
+    redis = AsyncMock()
+    with patch("app.routers.agent.get_redis", new_callable=AsyncMock, return_value=redis):
+        yield redis
+
+
+async def _stream(question: str) -> list[dict]:
+    response = await ask_stream_endpoint(AskRequest(question=question))
+    return [event async for event in response.body_iterator]
+
+
 @pytest.mark.asyncio
-async def test_stream_over_budget_skips_claude_and_retrieval(budget):
+async def test_stream_over_budget_skips_claude_retrieval_and_history(budget, history_store):
     budget.has_budget.return_value = False
     mock_client = AsyncMock()
 
     with (
         patch("app.services.agent._get_anthropic_client", return_value=mock_client),
         patch("app.routers.agent.execute_retrieval", new_callable=AsyncMock) as retrieve,
-        patch("app.routers.agent.get_redis", new_callable=AsyncMock, return_value=None),
     ):
-        response = await ask_stream_endpoint(AskRequest(question="latest earthquake news"))
-        events = [event async for event in response.body_iterator]
+        events = await _stream("latest earthquake news")
 
     assert [e["event"] for e in events] == ["token", "done"]  # no planning or retrieving
     assert json.loads(events[0]["data"]) == {"token": _PAUSED}
@@ -225,6 +237,31 @@ async def test_stream_over_budget_skips_claude_and_retrieval(budget):
     mock_client.messages.create.assert_not_called()
     retrieve.assert_not_called()
     budget.has_budget.assert_awaited_once_with(share=llm_budget.UNCACHED_SHARE)
+    history_store.set.assert_not_awaited()  # a pause is not part of the conversation
+
+
+@pytest.mark.asyncio
+async def test_ask_endpoint_over_budget_does_not_save_history(budget, history_store):
+    budget.has_budget.return_value = False
+
+    result = await ask_endpoint(AskRequest(question="latest earthquake news"))
+
+    assert result.answer == _PAUSED
+    history_store.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stream_off_topic_answer_is_still_saved(history_store):
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_make_mock_response('{"tools": [], "off_topic": true}')
+    )
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        events = await _stream("best pizza recipe?")
+
+    assert json.loads(events[0]["data"]) == {"token": _OFF_TOPIC_ANSWER}
+    history_store.set.assert_awaited_once()
 
 
 @pytest.mark.asyncio

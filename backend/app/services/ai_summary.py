@@ -170,7 +170,9 @@ async def _call_claude(
         raise SummaryUnavailable("AI summary unavailable (API key not configured).")
 
     if not await llm_budget.has_budget(share=budget_share):
-        logger.info("Daily Claude budget spent — returning fallback.")
+        logger.info(
+            "%.0f%% of the daily Claude budget is spent — returning fallback.", budget_share * 100
+        )
         raise SummaryUnavailable("AI summaries are paused until 00:00 UTC (daily limit reached).")
 
     try:

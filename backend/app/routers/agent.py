@@ -119,8 +119,12 @@ async def _save_history(
     """Append the latest exchange and persist to Redis (last 10 messages).
 
     Embeds citation URLs in the assistant message so follow-up questions
-    can discover them via ``_collect_urls_from_history``.
+    can discover them via ``_collect_urls_from_history``. The paused answer
+    is not saved: it says nothing about the conversation, and the question
+    can be asked again once the budget resets.
     """
+    if answer == _PAUSED_ANSWER:
+        return
     history.append({"role": "user", "content": question})
     # Append citation URLs so follow-up read_article calls can find them
     answer_to_store = answer

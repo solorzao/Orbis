@@ -85,7 +85,7 @@ def test_cost_matches_haiku_4_5_by_prefix():
 def test_unknown_model_is_priced_high_and_warned_about_once(caplog):
     usage = SimpleNamespace(input_tokens=1_000_000, output_tokens=1_000_000)
     with caplog.at_level(logging.WARNING, logger=llm_budget.__name__):
-        assert llm_budget.cost_usd(usage, "claude-next") == pytest.approx(30.00)
+        assert llm_budget.cost_usd(usage, "claude-next") == pytest.approx(60.00)
         llm_budget.cost_usd(usage, "claude-next")
     assert [r.levelno for r in caplog.records] == [logging.WARNING]
 
@@ -197,16 +197,17 @@ async def test_cap_trips_from_memory_when_redis_writes_fail(redis):
 
 
 @pytest.mark.asyncio
-async def test_record_logs_usage_and_warns_once_on_crossing_the_cap(caplog):
+async def test_record_logs_usage_and_warns_once_per_threshold(caplog):
     with caplog.at_level(logging.INFO, logger=llm_budget.__name__):
-        for _ in range(3):
-            await llm_budget.record(_usage(0.006), HAIKU)  # the cap of $0.01 falls in call 2
+        for _ in range(4):  # totals $0.004, $0.008, $0.012, $0.016 against a $0.01 cap
+            await llm_budget.record(_usage(0.004), HAIKU)
 
     infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(infos) == 3
-    assert HAIKU in infos[-1] and "0.0180" in infos[-1]  # model and running total
-    assert len(warnings) == 1
+    assert len(infos) == 4
+    assert HAIKU in infos[-1] and "0.0160" in infos[-1]  # model and running total
+    assert len(warnings) == 2
+    assert "70%" in warnings[0] and "100%" in warnings[1]
 
 
 @pytest.mark.asyncio

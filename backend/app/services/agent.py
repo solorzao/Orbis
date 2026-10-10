@@ -414,6 +414,7 @@ async def plan_retrieval(
     """Use Haiku to decide which retrieval tools to call.
 
     Returns a list of ``{"name": str, "args": dict}`` dicts (1-3 tools).
+    Does not check the budget: callers must ``admit_ask()`` first.
     """
     tool_desc = "\n".join(
         f"- {t['name']}: {t['description']} (params: {list(t['parameters'].keys())})"
@@ -475,7 +476,10 @@ async def admit_ask() -> bool:
     """
     if await llm_budget.has_budget(share=llm_budget.UNCACHED_SHARE):
         return True
-    logger.info("Daily Claude budget spent -- answering without AI.")
+    logger.info(
+        "Uncached share (%.0f%%) of the daily Claude budget is spent -- answering without AI.",
+        llm_budget.UNCACHED_SHARE * 100,
+    )
     return False
 
 
@@ -655,6 +659,7 @@ async def synthesize_answer(
     """Use Haiku to produce a cited answer with globe actions.
 
     Returns ``{"answer": str, "citations": list, "globe_actions": list}``.
+    Does not check the budget: callers must ``admit_ask()`` first.
     """
     messages: list[dict] = []
     if conversation_history:

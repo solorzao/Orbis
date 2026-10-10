@@ -3,7 +3,9 @@
 Spend is counted in Redis when available, which survives restarts, and always
 in process memory, which is exact only within one process. Reads take the
 larger of the two, so a failed Redis read or write, an outage or a restart
-never makes today's spend look lower than this process has seen.
+never makes today's spend look lower than this process has seen. Spend whose
+Redis write failed is not replayed, so a restart after a Redis outage can
+undercount by that amount.
 """
 
 from __future__ import annotations
@@ -23,13 +25,19 @@ _PRICES: dict[str, tuple[float, float]] = {
     "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5": (1.00, 5.00),
 }
-# Unknown models fail closed: priced high enough that a model change cannot
-# overspend the cap unnoticed.
-_UNKNOWN_PRICE = (5.00, 25.00)
+# Unknown models fail closed at the highest current list price (Claude Fable
+# 5.1), so pointing HAIKU_MODEL_ID at any model cannot overspend the cap.
+_UNKNOWN_PRICE = (10.00, 50.00)
 
 # Share of the cap for features whose answers serve one visitor (the agent,
 # selection summaries); the rest is kept for the cached cluster summaries.
 UNCACHED_SHARE = 0.7
+
+# Shares of the cap that log a warning when spend crosses them, and what pauses.
+_THRESHOLDS = (
+    (UNCACHED_SHARE, "the agent and selection summaries pause"),
+    (1.0, "all AI features pause"),
+)
 
 _memory: dict[str, float] = {}
 _warned_models: set[str] = set()
@@ -100,9 +108,13 @@ async def record(usage: Any, model: str) -> None:
             total,
         )
         cap = settings.llm_daily_budget_usd
-        if total - amount < cap <= total:
-            logger.warning(
-                "Daily Claude budget of $%.2f reached; AI features pause until 00:00 UTC.", cap
-            )
+        for share, effect in _THRESHOLDS:
+            if total - amount < cap * share <= total:
+                logger.warning(
+                    "Claude spend reached %.0f%% of the $%.2f daily budget; %s until 00:00 UTC.",
+                    share * 100,
+                    cap,
+                    effect,
+                )
     except Exception:
         logger.error("Recording Claude usage failed.", exc_info=True)
