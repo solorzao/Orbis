@@ -1,14 +1,23 @@
-# DO NOT create a terraform.tfvars with real secrets.
-# Instead, set environment variables before running terraform:
+# No secrets go through Terraform variables. The only required input is:
 #
 #   export TF_VAR_subscription_id="your-azure-subscription-id"
-#   export TF_VAR_pg_admin_password="YourStrongPasswordHere123!"
-#   export TF_VAR_ghcr_username="your-github-username"
-#   export TF_VAR_ghcr_password="ghp_xxxxxxxxxxxxxxxxxxxx"
-#   export TF_VAR_anthropic_api_key="sk-ant-xxxxxxxxxxxxxxxxxxxx"
-#   export TF_VAR_openai_api_key="sk-xxxxxxxxxxxxxxxxxxxx"
 #
-# Then run: terraform plan / terraform apply
+# One-time setup (remote state storage):   ../scripts/bootstrap-tfstate.sh
+# Then:                                    terraform init && terraform apply
 #
-# All sensitive values are stored in Azure Key Vault at runtime.
-# The Container App reads secrets from Key Vault via managed identity.
+# Terraform generates the Postgres password, the frontend API key and the
+# ML function key, and stores them in Key Vault. Third-party secrets are
+# created as "unset" placeholders; set the real values yourself:
+#
+#   KV=$(terraform output -raw key_vault_name)
+#   az keyvault secret set --vault-name "$KV" --name redis-url         --value "rediss://default:...@....upstash.io:6379"
+#   az keyvault secret set --vault-name "$KV" --name anthropic-api-key --value "sk-ant-..."
+#   az keyvault secret set --vault-name "$KV" --name openai-api-key    --value "sk-..."
+#
+# Then restart the API so it re-reads them:
+#
+#   az containerapp revision restart -g rg-orbis -n orbis-api \
+#     --revision "$(az containerapp show -g rg-orbis -n orbis-api --query properties.latestRevisionName -o tsv)"
+#
+# The API image (ghcr.io/solorzao/orbis-api) must be public; no registry
+# credentials are configured.

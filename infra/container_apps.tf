@@ -42,43 +42,31 @@ resource "azurerm_container_app" "api" {
   # Secrets sourced from Key Vault via managed identity
   secret {
     name                = "database-url"
-    key_vault_secret_id = azurerm_key_vault_secret.database_url.id
-    identity            = azurerm_user_assigned_identity.orbis_api.id
-  }
-
-  secret {
-    name                = "redis-url"
-    key_vault_secret_id = azurerm_key_vault_secret.redis_url.id
-    identity            = azurerm_user_assigned_identity.orbis_api.id
-  }
-
-  secret {
-    name                = "anthropic-api-key"
-    key_vault_secret_id = azurerm_key_vault_secret.anthropic_api_key.id
-    identity            = azurerm_user_assigned_identity.orbis_api.id
-  }
-
-  secret {
-    name                = "openai-api-key"
-    key_vault_secret_id = azurerm_key_vault_secret.openai_api_key.id
+    key_vault_secret_id = azurerm_key_vault_secret.database_url.versionless_id
     identity            = azurerm_user_assigned_identity.orbis_api.id
   }
 
   secret {
     name                = "orbis-api-key"
-    key_vault_secret_id = azurerm_key_vault_secret.orbis_api_key.id
+    key_vault_secret_id = azurerm_key_vault_secret.orbis_api_key.versionless_id
     identity            = azurerm_user_assigned_identity.orbis_api.id
   }
 
   secret {
-    name  = "ghcr-password"
-    value = var.ghcr_password
+    name                = "ml-functions-key"
+    key_vault_secret_id = azurerm_key_vault_secret.ml_functions_key.versionless_id
+    identity            = azurerm_user_assigned_identity.orbis_api.id
   }
 
-  registry {
-    server               = "ghcr.io"
-    username             = var.ghcr_username
-    password_secret_name = "ghcr-password"
+  # Versionless so values set later with `az keyvault secret set` are picked
+  # up on the next revision restart.
+  dynamic "secret" {
+    for_each = azurerm_key_vault_secret.external
+    content {
+      name                = secret.value.name
+      key_vault_secret_id = secret.value.versionless_id
+      identity            = azurerm_user_assigned_identity.orbis_api.id
+    }
   }
 
   ingress {
@@ -92,12 +80,14 @@ resource "azurerm_container_app" "api" {
   }
 
   template {
+    # Exactly one replica: GDELT ingestion runs on an in-process scheduler,
+    # so extra replicas would duplicate ingestion work.
     min_replicas = 1
-    max_replicas = 3
+    max_replicas = 1
 
     container {
       name   = "orbis-api"
-      image  = "ghcr.io/solorzao/orbis-api:latest"
+      image  = var.api_image
       cpu    = 0.25
       memory = "0.5Gi"
 
@@ -130,14 +120,28 @@ resource "azurerm_container_app" "api" {
         name  = "AGENT_ENABLED"
         value = var.agent_enabled
       }
+
+      env {
+        name  = "ML_FUNCTIONS_URL"
+        value = "https://${azurerm_function_app_flex_consumption.ml.default_hostname}/api"
+      }
+
+      env {
+        name        = "ML_FUNCTIONS_KEY"
+        secret_name = "ml-functions-key"
+      }
     }
+  }
+
+  lifecycle {
+    # CI deploys SHA-tagged images; don't roll them back on apply.
+    ignore_changes = [template[0].container[0].image]
   }
 
   depends_on = [
     azurerm_postgresql_flexible_server.orbis,
     azurerm_postgresql_flexible_server_database.orbis,
     azurerm_postgresql_flexible_server_configuration.extensions,
-    azurerm_redis_cache.orbis,
     azurerm_role_assignment.api_secrets,
   ]
 }

@@ -4,13 +4,18 @@ resource "random_string" "pg_suffix" {
   upper   = false
 }
 
+resource "random_password" "pg_admin" {
+  length  = 32
+  special = false
+}
+
 resource "azurerm_postgresql_flexible_server" "orbis" {
   name                          = "orbis-pg-server-${random_string.pg_suffix.result}"
   resource_group_name           = azurerm_resource_group.orbis.name
   location                      = azurerm_resource_group.orbis.location
   version                       = "16"
   administrator_login           = "orbisadmin"
-  administrator_password        = var.pg_admin_password
+  administrator_password        = random_password.pg_admin.result
   sku_name                      = var.pg_sku
   storage_mb                    = var.pg_storage_mb
   backup_retention_days         = 7

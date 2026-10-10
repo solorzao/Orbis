@@ -3,6 +3,8 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # Manual run deploys every component regardless of what changed
+  workflow_dispatch:
 
 # Only allow one deployment at a time
 concurrency:
@@ -12,6 +14,11 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  id-token: write # OIDC login to Azure (no stored credentials)
+
+env:
+  RESOURCE_GROUP: rg-orbis
+  ML_FUNCTION_APP: orbis-ml-classify
 
 jobs:
   changes:
@@ -37,7 +44,7 @@ jobs:
   build-and-push:
     name: Build & Push Docker Image
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -61,51 +68,65 @@ jobs:
     steps:
       - uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Deploy to Container Apps
         uses: azure/container-apps-deploy-action@v2
         with:
-          resourceGroup: rg-orbis
+          resourceGroup: ${{ env.RESOURCE_GROUP }}
           containerAppName: orbis-api
           imageToDeploy: ghcr.io/${{ github.repository_owner }}/orbis-api:${{ github.sha }}
 
   deploy-functions:
     name: Deploy ML Functions to Azure
     needs: changes
-    if: needs.changes.outputs.functions == 'true'
+    if: needs.changes.outputs.functions == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
       - uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-      - name: Install Azure Functions Core Tools
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy to Azure Functions (Flex Consumption)
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.ML_FUNCTION_APP }}
+          package: functions/ml-classify
+          sku: flexconsumption
+          remote-build: true
+      - name: Sync API host key from Key Vault
         run: |
-          curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
-          sudo mv microsoft.gpg /etc/apt/trusted.gpg.d/microsoft.gpg
-          sudo sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/microsoft-ubuntu-$(lsb_release -cs)-prod $(lsb_release -cs) main" > /etc/apt/sources.list.d/dotnetdev.list'
-          sudo apt-get update
-          sudo apt-get install -y azure-functions-core-tools-4
-      - name: Deploy to Azure Functions
-        working-directory: functions/ml-classify
-        run: func azure functionapp publish orbis-ml-classify --python
+          KV=$(az keyvault list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv)
+          KEY=$(az keyvault secret show --vault-name "$KV" --name ml-functions-key --query value -o tsv)
+          echo "::add-mask::$KEY"
+          az functionapp keys set -g "$RESOURCE_GROUP" -n "$ML_FUNCTION_APP" \
+            --key-type functionKeys --key-name orbis-api --key-value "$KEY" -o none
 
   run-migrations:
     name: Run Database Migrations
     needs: changes
-    if: needs.changes.outputs.database == 'true'
+    if: needs.changes.outputs.database == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Read DATABASE_URL from Key Vault
+        run: |
+          KV=$(az keyvault list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv)
+          URL=$(az keyvault secret show --vault-name "$KV" --name database-url --query value -o tsv)
+          echo "::add-mask::$URL"
+          echo "DATABASE_URL=$URL" >> "$GITHUB_ENV"
       - name: Install PostgreSQL client
         run: sudo apt-get install -y postgresql-client
 
       - name: Wait for database connectivity
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           for i in 1 2 3 4 5; do
             if psql "$DATABASE_URL" -c "SELECT 1" > /dev/null 2>&1; then
@@ -119,8 +140,6 @@ jobs:
           exit 1
 
       - name: Run pending migrations
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           set -euo pipefail
 

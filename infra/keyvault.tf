@@ -40,35 +40,21 @@ resource "azurerm_role_assignment" "api_secrets" {
   principal_id         = azurerm_user_assigned_identity.orbis_api.principal_id
 }
 
-# --- Secrets ---
+# --- Generated secrets (values owned by Terraform) ---
+
+resource "random_password" "orbis_api_key" {
+  length  = 40
+  special = false
+}
+
+resource "random_password" "ml_functions_key" {
+  length  = 48
+  special = false
+}
 
 resource "azurerm_key_vault_secret" "database_url" {
   name         = "database-url"
-  value        = "postgresql://orbisadmin:${urlencode(var.pg_admin_password)}@${azurerm_postgresql_flexible_server.orbis.fqdn}:5432/orbis?sslmode=require"
-  key_vault_id = azurerm_key_vault.orbis.id
-
-  depends_on = [azurerm_role_assignment.deployer_secrets]
-}
-
-resource "azurerm_key_vault_secret" "redis_url" {
-  name         = "redis-url"
-  value        = "rediss://:${azurerm_redis_cache.orbis.primary_access_key}@${azurerm_redis_cache.orbis.hostname}:${azurerm_redis_cache.orbis.ssl_port}"
-  key_vault_id = azurerm_key_vault.orbis.id
-
-  depends_on = [azurerm_role_assignment.deployer_secrets]
-}
-
-resource "azurerm_key_vault_secret" "anthropic_api_key" {
-  name         = "anthropic-api-key"
-  value        = var.anthropic_api_key
-  key_vault_id = azurerm_key_vault.orbis.id
-
-  depends_on = [azurerm_role_assignment.deployer_secrets]
-}
-
-resource "azurerm_key_vault_secret" "openai_api_key" {
-  name         = "openai-api-key"
-  value        = var.openai_api_key
+  value        = "postgresql://orbisadmin:${random_password.pg_admin.result}@${azurerm_postgresql_flexible_server.orbis.fqdn}:5432/orbis?sslmode=require"
   key_vault_id = azurerm_key_vault.orbis.id
 
   depends_on = [azurerm_role_assignment.deployer_secrets]
@@ -76,8 +62,45 @@ resource "azurerm_key_vault_secret" "openai_api_key" {
 
 resource "azurerm_key_vault_secret" "orbis_api_key" {
   name         = "orbis-api-key"
-  value        = var.orbis_api_key
+  value        = random_password.orbis_api_key.result
   key_vault_id = azurerm_key_vault.orbis.id
+
+  depends_on = [azurerm_role_assignment.deployer_secrets]
+}
+
+# Pushed to the Function App as a host key by the deploy workflow.
+resource "azurerm_key_vault_secret" "ml_functions_key" {
+  name         = "ml-functions-key"
+  value        = random_password.ml_functions_key.result
+  key_vault_id = azurerm_key_vault.orbis.id
+
+  depends_on = [azurerm_role_assignment.deployer_secrets]
+}
+
+# --- External secrets (values set out-of-band) ---
+#
+# Terraform creates these with a placeholder so the Container App can
+# reference them, then never touches the value again. Set the real values
+# with `az keyvault secret set` (see terraform.tfvars.example), then restart
+# the Container App revision.
+
+locals {
+  external_secrets = {
+    redis_url         = "redis-url" # Upstash rediss:// URL
+    anthropic_api_key = "anthropic-api-key"
+    openai_api_key    = "openai-api-key"
+  }
+}
+
+resource "azurerm_key_vault_secret" "external" {
+  for_each     = local.external_secrets
+  name         = each.value
+  value        = "unset"
+  key_vault_id = azurerm_key_vault.orbis.id
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 
   depends_on = [azurerm_role_assignment.deployer_secrets]
 }

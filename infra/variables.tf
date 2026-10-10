@@ -15,12 +15,6 @@ variable "resource_group_name" {
   default     = "rg-orbis"
 }
 
-variable "pg_admin_password" {
-  description = "Administrator password for PostgreSQL Flexible Server"
-  type        = string
-  sensitive   = true
-}
-
 variable "pg_sku" {
   description = "SKU name for PostgreSQL Flexible Server"
   type        = string
@@ -33,33 +27,16 @@ variable "pg_storage_mb" {
   default     = 32768
 }
 
-variable "ghcr_username" {
-  description = "GitHub username for container registry (ghcr.io)"
+variable "api_image" {
+  description = "Container image for the API. CI deploys SHA-tagged images after creation, so changes here are ignored."
   type        = string
+  default     = "ghcr.io/solorzao/orbis-api:latest"
 }
 
-variable "ghcr_password" {
-  description = "GitHub Personal Access Token for container registry (ghcr.io)"
-  type        = string
-  sensitive   = true
-}
-
-variable "anthropic_api_key" {
-  description = "Anthropic API key for Claude"
-  type        = string
-  sensitive   = true
-}
-
-variable "openai_api_key" {
-  description = "OpenAI API key"
-  type        = string
-  sensitive   = true
-}
-
-variable "orbis_api_key" {
-  description = "Shared API key for frontend-to-backend auth (X-API-Key header)"
-  type        = string
-  sensitive   = true
+variable "ml_function_max_instances" {
+  description = "Upper bound on Flex Consumption instances for the ML function (caps spend)"
+  type        = number
+  default     = 2
 }
 
 variable "agent_enabled" {

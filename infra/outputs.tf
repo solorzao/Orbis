@@ -8,9 +8,14 @@ output "postgres_fqdn" {
   value       = azurerm_postgresql_flexible_server.orbis.fqdn
 }
 
-output "redis_hostname" {
-  description = "Azure Cache for Redis hostname"
-  value       = azurerm_redis_cache.orbis.hostname
+output "ml_function_app_name" {
+  description = "Name of the ML classification Function App"
+  value       = azurerm_function_app_flex_consumption.ml.name
+}
+
+output "ml_functions_url" {
+  description = "Base URL the API uses for ML inference"
+  value       = "https://${azurerm_function_app_flex_consumption.ml.default_hostname}/api"
 }
 
 output "key_vault_name" {
