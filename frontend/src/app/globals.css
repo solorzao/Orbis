@@ -9,6 +9,7 @@
   --text-primary: #c8e6f8;
   --text-secondary: #6eaac8;
   --text-muted: #3a7090;
+  --text-motto: #4280a4; /* 4.6:1 on --bg-page (WCAG AA) */
   --border-subtle: rgba(0, 212, 255, 0.08);
   --border-accent: rgba(0, 212, 255, 0.2);
   --vignette: rgba(2, 6, 14, 0.7);
@@ -25,6 +26,7 @@
   --text-primary: #1e293b;
   --text-secondary: #475569;
   --text-muted: #94a3b8;
+  --text-motto: #5c6f8a; /* 4.6:1 on --bg-page (WCAG AA) */
   --border-subtle: rgba(0, 0, 0, 0.08);
   --border-accent: rgba(59, 130, 246, 0.2);
   --vignette: rgba(240, 244, 248, 0.5);

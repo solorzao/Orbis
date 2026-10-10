@@ -355,7 +355,7 @@ export default function Home() {
           >
             Orbis
           </h1>
-          <p className="hidden text-[9px] font-medium tracking-[0.3em] text-[var(--text-muted)] uppercase sm:block">
+          <p className="hidden text-[9px] font-medium tracking-[0.3em] text-[var(--text-motto)] uppercase sm:block">
             Every Story, Everywhere
           </p>
         </div>
