@@ -80,11 +80,26 @@ def _get_rate_group(path: str) -> str | None:
     return None
 
 
-def _client_ip(request: Request) -> str:
-    """Best-effort client IP (respects X-Forwarded-For from trusted proxies)."""
+# Set by the frontend's server-side proxy to the visitor's IP. Only honoured
+# on requests that passed the API-key check, since only the proxy holds the key.
+_PROXY_CLIENT_IP_HEADER = "X-Orbis-Client-IP"
+
+
+def _client_ip(request: Request, trusted: bool = False) -> str:
+    """Best-effort client IP for rate limiting and logs.
+
+    *trusted* means the request carried a valid API key, i.e. it came from our
+    proxy, so its client-IP header is believed. Otherwise use the rightmost
+    X-Forwarded-For entry: earlier entries are client-supplied and spoofable,
+    while the Container Apps ingress appends the address it actually saw.
+    """
+    if trusted:
+        proxied = request.headers.get(_PROXY_CLIENT_IP_HEADER, "").strip()
+        if proxied:
+            return proxied
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -154,7 +169,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         group = _get_rate_group(path)
         if group:
             window, limit = _RATE_LIMITS[group]
-            ip = _client_ip(request)
+            ip = _client_ip(request, trusted=True)
             bucket_key = f"{group}:{ip}"
             bucket = _rate_buckets[group][bucket_key]
             if not bucket.allow(time.time(), window, limit):
