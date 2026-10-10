@@ -14,10 +14,23 @@
 #   az keyvault secret set --vault-name "$KV" --name anthropic-api-key --value "sk-ant-..."
 #   az keyvault secret set --vault-name "$KV" --name openai-api-key    --value "sk-..."
 #
-# Then restart the API so it re-reads them:
+# Container Apps caches Key Vault values and refreshes them on its own within
+# ~30 minutes. A revision restart does NOT force a refresh. To apply a new
+# value immediately, pin the secret to the new version, restart, then let
+# Terraform restore the versionless reference:
 #
+#   ID=$(az keyvault secret show --vault-name "$KV" --name <secret> --query id -o tsv)
+#   UAMI=$(az identity show -g rg-orbis -n id-orbis-api --query id -o tsv)
+#   az containerapp secret set -g rg-orbis -n orbis-api \
+#     --secrets "<secret>=keyvaultref:$ID,identityref:$UAMI"
 #   az containerapp revision restart -g rg-orbis -n orbis-api \
 #     --revision "$(az containerapp show -g rg-orbis -n orbis-api --query properties.latestRevisionName -o tsv)"
+#   terraform apply   # back to the versionless reference (same value)
+#
+# Rotating the frontend<->API key (orbis-api-key):
+#   terraform apply -replace=random_password.orbis_api_key
+#   then update ORBIS_API_KEY on Vercel (Sensitive) from Key Vault, apply the
+#   immediate-refresh steps above for orbis-api-key, and redeploy Vercel.
 #
 # The API image (ghcr.io/solorzao/orbis-api) must be public; no registry
 # credentials are configured.
