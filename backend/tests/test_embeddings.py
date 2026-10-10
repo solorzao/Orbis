@@ -23,7 +23,7 @@ class TestGenerateEmbeddings:
         ]
 
         mock_pool = AsyncMock()
-        mock_pool.fetch = AsyncMock(return_value=db_rows)
+        mock_pool.fetch = AsyncMock(side_effect=[db_rows, []])
         mock_pool.executemany = AsyncMock()
 
         # Build a mock OpenAI response
@@ -58,6 +58,32 @@ class TestGenerateEmbeddings:
             "Another headline here",
         ]
         mock_pool.executemany.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_generate_embeddings_loops_until_backlog_is_empty(self):
+        from app.services.embeddings import generate_embeddings
+
+        batch = [{"id": uuid.uuid4(), "title": f"Headline {i}"} for i in range(2)]
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(side_effect=[batch, batch, []])
+        mock_pool.executemany = AsyncMock()
+        emb = MagicMock()
+        emb.embedding = _fake_embedding()
+        response = MagicMock()
+        response.data = [emb, emb]
+        client = AsyncMock()
+        client.embeddings.create = AsyncMock(return_value=response)
+
+        with (
+            patch("app.services.embeddings._get_openai_client", return_value=client),
+            patch(
+                "app.services.embeddings.get_pool", new_callable=AsyncMock, return_value=mock_pool
+            ),
+        ):
+            count = await generate_embeddings()
+
+        assert count == 4
+        assert client.embeddings.create.await_count == 2
 
     @pytest.mark.asyncio
     async def test_generate_embeddings_skips_when_no_api_key(self):

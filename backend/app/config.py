@@ -49,6 +49,9 @@ class Settings:
     openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))
     embedding_model: str = "text-embedding-3-small"
     embedding_batch_size: int = 100
+    embedding_max_per_cycle: int = field(
+        default_factory=lambda: _env_int("EMBEDDING_MAX_PER_CYCLE", 2000)
+    )
 
     # --- ML classification ---
     ml_topic_model: str = field(

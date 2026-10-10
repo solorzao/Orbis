@@ -29,7 +29,11 @@ def _get_openai_client() -> Any | None:
 
 
 async def generate_embeddings() -> int:
-    """Embed articles that lack a vector and store results in PostgreSQL.
+    """Embed the backlog of articles that lack a vector and store results in PostgreSQL.
+
+    Works through the backlog in batches of ``embedding_batch_size``, newest
+    first, until none are left or ``embedding_max_per_cycle`` articles have
+    been embedded in this call.
 
     Returns the number of articles successfully embedded.
     """
@@ -37,40 +41,35 @@ async def generate_embeddings() -> int:
     if client is None:
         return 0
 
+    total = 0
     try:
         pool = await get_pool()
-
-        rows = await pool.fetch(
-            "SELECT id, title FROM articles "
-            "WHERE embedding IS NULL "
-            "ORDER BY ingested_at DESC "
-            "LIMIT $1",
-            settings.embedding_batch_size,
-        )
-
-        if not rows:
-            return 0
-
-        titles = [r["title"] for r in rows]
-
-        response = await client.embeddings.create(
-            model=settings.embedding_model,
-            input=titles,
-        )
-
-        updates: list[tuple[str, Any]] = []
-        for row, embedding_obj in zip(rows, response.data):
-            vec_str = "[" + ",".join(str(v) for v in embedding_obj.embedding) + "]"
-            updates.append((vec_str, row["id"]))
-
-        await pool.executemany(
-            "UPDATE articles SET embedding = $1::vector WHERE id = $2",
-            updates,
-        )
-
-        logger.info("Generated embeddings for %d articles.", len(updates))
-        return len(updates)
-
+        while total < settings.embedding_max_per_cycle:
+            rows = await pool.fetch(
+                "SELECT id, title FROM articles "
+                "WHERE embedding IS NULL "
+                "ORDER BY ingested_at DESC "
+                "LIMIT $1",
+                settings.embedding_batch_size,
+            )
+            if not rows:
+                break
+            response = await client.embeddings.create(
+                model=settings.embedding_model,
+                input=[r["title"] for r in rows],
+            )
+            updates: list[tuple[str, Any]] = [
+                ("[" + ",".join(str(v) for v in emb.embedding) + "]", row["id"])
+                for row, emb in zip(rows, response.data)
+            ]
+            await pool.executemany(
+                "UPDATE articles SET embedding = $1::vector WHERE id = $2",
+                updates,
+            )
+            total += len(updates)
+        if total:
+            logger.info("Generated embeddings for %d articles.", total)
+        return total
     except Exception:
-        logger.error("Embedding generation failed.", exc_info=True)
-        return 0
+        logger.error("Embedding generation failed after %d articles.", total, exc_info=True)
+        return total
