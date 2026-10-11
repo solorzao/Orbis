@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
-import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
+import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
-import { countAfterPage, nextPage } from "@/lib/loadMore";
+import { appendPage, countAfterPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
+import { LIVE_WINDOW_HOURS, panelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
@@ -139,7 +140,12 @@ export default function Home() {
     let cancelled = false;
     const effectiveRange = timeRange ?? dayWindow;
     const timer = setTimeout(() => {
-      fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
+      fetchGlobeNews(
+        `${LIVE_WINDOW_HOURS}h`,
+        500,
+        effectiveRange?.startTime,
+        effectiveRange?.endTime,
+      )
         .then((apiPoints) => {
           if (cancelled) return;
           setAllPoints(apiPointsToGlobePoints(apiPoints));
@@ -184,26 +190,31 @@ export default function Home() {
       sentimentScore: a.sentiment_score,
     }));
 
+  // Panels read only their own query, fixed at click time (see panelQuery).
   const fetchPanelData = useCallback(
-    async (panelId: string, point: GlobePoint) => {
-      const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
-
+    async (panelId: string, point: GlobePoint, query: PanelQuery) => {
       try {
         const apiArticles = await fetchClusterArticles(
           point.lat,
           point.lng,
           0.75,
-          topicFilter,
+          query.topic,
           point.locationName,
           0,
-          10,
-          (timeRange ?? dayWindow)?.startTime,
-          (timeRange ?? dayWindow)?.endTime,
+          FIRST_PAGE_LIMIT,
+          query.startTime,
+          query.endTime,
         );
         const mapped = mapArticles(apiArticles);
+        const count = countAfterPage(
+          point.count,
+          mapped.length,
+          apiArticles.length,
+          FIRST_PAGE_LIMIT,
+        );
         updatePanel(panelId, {
           articles: mapped,
-          point: { ...point, articles: mapped },
+          point: { ...point, articles: mapped, count },
           articlesLoading: false,
         });
       } catch {
@@ -216,16 +227,16 @@ export default function Home() {
           point.lng,
           0.75,
           point.locationName,
-          topicFilter,
-          (timeRange ?? dayWindow)?.startTime,
-          (timeRange ?? dayWindow)?.endTime,
+          query.topic,
+          query.startTime,
+          query.endTime,
         );
         updatePanel(panelId, { clusterSummary: result.summary, summaryLoading: false });
       } catch {
         updatePanel(panelId, { summaryLoading: false });
       }
     },
-    [activeTopic, timeRange, dayWindow, updatePanel],
+    [updatePanel],
   );
 
   const handleLoadMore = useCallback(
@@ -235,7 +246,7 @@ export default function Home() {
 
       updatePanel(panelId, { loadingMore: true });
 
-      const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
+      const { query } = panel;
       const isFiltered =
         filters && (filters.sentiment || filters.search || filters.topics.length > 0);
 
@@ -248,15 +259,15 @@ export default function Home() {
           panel.point.lat,
           panel.point.lng,
           0.75,
-          topicFilter,
+          query.topic,
           panel.point.locationName,
           offset,
           limit,
-          (timeRange ?? dayWindow)?.startTime,
-          (timeRange ?? dayWindow)?.endTime,
+          query.startTime,
+          query.endTime,
         );
         const mapped = mapArticles(apiArticles);
-        const allArticles = [...panel.articles, ...mapped];
+        const allArticles = appendPage(panel.articles, mapped);
         const count = countAfterPage(
           panel.point.count,
           allArticles.length,
@@ -272,7 +283,7 @@ export default function Home() {
         updatePanel(panelId, { loadingMore: false });
       }
     },
-    [panelQueue, activeTopic, timeRange, dayWindow, updatePanel],
+    [panelQueue, updatePanel],
   );
 
   const handlePointClick = useCallback(
@@ -285,9 +296,11 @@ export default function Home() {
       }
 
       const panelId = `${point.id}-${Date.now()}`;
+      const query = panelQuery(activeTopic, timeRange ?? dayWindow, Date.now());
       const newEntry: PanelEntry = {
         panelId,
         point,
+        query,
         articles: [],
         clusterSummary: null,
         articlesLoading: true,
@@ -307,9 +320,9 @@ export default function Home() {
       });
 
       setExpandedPanelId(panelId);
-      fetchPanelData(panelId, point);
+      fetchPanelData(panelId, point, query);
     },
-    [panelQueue, fetchPanelData],
+    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData],
   );
 
   const handleZoomChange = useCallback(() => {}, []);

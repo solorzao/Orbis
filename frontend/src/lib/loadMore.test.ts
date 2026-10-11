@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { countAfterPage, nextPage, FILTERED_LOAD_MORE_LIMIT, LOAD_MORE_LIMIT } from "./loadMore";
+import {
+  appendPage,
+  countAfterPage,
+  nextPage,
+  FILTERED_LOAD_MORE_LIMIT,
+  FIRST_PAGE_LIMIT,
+  LOAD_MORE_LIMIT,
+} from "./loadMore";
 
 // NewsPanel shows "Load more" while this holds.
 const buttonShown = (loaded: number, count: number) => loaded > 0 && loaded < count;
@@ -30,6 +37,12 @@ describe("countAfterPage", () => {
     expect(countAfterPage(120, 30, 0, LOAD_MORE_LIMIT)).toBe(30);
   });
 
+  it("applies to the first page too: a short one offers no Load more", () => {
+    // A dot counting 50 stories of which 3 carry the active topic.
+    expect(countAfterPage(50, 3, 3, FIRST_PAGE_LIMIT)).toBe(3);
+    expect(countAfterPage(50, FIRST_PAGE_LIMIT, FIRST_PAGE_LIMIT, FIRST_PAGE_LIMIT)).toBe(50);
+  });
+
   it("pages through a cell well past the first Load more", () => {
     // A dot counting 120 stories whose list (deduplicated) holds 95.
     const available = 95;
@@ -46,5 +59,25 @@ describe("countAfterPage", () => {
     expect(loaded).toBe(available);
     expect(count).toBe(available);
     expect(clicks).toBeGreaterThan(2);
+  });
+});
+
+describe("appendPage", () => {
+  const story = (id: string) => ({ id });
+
+  it("appends the page after the stories already loaded", () => {
+    expect(appendPage([story("a"), story("b")], [story("c")])).toEqual([
+      story("a"),
+      story("b"),
+      story("c"),
+    ]);
+  });
+
+  it("drops stories already loaded: a batch ingested since the click shifts the pages", () => {
+    expect(appendPage([story("a"), story("b")], [story("b"), story("c")])).toEqual([
+      story("a"),
+      story("b"),
+      story("c"),
+    ]);
   });
 });

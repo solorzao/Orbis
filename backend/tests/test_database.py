@@ -75,49 +75,131 @@ def _globe_row(**overrides):
     return {**row, **overrides}
 
 
+def _sql(query: str) -> str:
+    """*query* with its whitespace collapsed, for substring and order checks."""
+    return " ".join(query.split())
+
+
+def _fetched(pool) -> tuple[str, list]:
+    """The last query sent (whitespace collapsed) and its arguments."""
+    query, *args = pool.fetch.call_args.args
+    return _sql(query), args
+
+
 def _selected_columns(query: str) -> set[str]:
     """The columns the dedup subquery reads from ``articles``."""
-    match = re.search(r"DISTINCT ON \(lower\(title\)\)\s+(.*?)\s+FROM articles", query, re.S)
+    match = re.search(r"DISTINCT ON \(lower\(title\)\) (.*?) FROM articles", _sql(query))
     assert match, query
     return {col.strip() for col in match.group(1).split(",")}
 
 
+# The New York cell: lat [40, 41), lng [-75, -74).
+CELL = (40.0, -75.0, 41.0, -74.0)
+
+
 class TestGetArticlesInBounds:
     @pytest.mark.asyncio
-    async def test_window_and_limit_are_query_parameters(self, pool):
+    async def test_cell_box_and_limit_are_the_first_parameters(self, pool):
+        await database.get_articles_in_bounds(*CELL, limit=300)
+
+        _, args = _fetched(pool)
+        # Bounds, then the padded (lng, lat) box for the index, then the limit.
+        assert args == pytest.approx([*CELL, -75.01, 39.99, -73.99, 41.01, 300])
+
+    @pytest.mark.asyncio
+    async def test_cell_is_half_open_like_the_dots(self, pool):
+        """Dots use FLOOR, so a point on the lower edge belongs to this cell."""
+        await database.get_articles_in_bounds(*CELL)
+
+        query, _ = _fetched(pool)
+        assert "latitude >= $1 AND latitude < $3 AND longitude >= $2 AND longitude < $4" in query
+
+    @pytest.mark.asyncio
+    async def test_index_prefilter_is_a_geography_box(self, pool):
+        """&& on the geography column can use idx_articles_location; ST_Within on a cast cannot."""
+        await database.get_articles_in_bounds(*CELL)
+
+        query, _ = _fetched(pool)
+        assert "location && ST_MakeEnvelope($5, $6, $7, $8, 4326)::geography" in query
+        assert "ST_Within" not in query
+
+    @pytest.mark.asyncio
+    async def test_padded_box_stays_on_the_globe(self, pool):
+        await database.get_articles_in_bounds(89.0, 179.0, 90.0, 180.0)
+        assert _fetched(pool)[1][4:8] == pytest.approx([178.99, 88.99, 180.0, 90.0])
+
+        await database.get_articles_in_bounds(-90.0, -180.0, -89.0, -179.0)
+        assert _fetched(pool)[1][4:8] == pytest.approx([-180.0, -90.0, -178.99, -88.99])
+
+    @pytest.mark.asyncio
+    async def test_no_window_or_topic_means_no_such_predicates(self, pool):
+        """No `$n IS NULL OR ...`: a generic plan for those could not use the indexes."""
+        await database.get_articles_in_bounds(*CELL)
+
+        query, args = _fetched(pool)
+        assert len(args) == 9
+        assert "IS NULL" not in query
+        assert "published_at >=" not in query
+        assert "published_at <=" not in query
+        assert "topic_tags &&" not in query
+
+    @pytest.mark.asyncio
+    async def test_window_and_topics_follow_the_limit(self, pool):
         await database.get_articles_in_bounds(
-            40.0, -75.0, 41.0, -74.0, limit=300, start_time=START, end_time=END
+            *CELL, limit=300, start_time=START, end_time=END, topics=["conflict"]
         )
 
-        query, *args = pool.fetch.call_args.args
-        assert args == [40.0, -75.0, 41.0, -74.0, 300, START, END, None]
-        assert "published_at >= $6" in query
-        assert "published_at <= $7" in query
+        query, args = _fetched(pool)
+        assert args[8:] == [300, START, END, ["conflict"]]
+        assert "published_at >= $10" in query
+        assert "published_at <= $11" in query
+        assert "topic_tags && $12" in query
+        # Every placeholder has an argument and vice versa.
+        assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
 
     @pytest.mark.asyncio
-    async def test_topics_are_parameter_8(self, pool):
-        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0, topics=["conflict"])
+    async def test_either_bound_or_topics_may_be_given_alone(self, pool):
+        await database.get_articles_in_bounds(*CELL, start_time=START)
+        query, args = _fetched(pool)
+        assert args[9:] == [START]
+        assert "published_at >= $10" in query and "published_at <=" not in query
 
-        query, *args = pool.fetch.call_args.args
-        assert args[7] == ["conflict"]
-        assert "($8::text[] IS NULL OR topic_tags && $8)" in query
+        await database.get_articles_in_bounds(*CELL, end_time=END)
+        query, args = _fetched(pool)
+        assert args[9:] == [END]
+        assert "published_at <= $10" in query and "published_at >=" not in query
+
+        await database.get_articles_in_bounds(*CELL, topics=["conflict"])
+        query, args = _fetched(pool)
+        assert args[9:] == [["conflict"]]
+        assert "topic_tags && $10" in query
 
     @pytest.mark.asyncio
-    async def test_topic_filter_runs_inside_the_dedup_before_the_limit(self, pool):
-        """Dedup picks among matching rows, and the limit counts matching rows only."""
-        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0, topics=["conflict"])
+    async def test_filters_run_inside_the_dedup_before_the_limit(self, pool):
+        """Dedup picks among matching rows; the limit counts matching rows only."""
+        await database.get_articles_in_bounds(
+            *CELL, start_time=START, end_time=END, topics=["conflict"]
+        )
 
-        query = pool.fetch.call_args.args[0]
-        topic = query.index("topic_tags && $8")
-        assert query.index("DISTINCT ON (lower(title))") < topic
-        assert topic < query.index(") deduped") < query.index("LIMIT $5")
+        query, _ = _fetched(pool)
+        dedup = query.index("DISTINCT ON (lower(title))")
+        subquery_end = query.index(") deduped")
+        for predicate in (
+            "location &&",
+            "latitude >= $1",
+            "published_at >= $10",
+            "published_at <= $11",
+            "topic_tags && $12",
+        ):
+            assert dedup < query.index(predicate) < subquery_end, predicate
+        assert subquery_end < query.index("LIMIT $9")
 
     @pytest.mark.asyncio
     async def test_selects_the_article_columns_but_not_the_embedding(self, pool):
         """A 300-row cell must not pull 300 1536-dim vectors."""
         from app.models.news import NewsArticle
 
-        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0)
+        await database.get_articles_in_bounds(*CELL)
 
         columns = _selected_columns(pool.fetch.call_args.args[0])
         assert "embedding" not in columns
@@ -125,37 +207,14 @@ class TestGetArticlesInBounds:
         assert columns == set(NewsArticle.model_fields)
 
     @pytest.mark.asyncio
-    async def test_ties_on_published_at_have_a_stable_order(self, pool):
-        """GDELT stamps a whole 15-minute batch alike; offset paging needs a total order."""
-        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0)
+    async def test_duplicates_and_ties_resolve_the_same_way_every_call(self, pool):
+        """GDELT stamps a whole 15-minute batch alike: offset paging needs a total order,
+        and the copy dedup keeps must not change between pages."""
+        await database.get_articles_in_bounds(*CELL)
 
-        query = pool.fetch.call_args.args[0]
-        outer = query[query.index(") deduped") :]
-        assert "ORDER BY published_at DESC, id" in outer
-
-    @pytest.mark.asyncio
-    async def test_window_is_applied_before_the_limit(self, pool):
-        await database.get_articles_in_bounds(
-            40.0, -75.0, 41.0, -74.0, limit=300, start_time=START, end_time=END
-        )
-
-        query = pool.fetch.call_args.args[0]
-        assert query.index("published_at >= $6") < query.index("LIMIT $5")
-
-    @pytest.mark.asyncio
-    async def test_envelope_takes_lng_lat_order(self, pool):
-        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0)
-
-        query = pool.fetch.call_args.args[0]
-        assert "ST_MakeEnvelope($2, $1, $4, $3, 4326)" in query
-
-    @pytest.mark.asyncio
-    async def test_either_bound_may_be_given_alone(self, pool):
-        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0, start_time=START)
-        assert pool.fetch.call_args.args[6:8] == (START, None)
-
-        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0, end_time=END)
-        assert pool.fetch.call_args.args[6:8] == (None, END)
+        query, _ = _fetched(pool)
+        assert "ORDER BY lower(title), published_at DESC, id ) deduped" in query
+        assert ") deduped ORDER BY published_at DESC, id LIMIT $9" in query
 
 
 class TestGetGlobePoints:
@@ -166,7 +225,7 @@ class TestGetGlobePoints:
         await database.get_globe_points(cell_size=1.0, start_time=START, end_time=END)
 
         assert pool.fetch.call_count == 1
-        query = pool.fetch.call_args.args[0]
+        query = _sql(pool.fetch.call_args.args[0])
         assert "unnest(topic_tags)" in query
         assert "array_agg(DISTINCT tag)" in query
 
@@ -177,7 +236,7 @@ class TestGetGlobePoints:
         await database.get_globe_points(cell_size=1.0)
 
         assert pool.fetch.call_count == 2
-        fallback = pool.fetch.call_args_list[1].args[0]
+        fallback = _sql(pool.fetch.call_args_list[1].args[0])
         assert "unnest(topic_tags)" in fallback
         assert "array_agg(DISTINCT tag)" in fallback
 

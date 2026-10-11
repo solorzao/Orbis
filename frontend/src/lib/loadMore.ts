@@ -1,5 +1,7 @@
 // "Load more" paging for a cell's story list in the news panel.
 
+/** Stories fetched when a panel opens. */
+export const FIRST_PAGE_LIMIT = 10;
 /** Stories fetched per "Load more". */
 export const LOAD_MORE_LIMIT = 20;
 /** Per "Load more" while in-panel filters are on: they filter what is loaded. */
@@ -11,8 +13,20 @@ export function nextPage(loaded: number, filtered: boolean): { offset: number; l
 }
 
 /**
+ * The stories loaded with a new page added, minus any already loaded: a batch
+ * ingested after the click can still be stamped inside the panel's window,
+ * shifting later pages down onto stories already shown (and React keys them
+ * by id).
+ */
+export function appendPage<T extends { id: string }>(loaded: T[], page: T[]): T[] {
+  const seen = new Set(loaded.map((story) => story.id));
+  return [...loaded, ...page.filter((story) => !seen.has(story.id))];
+}
+
+/**
  * The panel point's `count` once a page of `received` stories (of `limit`
- * asked for) has arrived, bringing the stories loaded to `loaded`.
+ * asked for) has arrived, bringing the stories loaded to `loaded`. That
+ * includes the first page.
  *
  * NewsPanel offers "Load more" while fewer stories are loaded than `count`.
  * A full page means the cell may hold more, so the dot's count stands; a

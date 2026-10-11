@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -78,8 +79,6 @@ async def test_usage_is_recorded_even_when_claude_refuses(client, budget):
 
 
 def _article(title: str, region: str = ""):
-    from datetime import datetime, timezone
-
     from app.models.news import NewsArticle
 
     now = datetime.now(timezone.utc)
@@ -160,8 +159,6 @@ async def test_cluster_summary_key_includes_topic(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cluster_summary_key_floors_the_window_to_the_hour(monkeypatch):
-    from datetime import datetime, timedelta, timezone
-
     start = datetime(2026, 3, 7, 10, 15, 30, 123000, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     key = await _cache_key(monkeypatch, cell_size=1.0, start_time=start, end_time=end)
@@ -186,8 +183,6 @@ async def test_cluster_summary_key_floors_the_window_to_the_hour(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cluster_summary_key_with_one_bound(monkeypatch):
-    from datetime import datetime, timezone
-
     start = datetime(2026, 3, 7, 10, 15, tzinfo=timezone.utc)
     key = await _cache_key(monkeypatch, cell_size=1.0, start_time=start)
     assert key == "summary:v3:38:-78:2026030710-"

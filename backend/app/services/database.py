@@ -148,6 +148,12 @@ async def get_articles_by_country(
     return [dict(r) for r in rows]
 
 
+# Degrees added on every side of the geography prefilter box in
+# get_articles_in_bounds: about 1 km, ten times the most (~0.001 degrees) a
+# 1-degree cell's geodesic edge strays from its line of latitude.
+_BOX_PAD_DEGREES = 0.01
+
+
 async def get_articles_in_bounds(
     min_lat: float,
     min_lng: float,
@@ -158,43 +164,65 @@ async def get_articles_in_bounds(
     end_time: datetime | None = None,
     topics: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the newest articles inside a lat/lng bounding box, one per title.
+    """Return the newest articles in a lat/lng box, one per title.
 
-    The SQL function ``articles_in_bounds`` with the time window and a topic
-    filter added, both applied before the dedup and the LIMIT: an older window
-    still gets its newest *limit* articles, and a topic gets its newest *limit*
-    articles tagged with any of *topics*. Either bound, and *topics*, may be None.
+    The box is half-open (min <= value < max), like the FLOOR grid the globe
+    dots use, so a point on a cell edge belongs to exactly one cell. The time
+    window and the topic filter (any of *topics*) apply before the dedup and
+    the LIMIT: an older window or a topic still gets its newest *limit*
+    articles. Either bound, and *topics*, may be None; absent filters are left
+    out of the SQL rather than written as ``$n IS NULL OR ...``, so no plan
+    asyncpg prepares has to cover both cases and miss the indexes.
 
     Selects only the columns a ``NewsArticle`` reads: never the embedding.
     Ties on ``published_at`` (a whole GDELT batch shares one) break on ``id``,
-    so offset paging over repeated calls neither repeats nor skips articles.
+    in the dedup and the final order, so offset paging over repeated calls
+    neither repeats nor skips articles.
     """
+    # Index prefilter: the box as geography for idx_articles_location, padded
+    # (and kept on the globe) so its geodesic edges never cut off a point of
+    # the exact box; the half-open lat/lng range then decides.
+    params: list[Any] = [
+        min_lat,
+        min_lng,
+        max_lat,
+        max_lng,
+        max(min_lng - _BOX_PAD_DEGREES, -180.0),
+        max(min_lat - _BOX_PAD_DEGREES, -90.0),
+        min(max_lng + _BOX_PAD_DEGREES, 180.0),
+        min(max_lat + _BOX_PAD_DEGREES, 90.0),
+        limit,
+    ]
+    conditions = [
+        "location && ST_MakeEnvelope($5, $6, $7, $8, 4326)::geography",
+        "latitude >= $1 AND latitude < $3 AND longitude >= $2 AND longitude < $4",
+    ]
+    if start_time is not None:
+        params.append(start_time)
+        conditions.append(f"published_at >= ${len(params)}")
+    if end_time is not None:
+        params.append(end_time)
+        conditions.append(f"published_at <= ${len(params)}")
+    if topics is not None:
+        params.append(topics)
+        conditions.append(f"topic_tags && ${len(params)}")
+
     pool = await get_pool()
     rows = await pool.fetch(
-        """
+        f"""
         SELECT * FROM (
             SELECT DISTINCT ON (lower(title))
                    id, title, summary, source_url, source_name, source_language,
                    published_at, ingested_at, latitude, longitude, country_code,
                    region, topic_tags, sentiment_score, entities, image_url
             FROM articles
-            WHERE ST_Within(location::geometry, ST_MakeEnvelope($2, $1, $4, $3, 4326))
-              AND ($6::timestamptz IS NULL OR published_at >= $6)
-              AND ($7::timestamptz IS NULL OR published_at <= $7)
-              AND ($8::text[] IS NULL OR topic_tags && $8)
-            ORDER BY lower(title), published_at DESC
+            WHERE {" AND ".join(conditions)}
+            ORDER BY lower(title), published_at DESC, id
         ) deduped
         ORDER BY published_at DESC, id
-        LIMIT $5
+        LIMIT $9
         """,
-        min_lat,
-        min_lng,
-        max_lat,
-        max_lng,
-        limit,
-        start_time,
-        end_time,
-        topics,
+        *params,
     )
     return [dict(r) for r in rows]
 

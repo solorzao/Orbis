@@ -186,15 +186,25 @@ class TestGetClusterArticles:
             assert result[0].title == "Tehran protest"
 
     @pytest.mark.asyncio
-    async def test_uses_grid_cell_bounds(self):
-        from app.routers.news import _CELL_SIZE, get_cluster_articles
+    @pytest.mark.parametrize(
+        ("lat", "lng", "cell"),
+        [
+            (40.5, -74.5, (40.0, -75.0, 41.0, -74.0)),  # a dot's centre
+            (40.9, -74.1, (40.0, -75.0, 41.0, -74.0)),  # off centre: same cell
+            (-33.87, -70.65, (-34.0, -71.0, -33.0, -70.0)),  # negative: floors down
+            (51.0, -0.2, (51.0, -1.0, 52.0, 0.0)),  # on an edge: the cell above it
+        ],
+    )
+    async def test_queries_the_dots_floored_cell(self, lat, lng, cell):
+        """The cell the dot (and the summary cache key) uses: FLOOR, not lat/lng +/- half."""
+        from app.routers.news import get_cluster_articles
 
         with patch(
             "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]
         ) as mock_bounds:
             await get_cluster_articles(
-                lat=40.5,
-                lng=-74.5,
+                lat=lat,
+                lng=lng,
                 topic=None,
                 location_name=None,
                 offset=0,
@@ -202,12 +212,7 @@ class TestGetClusterArticles:
                 sentiment=None,
                 search=None,
             )
-            args = mock_bounds.call_args[0]
-            half = _CELL_SIZE / 2.0
-            assert args[0] == pytest.approx(40.5 - half)  # min_lat
-            assert args[1] == pytest.approx(-74.5 - half)  # min_lng
-            assert args[2] == pytest.approx(40.5 + half)  # max_lat
-            assert args[3] == pytest.approx(-74.5 + half)  # max_lng
+        assert mock_bounds.call_args.args == pytest.approx(cell)
 
     @pytest.mark.asyncio
     async def test_topic_filter_applied(self):

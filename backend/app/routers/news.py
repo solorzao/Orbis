@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from datetime import datetime, timezone
 
@@ -177,13 +178,15 @@ async def _fetch_cell_articles(
     limit; a topic the cell has no articles for gives an empty list. Then
     applies optional filters for sentiment band and title search.
     """
-    half = _CELL_SIZE / 2.0
+    # The dots' FLOOR grid cell, as in the summary cache key.
+    min_lat = math.floor(lat / _CELL_SIZE) * _CELL_SIZE
+    min_lng = math.floor(lng / _CELL_SIZE) * _CELL_SIZE
     resolved = _resolve_topic(topic)
     rows = await get_articles_in_bounds(
-        lat - half,
-        lng - half,
-        lat + half,
-        lng + half,
+        min_lat,
+        min_lng,
+        min_lat + _CELL_SIZE,
+        min_lng + _CELL_SIZE,
         limit=limit,
         start_time=start_time,
         end_time=end_time,

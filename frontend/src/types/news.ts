@@ -43,9 +43,17 @@ export interface PanelFilters {
   search: string;
 }
 
+/** What a panel lists and summarises, fixed when its dot is clicked. */
+export interface PanelQuery {
+  topic?: Topic;
+  startTime: string;
+  endTime: string;
+}
+
 export interface PanelEntry {
   panelId: string;
   point: GlobePoint;
+  query: PanelQuery;
   articles: NewsArticle[];
   clusterSummary: string | null;
   articlesLoading: boolean;
