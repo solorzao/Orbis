@@ -78,28 +78,60 @@ async def semantic_search(query: str, limit: int = 10) -> list[dict]:
 # node; weight is the number of distinct shared ARTICLE nodes. Legacy stored
 # CO_MENTIONED rows are ignored by every query here and age out with their
 # articles (kg_edges.article_id is ON DELETE CASCADE).
+#
+# Only the start entity's most recent article nodes ($2) are joined, which
+# bounds the cost for hot entities with tens of thousands of mentions.
+# The representative article prefers one that mentions the start entity too:
+# ARTICLE nodes are keyed by title, so a same-titled copy may not.
 _CO_MENTIONS_SQL = """
+    WITH mine AS (
+        SELECT target_node_id, article_id
+        FROM kg_edges
+        WHERE source_node_id = $1 AND rel_type = 'MENTIONED_IN'
+        ORDER BY created_at DESC
+        LIMIT $2
+    )
     SELECT n.id, n.type, n.name, 'CO_MENTIONED' AS rel_type,
            count(DISTINCT e2.target_node_id)::int AS weight,
-           (array_agg(e2.article_id ORDER BY e2.created_at DESC))[1] AS article_id,
+           (array_agg(e2.article_id
+                      ORDER BY (e2.article_id = mine.article_id) DESC NULLS LAST,
+                               e2.created_at DESC, e2.article_id))[1] AS article_id,
            1 AS depth
-    FROM kg_edges e1
-    JOIN kg_edges e2 ON e2.target_node_id = e1.target_node_id
+    FROM mine
+    JOIN kg_edges e2 ON e2.target_node_id = mine.target_node_id
                     AND e2.rel_type = 'MENTIONED_IN'
                     AND e2.source_node_id <> $1
     JOIN kg_nodes n ON n.id = e2.source_node_id
-    WHERE e1.source_node_id = $1 AND e1.rel_type = 'MENTIONED_IN'
     GROUP BY n.id, n.type, n.name
-    ORDER BY weight DESC
+    ORDER BY weight DESC, max(e2.created_at) DESC, n.name
     LIMIT 20
 """
+_CO_MENTION_ARTICLE_WINDOW = 500
+_CO_MENTIONS_TIMEOUT_S = 2.0
 
 _GRAPH_CONNECTION_LIMIT = 50
 
 
 async def _co_mentions(pool: Any, node_id: Any) -> list[dict]:
-    """Top-20 entities sharing an article with *node_id*, as CO_MENTIONED rows."""
-    rows = await pool.fetch(_CO_MENTIONS_SQL, node_id)
+    """Top-20 entities sharing a recent article with *node_id*, as CO_MENTIONED rows.
+
+    Returns ``[]`` if the query times out, so callers still return their
+    stored-edge results instead of failing the whole tool call.
+    """
+    try:
+        rows = await pool.fetch(
+            _CO_MENTIONS_SQL,
+            node_id,
+            _CO_MENTION_ARTICLE_WINDOW,
+            timeout=_CO_MENTIONS_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Co-mention query for node %s timed out after %.1fs; skipping co-mentions.",
+            node_id,
+            _CO_MENTIONS_TIMEOUT_S,
+        )
+        return []
     return [dict(r) for r in rows]
 
 
@@ -181,7 +213,9 @@ async def graph_traverse(
     Returns connected nodes up to *depth* hops (capped at 3), plus the
     source articles that establish those relationships. Co-mentions are
     computed from shared articles and listed first, as depth-1 rows.
+    *rel_type* is case-insensitive; an empty string means no filter.
     """
+    rel_type = (rel_type or "").upper() or None
     depth = min(depth, 3)
 
     try:
