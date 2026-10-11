@@ -80,9 +80,9 @@ class TestPopulateGraph:
         with patch(
             "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
         ):
-            edges = await populate_graph([article])
+            await populate_graph([article])
 
-        # Should have edges: 2 MENTIONED_IN (persons) + 1 LOCATED_AT + 1 CO_MENTIONED
+        # Should have edges: 2 MENTIONED_IN (persons) + 1 LOCATED_AT
         # Check that MENTIONED_IN was used in execute calls
         execute_calls = conn.execute.call_args_list
         mentioned_in_calls = [
@@ -109,24 +109,30 @@ class TestPopulateGraph:
         assert len(mentioned_in_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_creates_co_mentioned_edges(self):
+    async def test_does_not_store_co_mentioned_edges(self):
+        """Co-mentions are computed at query time, so no pair rows are written."""
         from app.services.knowledge_graph import populate_graph
 
         pool, conn = _mock_pool()
-        # 2 persons + 1 org = 3 entities => C(3,2) = 3 CO_MENTIONED edges
-        article = _make_article(topic_tags=[])
+        # 2 persons + 1 org + 1 mentioned location: 4 entities, 6 possible pairs
+        article = _make_article(
+            topic_tags=[],
+            mentioned_locations=[{"name": "China", "lat": 35, "lng": 105}],
+        )
 
         with patch(
             "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
         ):
-            edges = await populate_graph([article])
+            await populate_graph([article])
 
-        # CO_MENTIONED: since execute returns "UPDATE 0", all will INSERT
-        execute_calls = conn.execute.call_args_list
-        co_mentioned_calls = [
-            c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "CO_MENTIONED"
+        sent = [
+            str(arg)
+            for c in conn.execute.call_args_list + conn.fetchval.call_args_list
+            for arg in c.args
         ]
-        assert len(co_mentioned_calls) == 3
+        assert not [arg for arg in sent if "CO_MENTIONED" in arg]
+        # One INSERT per edge and nothing else: 4 MENTIONED_IN + 1 LOCATED_AT
+        assert conn.execute.await_count == 5
 
     @pytest.mark.asyncio
     async def test_creates_located_at_edges(self):
@@ -199,7 +205,7 @@ class TestPopulateGraph:
         from app.services.knowledge_graph import populate_graph
 
         pool, conn = _mock_pool()
-        # 2 persons + 1 org = 3 MENTIONED_IN + 1 LOCATED_AT + 1 ABOUT_TOPIC + 3 CO_MENTIONED = 8
+        # 2 persons + 1 org = 3 MENTIONED_IN + 1 LOCATED_AT + 1 ABOUT_TOPIC = 5
         article = _make_article()
 
         with patch(
@@ -207,7 +213,7 @@ class TestPopulateGraph:
         ):
             edges = await populate_graph([article])
 
-        assert edges == 8
+        assert edges == 5
 
     @pytest.mark.asyncio
     async def test_empty_articles_returns_zero(self):
