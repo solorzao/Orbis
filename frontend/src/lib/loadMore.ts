@@ -7,9 +7,12 @@ export const LOAD_MORE_LIMIT = 20;
 /** Per "Load more" while in-panel filters are on: they filter what is loaded. */
 export const FILTERED_LOAD_MORE_LIMIT = 50; // the endpoint's maximum
 
-/** The next page to request: always the stories after those already loaded. */
-export function nextPage(loaded: number, filtered: boolean): { offset: number; limit: number } {
-  return { offset: loaded, limit: filtered ? FILTERED_LOAD_MORE_LIMIT : LOAD_MORE_LIMIT };
+/**
+ * The next page to request, at the panel's `nextOffset`: the rows received so
+ * far, which can be more than the stories kept (see applyPage).
+ */
+export function nextPage(nextOffset: number, filtered: boolean): { offset: number; limit: number } {
+  return { offset: nextOffset, limit: filtered ? FILTERED_LOAD_MORE_LIMIT : LOAD_MORE_LIMIT };
 }
 
 /**
@@ -40,4 +43,24 @@ export function countAfterPage(
   limit: number,
 ): number {
   return received < limit ? loaded : count;
+}
+
+/**
+ * A panel's stories, count and next offset once the page asked for at
+ * `offset` with `limit` has arrived. The offset advances by the rows
+ * received, duplicates included: they sit at those positions of the cell's
+ * list, so a page of nothing but duplicates still moves Load more on.
+ */
+export function applyPage<T extends { id: string }>(
+  panel: { articles: T[]; count: number },
+  page: T[],
+  offset: number,
+  limit: number,
+): { articles: T[]; count: number; nextOffset: number } {
+  const articles = appendPage(panel.articles, page);
+  return {
+    articles,
+    count: countAfterPage(panel.count, articles.length, page.length, limit),
+    nextOffset: offset + page.length,
+  };
 }

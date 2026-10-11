@@ -164,7 +164,11 @@ async def get_articles_in_bounds(
     end_time: datetime | None = None,
     topics: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the newest articles in a lat/lng box, one per title.
+    """Return the newest articles in a cell-sized lat/lng box, one per title.
+
+    The box must be cell-sized: the geography ``&&`` prefilter joins its
+    corners by the shorter way round, so a box 180 degrees or more wide would
+    not mean what it says.
 
     The box is half-open (min <= value < max), like the FLOOR grid the globe
     dots use, so a point on a cell edge belongs to exactly one cell. The time

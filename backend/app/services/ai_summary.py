@@ -12,6 +12,7 @@ from app.middleware.security import has_injection_pattern, sanitise_text
 from app.models.news import NewsArticle
 from app.services import llm_budget
 from app.services.cache import get_cached, set_cached
+from app.services.grid import cell_index
 from app.services.llm import response_text
 
 logger = logging.getLogger(__name__)
@@ -99,8 +100,8 @@ async def summarise_cluster(
         return ""
 
     # Snap to the dots' grid → one stable cache key per dot.
-    cell_lat = int(lat // cell_size)
-    cell_lng = int(lng // cell_size)
+    cell_lat = cell_index(lat, cell_size)
+    cell_lng = cell_index(lng, cell_size)
     window = _window_key(start_time, end_time)
     topic_suffix = f":{topic}" if topic else ""
     # v3: 1° cells and a time window (v2 keys were 2° cells over all time)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 from datetime import datetime, timezone
 
@@ -28,6 +27,7 @@ from app.services.database import (
     get_hourly_density,
     get_topic_counts,
 )
+from app.services.grid import cell_index
 
 logger = logging.getLogger(__name__)
 
@@ -178,9 +178,9 @@ async def _fetch_cell_articles(
     limit; a topic the cell has no articles for gives an empty list. Then
     applies optional filters for sentiment band and title search.
     """
-    # The dots' FLOOR grid cell, as in the summary cache key.
-    min_lat = math.floor(lat / _CELL_SIZE) * _CELL_SIZE
-    min_lng = math.floor(lng / _CELL_SIZE) * _CELL_SIZE
+    # The dots' grid cell, as in the summary cache key.
+    min_lat = cell_index(lat, _CELL_SIZE) * _CELL_SIZE
+    min_lng = cell_index(lng, _CELL_SIZE) * _CELL_SIZE
     resolved = _resolve_topic(topic)
     rows = await get_articles_in_bounds(
         min_lat,

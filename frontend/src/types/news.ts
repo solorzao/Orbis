@@ -48,6 +48,8 @@ export interface PanelQuery {
   topic?: Topic;
   startTime: string;
   endTime: string;
+  /** Opened without a selected window: the last 24 hours up to the click. */
+  live: boolean;
 }
 
 export interface PanelEntry {
@@ -55,6 +57,8 @@ export interface PanelEntry {
   point: GlobePoint;
   query: PanelQuery;
   articles: NewsArticle[];
+  /** Offset of the next page: rows received so far, duplicates included. */
+  nextOffset: number;
   clusterSummary: string | null;
   articlesLoading: boolean;
   summaryLoading: boolean;

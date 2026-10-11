@@ -6,8 +6,8 @@ import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
-import { appendPage, countAfterPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
-import { LIVE_WINDOW_HOURS, panelQuery } from "@/lib/panelQuery";
+import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
+import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
@@ -205,16 +205,16 @@ export default function Home() {
           query.startTime,
           query.endTime,
         );
-        const mapped = mapArticles(apiArticles);
-        const count = countAfterPage(
-          point.count,
-          mapped.length,
-          apiArticles.length,
+        const page = applyPage(
+          { articles: [], count: point.count },
+          mapArticles(apiArticles),
+          0,
           FIRST_PAGE_LIMIT,
         );
         updatePanel(panelId, {
-          articles: mapped,
-          point: { ...point, articles: mapped, count },
+          articles: page.articles,
+          nextOffset: page.nextOffset,
+          point: { ...point, articles: page.articles, count: page.count },
           articlesLoading: false,
         });
       } catch {
@@ -253,8 +253,8 @@ export default function Home() {
       try {
         // In-panel filters work on the loaded stories, so they get bigger
         // pages. Load more stays while pages come back full; a short page
-        // ends the list (see countAfterPage).
-        const { offset, limit } = nextPage(panel.articles.length, Boolean(isFiltered));
+        // ends the list (see applyPage).
+        const { offset, limit } = nextPage(panel.nextOffset, Boolean(isFiltered));
         const apiArticles = await fetchClusterArticles(
           panel.point.lat,
           panel.point.lng,
@@ -266,17 +266,16 @@ export default function Home() {
           query.startTime,
           query.endTime,
         );
-        const mapped = mapArticles(apiArticles);
-        const allArticles = appendPage(panel.articles, mapped);
-        const count = countAfterPage(
-          panel.point.count,
-          allArticles.length,
-          apiArticles.length,
+        const page = applyPage(
+          { articles: panel.articles, count: panel.point.count },
+          mapArticles(apiArticles),
+          offset,
           limit,
         );
         updatePanel(panelId, {
-          articles: allArticles,
-          point: { ...panel.point, articles: allArticles, count },
+          articles: page.articles,
+          nextOffset: page.nextOffset,
+          point: { ...panel.point, articles: page.articles, count: page.count },
           loadingMore: false,
         });
       } catch {
@@ -288,20 +287,25 @@ export default function Home() {
 
   const handlePointClick = useCallback(
     (point: GlobePoint) => {
-      // Check if already in queue
-      const existing = panelQueue.find((p) => p.point.id === point.id);
+      // Reopen a panel only if it shows this cell for the same topic and
+      // window; point ids are list positions, so they can name another cell.
+      const query = panelQuery(activeTopic, timeRange ?? dayWindow, Date.now());
+      const existing = panelQueue.find(
+        (p) =>
+          p.point.lat === point.lat && p.point.lng === point.lng && samePanelQuery(p.query, query),
+      );
       if (existing) {
         setExpandedPanelId(existing.panelId);
         return;
       }
 
       const panelId = `${point.id}-${Date.now()}`;
-      const query = panelQuery(activeTopic, timeRange ?? dayWindow, Date.now());
       const newEntry: PanelEntry = {
         panelId,
         point,
         query,
         articles: [],
+        nextOffset: 0,
         clusterSummary: null,
         articlesLoading: true,
         summaryLoading: true,
