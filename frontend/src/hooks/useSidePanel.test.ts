@@ -65,13 +65,13 @@ describe("useSidePanel", () => {
     expect(result.current.open).toBe(false);
   });
 
-  it("renders closed on the server, then opens after hydration on a wide screen", () => {
+  it("is unknown on the server, then opens after hydration on a wide screen", () => {
     function Probe() {
       const { open } = useSidePanel();
-      return createElement("p", null, open ? "open" : "closed");
+      return createElement("p", null, open === null ? "unknown" : open ? "open" : "closed");
     }
     const html = renderToString(createElement(Probe));
-    expect(html).toContain("closed");
+    expect(html).toContain("unknown");
 
     const container = document.createElement("div");
     container.innerHTML = html;
@@ -112,6 +112,14 @@ describe("useSidePanel", () => {
     expect(result.current.tab).toBe("stories");
     act(() => result.current.setTab("copilot"));
     expect(result.current.tab).toBe("copilot");
+  });
+
+  it("reads the media query once", () => {
+    const { result, rerender } = renderHook(() => useSidePanel());
+    rerender();
+    act(() => result.current.setTab("stories"));
+    resize(false);
+    expect(window.matchMedia).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the window width without matchMedia", () => {

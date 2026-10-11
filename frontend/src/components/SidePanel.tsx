@@ -11,7 +11,8 @@ const TABS: { id: SideTab; label: string }[] = [
 interface SidePanelProps {
   tab: SideTab;
   onTabChange: (tab: SideTab) => void;
-  open: boolean;
+  /** Null before hydration: CSS then shows the default for the width. */
+  open: boolean | null;
   onOpenChange: (open: boolean) => void;
   copilot: ReactNode;
   stories: ReactNode;
@@ -64,7 +65,7 @@ export default function SidePanel({
 
   const select = (next: SideTab) => {
     onTabChange(next);
-    if (!open) onOpenChange(true); // the sheet's tab bar opens the sheet
+    if (open !== true) onOpenChange(true); // the sheet's tab bar opens the sheet
   };
 
   const onTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, current: SideTab) => {
@@ -88,6 +89,7 @@ export default function SidePanel({
   };
 
   const places = `${storiesCount} ${storiesCount === 1 ? "place" : "places"} in Stories`;
+  const active = TABS.find((t) => t.id === tab)!.label;
 
   return (
     <>
@@ -95,7 +97,7 @@ export default function SidePanel({
         className="glass side"
         aria-label="Co-pilot and stories"
         data-testid="side-panel"
-        data-open={open}
+        data-open={open ?? undefined}
       >
         <div className="ghead">
           <div className="seg" role="tablist" aria-label="Side panel">
@@ -125,7 +127,7 @@ export default function SidePanel({
               className="iconbtn side-collapse"
               data-testid="side-collapse"
               aria-label={open ? "Collapse panel" : "Expand panel"}
-              aria-expanded={open}
+              aria-expanded={open === true}
               aria-controls={TABS.map((t) => panelId(t.id)).join(" ")}
               onClick={() => {
                 if (open) focusAfter.current = "pill";
@@ -170,14 +172,14 @@ export default function SidePanel({
         type="button"
         className="pillbar pill lg side-open"
         data-testid="side-open"
-        hidden={open}
-        aria-label={storiesCount > 0 ? `Open Co-pilot, ${places}` : "Open Co-pilot"}
+        hidden={open !== false}
+        aria-label={storiesCount > 0 ? `Open ${active}, ${places}` : `Open ${active}`}
         onClick={() => {
           focusAfter.current = "tab";
           onOpenChange(true);
         }}
       >
-        Co-pilot
+        {active}
         {storiesCount > 0 && <span className="num">{storiesCount}</span>}
       </button>
     </>

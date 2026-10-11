@@ -732,14 +732,18 @@ kbd {
 
 /*
  * Below 1180px the side panel is a bottom sheet (mockup lines 440-454): full
- * width, 46vh open, folded to its 56px tab bar when collapsed. --sheet-h
- * tells the time slider (PR 10: the timeline row) where the sheet's top is.
+ * width, 46vh open, folded to its 56px tab bar when collapsed, and before
+ * hydration (no data-open yet). --sheet-h is set on the sheet and its later
+ * siblings: the time slider now, PR 10's timeline row after it, which must
+ * also come after the side panel in the DOM.
  */
 @media (width < 1180px) {
-  :root {
+  .side,
+  .side ~ * {
     --sheet-h: 46vh;
   }
-  :root:has(.side[data-open="false"]) {
+  .side:not([data-open="true"]),
+  .side:not([data-open="true"]) ~ * {
     --sheet-h: 56px;
   }
   .side,
@@ -759,20 +763,20 @@ kbd {
   .side .ghead {
     padding: 10px 12px; /* 34px tabs + 2px border: a 56px tab bar */
   }
-  .side[data-open="false"] .gbody {
+  .side:not([data-open="true"]) .gbody {
     display: none;
   }
   .side-collapse svg {
     transform: none; /* down: the sheet folds to its tab bar */
   }
-  .side[data-open="false"] .side-collapse svg {
+  .side:not([data-open="true"]) .side-collapse svg {
     transform: rotate(180deg);
   }
   .side-open {
     display: none; /* the tab bar stays, so no pill */
   }
   .time-slider {
-    bottom: calc(var(--sheet-h) + 24px);
+    bottom: calc(var(--sheet-h, 56px) + 24px);
     transition: bottom var(--dur-slow) var(--ease-out);
   }
 }

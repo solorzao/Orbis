@@ -141,6 +141,28 @@ describe("SidePanel", () => {
     expect(screen.getByTestId("side-open")).toHaveAccessibleName("Open Co-pilot");
   });
 
+  it("names the pill after the active tab", () => {
+    render(<Harness initialTab="stories" initialOpen={false} storiesCount={1} />);
+    const pill = screen.getByTestId("side-open");
+    expect(pill).toHaveTextContent("Stories");
+    expect(pill).toHaveAccessibleName("Open Stories, 1 place in Stories");
+  });
+
+  it("leaves the default to CSS until the width is known (server render)", () => {
+    render(
+      <SidePanel
+        tab="copilot"
+        onTabChange={() => {}}
+        open={null}
+        onOpenChange={() => {}}
+        copilot={null}
+        stories={null}
+      />,
+    );
+    expect(panel()).not.toHaveAttribute("data-open");
+    expect(screen.getByTestId("side-open")).not.toBeVisible();
+  });
+
   it("opens when a tab is chosen while collapsed (the sheet's tab bar)", () => {
     render(<Harness initialOpen={false} />);
     fireEvent.click(tab("Stories"));

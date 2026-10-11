@@ -8,29 +8,40 @@ export type SideTab = "copilot" | "stories";
 export const SIDE_WIDE_QUERY = "(min-width: 1180px)";
 const SIDE_WIDE_PX = 1180;
 
+// Created on first use (never on the server), and again if matchMedia is replaced (tests).
+let cached: { matchMedia: typeof window.matchMedia; query: MediaQueryList } | null = null;
+
+function wideQuery(): MediaQueryList | null {
+  if (typeof window.matchMedia !== "function") return null;
+  if (cached?.matchMedia !== window.matchMedia) {
+    cached = { matchMedia: window.matchMedia, query: window.matchMedia(SIDE_WIDE_QUERY) };
+  }
+  return cached.query;
+}
+
 function subscribeWide(onChange: () => void) {
-  if (typeof window.matchMedia !== "function") return () => {};
-  const mql = window.matchMedia(SIDE_WIDE_QUERY);
-  mql.addEventListener("change", onChange);
-  return () => mql.removeEventListener("change", onChange);
+  const query = wideQuery();
+  if (!query) return () => {};
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
 }
 
 function getWide(): boolean {
-  if (typeof window.matchMedia !== "function") return window.innerWidth >= SIDE_WIDE_PX;
-  return window.matchMedia(SIDE_WIDE_QUERY).matches;
+  return wideQuery()?.matches ?? window.innerWidth >= SIDE_WIDE_PX;
 }
 
-// The server can't know the width: render closed, and the client opens the
-// panel right after hydration on a wide screen (no hydration mismatch).
-const onServer = () => false;
+// The server can't know the width: null renders the panel without data-open,
+// so CSS shows the default for the width (open from 1180px, a collapsed sheet
+// below) until the client knows it, right after hydration.
+const onServer = () => null;
 
 /**
  * State for the side panel (tokens.md principle 2: the co-pilot is open by
  * default on wide screens). Until the visitor opens or collapses it, the
- * panel follows the width: open from 1180px, a collapsed sheet below.
+ * panel follows the width. `open` is null only before hydration.
  */
 export function useSidePanel() {
-  const wide = useSyncExternalStore(subscribeWide, getWide, onServer);
+  const wide = useSyncExternalStore<boolean | null>(subscribeWide, getWide, onServer);
   const [chosen, setChosen] = useState<boolean | null>(null);
   const [tab, setTab] = useState<SideTab>("copilot");
 

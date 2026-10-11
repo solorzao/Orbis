@@ -130,3 +130,28 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     await expect(page.getByTestId("side-collapse")).toBeFocused();
   });
 }
+
+test.describe("before hydration (server HTML, no JavaScript)", () => {
+  test.use({ javaScriptEnabled: false });
+
+  test("from 1180px the side panel shows open, with no reopen pill", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const side = page.getByTestId("side-panel");
+    await expect(side).not.toHaveAttribute("data-open");
+    await expect(side).toBeVisible();
+    await expect(page.getByTestId("side-open")).not.toBeVisible();
+  });
+
+  test("below 1180px the sheet shows folded to its tab bar", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    const side = page.getByTestId("side-panel");
+    await expect(side).not.toHaveAttribute("data-open");
+    const box = (await side.boundingBox())!;
+    expect(box.height).toBe(56);
+    expect(box.y + box.height).toBe(844 - 12);
+    const slider = (await page.getByTestId("time-slider").boundingBox())!;
+    expect(box.y - (slider.y + slider.height)).toBeCloseTo(12, 0);
+  });
+});
