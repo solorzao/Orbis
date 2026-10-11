@@ -1,5 +1,7 @@
 """Tests for the agent retrieval functions."""
 
+import asyncio
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -8,12 +10,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.services import retrieval
+
 HALFVEC_MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "database"
     / "migrations"
     / "008_halfvec_embedding_index.sql"
 )
+
+_EMPTY_GRAPH = {"entity": None, "connections": [], "articles": []}
 
 
 def _fake_embedding(dim: int = 1536) -> list[float]:
@@ -57,6 +63,68 @@ async def _run_semantic_search(
     mock_pool.fetch.assert_called_once()
     sql, *params = mock_pool.fetch.call_args[0]
     return results, " ".join(sql.split()), params
+
+
+def _is_co_mentions(sql: str) -> bool:
+    return sql is retrieval._CO_MENTIONS_SQL
+
+
+def _routed_fetch(*, co_mentions=(), traverse=(), edges=(), articles=()):
+    """Fake ``pool.fetch`` that answers by query, so call order doesn't matter.
+
+    *co_mentions* may be an exception instance, which the co-mention fetch raises.
+    """
+
+    async def fetch(sql, *args, **kwargs):
+        if _is_co_mentions(sql):
+            if isinstance(co_mentions, BaseException):
+                raise co_mentions
+            return list(co_mentions)
+        if "WITH RECURSIVE" in sql:
+            return list(traverse)
+        if re.search(r"\barticles\b", sql):
+            return list(articles)
+        return list(edges)
+
+    return AsyncMock(side_effect=fetch)
+
+
+def _sql_calls(mock_fetch, marker: str) -> list:
+    """Calls to *mock_fetch* whose SQL contains *marker*."""
+    return [c for c in mock_fetch.call_args_list if marker in c.args[0]]
+
+
+def _co_mention_calls(mock_fetch) -> list:
+    return [c for c in mock_fetch.call_args_list if _is_co_mentions(c.args[0])]
+
+
+def _article_calls(mock_fetch) -> list:
+    return [c for c in mock_fetch.call_args_list if re.search(r"\barticles\b", c.args[0])]
+
+
+def _co_mention_row(name: str, weight: int, article_id, node_type: str = "PERSON") -> dict:
+    return {
+        "id": uuid.uuid4(),
+        "type": node_type,
+        "name": name,
+        "rel_type": "CO_MENTIONED",
+        "weight": weight,
+        "article_id": article_id,
+        "depth": 1,
+    }
+
+
+def _article_row(article_id, title: str = "Story") -> dict:
+    return {
+        "id": article_id,
+        "title": title,
+        "source_url": f"https://example.com/{article_id}",
+        "source_name": "Example",
+        "latitude": 40.0,
+        "longitude": -74.0,
+        "published_at": "2026-03-01T00:00:00Z",
+        "sentiment_score": 0.5,
+    }
 
 
 class TestSemanticSearch:
@@ -179,7 +247,7 @@ class TestGraphTraverse:
 
         mock_pool = AsyncMock()
         mock_pool.fetchrow = AsyncMock(return_value=start_row)
-        mock_pool.fetch = AsyncMock(side_effect=[conn_rows, art_rows])
+        mock_pool.fetch = _routed_fetch(traverse=conn_rows, articles=art_rows)
 
         with patch(
             "app.services.retrieval.get_pool",
@@ -193,6 +261,214 @@ class TestGraphTraverse:
         assert result["connections"][0]["name"] == "Jane Doe"
         assert result["connections"][0]["rel_type"] == "MENTIONED_IN"
         assert len(result["articles"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_co_mentioned_filter_computes_co_mentions_without_cte(self):
+        from app.services.retrieval import graph_traverse
+
+        start_id = uuid.uuid4()
+        article_id = uuid.uuid4()
+        co_rows = [_co_mention_row("Jane Doe", 3, article_id)]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": start_id, "type": "PERSON", "name": "John Doe"}
+        )
+        mock_pool.fetch = _routed_fetch(co_mentions=co_rows, articles=[_article_row(article_id)])
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            result = await graph_traverse("John Doe", rel_type="CO_MENTIONED")
+
+        assert not _sql_calls(mock_pool.fetch, "WITH RECURSIVE")
+        (co_call,) = _co_mention_calls(mock_pool.fetch)
+        # Bounded: start entity's recent article window, with a statement timeout
+        assert co_call.args[1:] == (start_id, retrieval._CO_MENTION_ARTICLE_WINDOW)
+        assert co_call.kwargs["timeout"] == retrieval._CO_MENTIONS_TIMEOUT_S
+        assert result["connections"] == co_rows
+        # The representative article backs the co-mention as a citable source
+        (art_call,) = _article_calls(mock_pool.fetch)
+        assert art_call.args[1] == [article_id]
+        assert [a["id"] for a in result["articles"]] == [article_id]
+
+    @pytest.mark.asyncio
+    async def test_default_traversal_skips_stored_co_mentions_and_merges_computed(self):
+        from app.services.retrieval import graph_traverse
+
+        start_id = uuid.uuid4()
+        co_article = uuid.uuid4()
+        cte_article = uuid.uuid4()
+        co_rows = [
+            _co_mention_row("Jane Doe", 4, co_article),
+            _co_mention_row("Acme Corp", 2, co_article, node_type="ORG"),
+        ]
+        cte_rows = [
+            {
+                "id": uuid.uuid4(),
+                "type": "ARTICLE",
+                "name": "Article about John",
+                "rel_type": "MENTIONED_IN",
+                "weight": 1,
+                "article_id": cte_article,
+                "depth": 1,
+            }
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": start_id, "type": "PERSON", "name": "John Doe"}
+        )
+        mock_pool.fetch = _routed_fetch(
+            co_mentions=co_rows,
+            traverse=cte_rows,
+            articles=[_article_row(co_article), _article_row(cte_article)],
+        )
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            result = await graph_traverse("John Doe")
+
+        (cte_call,) = _sql_calls(mock_pool.fetch, "WITH RECURSIVE")
+        # Both halves of the recursive CTE ignore stored CO_MENTIONED rows
+        assert cte_call.args[0].count("<> 'CO_MENTIONED'") == 2
+        # The CTE only fills what is left of the 50-row budget
+        assert cte_call.args[-1] == 50 - len(co_rows)
+        assert len(_co_mention_calls(mock_pool.fetch)) == 1
+        # Computed co-mentions (depth 1, weighted) come first, then the CTE rows
+        assert result["connections"] == co_rows + cte_rows
+        (art_call,) = _article_calls(mock_pool.fetch)
+        assert set(art_call.args[1]) == {co_article, cte_article}
+
+    @pytest.mark.asyncio
+    async def test_co_mention_timeout_falls_back_to_stored_edges(self, caplog):
+        from app.services.retrieval import graph_traverse
+
+        cte_article = uuid.uuid4()
+        cte_rows = [
+            {
+                "id": uuid.uuid4(),
+                "type": "ARTICLE",
+                "name": "Article about John",
+                "rel_type": "MENTIONED_IN",
+                "weight": 1,
+                "article_id": cte_article,
+                "depth": 1,
+            }
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": uuid.uuid4(), "type": "PERSON", "name": "John Doe"}
+        )
+        mock_pool.fetch = _routed_fetch(
+            co_mentions=asyncio.TimeoutError(),
+            traverse=cte_rows,
+            articles=[_article_row(cte_article)],
+        )
+
+        with (
+            patch(
+                "app.services.retrieval.get_pool",
+                new_callable=AsyncMock,
+                return_value=mock_pool,
+            ),
+            caplog.at_level(logging.WARNING, logger="orbis.retrieval"),
+        ):
+            result = await graph_traverse("John Doe")
+
+        assert len(_co_mention_calls(mock_pool.fetch)) == 1
+        assert result["entity"]["name"] == "John Doe"
+        assert result["connections"] == cte_rows
+        assert [a["id"] for a in result["articles"]] == [cte_article]
+        # The whole 50-row budget goes to the stored-edge traversal
+        (cte_call,) = _sql_calls(mock_pool.fetch, "WITH RECURSIVE")
+        assert cte_call.args[-1] == 50
+        assert "timed out" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_co_mention_error_returns_empty_result(self):
+        from app.services.retrieval import graph_traverse
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": uuid.uuid4(), "type": "PERSON", "name": "John Doe"}
+        )
+        mock_pool.fetch = _routed_fetch(co_mentions=RuntimeError("connection lost"))
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            result = await graph_traverse("John Doe")
+
+        assert result == _EMPTY_GRAPH
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rel_type", "runs_co_mentions", "runs_cte", "cte_rel_param"),
+        [
+            ("co_mentioned", True, False, None),
+            ("", True, True, None),
+            ("located_at", False, True, "LOCATED_AT"),
+        ],
+    )
+    async def test_rel_type_is_normalised(
+        self, rel_type, runs_co_mentions, runs_cte, cte_rel_param
+    ):
+        from app.services.retrieval import graph_traverse
+
+        start_id = uuid.uuid4()
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": start_id, "type": "PERSON", "name": "John Doe"}
+        )
+        mock_pool.fetch = _routed_fetch()
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            await graph_traverse("John Doe", rel_type=rel_type)
+
+        assert bool(_co_mention_calls(mock_pool.fetch)) is runs_co_mentions
+        cte_calls = _sql_calls(mock_pool.fetch, "WITH RECURSIVE")
+        assert bool(cte_calls) is runs_cte
+        if runs_cte:
+            (cte_call,) = cte_calls
+            if cte_rel_param is None:
+                # No rel filter: params are just start id, depth and limit
+                assert len(cte_call.args) == 4
+            else:
+                assert cte_call.args[2] == cte_rel_param
+
+    @pytest.mark.asyncio
+    async def test_other_rel_type_filter_skips_co_mentions(self):
+        from app.services.retrieval import graph_traverse
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": uuid.uuid4(), "type": "PERSON", "name": "John Doe"}
+        )
+        mock_pool.fetch = _routed_fetch()
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            await graph_traverse("John Doe", rel_type="LOCATED_AT")
+
+        assert not _co_mention_calls(mock_pool.fetch)
+        (cte_call,) = _sql_calls(mock_pool.fetch, "WITH RECURSIVE")
+        assert "LOCATED_AT" in cte_call.args
 
 
 class TestKeywordSearch:
@@ -321,7 +597,7 @@ class TestEntityLookup:
 
         mock_pool = AsyncMock()
         mock_pool.fetchrow = AsyncMock(return_value=node_row)
-        mock_pool.fetch = AsyncMock(side_effect=[conn_rows, art_rows])
+        mock_pool.fetch = _routed_fetch(edges=conn_rows, articles=art_rows)
 
         with patch(
             "app.services.retrieval.get_pool",
@@ -335,4 +611,80 @@ class TestEntityLookup:
         assert result["connections"][0]["rel_type"] == "LEADS"
         assert len(result["articles"]) == 1
         mock_pool.fetchrow.assert_called_once()
-        assert mock_pool.fetch.call_count == 2
+        # Computed co-mentions, stored edges, articles
+        assert mock_pool.fetch.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_entity_lookup_computes_co_mentions_and_skips_stored_ones(self):
+        from app.services.retrieval import entity_lookup
+
+        node_id = uuid.uuid4()
+        co_rows = [_co_mention_row("Secretary General", 5, uuid.uuid4())]
+        edge_rows = [
+            {
+                "id": uuid.uuid4(),
+                "type": "ARTICLE",
+                "name": "UN Summit",
+                "rel_type": "MENTIONED_IN",
+                "weight": 1,
+                "metadata": "{}",
+            }
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": node_id, "type": "ORG", "name": "United Nations", "metadata": "{}"}
+        )
+        mock_pool.fetch = _routed_fetch(co_mentions=co_rows, edges=edge_rows)
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            result = await entity_lookup("United Nations")
+
+        (co_call,) = _co_mention_calls(mock_pool.fetch)
+        assert co_call.args[1] == node_id
+        # Every query that reads stored edges ignores CO_MENTIONED rows
+        stored = [c for c in mock_pool.fetch.call_args_list if not _is_co_mentions(c.args[0])]
+        assert len(stored) == 2
+        for c in stored:
+            assert "<> 'CO_MENTIONED'" in c.args[0]
+        assert result["connections"] == co_rows + edge_rows
+
+    @pytest.mark.asyncio
+    async def test_entity_lookup_keeps_stored_edges_when_co_mentions_time_out(self):
+        from app.services.retrieval import entity_lookup
+
+        edge_rows = [
+            {
+                "id": uuid.uuid4(),
+                "type": "ARTICLE",
+                "name": "UN Summit",
+                "rel_type": "MENTIONED_IN",
+                "weight": 1,
+                "metadata": "{}",
+            }
+        ]
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "type": "ORG",
+                "name": "United Nations",
+                "metadata": "{}",
+            }
+        )
+        mock_pool.fetch = _routed_fetch(co_mentions=asyncio.TimeoutError(), edges=edge_rows)
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            result = await entity_lookup("United Nations")
+
+        assert result["node"]["name"] == "United Nations"
+        assert result["connections"] == edge_rows

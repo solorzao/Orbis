@@ -73,6 +73,136 @@ async def semantic_search(query: str, limit: int = 10) -> list[dict]:
         return []
 
 
+# Co-mentions are not stored as edges. Two entities are co-mentioned when
+# both have a MENTIONED_IN edge (entity -> ARTICLE node) to the same ARTICLE
+# node; weight is the number of distinct shared ARTICLE nodes. Legacy stored
+# CO_MENTIONED rows are ignored by every query here and age out with their
+# articles (kg_edges.article_id is ON DELETE CASCADE).
+#
+# Only the start entity's most recent article nodes ($2) are joined, which
+# bounds the cost for hot entities with tens of thousands of mentions.
+# The representative article prefers one that mentions the start entity too:
+# ARTICLE nodes are keyed by title, so a same-titled copy may not.
+_CO_MENTIONS_SQL = """
+    WITH mine AS (
+        SELECT target_node_id, article_id
+        FROM kg_edges
+        WHERE source_node_id = $1 AND rel_type = 'MENTIONED_IN'
+        ORDER BY created_at DESC
+        LIMIT $2
+    )
+    SELECT n.id, n.type, n.name, 'CO_MENTIONED' AS rel_type,
+           count(DISTINCT e2.target_node_id)::int AS weight,
+           (array_agg(e2.article_id
+                      ORDER BY (e2.article_id = mine.article_id) DESC NULLS LAST,
+                               e2.created_at DESC, e2.article_id))[1] AS article_id,
+           1 AS depth
+    FROM mine
+    JOIN kg_edges e2 ON e2.target_node_id = mine.target_node_id
+                    AND e2.rel_type = 'MENTIONED_IN'
+                    AND e2.source_node_id <> $1
+    JOIN kg_nodes n ON n.id = e2.source_node_id
+    GROUP BY n.id, n.type, n.name
+    ORDER BY weight DESC, max(e2.created_at) DESC, n.name
+    LIMIT 20
+"""
+_CO_MENTION_ARTICLE_WINDOW = 500
+_CO_MENTIONS_TIMEOUT_S = 2.0
+
+_GRAPH_CONNECTION_LIMIT = 50
+
+
+async def _co_mentions(pool: Any, node_id: Any) -> list[dict]:
+    """Top-20 entities sharing a recent article with *node_id*, as CO_MENTIONED rows.
+
+    Returns ``[]`` if the query times out, so callers still return their
+    stored-edge results instead of failing the whole tool call.
+    """
+    try:
+        rows = await pool.fetch(
+            _CO_MENTIONS_SQL,
+            node_id,
+            _CO_MENTION_ARTICLE_WINDOW,
+            timeout=_CO_MENTIONS_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Co-mention query for node %s timed out after %.1fs; skipping co-mentions.",
+            node_id,
+            _CO_MENTIONS_TIMEOUT_S,
+        )
+        return []
+    return [dict(r) for r in rows]
+
+
+async def _traverse_stored_edges(
+    pool: Any,
+    start_id: Any,
+    rel_type: str | None,
+    depth: int,
+    limit: int,
+) -> list[dict]:
+    """Walk stored edges (never CO_MENTIONED) from *start_id* up to *depth* hops."""
+    rel_filter = "AND e.rel_type = $2" if rel_type else ""
+    params: list[Any] = [start_id]
+    if rel_type:
+        params.append(rel_type)
+
+    depth_param = f"${len(params) + 1}"
+    params.append(depth)
+
+    limit_param = f"${len(params) + 1}"
+    params.append(limit)
+
+    query = f"""
+        WITH RECURSIVE traverse AS (
+            SELECT
+                n.id,
+                n.type,
+                n.name,
+                e.rel_type,
+                e.weight,
+                e.article_id,
+                1 AS depth
+            FROM kg_edges e
+            JOIN kg_nodes n
+                ON n.id = CASE
+                    WHEN e.source_node_id = $1 THEN e.target_node_id
+                    ELSE e.source_node_id
+                END
+            WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
+            AND e.rel_type <> 'CO_MENTIONED'
+            {rel_filter}
+          UNION
+            SELECT
+                n2.id,
+                n2.type,
+                n2.name,
+                e2.rel_type,
+                e2.weight,
+                e2.article_id,
+                t.depth + 1
+            FROM traverse t
+            JOIN kg_edges e2
+                ON e2.source_node_id = t.id OR e2.target_node_id = t.id
+            JOIN kg_nodes n2
+                ON n2.id = CASE
+                    WHEN e2.source_node_id = t.id THEN e2.target_node_id
+                    ELSE e2.source_node_id
+                END
+            WHERE t.depth < {depth_param}
+            AND e2.rel_type <> 'CO_MENTIONED'
+            {"AND e2.rel_type = $2" if rel_type else ""}
+        )
+        SELECT DISTINCT id, type, name, rel_type, weight, article_id, depth
+        FROM traverse
+        ORDER BY depth, weight DESC
+        LIMIT {limit_param}
+    """
+    rows = await pool.fetch(query, *params)
+    return [dict(r) for r in rows]
+
+
 async def graph_traverse(
     entity_name: str,
     rel_type: str | None = None,
@@ -81,8 +211,11 @@ async def graph_traverse(
     """Traverse the knowledge graph starting from *entity_name*.
 
     Returns connected nodes up to *depth* hops (capped at 3), plus the
-    source articles that establish those relationships.
+    source articles that establish those relationships. Co-mentions are
+    computed from shared articles and listed first, as depth-1 rows.
+    *rel_type* is case-insensitive; an empty string means no filter.
     """
+    rel_type = (rel_type or "").upper() or None
     depth = min(depth, 3)
 
     try:
@@ -98,66 +231,17 @@ async def graph_traverse(
 
         start_id = start["id"]
 
-        rel_filter = "AND e.rel_type = $2" if rel_type else ""
-        params: list[Any] = [start_id]
-        if rel_type:
-            params.append(rel_type)
+        connections: list[dict] = []
+        if rel_type in (None, "CO_MENTIONED"):
+            connections = await _co_mentions(pool, start_id)
 
-        depth_param = f"${len(params) + 1}"
-        params.append(depth)
-
-        limit_param = f"${len(params) + 1}"
-        params.append(50)
-
-        query = f"""
-            WITH RECURSIVE traverse AS (
-                SELECT
-                    n.id,
-                    n.type,
-                    n.name,
-                    e.rel_type,
-                    e.weight,
-                    e.article_id,
-                    1 AS depth
-                FROM kg_edges e
-                JOIN kg_nodes n
-                    ON n.id = CASE
-                        WHEN e.source_node_id = $1 THEN e.target_node_id
-                        ELSE e.source_node_id
-                    END
-                WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
-                {rel_filter}
-              UNION
-                SELECT
-                    n2.id,
-                    n2.type,
-                    n2.name,
-                    e2.rel_type,
-                    e2.weight,
-                    e2.article_id,
-                    t.depth + 1
-                FROM traverse t
-                JOIN kg_edges e2
-                    ON e2.source_node_id = t.id OR e2.target_node_id = t.id
-                JOIN kg_nodes n2
-                    ON n2.id = CASE
-                        WHEN e2.source_node_id = t.id THEN e2.target_node_id
-                        ELSE e2.source_node_id
-                    END
-                WHERE t.depth < {depth_param}
-                {"AND e2.rel_type = $2" if rel_type else ""}
+        if rel_type != "CO_MENTIONED":
+            connections += await _traverse_stored_edges(
+                pool, start_id, rel_type, depth, _GRAPH_CONNECTION_LIMIT - len(connections)
             )
-            SELECT DISTINCT id, type, name, rel_type, weight, article_id, depth
-            FROM traverse
-            ORDER BY depth, weight DESC
-            LIMIT {limit_param}
-        """
-
-        rows = await pool.fetch(query, *params)
-        connections = [dict(r) for r in rows]
 
         # Collect unique article IDs from traversal edges
-        article_ids = list({r["article_id"] for r in rows if r["article_id"]})
+        article_ids = list({c["article_id"] for c in connections if c["article_id"]})
 
         articles: list[dict] = []
         if article_ids:
@@ -296,6 +380,9 @@ async def entity_lookup(name: str) -> dict:
         node = dict(node_row)
         node_id = node["id"]
 
+        # Co-mentioned entities first (computed, weighted), then stored edges
+        connections = await _co_mentions(pool, node_id)
+
         conn_rows = await pool.fetch(
             """
             SELECT n.id, n.type, n.name, e.rel_type, e.weight, n.metadata::text
@@ -305,12 +392,14 @@ async def entity_lookup(name: str) -> dict:
                     WHEN e.source_node_id = $1 THEN e.target_node_id
                     ELSE e.source_node_id
                 END
-            WHERE e.source_node_id = $1 OR e.target_node_id = $1
+            WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
+              AND e.rel_type <> 'CO_MENTIONED'
             ORDER BY e.weight DESC
             LIMIT 20
             """,
             node_id,
         )
+        connections += [dict(r) for r in conn_rows]
 
         # Fetch articles linked to this entity via MENTIONED_IN edges
         art_rows = await pool.fetch(
@@ -320,6 +409,7 @@ async def entity_lookup(name: str) -> dict:
             FROM kg_edges e
             JOIN articles a ON a.id = e.article_id
             WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
+              AND e.rel_type <> 'CO_MENTIONED'
               AND e.article_id IS NOT NULL
             ORDER BY a.published_at DESC
             LIMIT 10
@@ -329,7 +419,7 @@ async def entity_lookup(name: str) -> dict:
 
         return {
             "node": node,
-            "connections": [dict(r) for r in conn_rows],
+            "connections": connections,
             "articles": [dict(r) for r in art_rows],
         }
     except Exception:

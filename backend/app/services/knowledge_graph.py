@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-from itertools import combinations
 
 from app.services.database import get_pool
 
@@ -18,6 +17,9 @@ logger = logging.getLogger("orbis.knowledge_graph")
 
 async def populate_graph(articles: list[dict]) -> int:
     """Upsert KG nodes and edges for a batch of articles.
+
+    Co-mentions are not stored: retrieval derives them from entities whose
+    MENTIONED_IN edges share an ARTICLE node.
 
     Returns the total number of edges created.
     """
@@ -59,9 +61,6 @@ async def populate_graph(articles: list[dict]) -> int:
                 region = article.get("region", "")
                 topic_tags = article.get("topic_tags", [])
 
-                # Collect entity node IDs for CO_MENTIONED edges
-                entity_node_ids: list = []
-
                 # 2. Upsert PERSON nodes + MENTIONED_IN edges
                 for person in persons:
                     if not person:
@@ -86,7 +85,6 @@ async def populate_graph(articles: list[dict]) -> int:
                         article_id,
                     )
                     edge_count += 1
-                    entity_node_ids.append(person_node_id)
 
                 # 3. Upsert ORG nodes + MENTIONED_IN edges
                 for org in organizations:
@@ -112,7 +110,6 @@ async def populate_graph(articles: list[dict]) -> int:
                         article_id,
                     )
                     edge_count += 1
-                    entity_node_ids.append(org_node_id)
 
                 # 4. Upsert LOCATION node + LOCATED_AT edge
                 if region:
@@ -201,29 +198,6 @@ async def populate_graph(articles: list[dict]) -> int:
                         "MENTIONED_IN",
                         article_id,
                     )
-                    edge_count += 1
-                    entity_node_ids.append(loc_node_id)
-
-                # 7. CO_MENTIONED edges between all entity pairs
-                for node_a, node_b in combinations(entity_node_ids, 2):
-                    # Try to increment weight on an existing edge first
-                    updated = await conn.execute(
-                        "UPDATE kg_edges SET weight = weight + 1 "
-                        "WHERE source_node_id = $1 AND target_node_id = $2 "
-                        "AND rel_type = 'CO_MENTIONED'",
-                        node_a,
-                        node_b,
-                    )
-                    if updated == "UPDATE 0":
-                        await conn.execute(
-                            "INSERT INTO kg_edges (source_node_id, "
-                            "target_node_id, rel_type, weight, article_id) "
-                            "VALUES ($1, $2, $3, 1, $4)",
-                            node_a,
-                            node_b,
-                            "CO_MENTIONED",
-                            article_id,
-                        )
                     edge_count += 1
 
     logger.info("Knowledge graph: created %d edges from %d articles.", edge_count, len(articles))
