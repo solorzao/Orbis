@@ -15,6 +15,7 @@ import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
 import TopicFilter from "@/components/TopicFilter";
 import AgentPanel from "@/components/AgentPanel";
+import Sky from "@/components/Sky";
 
 // Globe requires `window` — load without SSR
 const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
@@ -353,6 +354,9 @@ export default function Home() {
 
   return (
     <main className="relative h-screen w-screen overflow-hidden">
+      {/* Starfield, under everything */}
+      <Sky />
+
       {/* Globe */}
       <Globe
         points={points}

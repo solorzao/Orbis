@@ -29,6 +29,16 @@ kbd {
   padding: 0 5px;
 }
 
+/* sky (mockup #stars): a fixed layer under the globe that ignores the pointer */
+.sky {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: var(--z-sky);
+  pointer-events: none;
+}
+
 /* glass */
 .glass {
   background: var(--glass-panel-background);
