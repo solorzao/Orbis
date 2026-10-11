@@ -14,6 +14,7 @@ from app.models.news import (
     ClusterSummaryResponse,
     GlobeDataPoint,
     HourlyDensity,
+    HourlyVolume,
     NewsArticle,
     SelectionSummaryRequest,
     SelectionSummaryResponse,
@@ -25,6 +26,7 @@ from app.services.database import (
     get_articles_in_bounds,
     get_globe_points,
     get_hourly_density,
+    get_hourly_volume,
     get_topic_counts,
 )
 from app.services.grid import cell_index
@@ -293,6 +295,24 @@ async def get_article_density(
 
     if result:
         await set_cached(cache_k, [d.model_dump() for d in result], settings.db_cache_ttl)
+    return result
+
+
+@router.get("/news/volume", response_model=list[HourlyVolume])
+async def get_story_volume(
+    days: int = Query(7, ge=1, le=7, description="Days back from now (1-7)"),
+) -> list[HourlyVolume]:
+    """Return stories per UTC hour for the timeline: every hour, zeros included."""
+    cache_k = f"db:volume:{days}"
+    cached = await get_cached(cache_k)
+    if cached:
+        return [HourlyVolume(**v) for v in cached]
+
+    result = [HourlyVolume(**r) for r in await get_hourly_volume(days)]
+    if result:
+        await set_cached(
+            cache_k, [v.model_dump(mode="json") for v in result], settings.db_cache_ttl
+        )
     return result
 
 

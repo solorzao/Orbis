@@ -30,6 +30,7 @@ __all__ = [
     "get_topic_counts",
     "get_globe_points",
     "get_hourly_density",
+    "get_hourly_volume",
 ]
 
 logger = logging.getLogger("orbis.database")
@@ -442,6 +443,34 @@ async def get_hourly_density(*, timespan_hours: int = 24, offset_days: int = 0) 
         window_end,
     )
     return {int(r["hour"]): int(r["count"]) for r in rows}
+
+
+async def get_hourly_volume(days: int) -> list[dict[str, Any]]:
+    """Stories per UTC hour over the last *days* days, for the timeline chart.
+
+    One row (``hour``, ``count``) for every hour from the hour *days* days ago
+    to the current one, oldest first; hours without stories count 0. Hours
+    are truncated in UTC whatever the session time zone.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT h.hour, COALESCE(c.count, 0)::int AS count
+        FROM generate_series(
+               date_trunc('hour', now() - make_interval(days => $1), 'UTC'),
+               date_trunc('hour', now(), 'UTC'),
+               interval '1 hour') AS h(hour)
+        LEFT JOIN (
+          SELECT date_trunc('hour', published_at, 'UTC') AS hour, count(*) AS count
+          FROM articles
+          WHERE published_at >= date_trunc('hour', now() - make_interval(days => $1), 'UTC')
+          GROUP BY 1
+        ) c USING (hour)
+        ORDER BY h.hour
+        """,
+        days,
+    )
+    return [{"hour": r["hour"], "count": r["count"]} for r in rows]
 
 
 async def get_topic_counts() -> dict[str, int]:

@@ -331,3 +331,35 @@ class TestGetGlobePoints:
 
         assert point["topic"] == "general"
         assert point["topics"] == []
+
+
+class TestGetHourlyVolume:
+    @pytest.mark.asyncio
+    async def test_counts_every_hour_of_the_window_zeros_included(self, pool):
+        hour = datetime(2026, 10, 11, 14, tzinfo=timezone.utc)
+        pool.fetch.return_value = [{"hour": hour, "count": 0}]
+
+        rows = await database.get_hourly_volume(7)
+
+        query, args = _fetched(pool)
+        assert args == [7]
+        # One row per hour from the window's first hour to the current one, oldest first.
+        assert (
+            "generate_series( date_trunc('hour', now() - make_interval(days => $1), 'UTC'), "
+            "date_trunc('hour', now(), 'UTC'), interval '1 hour') AS h(hour)" in query
+        )
+        assert "LEFT JOIN" in query and "COALESCE(c.count, 0)::int AS count" in query
+        assert query.endswith("ORDER BY h.hour")
+        assert rows == [{"hour": hour, "count": 0}]
+
+    @pytest.mark.asyncio
+    async def test_buckets_published_at_by_utc_hour_inside_the_window(self, pool):
+        await database.get_hourly_volume(3)
+
+        query, args = _fetched(pool)
+        assert args == [3]
+        assert "date_trunc('hour', published_at, 'UTC') AS hour" in query
+        assert (
+            "WHERE published_at >= date_trunc('hour', now() - make_interval(days => $1), 'UTC')"
+            in query
+        )

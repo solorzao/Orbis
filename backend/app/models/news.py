@@ -139,6 +139,13 @@ class HourlyDensity(BaseModel):
     count: int
 
 
+class HourlyVolume(BaseModel):
+    """Stories published in one UTC hour (``hour`` is the hour's start)."""
+
+    hour: datetime
+    count: int
+
+
 class SelectionSummaryRequest(BaseModel):
     """Request body for summarizing a user-selected set of articles."""
 
