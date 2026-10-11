@@ -32,6 +32,14 @@ test.describe("Agent Panel", () => {
     await expect(page.getByTestId("agent-panel")).not.toBeVisible();
   });
 
+  test("the question input shows the focus ring", async ({ page }) => {
+    await page.getByTestId("agent-toggle").click();
+    const input = page.getByTestId("agent-input");
+    await input.focus();
+    await expect(input).toBeFocused();
+    expect(await input.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");
+  });
+
   test("can type and submit a question", async ({ page }) => {
     await page.getByTestId("agent-toggle").click();
 

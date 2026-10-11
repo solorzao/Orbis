@@ -14,8 +14,10 @@ test.describe("Time Slider", () => {
   });
 
   test("shows LIVE status on initial load", async ({ page }) => {
-    // Wait for loading to finish
-    await expect(page.locator("text=LIVE")).toBeVisible({ timeout: 10000 });
+    // Wait for loading to finish. Scoped: the top bar's status pill also says Live.
+    await expect(page.getByTestId("time-slider").locator("text=LIVE")).toBeVisible({
+      timeout: 10000,
+    });
   });
 
   test("shows Today label by default", async ({ page }) => {

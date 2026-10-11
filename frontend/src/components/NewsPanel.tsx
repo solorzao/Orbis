@@ -411,7 +411,7 @@ export default function NewsPanel({
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search headlines..."
-                    className="h-7 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--inset-highlight)] pl-7 pr-3 text-[11px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-colors focus:border-blue-500/30"
+                    className="h-7 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--inset-highlight)] pl-7 pr-3 text-[11px] text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-colors focus:border-blue-500/30"
                   />
                   <svg
                     width="12"

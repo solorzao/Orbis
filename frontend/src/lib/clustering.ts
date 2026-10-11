@@ -1,15 +1,27 @@
 import { NewsArticle, GlobePoint, Topic } from "@/types/news";
 import type { ApiGlobePoint } from "./api";
 
+// Canvas colours can't be CSS variables, so these copy the Soft Orbit tokens
+// (--topic-*, --sentiment-*); clustering.test.ts fails if they drift.
 const TOPIC_COLORS: Record<Topic, string> = {
-  All: "#3B82F6",
-  Politics: "#8B5CF6",
-  Conflict: "#EF4444",
-  Technology: "#06B6D4",
-  Climate: "#10B981",
-  Economy: "#F59E0B",
-  Health: "#EC4899",
+  All: "#c0c3e0",
+  Politics: "#ab9dff",
+  Conflict: "#ff8f9c",
+  Technology: "#7db9ff",
+  Climate: "#72ddb2",
+  Economy: "#f4c97c",
+  Health: "#f5a0d0",
 };
+
+const SENTIMENT_COLORS = {
+  n3: "#f08a94",
+  n2: "#e6a5aa",
+  n1: "#cdb8c4",
+  neutral: "#a9abc8",
+  p1: "#acd4d2",
+  p2: "#8bdcc9",
+  p3: "#62dcbc",
+} as const;
 
 export function getTopicColor(topic: Topic): string {
   return TOPIC_COLORS[topic];
@@ -23,10 +35,15 @@ export function getPrimaryTopicColor(article: NewsArticle): string {
   return TOPIC_COLORS.All;
 }
 
+/** Soft Orbit's diverging sentiment bins (tokens.md "Sentiment"). */
 export function getSentimentColor(score: number): string {
-  if (score >= 0.5) return "#10B981"; // green — positive
-  if (score >= 0) return "#F59E0B"; // amber — neutral
-  return "#EF4444"; // red — negative
+  if (score <= -0.6) return SENTIMENT_COLORS.n3;
+  if (score <= -0.3) return SENTIMENT_COLORS.n2;
+  if (score <= -0.1) return SENTIMENT_COLORS.n1;
+  if (score < 0.1) return SENTIMENT_COLORS.neutral;
+  if (score < 0.3) return SENTIMENT_COLORS.p1;
+  if (score < 0.6) return SENTIMENT_COLORS.p2;
+  return SENTIMENT_COLORS.p3;
 }
 
 /**

@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
@@ -10,11 +9,15 @@ import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
+import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
-import TopicFilter from "@/components/TopicFilter";
+import TopBar from "@/components/TopBar";
 import AgentPanel from "@/components/AgentPanel";
+import Sky from "@/components/Sky";
+import OrbitRings from "@/components/OrbitRings";
+import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
 const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
@@ -41,9 +44,11 @@ export default function Home() {
 
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false);
-  const globeControlsRef = useRef<{
-    flyTo: (lat: number, lng: number, altitude: number) => void;
-  } | null>(null);
+  const globeControlsRef = useRef<GlobeControls | null>(null);
+
+  // Reduced motion and low-power mode (also sets .low-power on <html>)
+  const { reduced, lowPower } = useMotionPrefs();
+  const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
 
   // Track time slider height so the chat icon can sit above it on mobile
   const [sliderHeight, setSliderHeight] = useState(0);
@@ -353,6 +358,9 @@ export default function Home() {
 
   return (
     <main className="relative h-screen w-screen overflow-hidden">
+      {/* Starfield, under everything */}
+      <Sky />
+
       {/* Globe */}
       <Globe
         points={points}
@@ -361,47 +369,21 @@ export default function Home() {
         onReady={(controls) => {
           globeControlsRef.current = controls;
         }}
+        reduced={reduced}
+        lowPower={lowPower}
       />
 
-      {/* Branding: frozen lockup (tokens.md). Colours, motto font and line
-          height are pinned so the Soft Orbit body text styles don't reach it. */}
-      <div className="fixed top-3 left-3 z-50 flex items-center gap-2 sm:top-5 sm:left-6 sm:gap-3">
-        <img
-          src="/Orbis_logo_50_resize.png"
-          alt="Orbis"
-          className="h-7 w-7 sm:h-10 sm:w-10"
-          style={{ filter: "drop-shadow(0 0 12px rgba(0, 212, 255, 0.5))" }}
-        />
-        <div>
-          <h1
-            className="text-sm font-bold tracking-[0.2em] text-[var(--brand-wordmark-color)] uppercase sm:text-lg"
-            style={{
-              fontFamily: "var(--font-brand), sans-serif",
-              textShadow: "0 0 30px rgba(0, 212, 255, 0.4)",
-            }}
-          >
-            Orbis
-          </h1>
-          <p
-            className="hidden text-[9px] leading-[13.5px] font-medium tracking-[0.3em] text-[var(--text-motto)] uppercase sm:block"
-            style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
-          >
-            Every Story, Everywhere
-          </p>
-        </div>
-      </div>
+      {/* Orbital rings around the globe */}
+      <OrbitRings getGeometry={getGlobeGeometry} reduced={reduced} lowPower={lowPower} />
 
-      {/* Topic Filters */}
-      <TopicFilter activeTopic={activeTopic} onTopicChange={setActiveTopic} />
-
-      {/* About: a temporary pill until PR 9 moves it into the top bar */}
-      <Link
-        href="/about"
-        title="About Orbis"
-        className="fixed top-3 right-3 z-50 flex h-[var(--pill-height-sm)] items-center rounded-full border border-line-2 bg-glass px-3 tracking-[var(--tracking-label)] text-ink-2 backdrop-blur-[var(--blur-glass)] transition-colors duration-[var(--dur-fast)] [font:var(--type-label)] hover:border-line-3 hover:text-ink sm:top-5 sm:right-6 sm:h-[var(--pill-height)]"
-      >
-        About
-      </Link>
+      {/* Top bar: brand, topics, status and About in one grid */}
+      <TopBar
+        activeTopic={activeTopic}
+        onTopicChange={setActiveTopic}
+        isLive={!apiError && !loading && dayOffset === 0}
+        isLoading={loading}
+        isOffline={apiError}
+      />
 
       {/* Panel Queue */}
       <PanelQueue

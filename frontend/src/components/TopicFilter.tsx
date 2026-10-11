@@ -1,9 +1,7 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
-import { motion } from "framer-motion";
+import { useRef, useState, useEffect, useCallback, type CSSProperties } from "react";
 import { Topic } from "@/types/news";
-import { getTopicColor } from "@/lib/clustering";
 
 const TOPICS: Topic[] = [
   "All",
@@ -15,110 +13,62 @@ const TOPICS: Topic[] = [
   "Health",
 ];
 
+type Fade = "none" | "left" | "right" | "both";
+
 interface TopicFilterProps {
   activeTopic: Topic;
   onTopicChange: (topic: Topic) => void;
 }
 
+/**
+ * Topic pills in the top bar's centre track. When the track is narrower than
+ * the pills, they scroll inside the glass and fade at the clipped edge.
+ */
 export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
+  const [fade, setFade] = useState<Fade>("none");
 
   const checkScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 2);
-    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft < el.scrollWidth - el.clientWidth - 2;
+    setFade(left && right ? "both" : left ? "left" : right ? "right" : "none");
   }, []);
 
   useEffect(() => {
-    checkScroll();
-    window.addEventListener("resize", checkScroll);
-    return () => window.removeEventListener("resize", checkScroll);
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    // Fires once on observe, then whenever the track resizes (viewport) or a
+    // pill does (the self-hosted font arriving).
+    const ro = new ResizeObserver(checkScroll);
+    ro.observe(el);
+    for (const pill of Array.from(el.children)) ro.observe(pill);
+    return () => ro.disconnect();
   }, [checkScroll]);
 
-  // From lg the bar sits centred beside the brand lockup, which ends about 253px
-  // from the left. Leave 17.5rem a side (room for wider system-ui mottos and the
-  // About pill); a narrower bar scrolls. PR 9's top-bar grid replaces this.
   return (
-    <div
-      data-testid="topic-filter"
-      className="fixed top-12 left-1/2 z-40 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 sm:top-6 lg:max-w-[calc(100vw-35rem)]"
-    >
-      {/* Left fade */}
-      {canScrollLeft && (
-        <div
-          className="pointer-events-none absolute top-0 left-0 z-10 h-full w-6 rounded-l-2xl"
-          style={{ background: "linear-gradient(to right, var(--bg-page), transparent)" }}
-        />
-      )}
-      {/* Right fade */}
-      {canScrollRight && (
-        <div
-          className="pointer-events-none absolute top-0 right-0 z-10 h-full w-6 rounded-r-2xl"
-          style={{ background: "linear-gradient(to left, var(--bg-page), transparent)" }}
-        />
-      )}
-      <motion.div
-        ref={scrollRef}
-        onScroll={checkScroll}
-        initial={{ y: -30, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.5, duration: 0.6, ease: [0.23, 1, 0.32, 1] }}
-        className="flex items-center gap-0.5 overflow-x-auto rounded-2xl border border-[var(--border-subtle)] px-1.5 py-1 sm:gap-1 sm:px-2 sm:py-1.5"
-        style={{
-          background: "var(--surface-overlay)",
-          backdropFilter: "blur(20px) saturate(1.3)",
-          boxShadow: "0 8px 32px var(--shadow), inset 0 1px 0 var(--inset-highlight)",
-          scrollbarWidth: "none",
-        }}
-      >
-        {TOPICS.map((topic) => {
-          const isActive = activeTopic === topic;
-          const color = getTopicColor(topic);
-
-          return (
-            <button
-              key={topic}
-              onClick={() => onTopicChange(topic)}
-              className="relative inline-flex h-7 shrink-0 items-center rounded-xl px-2.5 tracking-[var(--tracking-label)] transition-colors [font:var(--type-label)] sm:px-3"
-              style={{
-                color: isActive ? "var(--text-primary)" : "var(--text-muted)",
-              }}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="activeFilter"
-                  className="absolute inset-0 rounded-xl"
-                  style={{
-                    background: `${color}18`,
-                    border: `1px solid ${color}30`,
-                    boxShadow: `0 0 20px ${color}15`,
-                  }}
-                  transition={{
-                    type: "spring",
-                    stiffness: 400,
-                    damping: 30,
-                  }}
-                />
-              )}
-              <span className="relative z-10 flex items-center gap-1.5">
-                {topic !== "All" && (
-                  <span
-                    className="inline-block h-1.5 w-1.5 rounded-full"
-                    style={{
-                      backgroundColor: isActive ? color : "var(--text-muted)",
-                      boxShadow: isActive ? `0 0 6px ${color}60` : "none",
-                    }}
-                  />
-                )}
-                {topic}
-              </span>
-            </button>
-          );
-        })}
-      </motion.div>
-    </div>
+    <nav className="pillbar topics" aria-label="Topic filter" data-testid="topic-filter">
+      <div ref={scrollRef} className="topics-scroll" data-fade={fade} onScroll={checkScroll}>
+        {TOPICS.map((topic) => (
+          <button
+            key={topic}
+            type="button"
+            className="pill"
+            aria-pressed={activeTopic === topic}
+            onClick={() => onTopicChange(topic)}
+          >
+            {topic !== "All" && (
+              <span
+                className="dot"
+                aria-hidden="true"
+                style={{ "--c": `var(--topic-${topic.toLowerCase()})` } as CSSProperties}
+              />
+            )}
+            {topic}
+          </button>
+        ))}
+      </div>
+    </nav>
   );
 }

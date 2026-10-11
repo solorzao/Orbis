@@ -6,7 +6,7 @@ test.describe("News Panel", () => {
     await mockAllApiRoutes(page);
     await page.goto("/");
     // Wait for globe to render
-    await expect(page.locator("canvas")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("globe").locator("canvas")).toBeVisible({ timeout: 10000 });
   });
 
   test("panel is not visible on initial load", async ({ page }) => {
@@ -19,7 +19,7 @@ test.describe("News Panel", () => {
     // Wait for points to load, then click the canvas area.
     // The points are rendered as WebGL objects, so we rely on the mock
     // cluster endpoint returning articles regardless.
-    const canvas = page.locator("canvas");
+    const canvas = page.getByTestId("globe").locator("canvas");
     await canvas.click({ position: { x: 400, y: 300 } });
 
     // If the click hit a point, a panel should open.
@@ -32,7 +32,7 @@ test.describe("News Panel", () => {
     // We test this by waiting for the panel to appear after interacting
     // with the canvas. If it doesn't open (no point hit), we skip.
 
-    const canvas = page.locator("canvas");
+    const canvas = page.getByTestId("globe").locator("canvas");
     // Try clicking several positions to hit a point
     for (const pos of [
       { x: 400, y: 300 },
@@ -61,10 +61,13 @@ test.describe("News Panel Interactions", () => {
   test("article cards show sentiment indicators", async ({ page }) => {
     await mockAllApiRoutes(page);
     await page.goto("/");
-    await expect(page.locator("canvas")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("globe").locator("canvas")).toBeVisible({ timeout: 10000 });
 
     // Click canvas to try opening a panel
-    await page.locator("canvas").click({ position: { x: 400, y: 300 } });
+    await page
+      .getByTestId("globe")
+      .locator("canvas")
+      .click({ position: { x: 400, y: 300 } });
 
     const panel = page.getByTestId("news-panel");
     if (!(await panel.isVisible().catch(() => false))) {
