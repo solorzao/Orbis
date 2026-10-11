@@ -236,8 +236,73 @@ async def get_articles_in_bounds(
 # ---------------------------------------------------------------------------
 
 
+_UPSERT_ARTICLE_SQL = """
+    INSERT INTO articles (
+        title, summary, source_url, source_name, source_language,
+        published_at, latitude, longitude, location,
+        country_code, region, topic_tags, sentiment_score,
+        entities, image_url, country_fips,
+        themes, persons, orgs, names, counts
+    ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        ST_SetSRID(ST_MakePoint($8, $7), 4326)::geography,
+        $9, $10, $11, $12, $13, $14, $15,
+        $16, $17, $18, $19, $20
+    )
+    ON CONFLICT (source_url) DO UPDATE SET
+        title = EXCLUDED.title,
+        summary = EXCLUDED.summary,
+        latitude = EXCLUDED.latitude,
+        longitude = EXCLUDED.longitude,
+        location = EXCLUDED.location,
+        country_code = EXCLUDED.country_code,
+        country_fips = EXCLUDED.country_fips,
+        region = EXCLUDED.region,
+        sentiment_score = EXCLUDED.sentiment_score,
+        topic_tags = EXCLUDED.topic_tags,
+        entities = EXCLUDED.entities,
+        image_url = EXCLUDED.image_url,
+        themes = EXCLUDED.themes,
+        persons = EXCLUDED.persons,
+        orgs = EXCLUDED.orgs,
+        names = EXCLUDED.names,
+        counts = EXCLUDED.counts
+    """
+
+
+def _upsert_article_args(article: dict[str, Any]) -> tuple:
+    """Arguments $1-$20 of _UPSERT_ARTICLE_SQL for one article."""
+    return (
+        article.get("title", ""),
+        article.get("summary"),
+        article["source_url"],
+        article.get("source_name", ""),
+        article.get("source_language", "en"),
+        article.get("published_at", datetime.now(timezone.utc)),
+        article.get("latitude", 0.0),
+        article.get("longitude", 0.0),
+        article.get("country_code", ""),
+        article.get("region", ""),
+        article.get("topic_tags", []),
+        article.get("sentiment_score", 0.0),
+        json.dumps(article.get("entities", {})),
+        article.get("image_url"),
+        # Never NULL: NULL marks rows written before the FIPS to ISO
+        # switch, which the ingestion backfill converts.
+        article.get("country_fips") or "",
+        article.get("themes", []),
+        article.get("persons", []),
+        article.get("orgs", []),
+        article.get("names", []),
+        json.dumps(article.get("counts", [])),
+    )
+
+
 async def upsert_articles(articles: list[dict[str, Any]]) -> int:
     """Bulk upsert articles, deduplicating on source_url.
+
+    One ``executemany`` in one transaction: asyncpg pipelines the rows rather
+    than waiting a round trip for each.
 
     Returns the number of rows upserted.
     """
@@ -245,59 +310,13 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
         return 0
 
     pool = await get_pool()
-    count = 0
-
+    rows = [_upsert_article_args(a) for a in articles]
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for article in articles:
-                await conn.execute(
-                    """
-                    INSERT INTO articles (
-                        title, summary, source_url, source_name, source_language,
-                        published_at, latitude, longitude, location,
-                        country_code, region, topic_tags, sentiment_score,
-                        entities, image_url, country_fips
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8,
-                        ST_SetSRID(ST_MakePoint($8, $7), 4326)::geography,
-                        $9, $10, $11, $12, $13, $14, $15
-                    )
-                    ON CONFLICT (source_url) DO UPDATE SET
-                        title = EXCLUDED.title,
-                        summary = EXCLUDED.summary,
-                        latitude = EXCLUDED.latitude,
-                        longitude = EXCLUDED.longitude,
-                        location = EXCLUDED.location,
-                        country_code = EXCLUDED.country_code,
-                        country_fips = EXCLUDED.country_fips,
-                        region = EXCLUDED.region,
-                        sentiment_score = EXCLUDED.sentiment_score,
-                        topic_tags = EXCLUDED.topic_tags,
-                        entities = EXCLUDED.entities,
-                        image_url = EXCLUDED.image_url
-                    """,
-                    article.get("title", ""),
-                    article.get("summary"),
-                    article["source_url"],
-                    article.get("source_name", ""),
-                    article.get("source_language", "en"),
-                    article.get("published_at", datetime.now(timezone.utc)),
-                    article.get("latitude", 0.0),
-                    article.get("longitude", 0.0),
-                    article.get("country_code", ""),
-                    article.get("region", ""),
-                    article.get("topic_tags", []),
-                    article.get("sentiment_score", 0.0),
-                    json.dumps(article.get("entities", {})),
-                    article.get("image_url"),
-                    # Never NULL: NULL marks rows written before the FIPS to ISO
-                    # switch, which the ingestion backfill converts.
-                    article.get("country_fips") or "",
-                )
-                count += 1
+            await conn.executemany(_UPSERT_ARTICLE_SQL, rows)
 
-    logger.info("Upserted %d articles.", count)
-    return count
+    logger.info("Upserted %d articles.", len(rows))
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------

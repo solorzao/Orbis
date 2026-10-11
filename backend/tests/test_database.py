@@ -1,5 +1,6 @@
 """Tests for the SQL the database helpers send (the pool is mocked; no live database)."""
 
+import json
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -12,42 +13,115 @@ from app.services.database import upsert_articles
 
 
 def _mock_pool():
+    """A pool whose connection records transaction boundaries and statements in ``events``."""
+    events: list[str] = []
     conn = MagicMock()
-    conn.execute = AsyncMock()
+    conn.execute = AsyncMock(side_effect=lambda *a: events.append("execute"))
+    conn.executemany = AsyncMock(side_effect=lambda *a: events.append("executemany"))
 
     @asynccontextmanager
     async def _transaction():
+        events.append("begin")
         yield
+        events.append("commit")
 
     @asynccontextmanager
     async def _acquire():
         yield conn
 
     conn.transaction = _transaction
+    conn.events = events
     pool = MagicMock()
     pool.acquire = _acquire
     return pool, conn
 
 
+async def _upsert(articles):
+    """Run upsert_articles on a mocked pool; return (count, sql, per-row argument tuples)."""
+    pool, conn = _mock_pool()
+    with patch("app.services.database.get_pool", new_callable=AsyncMock, return_value=pool):
+        count = await upsert_articles(articles)
+    sql, rows = conn.executemany.await_args.args
+    return count, sql, [tuple(r) for r in rows], conn
+
+
+@pytest.mark.asyncio
+async def test_upsert_sends_all_rows_in_one_executemany_inside_a_transaction():
+    articles = [{"source_url": f"https://example.com/{i}"} for i in range(400)]
+
+    count, _, rows, conn = await _upsert(articles)
+
+    assert count == 400
+    assert len(rows) == 400
+    assert conn.events == ["begin", "executemany", "commit"]
+    assert [r[2] for r in rows] == [a["source_url"] for a in articles]  # $3 = source_url
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_no_articles_touches_nothing():
+    pool, conn = _mock_pool()
+    with patch("app.services.database.get_pool", new_callable=AsyncMock, return_value=pool):
+        assert await upsert_articles([]) == 0
+    assert conn.events == []
+
+
 @pytest.mark.asyncio
 async def test_upsert_writes_country_fips_and_never_null():
-    pool, conn = _mock_pool()
     articles = [
         {"source_url": "https://example.com/a", "country_code": "GB", "country_fips": "UK"},
         {"source_url": "https://example.com/b", "country_code": ""},  # no country_fips key
         {"source_url": "https://example.com/c", "country_code": "", "country_fips": None},
     ]
 
-    with patch("app.services.database.get_pool", new_callable=AsyncMock, return_value=pool):
-        assert await upsert_articles(articles) == 3
+    count, sql, rows, _ = await _upsert(articles)
 
-    sql, *args = conn.execute.await_args_list[0].args
+    assert count == 3
     assert "country_fips = EXCLUDED.country_fips" in sql
     # Every placeholder has an argument and vice versa.
-    assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
+    assert all(max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(r) for r in rows)
 
-    fips_values = [call.args[-1] for call in conn.execute.await_args_list]
+    fips_values = [r[14] for r in rows]  # $15
     assert fips_values == ["UK", "", ""]
+
+
+GKG_COLUMNS = ("themes", "persons", "orgs", "names", "counts")
+
+
+@pytest.mark.asyncio
+async def test_upsert_writes_gkg_fields_as_16_to_20():
+    counts = [{"type": "KILL", "n": 4, "object": "", "country": "ZA", "place": "Beitbridge"}]
+    articles = [
+        {
+            "source_url": "https://example.com/a",
+            "themes": ["KILL", "TERROR"],
+            "persons": ["Benjamin Netanyahu"],
+            "orgs": ["United Nations"],
+            "names": ["Gaza Strip"],
+            "counts": counts,
+        },
+        {"source_url": "https://example.com/b"},  # none of the GKG keys
+    ]
+
+    count, sql, rows, _ = await _upsert(articles)
+
+    assert count == 2
+    flat = _sql(sql)
+    insert_columns = re.search(r"INSERT INTO articles \((.*?)\) VALUES", flat).group(1)
+    values = re.search(r"VALUES \((.*?)\) ON CONFLICT", flat).group(1)
+    assert [c.strip() for c in insert_columns.split(",")][-5:] == list(GKG_COLUMNS)
+    assert [v.strip() for v in values.split(",")][-5:] == ["$16", "$17", "$18", "$19", "$20"]
+    for column in GKG_COLUMNS:
+        assert f"{column} = EXCLUDED.{column}" in flat
+    assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(rows[0]) == 20
+
+    assert list(rows[0][15:]) == [
+        ["KILL", "TERROR"],
+        ["Benjamin Netanyahu"],
+        ["United Nations"],
+        ["Gaza Strip"],
+        json.dumps(counts),
+    ]
+    assert list(rows[1][15:]) == [[], [], [], [], "[]"]
 
 
 START = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)

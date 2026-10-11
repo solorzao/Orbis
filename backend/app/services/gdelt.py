@@ -6,6 +6,7 @@ import asyncio
 import html as html_mod
 import io
 import logging
+import math
 import re
 import zipfile
 from datetime import datetime, timezone
@@ -225,6 +226,159 @@ def _is_usable_title(title: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# GKG field parsers (one per field, so each is tested on its own)
+# ---------------------------------------------------------------------------
+
+_MAX_TITLE_CHARS = 300
+_MAX_THEMES = 64
+_MAX_ENTITIES = 30  # persons, organizations
+_MAX_NAMES = 15
+_MAX_COUNTS = 10
+# V2.1COUNTS also carries theme names (e.g. SOC_GENERALCRIME); keep the count types.
+_COUNT_TYPES = frozenset({"AFFECT", "ARREST", "KIDNAP", "KILL", "PROTEST", "SEIZE", "WOUND"})
+
+# Only the first 2,000 raw characters are cleaned: the output is capped at 300,
+# and the cap bounds the regex work on hostile input.
+_MAX_RAW_TITLE_CHARS = 2000
+# An unterminated comment runs to the end of the text. Without the "|$"
+# alternative, every "<!--" rescans to the end: quadratic (16.8 s on 80 KB).
+_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
+# Real tags only (a letter after "<" or "</"), so "Inflation < 2%" survives.
+# Text shaped like a tag ("x<y>z") is stripped too.
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^<>]*>")
+_PAGE_TITLE_OPEN = "<PAGE_TITLE>"
+_PAGE_TITLE_CLOSE = "</PAGE_TITLE>"
+
+
+def _clean_title(raw: str) -> str:
+    """Return a display-ready headline from a raw page title, or '' if unusable.
+
+    Shared by GDELT's PAGE_TITLE and scraped <title> tags so both are cleaned
+    alike: drop NUL bytes (Postgres rejects them), strip HTML comments (React
+    leaves ``<!-- -->`` in some titles) and tags, unescape entities, collapse
+    whitespace, cap at 300 characters. Comments are stripped again after
+    unescaping in case they arrived escaped; tags are not, so a headline
+    quoting ``&lt;div&gt;`` keeps it.
+    """
+    text = raw[:_MAX_RAW_TITLE_CHARS].replace("\x00", "")
+    text = _HTML_TAG_RE.sub("", _HTML_COMMENT_RE.sub("", text))
+    text = _HTML_COMMENT_RE.sub("", html_mod.unescape(text))
+    text = " ".join(text.split())
+    if len(text) <= 5 or not _is_usable_title(text):
+        return ""
+    return text[:_MAX_TITLE_CHARS].rstrip()
+
+
+def _field(fields: list[str], index: int) -> str:
+    """GKG column *index*, or '' when the record is shorter."""
+    return fields[index] if len(fields) > index else ""
+
+
+def _parse_page_title(extras: str) -> str:
+    """Title from V2EXTRASXML's ``<PAGE_TITLE>``, cleaned; '' if missing or unusable.
+
+    Uses str.find rather than a lazy regex, which rescans to the end from
+    every unclosed opener (11.5 s on 120 KB of them).
+    """
+    start = extras.find(_PAGE_TITLE_OPEN)
+    if start < 0:
+        return ""
+    start += len(_PAGE_TITLE_OPEN)
+    end = extras.find(_PAGE_TITLE_CLOSE, start)
+    return _clean_title(extras[start:end]) if end >= 0 else ""
+
+
+def _parse_themes(raw: str) -> list[str]:
+    """V1THEMES: distinct, non-empty themes in first-seen order, capped."""
+    themes = dict.fromkeys(t.strip() for t in raw.split(";"))
+    themes.pop("", None)
+    return list(themes)[:_MAX_THEMES]
+
+
+def _parse_entities(raw: str) -> list[str]:
+    """V1PERSONS / V1ORGANIZATIONS: title-cased, distinct, in order, capped."""
+    names = dict.fromkeys(p.strip().title() for p in raw.split(";") if p.strip())
+    return list(names)[:_MAX_ENTITIES]
+
+
+def _parse_names(raw: str) -> list[str]:
+    """V2.1ALLNAMES (``Name,offset;...``): the most repeated names.
+
+    Ties go to the name that occurs earliest in the text. Blocks without an
+    integer offset are skipped.
+    """
+    counts: dict[str, int] = {}
+    first_offset: dict[str, int] = {}
+    for block in raw.split(";"):
+        name, _, offset = block.rpartition(",")  # names may contain commas
+        name = name.strip()
+        try:
+            pos = int(offset)
+        except ValueError:
+            continue
+        if not name:
+            continue
+        counts[name] = counts.get(name, 0) + 1
+        first_offset[name] = min(pos, first_offset.get(name, pos))
+    ranked = sorted(counts, key=lambda n: (-counts[n], first_offset[n]))
+    return ranked[:_MAX_NAMES]
+
+
+def _parse_counts(v21_counts: str, v1_counts: str) -> list[dict]:
+    """V2.1COUNTS (else V1COUNTS): typed counts such as people killed or arrested.
+
+    Blocks are ``TYPE#N#OBJECT#LOCTYPE#LOCNAME#FIPS#ADM1#LAT#LNG#FEATUREID[#OFFSET]``.
+    Only the count types are kept; blocks whose N is not an integer are
+    skipped, exact duplicates (e.g. the same count at two offsets) dropped.
+    """
+    results: list[dict] = []
+    seen: set[tuple] = set()
+    for block in (v21_counts or v1_counts).split(";"):
+        parts = block.split("#")
+        if len(parts) < 2 or parts[0] not in _COUNT_TYPES:
+            continue
+        try:
+            n = int(parts[1])
+        except ValueError:
+            continue
+        parts += [""] * (6 - len(parts))
+        count = {
+            "type": parts[0],
+            "n": n,
+            "object": parts[2],
+            "country": fips_to_iso2(parts[5]) or "",
+            "place": parts[4],
+        }
+        key = tuple(count.values())
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(count)
+        if len(results) == _MAX_COUNTS:
+            break
+    return results
+
+
+def _parse_tone_detail(raw: str) -> dict | None:
+    """V1.5TONE: tone, positive, negative, polarity (0-3) and word count (6).
+
+    None when the field is malformed, including non-finite values, which
+    JSONB cannot store.
+    """
+    parts = raw.split(",")
+    if len(parts) < 7:
+        return None
+    try:
+        tone, pos, neg, polarity = (float(p) for p in parts[:4])
+        words = int(parts[6])
+    except ValueError:
+        return None
+    if not all(math.isfinite(v) for v in (tone, pos, neg, polarity)):
+        return None
+    return {"tone": tone, "pos": pos, "neg": neg, "polarity": polarity, "words": words}
+
+
+# ---------------------------------------------------------------------------
 # Public API — raw GKG data files
 # ---------------------------------------------------------------------------
 
@@ -234,11 +388,13 @@ async def fetch_raw_gkg() -> list[dict]:
 
     Each 15-minute GKG file contains ~1000+ records.  We filter to records
     with city-level locations (type 3=USCITY or 4=WORLDCITY) and deduplicate
-    by URL, returning ~600 unique articles with city-level coordinates.
+    by URL, returning a few hundred unique articles with city-level coordinates.
 
     Returns a list of dicts with keys:
-        url, domain, lat, lng, location_name, tone, themes,
-        image_url, published_at
+        url, domain, lat, lng, location_name, country_code, country_fips,
+        tone, tone_detail (only when V1.5TONE is well formed), page_title
+        ('' when GDELT has no usable one), themes, persons, organizations,
+        names, counts, mentioned_locations, image_url, published_at
     """
     # 1. Find the latest GKG file URL
     index_bytes = await _download_bytes(_GKG_LASTUPDATE_URL)
@@ -275,20 +431,37 @@ async def fetch_raw_gkg() -> list[dict]:
     except Exception:
         logger.error("Failed to unzip GKG file.", exc_info=True)
         return []
+    # NUL survives decoding, and Postgres TEXT, TEXT[] and JSONB reject it: one
+    # such record would roll back the whole upsert transaction.
+    raw = raw.replace("\x00", "")
 
-    # 3. Parse TSV — one record per document
+    # 3. Parse off the event loop: the per-record work is CPU-bound, and the
+    # container also serves the API.
+    return await asyncio.to_thread(_parse_gkg, raw)
+
+
+def _parse_gkg(raw: str) -> list[dict]:
+    """Parse a decoded GKG 2.1 file into city-level articles (see fetch_raw_gkg)."""
+    # One record per line, tab-separated.
     # GKG 2.1 field indices (0-based, tab-delimited):
     #  0: GKGRECORDID
     #  1: V2.1DATE (YYYYMMDDHHMMSS)
     #  3: V2SOURCECOMMONNAME (domain)
     #  4: V2DOCUMENTIDENTIFIER (article URL)
+    #  5: V1COUNTS (fallback for 6; same blocks without the offset)
+    #  6: V2.1COUNTS (semicolon-delimited TYPE#N#OBJECT#LOCTYPE#LOCNAME#FIPS#...#OFFSET)
     #  7: V1THEMES (semicolon-delimited)
     #  9: V1LOCATIONS (semicolon-delimited blocks, #-delimited fields)
-    # 15: V1.5TONE (comma-separated: tone, pos, neg, polarity, ...)
+    # 11: V1PERSONS (semicolon-delimited)
+    # 13: V1ORGANIZATIONS (semicolon-delimited)
+    # 15: V1.5TONE (comma-separated: tone, pos, neg, polarity, act, self, words)
     # 18: V2.1SHARINGIMAGE (URL)
+    # 23: V2.1ALLNAMES (semicolon-delimited Name,offset)
+    # 26: V2EXTRASXML (<PAGE_TITLE>...</PAGE_TITLE> among other tags)
     articles: dict[str, dict] = {}  # keyed by URL for dedup
 
-    for line in raw.strip().split("\n"):
+    lines = raw.strip().split("\n")
+    for line in lines:
         fields = line.split("\t")
         if len(fields) < 16:
             continue
@@ -354,44 +527,35 @@ async def fetch_raw_gkg() -> list[dict]:
             except (ValueError, IndexError):
                 pass
 
-        domain = fields[3] if len(fields) > 3 else ""
-        # GKG field 11 = V1PERSONS, field 13 = V1ORGANIZATIONS (semicolon-delimited)
-        persons_raw = fields[11] if len(fields) > 11 else ""
-        orgs_raw = fields[13] if len(fields) > 13 else ""
-        persons = (
-            list(dict.fromkeys(p.strip().title() for p in persons_raw.split(";") if p.strip()))
-            if persons_raw
-            else []
-        )
-        organizations = (
-            list(dict.fromkeys(o.strip().title() for o in orgs_raw.split(";") if o.strip()))
-            if orgs_raw
-            else []
-        )
-        themes = fields[7] if len(fields) > 7 else ""
-        image_url = fields[18].strip() if len(fields) > 18 else ""
-        date_str = fields[1] if len(fields) > 1 else ""
+        image_url = _field(fields, 18).strip()
 
-        articles[url] = {
+        article = {
             "url": url,
-            "domain": domain,
+            "domain": _field(fields, 3),
             "lat": city_loc["lat"],
             "lng": city_loc["lng"],
             "location_name": city_loc["fullname"],
             "country_code": city_loc["country_code"],
             "country_fips": city_loc["country_fips"],
             "tone": tone,
-            "themes": themes,
-            "persons": persons,
-            "organizations": organizations,
+            "page_title": _parse_page_title(_field(fields, 26)),
+            "themes": _parse_themes(_field(fields, 7)),
+            "persons": _parse_entities(_field(fields, 11)),
+            "organizations": _parse_entities(_field(fields, 13)),
+            "names": _parse_names(_field(fields, 23)),
+            "counts": _parse_counts(_field(fields, 6), _field(fields, 5)),
             "mentioned_locations": mentioned_locations,
             "image_url": image_url if image_url.startswith("http") else "",
-            "published_at": _parse_gkg_date(date_str),
+            "published_at": _parse_gkg_date(_field(fields, 1)),
         }
+        tone_detail = _parse_tone_detail(tone_raw)
+        if tone_detail is not None:
+            article["tone_detail"] = tone_detail
+        articles[url] = article
 
     logger.info(
         "GKG raw file: %d records, %d with city-level locations.",
-        len(raw.strip().split("\n")),
+        len(lines),
         len(articles),
     )
     return list(articles.values())
@@ -400,8 +564,9 @@ async def fetch_raw_gkg() -> list[dict]:
 async def scrape_titles(articles: list[dict]) -> list[dict]:
     """Concurrently scrape <title> tags from article URLs.
 
-    For each article dict, adds a ``title`` key with the scraped title
-    or a fallback derived from the URL path.
+    Sets each article's ``title`` to its page's <title>, cleaned by
+    ``_clean_title``. Articles whose page fails or has no usable title are
+    left without one (ingestion drops them).
     """
     semaphore = asyncio.Semaphore(_SCRAPE_CONCURRENCY)
 
@@ -419,20 +584,11 @@ async def scrape_titles(articles: list[dict]) -> list[dict]:
                     text = resp.content[:_SCRAPE_MAX_BYTES].decode("utf-8", errors="replace")
                     match = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
                     if match:
-                        title = html_mod.unescape(match.group(1)).strip()
-                        if len(title) > 5 and _is_usable_title(title):
-                            article["title"] = title[:300]
-                            return
+                        title = _clean_title(match.group(1))
+                        if title:
+                            article["title"] = title
             except Exception:
                 pass  # title stays empty → article will be dropped
 
     await asyncio.gather(*[_scrape_one(a) for a in articles])
-
-    scraped = sum(1 for a in articles if a.get("title"))
-    logger.info(
-        "Title scraping: %d/%d got usable titles, %d dropped.",
-        scraped,
-        len(articles),
-        len(articles) - scraped,
-    )
     return articles
