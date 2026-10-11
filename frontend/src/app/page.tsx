@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
-import { LIVE_WINDOW_HOURS, MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { DEFAULT_WINDOW, HOUR_MS, windowQuery, type TimeWindow } from "@/lib/timeWindow";
 import { useAgent } from "@/hooks/useAgent";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
@@ -32,17 +33,15 @@ export default function Home() {
   const [apiError, setApiError] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const [timeRange, setTimeRange] = useState<{ startTime: string; endTime: string } | null>(null);
-  const [density, setDensity] = useState<{ hour: number; count: number }[]>([]);
+  // One time window for the globe, the panels and the timeline (lib/timeWindow).
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>(DEFAULT_WINDOW);
+  // The old slider's day, until the timeline replaces it (PR 10, Task 10.6).
   const [dayOffset, setDayOffset] = useState(0);
+  const [density, setDensity] = useState<{ hour: number; count: number }[]>([]);
   const [hasOlderData, setHasOlderData] = useState(true);
 
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
-
-  // Snapshot of "now" captured at mount and when the user changes the day,
-  // so derived date math stays pure during render.
-  const [nowTs, setNowTs] = useState(() => Date.now());
 
   // Side panel (Co-pilot | Stories): open by default on wide screens
   const side = useSidePanel();
@@ -57,24 +56,28 @@ export default function Home() {
   const { reduced, lowPower } = useMotionPrefs();
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
 
-  const handleDayChange = useCallback((newOffset: number) => {
-    const clamped = Math.max(0, Math.min(6, newOffset));
-    setDayOffset(clamped);
-    setTimeRange(null);
-    setNowTs(Date.now());
+  const changeWindow = useCallback((next: TimeWindow) => {
+    setTimeWindow(next);
     setLoading(true);
   }, []);
 
-  const dayWindow = useMemo(
-    () =>
-      dayOffset === 0
-        ? null
-        : (() => {
-            const windowEnd = new Date(nowTs - dayOffset * 86400000);
-            const windowStart = new Date(windowEnd.getTime() - 86400000);
-            return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
-          })(),
-    [dayOffset, nowTs],
+  // The old slider's day chips: today is live, an earlier day the 24 hours before it.
+  const handleDayChange = useCallback(
+    (newOffset: number) => {
+      const day = Math.max(0, Math.min(6, newOffset));
+      setDayOffset(day);
+      const end = Date.now() - day * 24 * HOUR_MS;
+      changeWindow(
+        day === 0
+          ? DEFAULT_WINDOW
+          : {
+              kind: "range",
+              startTime: new Date(end - 24 * HOUR_MS).toISOString(),
+              endTime: new Date(end).toISOString(),
+            },
+      );
+    },
+    [changeWindow],
   );
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
@@ -134,17 +137,12 @@ export default function Home() {
     };
   }, [dayOffset]);
 
-  // Fetch globe data on mount and when timeRange or dayOffset changes
+  // Fetch globe data on mount and whenever the window changes
   useEffect(() => {
     let cancelled = false;
-    const effectiveRange = timeRange ?? dayWindow;
+    const query = windowQuery(timeWindow);
     const timer = setTimeout(() => {
-      fetchGlobeNews(
-        `${LIVE_WINDOW_HOURS}h`,
-        500,
-        effectiveRange?.startTime,
-        effectiveRange?.endTime,
-      )
+      fetchGlobeNews(query.timespan, 500, query.startTime, query.endTime)
         .then((apiPoints) => {
           if (cancelled) return;
           setAllPoints(apiPointsToGlobePoints(apiPoints));
@@ -163,7 +161,7 @@ export default function Home() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [timeRange, dayWindow]);
+  }, [timeWindow]);
 
   // Filter points client-side — instant, no API call
   const points = filterPointsByTopic(allPoints, activeTopic);
@@ -288,7 +286,7 @@ export default function Home() {
     (point: GlobePoint) => {
       // Reopen a panel only if it shows this cell for the same topic and
       // window; point ids are list positions, so they can name another cell.
-      const query = panelQuery(activeTopic, timeRange ?? dayWindow, Date.now());
+      const query = panelQuery(activeTopic, timeWindow, Date.now());
       const existing = panelQueue.find(
         (p) =>
           p.point.lat === point.lat && p.point.lng === point.lng && samePanelQuery(p.query, query),
@@ -326,7 +324,7 @@ export default function Home() {
       setExpandedPanelId(panelId);
       fetchPanelData(panelId, point, query);
     },
-    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData, showStories],
+    [panelQueue, activeTopic, timeWindow, fetchPanelData, showStories],
   );
 
   const handleZoomChange = useCallback(() => {}, []);
@@ -421,7 +419,7 @@ export default function Home() {
       <TopBar
         activeTopic={activeTopic}
         onTopicChange={setActiveTopic}
-        isLive={!apiError && !loading && dayOffset === 0}
+        isLive={!apiError && !loading && timeWindow.kind === "live"}
         isLoading={loading}
         isOffline={apiError}
       />
@@ -453,15 +451,15 @@ export default function Home() {
       <TimeSlider
         density={density}
         onChange={(range) => {
-          setTimeRange(range);
-          setLoading(true);
+          if (range) changeWindow({ kind: "range", ...range });
+          else handleDayChange(dayOffset);
         }}
         onDayChange={handleDayChange}
         dayOffset={dayOffset}
         hasOlderData={hasOlderData}
         totalStories={points.reduce((sum, p) => sum + p.count, 0)}
         totalLocations={points.length}
-        isLive={!apiError && !loading && dayOffset === 0}
+        isLive={!apiError && !loading && timeWindow.kind === "live"}
         isLoading={loading}
         isOffline={apiError}
       />

@@ -1,3 +1,5 @@
+import type { LiveHours } from "@/lib/timeWindow";
+
 export interface NewsArticle {
   id: string;
   title: string;
@@ -48,8 +50,10 @@ export interface PanelQuery {
   topic?: Topic;
   startTime: string;
   endTime: string;
-  /** Opened without a selected window: the last 24 hours up to the click. */
+  /** Opened on a live window: the last `hours` up to the click. */
   live: boolean;
+  /** A live panel's preset (see timeWindow): live panels match on it. */
+  hours?: LiveHours;
 }
 
 export interface PanelEntry {

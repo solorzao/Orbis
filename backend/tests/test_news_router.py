@@ -120,6 +120,20 @@ class TestGetGlobeData:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("timespan", "hours"), [("168h", 168), ("169h", 168), ("9999h", 168), ("0h", 1), ("-5h", 1)]
+    )
+    async def test_timespan_is_one_hour_to_seven_days(self, timespan, hours):
+        """The timeline's 7d preset asks for 168h; nothing asks for more."""
+        from app.routers.news import get_globe_data
+
+        with patch(
+            "app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[]
+        ) as mock_db:
+            await get_globe_data(timespan=timespan, limit=100)
+        assert mock_db.call_args.kwargs["timespan_hours"] == hours
+
+    @pytest.mark.asyncio
     async def test_passes_start_end_time_to_db(self):
         from app.routers.news import get_globe_data
 

@@ -83,12 +83,16 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
+# The longest live window: the timeline's 7-day preset.
+_MAX_TIMESPAN_HOURS = 168
+
+
 def _parse_timespan(timespan: str) -> int:
-    """Convert a timespan string like '24h' or '48h' to integer hours."""
+    """Convert a timespan string like '24h' or '168h' to hours, from 1 to 168."""
     s = timespan.strip().lower()
     if s.endswith("h"):
         try:
-            return int(s[:-1])
+            return min(max(int(s[:-1]), 1), _MAX_TIMESPAN_HOURS)
         except ValueError:
             pass
     return 24
