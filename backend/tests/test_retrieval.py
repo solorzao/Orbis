@@ -1,13 +1,54 @@
 """Tests for the agent retrieval functions."""
 
+import re
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+HALFVEC_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "database"
+    / "migrations"
+    / "008_halfvec_embedding_index.sql"
+)
+
 
 def _fake_embedding(dim: int = 1536) -> list[float]:
     return [0.01 * (i % 100) for i in range(dim)]
+
+
+async def _semantic_search_sql() -> str:
+    """Run semantic_search against mocks; return its SQL, whitespace-collapsed."""
+    from app.services.retrieval import semantic_search
+
+    mock_pool = AsyncMock()
+    mock_pool.fetch = AsyncMock(return_value=[])
+
+    emb_obj = MagicMock()
+    emb_obj.embedding = _fake_embedding()
+    mock_response = MagicMock()
+    mock_response.data = [emb_obj]
+
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(return_value=mock_response)
+
+    with (
+        patch(
+            "app.services.retrieval._get_openai_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ),
+    ):
+        await semantic_search("climate change")
+
+    mock_pool.fetch.assert_called_once()
+    return " ".join(mock_pool.fetch.call_args[0][0].split())
 
 
 class TestSemanticSearch:
@@ -58,6 +99,30 @@ class TestSemanticSearch:
         assert results[0]["title"] == "Climate summit begins"
         mock_client.embeddings.create.assert_called_once()
         mock_pool.fetch.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_compares_at_half_precision(self):
+        sql = await _semantic_search_sql()
+
+        assert "embedding::halfvec(1536) <=> $1::halfvec(1536) AS distance" in sql
+        assert "ORDER BY embedding::halfvec(1536) <=> $1::halfvec(1536)" in sql
+        assert "::vector" not in sql
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_matches_halfvec_index_expression(self):
+        # The planner uses the HNSW index only when the ORDER BY expression
+        # matches the index expression exactly; otherwise it scans the table.
+        migration = HALFVEC_MIGRATION.read_text(encoding="utf-8")
+        match = re.search(
+            r"USING hnsw \(\((embedding::halfvec\(\d+\))\) halfvec_cosine_ops\)",
+            migration,
+        )
+        assert match, "008 must index (embedding::halfvec(N)) halfvec_cosine_ops"
+        index_cast = match.group(1)
+        assert index_cast == "embedding::halfvec(1536)"
+
+        sql = await _semantic_search_sql()
+        assert f"ORDER BY {index_cast} <=> " in sql
 
 
 class TestGraphTraverse:

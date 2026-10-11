@@ -47,14 +47,17 @@ async def semantic_search(query: str, limit: int = 10) -> list[dict]:
         vec_str = "[" + ",".join(str(v) for v in vec) + "]"
 
         pool = await get_pool()
+        # The cast must match the half-precision HNSW index expression in
+        # database/migrations/008_halfvec_embedding_index.sql exactly, or the
+        # planner falls back to a sequential scan.
         rows = await pool.fetch(
             """
             SELECT id, title, source_url, source_name, latitude, longitude,
                    published_at, sentiment_score,
-                   embedding <=> $1::vector AS distance
+                   embedding::halfvec(1536) <=> $1::halfvec(1536) AS distance
             FROM articles
             WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> $1::vector
+            ORDER BY embedding::halfvec(1536) <=> $1::halfvec(1536)
             LIMIT $2
             """,
             vec_str,
