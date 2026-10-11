@@ -8,6 +8,7 @@ import {
   driftLng,
   durationMs,
   hexToRgba,
+  pointTooltipHtml,
   projectedRadius,
   type GlobeGeometry,
 } from "@/lib/globeView";
@@ -137,14 +138,7 @@ export default function Globe({
       .ringMaxRadius(2)
       .ringPropagationSpeed(1.2)
       .ringRepeatPeriod(2500)
-      .pointLabel((d: object) => {
-        const p = d as GlobePoint;
-        const location = p.locationName || "";
-        const label = location
-          ? `<span style="color:${p.color};font-weight:600">${p.count} stories</span> <span style="color:var(--text-muted)">•</span> ${location}`
-          : `<span style="color:${p.color};font-weight:600">${p.count} stories</span>`;
-        return `<div style="background:var(--surface-panel);backdrop-filter:blur(12px);border:1px solid var(--border-accent);border-radius:8px;padding:8px 12px;font-family:system-ui;color:var(--text-primary);font-size:12px;max-width:300px;pointer-events:none">${label}</div>`;
-      })
+      .pointLabel((d: object) => pointTooltipHtml(d as GlobePoint))
       .onPointClick((point: object) => {
         onPointClickRef.current(point as GlobePoint);
       })
