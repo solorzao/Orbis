@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
@@ -49,26 +48,11 @@ export default function Home() {
   const side = useSidePanel();
   const { showStories } = side;
 
-  // Agent panel
-  const [agentOpen, setAgentOpen] = useState(false);
   const globeControlsRef = useRef<GlobeControls | null>(null);
 
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
-
-  // Track time slider height so the chat icon can sit above it on mobile
-  const [sliderHeight, setSliderHeight] = useState(0);
-  const sliderRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = sliderRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setSliderHeight(entry.contentRect.height);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const handleDayChange = useCallback((newOffset: number) => {
     const clamped = Math.max(0, Math.min(6, newOffset));
@@ -437,46 +421,7 @@ export default function Home() {
         open={side.open}
         onOpenChange={side.setOpen}
         storiesCount={panelQueue.length}
-        copilot={<p className="side-empty">Ask the co-pilot about the news on the globe.</p>}
-        stories={storiesTab}
-      />
-
-      {/* Agent Toggle */}
-      {!agentOpen && (
-        <button
-          onClick={() => setAgentOpen(true)}
-          className="fixed left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-all hover:border-blue-500/30 hover:bg-blue-500/10 sm:!bottom-8 sm:left-6 sm:h-12 sm:w-12"
-          style={{
-            background: "var(--surface-overlay)",
-            backdropFilter: "blur(12px)",
-            bottom: `${sliderHeight + 24}px`,
-          }}
-          aria-label="Toggle agent panel"
-          data-testid="agent-toggle"
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M3 15a2 2 0 0 0 2 2h12l4 4V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />
-          </svg>
-          {agentMessages.length > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[9px] font-bold text-white">
-              {agentMessages.length}
-            </span>
-          )}
-        </button>
-      )}
-
-      {/* Agent Panel */}
-      <AnimatePresence>
-        {agentOpen && (
+        copilot={
           <AgentPanel
             messages={agentMessages}
             isLoading={agentLoading}
@@ -486,10 +431,10 @@ export default function Home() {
             onStop={agentStop}
             onClear={agentClear}
             onCitationClick={handleCitationClick}
-            onClose={() => setAgentOpen(false)}
           />
-        )}
-      </AnimatePresence>
+        }
+        stories={storiesTab}
+      />
 
       {/* Time Slider + Status */}
       <TimeSlider
@@ -506,7 +451,6 @@ export default function Home() {
         isLive={!apiError && !loading && dayOffset === 0}
         isLoading={loading}
         isOffline={apiError}
-        sliderRef={sliderRef}
       />
     </main>
   );

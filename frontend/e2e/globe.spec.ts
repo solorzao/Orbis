@@ -104,8 +104,10 @@ test.describe("Globe Page", () => {
     await expect(status.getByText("Live")).toBeVisible({ timeout: 10000 });
   });
 
-  test("agent toggle button is visible", async ({ page }) => {
-    await expect(page.getByTestId("agent-toggle")).toBeVisible();
+  test("the side panel shows the Co-pilot and Stories tabs", async ({ page }) => {
+    await expect(page.getByTestId("side-panel")).toBeVisible();
+    await expect(page.getByTestId("side-tab-copilot")).toBeVisible();
+    await expect(page.getByTestId("side-tab-stories")).toBeVisible();
   });
 
   test("time slider is present at bottom", async ({ page }) => {
