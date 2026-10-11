@@ -27,6 +27,7 @@ from app.services.database import (
     get_hourly_density,
     get_topic_counts,
 )
+from app.services.grid import cell_index
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,14 @@ async def get_globe_data(
 # Grid cell size must match get_globe_points() call in get_globe_data().
 _CELL_SIZE = 1.0
 
+# Newest articles fetched per cell: the most "Load more" can page through.
+_CELL_FETCH_LIMIT = 300
+
+# Articles fetched for a cell summary: it summarises the first 10 (and
+# summarise_cluster reads at most 30); the rest is headroom for the syndicated
+# copies _deduplicate_articles drops.
+_SUMMARY_FETCH_LIMIT = 30
+
 
 async def _fetch_cell_articles(
     lat: float,
@@ -161,34 +170,29 @@ async def _fetch_cell_articles(
     end_time: datetime | None = None,
     sentiment: str | None = None,
     search: str | None = None,
+    limit: int = _CELL_FETCH_LIMIT,
 ) -> list[NewsArticle]:
     """Fetch articles within the grid cell containing (lat, lng).
 
-    Applies optional filters for topic, sentiment band, and title search.
+    The topic filter runs in SQL (any of the article's tags), before the
+    limit; a topic the cell has no articles for gives an empty list. Then
+    applies optional filters for sentiment band and title search.
     """
-    half = _CELL_SIZE / 2.0
+    # The dots' grid cell, as in the summary cache key.
+    min_lat = cell_index(lat, _CELL_SIZE) * _CELL_SIZE
+    min_lng = cell_index(lng, _CELL_SIZE) * _CELL_SIZE
+    resolved = _resolve_topic(topic)
     rows = await get_articles_in_bounds(
-        lat - half,
-        lng - half,
-        lat + half,
-        lng + half,
-        limit=50,
+        min_lat,
+        min_lng,
+        min_lat + _CELL_SIZE,
+        min_lng + _CELL_SIZE,
+        limit=limit,
         start_time=start_time,
         end_time=end_time,
+        topics=[resolved] if resolved else None,
     )
     articles = _deduplicate_articles([_row_to_article(r) for r in rows])
-
-    resolved = _resolve_topic(topic)
-    if resolved:
-        filtered = [a for a in articles if resolved in a.topic_tags]
-        if filtered:
-            articles = filtered
-        else:
-            logger.info(
-                "Topic filter '%s' matched 0 of %d articles — returning unfiltered",
-                resolved,
-                len(articles),
-            )
 
     if sentiment:
         s = sentiment.lower()
@@ -245,13 +249,27 @@ async def get_cluster_summary(
         None,
         description="Ignored: the place name is resolved server-side from the cell's articles",
     ),
+    start_time: str | None = Query(None, description="ISO start time"),
+    end_time: str | None = Query(None, description="ISO end time"),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
-    articles = await _fetch_cell_articles(lat, lng, resolved)
+    start_dt = _parse_iso(start_time)
+    end_dt = _parse_iso(end_time)
+    articles = await _fetch_cell_articles(
+        lat, lng, resolved, start_time=start_dt, end_time=end_dt, limit=_SUMMARY_FETCH_LIMIT
+    )
     nearby = articles[:10]
 
-    summary_text = await summarise_cluster(nearby, lat, lng, topic=resolved)
+    summary_text = await summarise_cluster(
+        nearby,
+        lat,
+        lng,
+        topic=resolved,
+        cell_size=_CELL_SIZE,
+        start_time=start_dt,
+        end_time=end_dt,
+    )
     return ClusterSummaryResponse(
         lat=lat,
         lng=lng,

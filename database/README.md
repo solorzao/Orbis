@@ -38,7 +38,7 @@ PostgreSQL schema for the Orbis globe news explorer, powered by **Supabase** wit
 | Function              | Purpose                                         |
 |-----------------------|-------------------------------------------------|
 | `nearby_articles()`   | Articles within N km of a lat/lng point          |
-| `articles_in_bounds()`| Articles inside a bounding box (globe viewport) |
+| `articles_in_bounds()`| Articles inside a bounding box. Unused: the backend's `get_articles_in_bounds` inlines its own query |
 | `cluster_articles()`  | Grid-cell clustering with counts                |
 | `topic_counts()`      | Count of articles per topic tag                 |
 

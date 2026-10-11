@@ -111,7 +111,8 @@ class GlobeDataPoint(BaseModel):
     weight: float
     article_count: int
     top_headline: str
-    topic: str
+    topic: str  # newest article's first tag: sets the dot colour
+    topics: list[str] = Field(default_factory=list)  # every tag in the cell: the topic filter
     location_name: str = ""
 
 

@@ -31,7 +31,10 @@ export interface GlobePoint {
   isCluster: boolean;
   count: number;
   locationName?: string;
+  /** Sets the colour: the newest story's topic. */
   topic: Topic;
+  /** Every topic in the cell, for the topic filter. */
+  topics?: Topic[];
 }
 
 export interface PanelFilters {
@@ -40,10 +43,22 @@ export interface PanelFilters {
   search: string;
 }
 
+/** What a panel lists and summarises, fixed when its dot is clicked. */
+export interface PanelQuery {
+  topic?: Topic;
+  startTime: string;
+  endTime: string;
+  /** Opened without a selected window: the last 24 hours up to the click. */
+  live: boolean;
+}
+
 export interface PanelEntry {
   panelId: string;
   point: GlobePoint;
+  query: PanelQuery;
   articles: NewsArticle[];
+  /** Offset of the next page: rows received so far, duplicates included. */
+  nextOffset: number;
   clusterSummary: string | null;
   articlesLoading: boolean;
   summaryLoading: boolean;

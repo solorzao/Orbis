@@ -3,9 +3,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
-import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
-import { apiPointsToGlobePoints } from "@/lib/clustering";
+import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
+import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
+import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
+import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
@@ -138,7 +140,12 @@ export default function Home() {
     let cancelled = false;
     const effectiveRange = timeRange ?? dayWindow;
     const timer = setTimeout(() => {
-      fetchGlobeNews("24h", 500, effectiveRange?.startTime, effectiveRange?.endTime)
+      fetchGlobeNews(
+        `${LIVE_WINDOW_HOURS}h`,
+        500,
+        effectiveRange?.startTime,
+        effectiveRange?.endTime,
+      )
         .then((apiPoints) => {
           if (cancelled) return;
           setAllPoints(apiPointsToGlobePoints(apiPoints));
@@ -160,8 +167,7 @@ export default function Home() {
   }, [timeRange, dayWindow]);
 
   // Filter points client-side — instant, no API call
-  const points =
-    activeTopic === "All" ? allPoints : allPoints.filter((p) => p.topic === activeTopic);
+  const points = filterPointsByTopic(allPoints, activeTopic);
 
   const updatePanel = useCallback((panelId: string, updates: Partial<PanelEntry>) => {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
@@ -184,26 +190,31 @@ export default function Home() {
       sentimentScore: a.sentiment_score,
     }));
 
+  // Panels read only their own query, fixed at click time (see panelQuery).
   const fetchPanelData = useCallback(
-    async (panelId: string, point: GlobePoint) => {
-      const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
-
+    async (panelId: string, point: GlobePoint, query: PanelQuery) => {
       try {
         const apiArticles = await fetchClusterArticles(
           point.lat,
           point.lng,
           0.75,
-          topicFilter,
+          query.topic,
           point.locationName,
           0,
-          10,
-          (timeRange ?? dayWindow)?.startTime,
-          (timeRange ?? dayWindow)?.endTime,
+          FIRST_PAGE_LIMIT,
+          query.startTime,
+          query.endTime,
         );
-        const mapped = mapArticles(apiArticles);
+        const page = applyPage(
+          { articles: [], count: point.count },
+          mapArticles(apiArticles),
+          0,
+          FIRST_PAGE_LIMIT,
+        );
         updatePanel(panelId, {
-          articles: mapped,
-          point: { ...point, articles: mapped },
+          articles: page.articles,
+          nextOffset: page.nextOffset,
+          point: { ...point, articles: page.articles, count: page.count },
           articlesLoading: false,
         });
       } catch {
@@ -216,14 +227,16 @@ export default function Home() {
           point.lng,
           0.75,
           point.locationName,
-          topicFilter,
+          query.topic,
+          query.startTime,
+          query.endTime,
         );
         updatePanel(panelId, { clusterSummary: result.summary, summaryLoading: false });
       } catch {
         updatePanel(panelId, { summaryLoading: false });
       }
     },
-    [activeTopic, timeRange, dayWindow, updatePanel],
+    [updatePanel],
   );
 
   const handleLoadMore = useCallback(
@@ -233,43 +246,54 @@ export default function Home() {
 
       updatePanel(panelId, { loadingMore: true });
 
-      const topicFilter = activeTopic !== "All" ? activeTopic : undefined;
+      const { query } = panel;
       const isFiltered =
         filters && (filters.sentiment || filters.search || filters.topics.length > 0);
 
       try {
-        // When filters are active, load ALL articles (unfiltered) so the
-        // client-side filter has the full dataset. Button disappears because
-        // count === articles.length. Clearing filters shows everything.
+        // In-panel filters work on the loaded stories, so they get bigger
+        // pages. Load more stays while pages come back full; a short page
+        // ends the list (see applyPage).
+        const { offset, limit } = nextPage(panel.nextOffset, Boolean(isFiltered));
         const apiArticles = await fetchClusterArticles(
           panel.point.lat,
           panel.point.lng,
           0.75,
-          topicFilter,
+          query.topic,
           panel.point.locationName,
-          isFiltered ? 0 : panel.articles.length,
-          isFiltered ? 50 : 20,
-          (timeRange ?? dayWindow)?.startTime,
-          (timeRange ?? dayWindow)?.endTime,
+          offset,
+          limit,
+          query.startTime,
+          query.endTime,
         );
-        const mapped = mapArticles(apiArticles);
-        const allArticles = isFiltered ? mapped : [...panel.articles, ...mapped];
+        const page = applyPage(
+          { articles: panel.articles, count: panel.point.count },
+          mapArticles(apiArticles),
+          offset,
+          limit,
+        );
         updatePanel(panelId, {
-          articles: allArticles,
-          point: { ...panel.point, articles: allArticles, count: allArticles.length },
+          articles: page.articles,
+          nextOffset: page.nextOffset,
+          point: { ...panel.point, articles: page.articles, count: page.count },
           loadingMore: false,
         });
       } catch {
         updatePanel(panelId, { loadingMore: false });
       }
     },
-    [panelQueue, activeTopic, timeRange, dayWindow, updatePanel],
+    [panelQueue, updatePanel],
   );
 
   const handlePointClick = useCallback(
     (point: GlobePoint) => {
-      // Check if already in queue
-      const existing = panelQueue.find((p) => p.point.id === point.id);
+      // Reopen a panel only if it shows this cell for the same topic and
+      // window; point ids are list positions, so they can name another cell.
+      const query = panelQuery(activeTopic, timeRange ?? dayWindow, Date.now());
+      const existing = panelQueue.find(
+        (p) =>
+          p.point.lat === point.lat && p.point.lng === point.lng && samePanelQuery(p.query, query),
+      );
       if (existing) {
         setExpandedPanelId(existing.panelId);
         return;
@@ -279,7 +303,9 @@ export default function Home() {
       const newEntry: PanelEntry = {
         panelId,
         point,
+        query,
         articles: [],
+        nextOffset: 0,
         clusterSummary: null,
         articlesLoading: true,
         summaryLoading: true,
@@ -298,9 +324,9 @@ export default function Home() {
       });
 
       setExpandedPanelId(panelId);
-      fetchPanelData(panelId, point);
+      fetchPanelData(panelId, point, query);
     },
-    [panelQueue, fetchPanelData],
+    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData],
   );
 
   const handleZoomChange = useCallback(() => {}, []);

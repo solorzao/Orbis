@@ -44,6 +44,16 @@ def _make_db_row(title: str = "Test", topic_tags=None, lat: float = 40.0, lng: f
     )
 
 
+def _db_honouring_topics(rows):
+    """A get_articles_in_bounds stand-in that filters on topics and limits like the SQL."""
+
+    async def in_bounds(*_bounds, limit, topics=None, **_window):
+        matching = [r for r in rows if topics is None or set(r["topic_tags"]) & set(topics)]
+        return matching[:limit]
+
+    return in_bounds
+
+
 # Disable caching for all router tests
 @pytest.fixture(autouse=True)
 def _no_cache():
@@ -128,6 +138,29 @@ class TestGetGlobeData:
             assert call_kwargs["start_time"].hour == 14
             assert call_kwargs["end_time"].hour == 18
 
+    @pytest.mark.asyncio
+    async def test_returns_every_topic_in_the_cell(self):
+        from app.routers.news import get_globe_data
+
+        row = {**_make_globe_row(topic="sport"), "topics": ["conflict", "sport"]}
+        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[row]):
+            [point] = await get_globe_data(timespan="24h", limit=100)
+        assert point.topic == "sport"
+        assert point.topics == ["conflict", "sport"]
+
+    @pytest.mark.asyncio
+    async def test_cached_points_without_topics_still_load(self):
+        """Entries cached before `topics` existed stay valid until their TTL ends."""
+        from app.routers.news import get_globe_data
+
+        with patch(
+            "app.routers.news.get_cached",
+            new_callable=AsyncMock,
+            return_value=[_make_globe_row(topic="conflict")],
+        ):
+            [point] = await get_globe_data(timespan="24h", limit=100)
+        assert point.topics == []
+
 
 class TestGetClusterArticles:
     @pytest.mark.asyncio
@@ -153,15 +186,25 @@ class TestGetClusterArticles:
             assert result[0].title == "Tehran protest"
 
     @pytest.mark.asyncio
-    async def test_uses_grid_cell_bounds(self):
-        from app.routers.news import _CELL_SIZE, get_cluster_articles
+    @pytest.mark.parametrize(
+        ("lat", "lng", "cell"),
+        [
+            (40.5, -74.5, (40.0, -75.0, 41.0, -74.0)),  # a dot's centre
+            (40.9, -74.1, (40.0, -75.0, 41.0, -74.0)),  # off centre: same cell
+            (-33.87, -70.65, (-34.0, -71.0, -33.0, -70.0)),  # negative: floors down
+            (51.0, -0.2, (51.0, -1.0, 52.0, 0.0)),  # on an edge: the cell above it
+        ],
+    )
+    async def test_queries_the_dots_floored_cell(self, lat, lng, cell):
+        """The cell the dot (and the summary cache key) uses: FLOOR, not lat/lng +/- half."""
+        from app.routers.news import get_cluster_articles
 
         with patch(
             "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]
         ) as mock_bounds:
             await get_cluster_articles(
-                lat=40.5,
-                lng=-74.5,
+                lat=lat,
+                lng=lng,
                 topic=None,
                 location_name=None,
                 offset=0,
@@ -169,12 +212,7 @@ class TestGetClusterArticles:
                 sentiment=None,
                 search=None,
             )
-            args = mock_bounds.call_args[0]
-            half = _CELL_SIZE / 2.0
-            assert args[0] == pytest.approx(40.5 - half)  # min_lat
-            assert args[1] == pytest.approx(-74.5 - half)  # min_lng
-            assert args[2] == pytest.approx(40.5 + half)  # max_lat
-            assert args[3] == pytest.approx(-74.5 + half)  # max_lng
+        assert mock_bounds.call_args.args == pytest.approx(cell)
 
     @pytest.mark.asyncio
     async def test_topic_filter_applied(self):
@@ -186,7 +224,9 @@ class TestGetClusterArticles:
         ]
 
         with patch(
-            "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows
+            "app.routers.news.get_articles_in_bounds",
+            new_callable=AsyncMock,
+            side_effect=_db_honouring_topics(rows),
         ):
             result = await get_cluster_articles(
                 lat=40.0,
@@ -198,17 +238,42 @@ class TestGetClusterArticles:
                 sentiment=None,
                 search=None,
             )
-            assert len(result) == 1
-            assert result[0].title == "Conflict article"
+            assert [a.title for a in result] == ["Conflict article"]
 
     @pytest.mark.asyncio
-    async def test_topic_filter_fallback_when_no_match(self):
+    @pytest.mark.parametrize(
+        ("topic", "expected"),
+        [("Conflict", ["conflict"]), ("Climate", ["environment"]), (None, None)],
+    )
+    async def test_resolved_topic_reaches_the_database(self, topic, expected):
+        from app.routers.news import get_cluster_articles
+
+        with patch(
+            "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]
+        ) as mock_bounds:
+            await get_cluster_articles(
+                lat=40.0,
+                lng=-74.0,
+                topic=topic,
+                location_name=None,
+                offset=0,
+                limit=10,
+                sentiment=None,
+                search=None,
+            )
+        assert mock_bounds.call_args.kwargs["topics"] == expected
+
+    @pytest.mark.asyncio
+    async def test_topic_with_no_match_returns_nothing(self):
+        """No fallback to off-topic stories: the cell has none for this topic."""
         from app.routers.news import get_cluster_articles
 
         rows = [_make_db_row("General article", ["general"])]
 
         with patch(
-            "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=rows
+            "app.routers.news.get_articles_in_bounds",
+            new_callable=AsyncMock,
+            side_effect=_db_honouring_topics(rows),
         ):
             result = await get_cluster_articles(
                 lat=40.0,
@@ -220,8 +285,7 @@ class TestGetClusterArticles:
                 sentiment=None,
                 search=None,
             )
-            # Falls back to unfiltered when topic matches nothing
-            assert len(result) == 1
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_caps_results_at_default_limit(self):
@@ -311,6 +375,124 @@ class TestGetClusterArticles:
             assert call_kwargs["end_time"].hour == 12
 
 
+class TestGetClusterSummary:
+    @pytest.mark.asyncio
+    async def test_window_reaches_db_and_summary(self):
+        from app.routers.news import _CELL_SIZE, get_cluster_summary
+
+        rows = [_make_db_row("Floods in Valencia")]
+        with (
+            patch(
+                "app.routers.news.get_articles_in_bounds",
+                new_callable=AsyncMock,
+                return_value=rows,
+            ) as mock_bounds,
+            patch(
+                "app.routers.news.summarise_cluster", new_callable=AsyncMock, return_value="S."
+            ) as mock_summary,
+        ):
+            result = await get_cluster_summary(
+                lat=39.5,
+                lng=-0.5,
+                topic=None,
+                location_name=None,
+                start_time="2026-03-07T10:00:00Z",
+                end_time="2026-03-08T10:00:00Z",
+            )
+
+        start = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)
+        end = datetime(2026, 3, 8, 10, tzinfo=timezone.utc)
+        assert mock_bounds.call_args.kwargs["start_time"] == start
+        assert mock_bounds.call_args.kwargs["end_time"] == end
+        kwargs = mock_summary.call_args.kwargs
+        assert kwargs["cell_size"] == _CELL_SIZE
+        assert kwargs["start_time"] == start
+        assert kwargs["end_time"] == end
+        assert result.summary == "S."
+
+    @pytest.mark.asyncio
+    async def test_no_window_means_live(self):
+        from app.routers.news import get_cluster_summary
+
+        with (
+            patch(
+                "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]
+            ) as mock_bounds,
+            patch(
+                "app.routers.news.summarise_cluster", new_callable=AsyncMock, return_value=""
+            ) as mock_summary,
+        ):
+            await get_cluster_summary(
+                lat=39.5,
+                lng=-0.5,
+                topic=None,
+                location_name=None,
+                start_time=None,
+                end_time=None,
+            )
+
+        assert mock_bounds.call_args.kwargs["start_time"] is None
+        assert mock_bounds.call_args.kwargs["end_time"] is None
+        assert mock_summary.call_args.kwargs["start_time"] is None
+        assert mock_summary.call_args.kwargs["end_time"] is None
+
+    @pytest.mark.asyncio
+    async def test_fetches_only_what_the_summary_reads_on_topic(self):
+        from app.routers.news import get_cluster_summary
+
+        with (
+            patch(
+                "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]
+            ) as mock_bounds,
+            patch("app.routers.news.summarise_cluster", new_callable=AsyncMock, return_value=""),
+        ):
+            await get_cluster_summary(
+                lat=39.5,
+                lng=-0.5,
+                topic="Climate",
+                location_name=None,
+                start_time=None,
+                end_time=None,
+            )
+
+        assert mock_bounds.call_args.kwargs["topics"] == ["environment"]
+        assert mock_bounds.call_args.kwargs["limit"] == 30
+
+    @pytest.mark.asyncio
+    async def test_topic_with_no_match_gives_an_empty_uncached_summary(self):
+        """Never summarise off-topic stories, nor cache anything under the topic key."""
+        from app.routers.news import get_cluster_summary
+
+        rows = [_make_db_row("Cup final tonight", ["sport"])]
+        with (
+            patch(
+                "app.routers.news.get_articles_in_bounds",
+                new_callable=AsyncMock,
+                side_effect=_db_honouring_topics(rows),
+            ),
+            patch("app.services.ai_summary.get_cached", new_callable=AsyncMock, return_value=None),
+            patch("app.services.ai_summary.set_cached", new_callable=AsyncMock) as mock_set,
+            patch(
+                "app.services.ai_summary._call_claude",
+                new_callable=AsyncMock,
+                return_value="A summary of the cup final.",
+            ) as mock_claude,
+        ):
+            result = await get_cluster_summary(
+                lat=39.5,
+                lng=-0.5,
+                topic="conflict",
+                location_name=None,
+                start_time=None,
+                end_time=None,
+            )
+
+        assert result.summary == ""
+        assert result.article_count == 0
+        mock_claude.assert_not_awaited()
+        mock_set.assert_not_awaited()
+
+
 class TestGetDensity:
     @pytest.mark.asyncio
     async def test_returns_24_hourly_buckets(self):
@@ -386,3 +568,41 @@ async def test_cluster_endpoint_survives_malformed_image_url(monkeypatch):
     assert resp.status_code == 200
     images = {a["title"]: a["image_url"] for a in resp.json()}
     assert images == {"Good image": "https://img.example.com/a.jpg", "Bad image": None}
+
+
+@pytest.mark.asyncio
+async def test_cluster_endpoint_pages_past_50_within_a_window(monkeypatch):
+    """Load more keeps going past the 50th article of a day's window."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import app
+    from app.middleware import security
+
+    monkeypatch.setattr(security.settings, "api_key", "")
+    rows = [_make_db_row(f"Article {i}") for i in range(120)]
+
+    async def in_bounds(*_bounds, limit, **_window):
+        return rows[:limit]  # the database honours the limit
+
+    with patch(
+        "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, side_effect=in_bounds
+    ) as mock_bounds:
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                "/api/news/cluster",
+                params={
+                    "lat": 40.5,
+                    "lng": -74.5,
+                    "start_time": "2026-03-07T10:00:00Z",
+                    "end_time": "2026-03-08T10:00:00Z",
+                    "offset": 50,
+                    "limit": 20,
+                },
+            )
+
+    assert resp.status_code == 200
+    assert [a["title"] for a in resp.json()] == [f"Article {i}" for i in range(50, 70)]
+    kwargs = mock_bounds.call_args.kwargs
+    assert kwargs["start_time"] == datetime(2026, 3, 7, 10, tzinfo=timezone.utc)
+    assert kwargs["end_time"] == datetime(2026, 3, 8, 10, tzinfo=timezone.utc)
