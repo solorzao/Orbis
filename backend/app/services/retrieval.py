@@ -12,6 +12,8 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+import asyncpg
+
 from app.config import settings
 from app.services.database import get_pool
 from app.services.scraper import extract_article_text
@@ -111,6 +113,65 @@ _CO_MENTIONS_TIMEOUT_S = 2.0
 
 _GRAPH_CONNECTION_LIMIT = 50
 
+# Stored-edge reads expand a node to at most N of its most recent edges, so
+# their cost no longer grows with how many edges a hub (a hot entity, topic or
+# region) has. Recency is per ingestion batch, not per edge: populate_graph
+# writes a whole 15-minute batch in one transaction and created_at defaults to
+# now(), so every edge in a batch has the same created_at. For a hub with more
+# than N edges in its latest batch, the N read are an arbitrary N of that batch.
+# N is the whole connection budget: graph_traverse returns depth-1 rows first
+# and at most _GRAPH_CONNECTION_LIMIT rows in all, so a node's other edges
+# could never add a row, and with every stored edge weighted 1 they would only
+# change which tied row wins. A larger N buys nothing and multiplies per hop:
+# depth 3 reads up to N^3 edges.
+_RECENT_EDGES_PER_NODE = _GRAPH_CONNECTION_LIMIT
+_STORED_EDGES_TIMEOUT_S = 2.0
+
+
+def _recent_edges_sql(node: str, per_node: str, rel_filter: str = "") -> str:
+    """Subquery for the *per_node* newest stored edges at *node*, either direction.
+
+    Yields ``node_id`` (the edge's other end), ``rel_type``, ``weight``,
+    ``article_id`` and ``created_at``, never stored CO_MENTIONED rows.
+    *rel_filter* (`` AND e.rel_type = $n``) applies before the limit. Each
+    direction is a range scan of idx_kg_edges_{source,target}_recent
+    (migration 010) that stops after *per_node* rows; without those indexes
+    it still works, reading all of the node's edges to sort them.
+    """
+    return f"""
+        (SELECT e.target_node_id AS node_id, e.rel_type, e.weight, e.article_id, e.created_at
+         FROM kg_edges e
+         WHERE e.source_node_id = {node} AND e.rel_type <> 'CO_MENTIONED'{rel_filter}
+         ORDER BY e.created_at DESC
+         LIMIT {per_node})
+        UNION ALL
+        (SELECT e.source_node_id, e.rel_type, e.weight, e.article_id, e.created_at
+         FROM kg_edges e
+         WHERE e.target_node_id = {node} AND e.rel_type <> 'CO_MENTIONED'{rel_filter}
+         ORDER BY e.created_at DESC
+         LIMIT {per_node})
+        ORDER BY created_at DESC
+        LIMIT {per_node}
+    """
+
+
+async def _fetch_or_skip(
+    pool: Any, what: str, node_id: Any, sql: str, *args: Any, timeout: float
+) -> list[dict]:
+    """``pool.fetch`` as dicts, or ``[]`` with a warning if it outlasts *timeout*.
+
+    For the optional parts of a tool result: a slow one is left out instead
+    of failing the whole tool call.
+    """
+    try:
+        rows = await pool.fetch(sql, *args, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "%s query for node %s timed out after %.1fs; skipping it.", what, node_id, timeout
+        )
+        return []
+    return [dict(r) for r in rows]
+
 
 async def _co_mentions(pool: Any, node_id: Any) -> list[dict]:
     """Top-20 entities sharing a recent article with *node_id*, as CO_MENTIONED rows.
@@ -118,21 +179,15 @@ async def _co_mentions(pool: Any, node_id: Any) -> list[dict]:
     Returns ``[]`` if the query times out, so callers still return their
     stored-edge results instead of failing the whole tool call.
     """
-    try:
-        rows = await pool.fetch(
-            _CO_MENTIONS_SQL,
-            node_id,
-            _CO_MENTION_ARTICLE_WINDOW,
-            timeout=_CO_MENTIONS_TIMEOUT_S,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Co-mention query for node %s timed out after %.1fs; skipping co-mentions.",
-            node_id,
-            _CO_MENTIONS_TIMEOUT_S,
-        )
-        return []
-    return [dict(r) for r in rows]
+    return await _fetch_or_skip(
+        pool,
+        "Co-mention",
+        node_id,
+        _CO_MENTIONS_SQL,
+        node_id,
+        _CO_MENTION_ARTICLE_WINDOW,
+        timeout=_CO_MENTIONS_TIMEOUT_S,
+    )
 
 
 async def _traverse_stored_edges(
@@ -142,64 +197,81 @@ async def _traverse_stored_edges(
     depth: int,
     limit: int,
 ) -> list[dict]:
-    """Walk stored edges (never CO_MENTIONED) from *start_id* up to *depth* hops."""
-    rel_filter = "AND e.rel_type = $2" if rel_type else ""
+    """Walk stored edges (never CO_MENTIONED) from *start_id* up to *depth* hops.
+
+    Every hop, the first included, expands a node to its newest
+    _RECENT_EDGES_PER_NODE edges. Returns ``[]`` if the walk times out, so
+    graph_traverse still returns its co-mentions.
+    """
     params: list[Any] = [start_id]
+    rel_filter = ""
     if rel_type:
         params.append(rel_type)
+        rel_filter = " AND e.rel_type = $2"
 
     depth_param = f"${len(params) + 1}"
     params.append(depth)
+
+    per_node_param = f"${len(params) + 1}"
+    params.append(_RECENT_EDGES_PER_NODE)
 
     limit_param = f"${len(params) + 1}"
     params.append(limit)
 
     query = f"""
         WITH RECURSIVE traverse AS (
-            SELECT
-                n.id,
-                n.type,
-                n.name,
-                e.rel_type,
-                e.weight,
-                e.article_id,
-                1 AS depth
-            FROM kg_edges e
-            JOIN kg_nodes n
-                ON n.id = CASE
-                    WHEN e.source_node_id = $1 THEN e.target_node_id
-                    ELSE e.source_node_id
-                END
-            WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
-            AND e.rel_type <> 'CO_MENTIONED'
-            {rel_filter}
+            SELECT n.id, n.type, n.name, h.rel_type, h.weight, h.article_id, 1 AS depth
+            FROM ({_recent_edges_sql("$1", per_node_param, rel_filter)}) h
+            JOIN kg_nodes n ON n.id = h.node_id
           UNION
-            SELECT
-                n2.id,
-                n2.type,
-                n2.name,
-                e2.rel_type,
-                e2.weight,
-                e2.article_id,
-                t.depth + 1
+            SELECT n2.id, n2.type, n2.name, h2.rel_type, h2.weight, h2.article_id, t.depth + 1
             FROM traverse t
-            JOIN kg_edges e2
-                ON e2.source_node_id = t.id OR e2.target_node_id = t.id
-            JOIN kg_nodes n2
-                ON n2.id = CASE
-                    WHEN e2.source_node_id = t.id THEN e2.target_node_id
-                    ELSE e2.source_node_id
-                END
+            CROSS JOIN LATERAL ({_recent_edges_sql("t.id", per_node_param, rel_filter)}) h2
+            JOIN kg_nodes n2 ON n2.id = h2.node_id
             WHERE t.depth < {depth_param}
-            AND e2.rel_type <> 'CO_MENTIONED'
-            {"AND e2.rel_type = $2" if rel_type else ""}
         )
         SELECT DISTINCT id, type, name, rel_type, weight, article_id, depth
         FROM traverse
         ORDER BY depth, weight DESC
         LIMIT {limit_param}
     """
-    rows = await pool.fetch(query, *params)
+    timed_out = False
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            # A bitmap scan reads all of a node's edges before sorting them;
+            # only an ordered index scan stops after the newest few. In the
+            # recursive step the planner can't see which node it expands
+            # (t.id), assumes the average handful of edges and picks bitmap
+            # scans, which read every edge of each hub on the way: depth 3
+            # from a hot entity took 2 s instead of 45 ms on a production-
+            # sized graph. SET LOCAL ends with this transaction.
+            await conn.execute("SET LOCAL enable_bitmapscan = off")
+            try:
+                rows = await conn.fetch(query, *params, timeout=_STORED_EDGES_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                timed_out = True
+                raise
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Stored-edge traversal from node %s timed out after %.1fs; skipping it.",
+            start_id,
+            _STORED_EDGES_TIMEOUT_S,
+        )
+        return []
+    except (asyncpg.PostgresError, asyncpg.InterfaceError, ConnectionError, OSError):
+        # After a timeout, the ROLLBACK or the connection's release can fail
+        # too (e.g. the connection dropped); that replaces the TimeoutError
+        # but is still just the timeout. Any other failure propagates.
+        if not timed_out:
+            raise
+        logger.warning(
+            "Stored-edge traversal from node %s timed out after %.1fs and its "
+            "cleanup failed; skipping it.",
+            start_id,
+            _STORED_EDGES_TIMEOUT_S,
+            exc_info=True,
+        )
+        return []
     return [dict(r) for r in rows]
 
 
@@ -212,7 +284,8 @@ async def graph_traverse(
 
     Returns connected nodes up to *depth* hops (capped at 3), plus the
     source articles that establish those relationships. Co-mentions are
-    computed from shared articles and listed first, as depth-1 rows.
+    computed from shared articles and listed first, as depth-1 rows. Each
+    hop follows only a node's newest stored edges (_RECENT_EDGES_PER_NODE).
     *rel_type* is case-insensitive; an empty string means no filter.
     """
     rel_type = (rel_type or "").upper() or None
@@ -354,6 +427,29 @@ async def trending_topics(hours: int = 24) -> list[dict]:
         return []
 
 
+# entity_lookup reads both from $2 of the entity's most recent stored edges,
+# recent by ingestion batch (see _RECENT_EDGES_PER_NODE): the heaviest 20 of
+# them (all weigh 1 today, so 20 from the latest batches, ties arbitrary) and
+# the 10 most recently published articles among those edges' articles. For a
+# hub whose latest batch alone exceeds $2 edges, that is an arbitrary sample
+# of that batch, not the entity's 10 most recent articles overall.
+_ENTITY_EDGES_SQL = f"""
+    SELECT n.id, n.type, n.name, h.rel_type, h.weight, n.metadata::text
+    FROM ({_recent_edges_sql("$1", "$2")}) h
+    JOIN kg_nodes n ON n.id = h.node_id
+    ORDER BY h.weight DESC, h.created_at DESC
+    LIMIT 20
+"""
+_ENTITY_ARTICLES_SQL = f"""
+    SELECT DISTINCT a.id, a.title, a.source_url, a.source_name,
+           a.latitude, a.longitude, a.published_at, a.sentiment_score
+    FROM ({_recent_edges_sql("$1", "$2")}) h
+    JOIN articles a ON a.id = h.article_id
+    ORDER BY a.published_at DESC
+    LIMIT 10
+"""
+
+
 async def entity_lookup(name: str) -> dict:
     """Look up a knowledge-graph entity by fuzzy name match.
 
@@ -382,46 +478,26 @@ async def entity_lookup(name: str) -> dict:
 
         # Co-mentioned entities first (computed, weighted), then stored edges
         connections = await _co_mentions(pool, node_id)
-
-        conn_rows = await pool.fetch(
-            """
-            SELECT n.id, n.type, n.name, e.rel_type, e.weight, n.metadata::text
-            FROM kg_edges e
-            JOIN kg_nodes n
-                ON n.id = CASE
-                    WHEN e.source_node_id = $1 THEN e.target_node_id
-                    ELSE e.source_node_id
-                END
-            WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
-              AND e.rel_type <> 'CO_MENTIONED'
-            ORDER BY e.weight DESC
-            LIMIT 20
-            """,
+        connections += await _fetch_or_skip(
+            pool,
+            "Entity edge",
             node_id,
+            _ENTITY_EDGES_SQL,
+            node_id,
+            _RECENT_EDGES_PER_NODE,
+            timeout=_STORED_EDGES_TIMEOUT_S,
         )
-        connections += [dict(r) for r in conn_rows]
-
-        # Fetch articles linked to this entity via MENTIONED_IN edges
-        art_rows = await pool.fetch(
-            """
-            SELECT DISTINCT a.id, a.title, a.source_url, a.source_name,
-                   a.latitude, a.longitude, a.published_at, a.sentiment_score
-            FROM kg_edges e
-            JOIN articles a ON a.id = e.article_id
-            WHERE (e.source_node_id = $1 OR e.target_node_id = $1)
-              AND e.rel_type <> 'CO_MENTIONED'
-              AND e.article_id IS NOT NULL
-            ORDER BY a.published_at DESC
-            LIMIT 10
-            """,
+        articles = await _fetch_or_skip(
+            pool,
+            "Entity article",
             node_id,
+            _ENTITY_ARTICLES_SQL,
+            node_id,
+            _RECENT_EDGES_PER_NODE,
+            timeout=_STORED_EDGES_TIMEOUT_S,
         )
 
-        return {
-            "node": node,
-            "connections": connections,
-            "articles": [dict(r) for r in art_rows],
-        }
+        return {"node": node, "connections": connections, "articles": articles}
     except Exception:
         logger.error("Entity lookup failed.", exc_info=True)
         return {"node": None, "connections": [], "articles": []}
