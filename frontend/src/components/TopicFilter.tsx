@@ -38,10 +38,13 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
     return () => window.removeEventListener("resize", checkScroll);
   }, [checkScroll]);
 
+  // From lg the bar sits centred beside the brand lockup, which ends about 253px
+  // from the left. Leave 17.5rem a side (room for wider system-ui mottos and the
+  // About pill); a narrower bar scrolls. PR 9's top-bar grid replaces this.
   return (
     <div
       data-testid="topic-filter"
-      className="fixed top-12 left-1/2 z-40 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 sm:top-6"
+      className="fixed top-12 left-1/2 z-40 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 sm:top-6 lg:max-w-[calc(100vw-35rem)]"
     >
       {/* Left fade */}
       {canScrollLeft && (
@@ -79,7 +82,7 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
             <button
               key={topic}
               onClick={() => onTopicChange(topic)}
-              className="relative shrink-0 rounded-xl px-2.5 py-1 text-[11px] font-medium tracking-wide transition-colors sm:px-3.5 sm:py-1.5 sm:text-xs"
+              className="relative inline-flex h-7 shrink-0 items-center rounded-xl px-2.5 tracking-[var(--tracking-label)] transition-colors [font:var(--type-label)] sm:px-3"
               style={{
                 color: isActive ? "var(--text-primary)" : "var(--text-muted)",
               }}
