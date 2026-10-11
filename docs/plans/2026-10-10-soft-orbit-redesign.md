@@ -749,6 +749,7 @@ Depends on 7a being deployed and 7b merged.
 
 **Parse in `fetch_raw_gkg`** (0-based GKG 2.1 columns; add each to the comment block listing field indices):
 - `page_title` from field 26 (`V2EXTRASXML`), `<PAGE_TITLE>…</PAGE_TITLE>`:
+  - First strip HTML comments (`<!-- … -->`) and any tags, in a helper that `scrape_titles` uses too, so GDELT and scraped titles are cleaned alike before `_is_usable_title`. Production has 31 of 12,627 scraped titles like `…Lapses<!-- --> | ZeroHedge`. Test both paths with a title like that.
   - Apply `html.unescape`, collapse whitespace, and cap at 300 characters.
   - Return `''` when the tag is missing, the title is 5 characters or fewer, or `_is_usable_title` rejects it.
 - `themes` from field 7 (`V1THEMES`): distinct, non-empty, first-seen order, capped at 64.
@@ -821,6 +822,6 @@ Depends on 7a being deployed and 7b merged.
 
 ## Risks to watch
 
-- **Database CPU credits** (burstable B1ms) once PRs 7, 15 and 19 land. Set an Azure alert on "CPU credits remaining" before PR 15.
+- **Database CPU credits** (burstable B1ms) once PRs 7c, 15 and 19 land. Set an Azure alert on "CPU credits remaining" before PR 15.
 - **Hover-driven requests:** keep hover data in the main payload and add `s-maxage` to public GETs.
 - **Mobile:** every hover interaction needs a tap equivalent. The bottom-sheet layout is in the Soft Orbit spec.
