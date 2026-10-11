@@ -172,7 +172,7 @@ export default function AgentPanel({
             data-testid="agent-input"
             placeholder="Ask about global events..."
             disabled={isLoading || isDisabled}
-            className="flex-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-overlay)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none transition-colors focus:border-blue-500/40 disabled:opacity-50"
+            className="flex-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-overlay)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-colors focus:border-blue-500/40 disabled:opacity-50"
           />
           {isLoading ? (
             <button

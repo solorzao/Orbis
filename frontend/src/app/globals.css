@@ -73,9 +73,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-:focus-visible {
-  outline: var(--bw-focus) solid var(--border-focus);
-  outline-offset: 3px;
+/* In the base layer, so components (e.g. the scrolling topic pills) can move the ring. */
+@layer base {
+  :focus-visible {
+    outline: var(--bw-focus) solid var(--border-focus);
+    outline-offset: 3px;
+  }
 }
 
 /* Custom scrollbar for news panel */

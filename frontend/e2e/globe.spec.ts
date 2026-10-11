@@ -56,6 +56,35 @@ test.describe("Globe Page", () => {
     await expect(page.locator("text=/\\d+ stories/")).toBeVisible();
   });
 
+  test("a keyboard-focused topic pill shows its whole focus ring", async ({ page }) => {
+    const pill = page.getByRole("button", { name: "Politics" });
+    await expect(pill).toBeVisible();
+    for (let i = 0; i < 12 && !(await pill.evaluate((el) => el === document.activeElement)); i++) {
+      await page.keyboard.press("Tab");
+    }
+    await expect(pill).toBeFocused();
+
+    const ring = await pill.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      // The topics scroller clips its content, outline included.
+      const clip = el.closest(".topics-scroll")!.getBoundingClientRect();
+      const reach = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
+      return {
+        style: cs.outlineStyle,
+        offset: cs.outlineOffset,
+        inside:
+          r.top - reach >= clip.top - 0.5 &&
+          r.bottom + reach <= clip.bottom + 0.5 &&
+          r.left - reach >= clip.left - 0.5 &&
+          r.right + reach <= clip.right + 0.5,
+      };
+    });
+    expect(ring.style).toBe("solid");
+    expect(ring.offset).toBe("-2px");
+    expect(ring.inside).toBe(true);
+  });
+
   test("status pill shows the UTC clock and Live once loaded", async ({ page }) => {
     const status = page.getByTestId("status-pill");
     await expect(status).toBeVisible();
