@@ -403,6 +403,12 @@ kbd {
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
+.status .state-region {
+  display: inline-flex;
+}
+.status .state-region:empty {
+  margin-left: -10px; /* no state (a past day): drop the flex gap it would leave */
+}
 .status .lbl,
 .status .state {
   font: var(--type-label);

@@ -65,6 +65,24 @@ describe("StatusPill state", () => {
     expect(screen.queryByText("Loading…")).toBeNull();
   });
 
+  it("announces the state, not the clock, through a status region", () => {
+    vi.setSystemTime(new Date("2026-10-11T07:05:42Z"));
+    const { rerender } = render(<StatusPill isLive={false} isLoading isOffline={false} />);
+    const region = screen.getByRole("status");
+    expect(region).toHaveTextContent("Loading…");
+    expect(region).not.toHaveTextContent("07:05");
+
+    rerender(<StatusPill isLive isLoading={false} isOffline={false} />);
+    // Same region, new text: screen readers read the change.
+    expect(screen.getByRole("status")).toBe(region);
+    expect(region).toHaveTextContent("Live");
+  });
+
+  it("keeps the status region mounted while it has nothing to say", () => {
+    render(<StatusPill isLive={false} isLoading={false} isOffline={false} />);
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
   it("shows only the clock for a past day (not live, loaded, online)", () => {
     vi.setSystemTime(new Date("2026-10-11T07:05:42Z"));
     render(<StatusPill isLive={false} isLoading={false} isOffline={false} />);

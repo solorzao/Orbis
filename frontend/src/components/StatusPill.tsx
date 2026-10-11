@@ -35,13 +35,16 @@ export default function StatusPill({ isLive, isLoading, isOffline }: StatusPillP
         <span className="num">{time}</span>
         <span className="lbl">UTC</span>
       </span>
-      {isOffline ? (
-        <span className="state offline">Offline</span>
-      ) : isLoading ? (
-        <span className="state muted">Loading…</span>
-      ) : isLive ? (
-        <span className="state live">Live</span>
-      ) : null}
+      {/* Always mounted, so screen readers announce Loading… → Live → Offline. */}
+      <span role="status" className="state-region">
+        {isOffline ? (
+          <span className="state offline">Offline</span>
+        ) : isLoading ? (
+          <span className="state muted">Loading…</span>
+        ) : isLive ? (
+          <span className="state live">Live</span>
+        ) : null}
+      </span>
     </div>
   );
 }
