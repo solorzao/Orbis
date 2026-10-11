@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 
-from app.services import ai_summary
+from app.services import ai_summary, llm_budget
+
+
+@pytest.fixture(autouse=True)
+def budget(monkeypatch):
+    """Stub the spend counter (tested in test_llm_budget.py) so no test touches Redis."""
+    stub = SimpleNamespace(has_budget=AsyncMock(return_value=True), record=AsyncMock())
+    monkeypatch.setattr(llm_budget, "has_budget", stub.has_budget)
+    monkeypatch.setattr(llm_budget, "record", stub.record)
+    return stub
 
 
 def _response(blocks: list[tuple[str, str]], stop_reason: str = "end_turn"):
@@ -51,7 +63,18 @@ async def test_returns_text_after_thinking_block(client):
 async def test_refusal_returns_fallback(client):
     client.messages.create.return_value = _response([("thinking", "")], stop_reason="refusal")
 
-    assert await ai_summary._call_claude("Headlines: ...") == "Summary generation failed."
+    assert await ai_summary.summarise_selection(["Headline"]) == "Summary generation failed."
+
+
+@pytest.mark.asyncio
+async def test_usage_is_recorded_even_when_claude_refuses(client, budget):
+    """A refusal is billed, so it counts against the budget too."""
+    response = _response([("thinking", "")], stop_reason="refusal")
+    client.messages.create.return_value = response
+
+    await ai_summary.summarise_selection(["Headline"])
+
+    budget.record.assert_awaited_once_with(response.usage, response.model)
 
 
 def _article(title: str, region: str = ""):
@@ -112,10 +135,105 @@ async def test_cluster_summary_cache_key_is_versioned(monkeypatch):
 
 
 @pytest.fixture
+def set_cached(monkeypatch):
+    """An empty summary cache; returns the mock that records writes."""
+    monkeypatch.setattr(ai_summary, "get_cached", AsyncMock(return_value=None))
+    mock = AsyncMock()
+    monkeypatch.setattr(ai_summary, "set_cached", mock)
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_cluster_summary_is_cached(client, set_cached):
+    client.messages.create.return_value = _response([("text", "Floods in Valencia.")])
+
+    summary = await ai_summary.summarise_cluster([_article("x")], 38.5, -77.5)
+
+    assert summary == "Floods in Valencia."
+    set_cached.assert_awaited_once()
+    assert set_cached.call_args.args[1] == "Floods in Valencia."
+
+
+def _rate_limit_error() -> anthropic.RateLimitError:
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return anthropic.RateLimitError(
+        "rate limited", response=httpx.Response(429, request=request), body=None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "shown"),
+    [
+        (RuntimeError("boom"), "Summary generation failed."),
+        (_rate_limit_error(), "Summary temporarily unavailable due to rate limits."),
+    ],
+)
+async def test_failed_cluster_summary_is_shown_but_not_cached(client, set_cached, error, shown):
+    """A cached failure would be served for the whole TTL, after Claude recovers."""
+    client.messages.create.side_effect = error
+
+    assert await ai_summary.summarise_cluster([_article("x")], 38.5, -77.5) == shown
+    set_cached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        _response([("text", "Floods hit the")], stop_reason="max_tokens"),
+        _response([("thinking", "")]),
+    ],
+    ids=["truncated", "empty"],
+)
+async def test_truncated_or_empty_summary_is_not_cached(client, set_cached, response):
+    client.messages.create.return_value = response
+
+    summary = await ai_summary.summarise_cluster([_article("x")], 38.5, -77.5)
+
+    assert summary == "Summary generation failed."
+    set_cached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_over_budget_skips_claude_and_is_not_cached(client, set_cached, budget):
+    """The budget resets at midnight UTC; a cached 'paused' message would outlive that."""
+    budget.has_budget.return_value = False
+
+    summary = await ai_summary.summarise_cluster([_article("x")], 38.5, -77.5)
+
+    assert summary == "AI summaries are paused until 00:00 UTC (daily limit reached)."
+    client.messages.create.assert_not_called()
+    set_cached.assert_not_awaited()
+    budget.has_budget.assert_awaited_once_with(share=1.0)  # shared by all visitors: full cap
+
+
+@pytest.mark.asyncio
+async def test_selection_summary_may_only_use_its_share(client, budget):
+    budget.has_budget.return_value = False
+
+    summary = await ai_summary.summarise_selection(["Floods in Valencia"])
+
+    assert summary == "AI summaries are paused until 00:00 UTC (daily limit reached)."
+    client.messages.create.assert_not_called()
+    budget.has_budget.assert_awaited_once_with(share=llm_budget.UNCACHED_SHARE)
+
+
+@pytest.mark.asyncio
+async def test_missing_api_key_placeholder_is_not_cached(monkeypatch, set_cached):
+    monkeypatch.setattr(ai_summary.settings, "anthropic_api_key", "")
+
+    summary = await ai_summary.summarise_cluster([_article("x")], 38.5, -77.5)
+
+    assert summary == "AI summary unavailable (API key not configured)."
+    set_cached.assert_not_awaited()
+
+
+@pytest.fixture
 def capture(monkeypatch):
     sent = {}
 
-    async def fake_call(user_message, system=None):
+    async def fake_call(user_message, system=None, **_kwargs):
         sent["msg"] = user_message
         return "Summary."
 

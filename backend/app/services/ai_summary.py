@@ -9,10 +9,19 @@ import anthropic
 from app.config import settings
 from app.middleware.security import has_injection_pattern, sanitise_text
 from app.models.news import NewsArticle
+from app.services import llm_budget
 from app.services.cache import get_cached, set_cached
 from app.services.llm import response_text
 
 logger = logging.getLogger(__name__)
+
+
+class SummaryUnavailable(Exception):
+    """Claude produced no summary; the message is the text to show instead.
+
+    That text must never be cached: Claude may be back long before the TTL ends.
+    """
+
 
 _SYSTEM_PROMPT = (
     "You are a concise news analyst. You will receive a location and a list "
@@ -93,7 +102,10 @@ async def summarise_cluster(
     header = f"Location: {location}\n\n" if location else ""
     user_msg = header + "Headlines:\n" + "\n".join(lines)
 
-    summary = await _call_claude(user_msg, system=_SYSTEM_PROMPT)
+    try:
+        summary = await _call_claude(user_msg, system=_SYSTEM_PROMPT)
+    except SummaryUnavailable as exc:
+        return str(exc)
 
     # Model returns "NONE" when headlines are completely irrelevant
     if summary.strip().upper() == "NONE":
@@ -133,18 +145,35 @@ async def summarise_selection(
     lines = [f"- {h}" for h in clean]
     user_msg = f"{location}Headlines:\n" + "\n".join(lines)
 
-    client_msg = await _call_claude(user_msg, system=_SELECTION_SYSTEM_PROMPT)
+    try:
+        client_msg = await _call_claude(
+            user_msg, system=_SELECTION_SYSTEM_PROMPT, budget_share=llm_budget.UNCACHED_SHARE
+        )
+    except SummaryUnavailable as exc:
+        return str(exc)
 
     if client_msg.strip().upper() == "NONE":
         return ""
     return client_msg
 
 
-async def _call_claude(user_message: str, system: str | None = None) -> str:
-    """Call the Anthropic messages API.  Returns the text response."""
+async def _call_claude(
+    user_message: str, system: str | None = None, budget_share: float = 1.0
+) -> str:
+    """Call the Anthropic messages API.  Returns the text response.
+
+    ``budget_share`` is the share of the daily cap this call may draw on.
+    Raises ``SummaryUnavailable`` when there is no summary to return.
+    """
     if not settings.anthropic_api_key:
         logger.warning("ANTHROPIC_API_KEY not set — returning placeholder summary.")
-        return "AI summary unavailable (API key not configured)."
+        raise SummaryUnavailable("AI summary unavailable (API key not configured).")
+
+    if not await llm_budget.has_budget(share=budget_share):
+        logger.info(
+            "%.0f%% of the daily Claude budget is spent — returning fallback.", budget_share * 100
+        )
+        raise SummaryUnavailable("AI summaries are paused until 00:00 UTC (daily limit reached).")
 
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -155,10 +184,17 @@ async def _call_claude(user_message: str, system: str | None = None) -> str:
             system=system or _SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
-        return response_text(response).strip()
+        # Before response_text: refusals are billed too.
+        await llm_budget.record(response.usage, response.model)
+        text = response_text(response).strip()
     except anthropic.RateLimitError:
         logger.warning("Anthropic rate-limited — returning fallback.")
-        return "Summary temporarily unavailable due to rate limits."
+        raise SummaryUnavailable("Summary temporarily unavailable due to rate limits.")
     except Exception:
         logger.error("Anthropic API call failed.", exc_info=True)
-        return "Summary generation failed."
+        raise SummaryUnavailable("Summary generation failed.")
+
+    if response.stop_reason == "max_tokens" or not text:
+        logger.warning("No usable summary from Claude (stop_reason=%s).", response.stop_reason)
+        raise SummaryUnavailable("Summary generation failed.")
+    return text

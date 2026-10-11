@@ -97,7 +97,8 @@ Optional (sensible defaults):
 | `GDELT_CACHE_TTL`     | `900`     | GDELT cache duration (seconds)     |
 | `SUMMARY_CACHE_TTL`   | `21600`   | AI summary cache duration (seconds) |
 | `CLUSTER_RESOLUTION_DEG` | `2.0`  | Clustering grid size (degrees)     |
-| `HAIKU_MODEL_ID`       | `claude-haiku-4-5-20251001` | Claude model for summaries |
+| `HAIKU_MODEL_ID`       | `claude-haiku-5-5` | Claude model for summaries and the agent |
+| `LLM_DAILY_BUDGET_USD` | `1.0`     | Daily cap on Claude spend (USD), reset at 00:00 UTC; the agent and selection summaries stop at 70% of it |
 
 See [`backend/.env.example`](backend/.env.example) for the full list.
 

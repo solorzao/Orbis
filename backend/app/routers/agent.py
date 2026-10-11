@@ -15,10 +15,12 @@ from app.config import settings
 from app.middleware.security import has_injection_pattern, sanitise_text
 from app.services.agent import (
     _OFF_TOPIC_ANSWER,
+    _PAUSED_ANSWER,
     _build_context,
     _collect_urls,
     _collect_urls_from_history,
     _enrich_citations,
+    admit_ask,
     ask,
     execute_retrieval,
     plan_retrieval,
@@ -117,8 +119,12 @@ async def _save_history(
     """Append the latest exchange and persist to Redis (last 10 messages).
 
     Embeds citation URLs in the assistant message so follow-up questions
-    can discover them via ``_collect_urls_from_history``.
+    can discover them via ``_collect_urls_from_history``. The paused answer
+    is not saved: it says nothing about the conversation, and the question
+    can be asked again once the budget resets.
     """
+    if answer == _PAUSED_ANSWER:
+        return
     history.append({"role": "user", "content": question})
     # Append citation URLs so follow-up read_article calls can find them
     answer_to_store = answer
@@ -180,12 +186,16 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
     async def event_generator() -> AsyncGenerator[dict, None]:
         conv_id, history = await _load_history(body.conversation_id)
 
-        # Step 1: Plan
-        tool_calls = await plan_retrieval(question, history)
+        # Step 1: Plan, unless the budget is spent (an admitted ask runs to the end)
+        if await admit_ask():
+            tool_calls = await plan_retrieval(question, history)
+            fixed_answer = None if tool_calls else _OFF_TOPIC_ANSWER
+        else:
+            tool_calls, fixed_answer = [], _PAUSED_ANSWER
 
-        # Off-topic: skip retrieval + synthesis (saves 2 API calls)
-        if not tool_calls:
-            answer_text = _OFF_TOPIC_ANSWER
+        # Paused or off-topic: skip retrieval + synthesis
+        if fixed_answer:
+            answer_text = fixed_answer
             yield {
                 "event": "token",
                 "data": json.dumps({"token": answer_text}),

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import os
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def _env(key: str, default: str = "") -> str:
@@ -34,6 +38,21 @@ def _env_float(key: str, default: float = 0.0) -> float:
     return default
 
 
+def _env_usd(key: str, default: float) -> float:
+    """A dollar amount: finite and not negative, else ``default`` with a warning."""
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if math.isfinite(value) and value >= 0:
+        return value
+    logger.warning("%s=%r is not a finite, non-negative number; using %s.", key, raw, default)
+    return default
+
+
 @dataclass
 class Settings:
     """Central configuration for the Orbis backend."""
@@ -51,6 +70,10 @@ class Settings:
     embedding_batch_size: int = 100
     embedding_max_per_cycle: int = field(
         default_factory=lambda: _env_int("EMBEDDING_MAX_PER_CYCLE", 2000)
+    )
+    # Global cap on Claude spend per UTC day; AI endpoints fall back past it.
+    llm_daily_budget_usd: float = field(
+        default_factory=lambda: _env_usd("LLM_DAILY_BUDGET_USD", 1.0)
     )
 
     # --- ML classification ---

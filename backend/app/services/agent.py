@@ -15,7 +15,7 @@ from typing import Any
 import anthropic
 
 from app.config import settings
-from app.services import retrieval
+from app.services import llm_budget, retrieval
 from app.services.llm import response_text
 
 logger = logging.getLogger("orbis.agent")
@@ -414,6 +414,7 @@ async def plan_retrieval(
     """Use Haiku to decide which retrieval tools to call.
 
     Returns a list of ``{"name": str, "args": dict}`` dicts (1-3 tools).
+    Does not check the budget: callers must ``admit_ask()`` first.
     """
     tool_desc = "\n".join(
         f"- {t['name']}: {t['description']} (params: {list(t['parameters'].keys())})"
@@ -435,6 +436,8 @@ async def plan_retrieval(
             system=system,
             messages=messages,
         )
+        # Before response_text: refusals are billed too.
+        await llm_budget.record(response.usage, response.model)
         text = response_text(response).strip()
         logger.info("Planner raw response: %s", text[:500])
         # Strip markdown code fences the model sometimes wraps around JSON
@@ -461,6 +464,23 @@ _OFF_TOPIC_ANSWER = (
     "Try asking about something happening in the world — "
     "conflicts, politics, economics, natural disasters, and more."
 )
+
+_PAUSED_ANSWER = "AI answers are paused until 00:00 UTC (daily limit reached)."
+
+
+async def admit_ask() -> bool:
+    """Whether a new ask may start; checked once, before any Claude call.
+
+    An admitted ask always runs to synthesis, even if its planning call takes
+    spend past the cap, so planning is never paid for without an answer.
+    """
+    if await llm_budget.has_budget(share=llm_budget.UNCACHED_SHARE):
+        return True
+    logger.info(
+        "Uncached share (%.0f%%) of the daily Claude budget is spent -- answering without AI.",
+        llm_budget.UNCACHED_SHARE * 100,
+    )
+    return False
 
 
 _STOP_WORDS = {
@@ -639,6 +659,7 @@ async def synthesize_answer(
     """Use Haiku to produce a cited answer with globe actions.
 
     Returns ``{"answer": str, "citations": list, "globe_actions": list}``.
+    Does not check the budget: callers must ``admit_ask()`` first.
     """
     messages: list[dict] = []
     if conversation_history:
@@ -659,6 +680,8 @@ async def synthesize_answer(
             system=_SYNTHESIS_SYSTEM,
             messages=messages,
         )
+        # Before response_text: refusals are billed too.
+        await llm_budget.record(response.usage, response.model)
         text = response_text(response).strip()
         # Strip markdown code fences the model sometimes adds
         if text.startswith("```"):
@@ -759,6 +782,9 @@ async def ask(
 
     Returns ``{"answer": str, "citations": list, "globe_actions": list, "tools_used": list}``.
     """
+    if not await admit_ask():
+        return {"answer": _PAUSED_ANSWER, "citations": [], "globe_actions": [], "tools_used": []}
+
     # Step 1: Plan
     tool_calls = await plan_retrieval(question, conversation_history)
 

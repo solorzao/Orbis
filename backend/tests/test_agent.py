@@ -3,16 +3,32 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.routers.agent import AskRequest, ask_endpoint, ask_stream_endpoint
+from app.services import llm_budget
 from app.services.agent import (
+    _OFF_TOPIC_ANSWER,
     RETRIEVAL_TOOLS,
     _normalize_globe_actions,
+    ask,
     plan_retrieval,
     synthesize_answer,
 )
+
+_PAUSED = "AI answers are paused until 00:00 UTC (daily limit reached)."
+
+
+@pytest.fixture(autouse=True)
+def budget(monkeypatch):
+    """Stub the spend counter (tested in test_llm_budget.py) so no test touches Redis."""
+    stub = SimpleNamespace(has_budget=AsyncMock(return_value=True), record=AsyncMock())
+    monkeypatch.setattr(llm_budget, "has_budget", stub.has_budget)
+    monkeypatch.setattr(llm_budget, "record", stub.record)
+    return stub
 
 
 def _block(type_: str, **fields):
@@ -152,6 +168,125 @@ async def test_synthesize_answer_handles_refusal():
 
     assert result["answer"] == "I'm sorry, I couldn't generate an answer right now."
     assert result["citations"] == []
+
+
+@pytest.mark.asyncio
+async def test_ask_over_budget_skips_claude_and_retrieval(budget):
+    budget.has_budget.return_value = False
+    mock_client = AsyncMock()
+
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch("app.services.agent.execute_retrieval", new_callable=AsyncMock) as retrieve,
+    ):
+        result = await ask("latest earthquake news")
+
+    assert result == {"answer": _PAUSED, "citations": [], "globe_actions": [], "tools_used": []}
+    mock_client.messages.create.assert_not_called()
+    retrieve.assert_not_called()
+    budget.has_budget.assert_awaited_once_with(share=llm_budget.UNCACHED_SHARE)
+
+
+@pytest.mark.asyncio
+async def test_admitted_ask_synthesizes_even_if_planning_spent_the_budget(budget):
+    budget.has_budget.side_effect = [True, False]  # a second check would refuse
+    plan = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {"terms": "x"}}]}')
+    answer = _make_mock_response('{"answer": "Floods [1].", "citations": [], "globe_actions": []}')
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=[plan, answer])
+
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch("app.services.agent.execute_retrieval", new_callable=AsyncMock, return_value=[]),
+    ):
+        result = await ask("flood news")
+
+    assert result["answer"] == "Floods [1]."
+    assert mock_client.messages.create.await_count == 2
+
+
+@pytest.fixture
+def history_store():
+    """Stand-in Redis for conversation history; ``set`` records saves."""
+    redis = AsyncMock()
+    with patch("app.routers.agent.get_redis", new_callable=AsyncMock, return_value=redis):
+        yield redis
+
+
+async def _stream(question: str) -> list[dict]:
+    response = await ask_stream_endpoint(AskRequest(question=question))
+    return [event async for event in response.body_iterator]
+
+
+@pytest.mark.asyncio
+async def test_stream_over_budget_skips_claude_retrieval_and_history(budget, history_store):
+    budget.has_budget.return_value = False
+    mock_client = AsyncMock()
+
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch("app.routers.agent.execute_retrieval", new_callable=AsyncMock) as retrieve,
+    ):
+        events = await _stream("latest earthquake news")
+
+    assert [e["event"] for e in events] == ["token", "done"]  # no planning or retrieving
+    assert json.loads(events[0]["data"]) == {"token": _PAUSED}
+    done = json.loads(events[1]["data"])
+    assert set(done) == {"conversation_id", "citations", "globe_actions", "tools_used"}
+    assert done["citations"] == done["globe_actions"] == done["tools_used"] == []
+    mock_client.messages.create.assert_not_called()
+    retrieve.assert_not_called()
+    budget.has_budget.assert_awaited_once_with(share=llm_budget.UNCACHED_SHARE)
+    history_store.set.assert_not_awaited()  # a pause is not part of the conversation
+
+
+@pytest.mark.asyncio
+async def test_ask_endpoint_over_budget_does_not_save_history(budget, history_store):
+    budget.has_budget.return_value = False
+
+    result = await ask_endpoint(AskRequest(question="latest earthquake news"))
+
+    assert result.answer == _PAUSED
+    history_store.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stream_off_topic_answer_is_still_saved(history_store):
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_make_mock_response('{"tools": [], "off_topic": true}')
+    )
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        events = await _stream("best pizza recipe?")
+
+    assert json.loads(events[0]["data"]) == {"token": _OFF_TOPIC_ANSWER}
+    history_store.set.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_plan_retrieval_records_usage(budget):
+    response = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {}}]}')
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=response)
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        await plan_retrieval("flood news")
+
+    budget.record.assert_awaited_once_with(response.usage, response.model)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_answer_records_usage_of_a_refusal(budget):
+    """A refusal is billed, so it counts against the budget too."""
+    response = _make_mock_response("", thinking_first=True, stop_reason="refusal")
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=response)
+
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        await synthesize_answer("anything", "context")
+
+    budget.record.assert_awaited_once_with(response.usage, response.model)
 
 
 def test_normalize_globe_actions_adds_fly_to_type():
