@@ -1,0 +1,291 @@
+/*
+ * Soft Orbit primitives, ported from docs/redesign/ui/soft-orbit/mockup.html
+ * (lines 195-198, 222-247, 251-269, 272, 284-285). Changes from the mockup:
+ * - .glass has no position or z-index; the layout grids place panels.
+ * - prefers-reduced-motion stops transitions and animations (mockup line 473).
+ */
+
+/* utilities */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.num {
+  font: var(--type-data);
+  font-variant-numeric: tabular-nums;
+}
+.muted {
+  color: var(--text-muted);
+}
+kbd {
+  font: var(--type-data-sm);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  padding: 0 5px;
+}
+
+/* glass */
+.glass {
+  background: var(--glass-panel-background);
+  border: 1px solid var(--glass-panel-border);
+  border-radius: var(--glass-panel-radius);
+  box-shadow: var(--glass-panel-shadow);
+  backdrop-filter: blur(var(--blur-glass)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(1.3);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  transition:
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out),
+    height var(--dur-slow) var(--ease-out);
+}
+.glass.edge::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    140deg,
+    var(--border-edge-a),
+    transparent 32%,
+    transparent 68%,
+    var(--border-edge-b)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+}
+.low-power .glass,
+.low-power .pillbar,
+.low-power .arc-pill {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: #1a182c;
+}
+.glass[hidden] {
+  display: flex;
+  opacity: 0;
+  transform: translateY(8px) scale(0.985);
+  pointer-events: none;
+  visibility: hidden;
+}
+.ghead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px 10px;
+}
+.ghead h2 {
+  margin: 0;
+  font: var(--type-heading);
+  color: var(--text-primary);
+}
+.ghead .sub {
+  font: var(--type-label);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ghead .end {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.gbody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(214, 218, 255, 0.18) transparent;
+}
+.scrim {
+  background: var(--surface-scrim);
+  border-radius: var(--radius-md);
+}
+
+/* pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--pill-height-sm);
+  padding: 0 12px;
+  border-radius: var(--pill-radius);
+  border: 1px solid var(--pill-border);
+  font: var(--type-label);
+  letter-spacing: var(--tracking-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.pill:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.pill[aria-pressed="true"],
+.pill.on {
+  background: var(--pill-active-fill);
+  color: var(--pill-active-text);
+  border-color: transparent;
+}
+.pill .num {
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+}
+.pill.on .num,
+.pill[aria-pressed="true"] .num {
+  color: inherit;
+  opacity: 0.8;
+}
+.pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.pill.lg {
+  height: var(--pill-height);
+  padding: 0 16px;
+}
+.aurora-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  color: var(--accent-on);
+  font: var(--type-label);
+  font-weight: 500;
+  background: linear-gradient(
+    120deg,
+    var(--aurora-start),
+    var(--aurora-mid) 55%,
+    var(--aurora-end)
+  );
+  box-shadow: var(--aurora-glow);
+}
+.aurora-btn:hover {
+  filter: brightness(1.08);
+}
+.iconbtn {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.iconbtn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.ai {
+  display: inline-block;
+  font: var(--type-data-sm);
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  margin-right: 6px;
+  color: var(--accent-on);
+  background: linear-gradient(120deg, var(--accent-primary), var(--accent-lavender));
+  vertical-align: 1px;
+}
+.sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--type-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.sent::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sc);
+}
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+}
+.seg button {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  font: var(--type-label);
+  color: var(--text-muted);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.seg button:hover {
+  color: var(--text-primary);
+}
+.seg button[aria-pressed="true"],
+.seg button[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+/* top bar (floating, no bar) */
+.pillbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-glass);
+  border: 1px solid var(--border-subtle);
+  backdrop-filter: blur(var(--blur-glass)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(1.3);
+  box-shadow: var(--elev-float);
+}
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--type-label);
+  color: var(--signal-live);
+}
+.live::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation: none !important;
+  }
+}

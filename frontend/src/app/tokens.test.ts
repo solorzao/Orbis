@@ -6,6 +6,7 @@ import path from "path";
 const MOCKUP = path.resolve(__dirname, "../../../docs/redesign/ui/soft-orbit/mockup.html");
 const TOKENS = path.resolve(__dirname, "./tokens.css");
 const GLOBALS = path.resolve(__dirname, "./globals.css");
+const PRIMITIVES = path.resolve(__dirname, "./soft-orbit.css");
 
 function declarations(css: string): string[] {
   const start = css.indexOf("/* @tokens:start");
@@ -42,5 +43,35 @@ describe("Soft Orbit tokens", () => {
       .split("\n")
       .map((l) => l.trim());
     expect(globals).toContain(line);
+  });
+});
+
+describe("Soft Orbit primitives", () => {
+  const css = () => readFileSync(PRIMITIVES, "utf8");
+
+  // Layout code builds on these; a refactor must not drop one silently.
+  it.each([".glass", ".pill", ".seg", ".aurora-btn", ".pillbar", ".low-power .glass"])(
+    "soft-orbit.css defines %s",
+    (selector) => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // The selector starts a rule or a selector list entry: "<sel> {" or "<sel>,".
+      expect(css()).toMatch(new RegExp(`(^|[\\s,}])${escaped}\\s*[,{]`, "m"));
+    },
+  );
+
+  // In the components layer, so a Tailwind utility on the same element still wins.
+  it("is imported by globals.css after the tokens, in the components layer", () => {
+    const globals = readFileSync(GLOBALS, "utf8");
+    const tokens = globals.indexOf('@import "./tokens.css";');
+    const primitives = globals.indexOf('@import "./soft-orbit.css" layer(components);');
+    expect(tokens).toBeGreaterThan(-1);
+    expect(primitives).toBeGreaterThan(tokens);
+  });
+
+  it("drops the mockup's fixed placement from .glass (layout grids place panels)", () => {
+    const glass = css().match(/^\.glass\s*\{([^}]*)\}/m)?.[1] ?? "";
+    expect(glass).not.toBe("");
+    expect(glass).not.toMatch(/position\s*:/);
+    expect(glass).not.toMatch(/z-index\s*:/);
   });
 });

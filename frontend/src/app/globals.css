@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "./tokens.css";
+/* Glass, pill and segmented primitives; layered so utilities can override them. */
+@import "./soft-orbit.css" layer(components);
 
 /* Self-hosted fonts (next/font on <html>) behind the token stacks. */
 :root {
