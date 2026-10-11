@@ -9,7 +9,6 @@ import {
   HOME_VIEW,
   driftLng,
   durationMs,
-  hasWebGpu,
   heatmapPoints,
   hexToRgba,
   pointTooltipHtml,
@@ -17,6 +16,7 @@ import {
   ringRepeatMs,
   type GlobeGeometry,
 } from "@/lib/globeView";
+import { webGpuReady } from "@/lib/webgpu";
 import type { GlobeLayer } from "@/components/LayerSwitcher";
 
 // Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
@@ -299,16 +299,35 @@ export default function Globe({
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe || !isLoaded) return;
-    if (layer === "intensity") {
-      globe.pointsData([]);
-      globe.ringsData([]);
-      const heat = heatmapPoints(points, { gpu: hasWebGpu() });
-      globe.heatmapsData(heat.length ? [heat] : []);
-    } else {
+    if (layer === "dots") {
       globe.heatmapsData([]);
       globe.pointsData(points);
       globe.ringsData(points);
+      return;
     }
+    globe.pointsData([]);
+    globe.ringsData([]);
+    let cancelled = false;
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    // Probe WebGPU first: it decides how many places the heatmap can afford.
+    webGpuReady().then((gpu) => {
+      if (cancelled || !globeRef.current) return;
+      const heat = heatmapPoints(points, { gpu });
+      globeRef.current.heatmapsData(heat.length ? [heat] : []);
+      // three-globe builds the heatmap's sphere on its next update (a 1 ms
+      // debounce). Its material is transparent but writes depth, which hides
+      // the land dots under it everywhere, even where the heat is clear.
+      settle = setTimeout(() => {
+        globeRef.current?.scene().traverse((obj: object) => {
+          const mesh = obj as { __globeObjType?: string; material?: { depthWrite: boolean } };
+          if (mesh.__globeObjType === "heatmap" && mesh.material) mesh.material.depthWrite = false;
+        });
+      }, 50);
+    });
+    return () => {
+      cancelled = true;
+      clearTimeout(settle);
+    };
   }, [points, layer, isLoaded]);
 
   return (

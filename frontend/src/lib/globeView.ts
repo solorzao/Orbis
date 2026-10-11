@@ -57,11 +57,12 @@ export const HEATMAP = {
 
 /**
  * The places the Intensity heatmap is computed from. three-globe evaluates
- * every place at each of the sphere's ~246,000 vertices: with WebGPU that
- * takes about 0.35 s whatever the count, so every place goes in. Without it
- * (Firefox, older Safari) the work runs on the main thread at about 10 ms
- * per place on a fast desktop, so only the busiest HEATMAP.maxPointsWithoutGpu
- * go in (a pause of about 0.7 s); the quiet places dropped barely tint it.
+ * every place at each of the sphere's ~246,000 vertices: with WebGPU (see
+ * webGpuReady) that takes about 0.35 s whatever the count, so every place
+ * goes in. Without it (Firefox, older Safari, no usable GPU) the work runs on
+ * the main thread at about 10 ms per place on a fast desktop, so only the
+ * busiest HEATMAP.maxPointsWithoutGpu go in (a pause of about 0.7 s); the
+ * quiet places dropped barely tint it.
  */
 export function heatmapPoints<P extends { count: number }>(
   points: readonly P[],
@@ -69,11 +70,6 @@ export function heatmapPoints<P extends { count: number }>(
 ): P[] {
   if (gpu) return [...points];
   return [...points].sort((a, b) => b.count - a.count).slice(0, HEATMAP.maxPointsWithoutGpu);
-}
-
-/** Whether three-globe will compute heatmaps with WebGPU (it checks navigator.gpu). */
-export function hasWebGpu(): boolean {
-  return typeof navigator !== "undefined" && Boolean((navigator as { gpu?: unknown }).gpu);
 }
 
 /** "#rrggbb" to "rgba(r,g,b,a)", for canvas colours built from tokens. */
