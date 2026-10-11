@@ -37,6 +37,11 @@ export function durationMs(value: string, fallbackMs: number): number {
   return v.endsWith("ms") ? n : v.endsWith("s") ? n * 1000 : n;
 }
 
+/** Pulse interval for the rings under the dots; 0 emits one ring and stops (mockup). */
+export function ringRepeatMs(motion: { reduced: boolean; lowPower: boolean }): number {
+  return motion.reduced || motion.lowPower ? 0 : 2500;
+}
+
 /** "#rrggbb" to "rgba(r,g,b,a)", for canvas colours built from tokens. */
 export function hexToRgba(hex: string, alpha: number): string {
   const n = parseInt(hex.trim().replace("#", ""), 16);

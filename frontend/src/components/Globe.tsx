@@ -10,6 +10,7 @@ import {
   hexToRgba,
   pointTooltipHtml,
   projectedRadius,
+  ringRepeatMs,
   type GlobeGeometry,
 } from "@/lib/globeView";
 
@@ -137,7 +138,7 @@ export default function Globe({
       })
       .ringMaxRadius(2)
       .ringPropagationSpeed(1.2)
-      .ringRepeatPeriod(2500)
+      .ringRepeatPeriod(ringRepeatMs(motionRef.current))
       .pointLabel((d: object) => pointTooltipHtml(d as GlobePoint))
       .onPointClick((point: object) => {
         onPointClickRef.current(point as GlobePoint);
@@ -267,6 +268,13 @@ export default function Globe({
       }
     };
   }, [initGlobe]);
+
+  // Ring pulses stop with reduced motion or in low-power mode (both can change after load)
+  useEffect(() => {
+    if (globeRef.current && isLoaded) {
+      globeRef.current.ringRepeatPeriod(ringRepeatMs({ reduced, lowPower }));
+    }
+  }, [reduced, lowPower, isLoaded]);
 
   // Update points and rings when data changes
   useEffect(() => {

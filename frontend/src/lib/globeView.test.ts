@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { driftLng, durationMs, hexToRgba, pointTooltipHtml, projectedRadius } from "./globeView";
+import {
+  driftLng,
+  durationMs,
+  hexToRgba,
+  pointTooltipHtml,
+  projectedRadius,
+  ringRepeatMs,
+} from "./globeView";
 import type { GlobePoint } from "@/types/news";
 
 describe("projectedRadius", () => {
@@ -87,5 +94,19 @@ describe("pointTooltipHtml", () => {
 
   it("leaves out the place when there is none", () => {
     expect(pointTooltipHtml(point())).not.toContain("•");
+  });
+});
+
+describe("ringRepeatMs", () => {
+  it("pulses every 2.5 s with full motion", () => {
+    expect(ringRepeatMs({ reduced: false, lowPower: false })).toBe(2500);
+  });
+
+  it.each([
+    { reduced: true, lowPower: false },
+    { reduced: false, lowPower: true },
+    { reduced: true, lowPower: true },
+  ])("emits one ring and stops when reduced=$reduced, lowPower=$lowPower", (motion) => {
+    expect(ringRepeatMs(motion)).toBe(0);
   });
 });
