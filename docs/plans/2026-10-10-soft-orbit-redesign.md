@@ -40,7 +40,8 @@
 | 7c | 1 | Store GKG fields and take titles from GDELT | 7a deployed, 7b |
 | 8 | 2 UI foundation | Soft Orbit tokens and fonts in the frontend | none |
 | 9 | 2 | Soft Orbit shell: sky, glass panels, layout, pills | 8 |
-| 10 | 2 | Timeline capsule and layer switcher | 9 |
+| 9b | 2 | Side panel (co-pilot and stories tabs), narrow-screen sheet | 9 |
+| 10 | 2 | Timeline capsule and layer switcher | 9b |
 | 11 | 2 | Co-pilot console restyle with action pills | 1, 9 |
 | 12 | 3 Quick wins | City hover card (image, headline, topic mix, tone, sparkline) | 3, 9 |
 | 13 | 3 | Co-coverage arcs layer and link inspector | 7c, 9 |
@@ -52,7 +53,7 @@
 | 19 | 5 Events | GDELT Events ingestion: daily country-pair rollups | 4b |
 | 20 | 5 | Relation arcs layer (cooperation and conflict) | 13, 19 |
 
-Phase 1 is detailed below and ready to execute. Phases 2 to 5 are scoped here and get their bite-sized plans when Phase 1 is done, so they build on what actually shipped.
+Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md`. Phases 3 to 5 are scoped here and get their bite-sized plans when the phase before them is done, so they build on what actually shipped.
 
 ---
 

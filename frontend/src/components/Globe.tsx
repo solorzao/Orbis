@@ -3,7 +3,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { GlobeInstance } from "globe.gl";
 import { GlobePoint } from "@/types/news";
-import { useTheme } from "@/lib/theme";
 
 interface GlobeControls {
   flyTo: (lat: number, lng: number, altitude: number) => void;
@@ -20,7 +19,6 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  const { theme: resolvedTheme } = useTheme();
 
   const onPointClickRef = useRef(onPointClick);
   onPointClickRef.current = onPointClick;
@@ -201,31 +199,6 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
     }
   }, [points, isLoaded]);
 
-  // Swap globe texture and atmosphere color when theme changes
-  useEffect(() => {
-    if (!globeRef.current || !isLoaded) return;
-    const isDark = resolvedTheme === "dark";
-    globeRef.current
-      .globeImageUrl(
-        isDark
-          ? "//unpkg.com/three-globe/example/img/earth-night.jpg"
-          : "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg",
-      )
-      .atmosphereColor(isDark ? "#00d4ff" : "#87CEEB");
-
-    // Re-apply holographic material for dark mode
-    const mat = globeRef.current.globeMaterial();
-    if (isDark) {
-      mat.color?.set(0x0a1a2e);
-      mat.emissive?.set(0x063040);
-      mat.emissiveIntensity = 0.6;
-    } else {
-      mat.color?.set(0xffffff);
-      mat.emissive?.set(0x000000);
-      mat.emissiveIntensity = 0;
-    }
-  }, [resolvedTheme, isLoaded]);
-
   return (
     <div className="fixed inset-0 z-0" style={{ top: "-2rem", bottom: 0 }}>
       {/* Radial gradient vignette overlay */}
@@ -235,8 +208,6 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
           background: "radial-gradient(ellipse at center, transparent 40%, var(--vignette) 100%)",
         }}
       />
-      {/* Holographic scanline overlay */}
-      <div className="scanlines pointer-events-none absolute inset-0 z-[11]" />
       <div ref={containerRef} className="h-full w-full" />
     </div>
   );

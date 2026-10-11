@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
@@ -13,7 +14,6 @@ import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
 import TopicFilter from "@/components/TopicFilter";
-import ThemeToggle from "@/components/ThemeToggle";
 import AgentPanel from "@/components/AgentPanel";
 
 // Globe requires `window` — load without SSR
@@ -352,7 +352,7 @@ export default function Home() {
   );
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-[var(--bg-page)]">
+    <main className="relative h-screen w-screen overflow-hidden">
       {/* Globe */}
       <Globe
         points={points}
@@ -363,7 +363,8 @@ export default function Home() {
         }}
       />
 
-      {/* Branding */}
+      {/* Branding: frozen lockup (tokens.md). Colours, motto font and line
+          height are pinned so the Soft Orbit body text styles don't reach it. */}
       <div className="fixed top-3 left-3 z-50 flex items-center gap-2 sm:top-5 sm:left-6 sm:gap-3">
         <img
           src="/Orbis_logo_50_resize.png"
@@ -373,7 +374,7 @@ export default function Home() {
         />
         <div>
           <h1
-            className="text-sm font-bold tracking-[0.2em] text-[var(--text-primary)] uppercase sm:text-lg"
+            className="text-sm font-bold tracking-[0.2em] text-[var(--brand-wordmark-color)] uppercase sm:text-lg"
             style={{
               fontFamily: "var(--font-brand), sans-serif",
               textShadow: "0 0 30px rgba(0, 212, 255, 0.4)",
@@ -381,7 +382,10 @@ export default function Home() {
           >
             Orbis
           </h1>
-          <p className="hidden text-[9px] font-medium tracking-[0.3em] text-[var(--text-motto)] uppercase sm:block">
+          <p
+            className="hidden text-[9px] leading-[13.5px] font-medium tracking-[0.3em] text-[var(--text-motto)] uppercase sm:block"
+            style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
+          >
             Every Story, Everywhere
           </p>
         </div>
@@ -390,8 +394,14 @@ export default function Home() {
       {/* Topic Filters */}
       <TopicFilter activeTopic={activeTopic} onTopicChange={setActiveTopic} />
 
-      {/* Theme Toggle */}
-      <ThemeToggle />
+      {/* About: a temporary pill until PR 9 moves it into the top bar */}
+      <Link
+        href="/about"
+        title="About Orbis"
+        className="fixed top-3 right-3 z-50 flex h-[var(--pill-height-sm)] items-center rounded-full border border-line-2 bg-glass px-3 tracking-[var(--tracking-label)] text-ink-2 backdrop-blur-[var(--blur-glass)] transition-colors duration-[var(--dur-fast)] [font:var(--type-label)] hover:border-line-3 hover:text-ink sm:top-5 sm:right-6 sm:h-[var(--pill-height)]"
+      >
+        About
+      </Link>
 
       {/* Panel Queue */}
       <PanelQueue

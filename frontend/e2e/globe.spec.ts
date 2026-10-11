@@ -64,12 +64,20 @@ test.describe("Globe Page", () => {
     await expect(page.getByTestId("time-slider")).toBeVisible();
   });
 
-  test("theme toggle is present", async ({ page }) => {
-    await expect(page.locator('button[aria-label*="Theme"]')).toBeVisible();
+  test("has no theme toggle (Soft Orbit is dark only)", async ({ page }) => {
+    await expect(page.locator('button[aria-label*="Theme"]')).toHaveCount(0);
+    await expect(page.locator("html")).not.toHaveAttribute("data-theme");
   });
 
   test("About link is visible", async ({ page }) => {
     await expect(page.locator("a", { hasText: "About" })).toBeVisible();
+  });
+
+  test("About link navigates to about page", async ({ page }) => {
+    const aboutLink = page.locator("a", { hasText: "About" });
+    await expect(aboutLink).toBeVisible();
+    await aboutLink.click();
+    await expect(page).toHaveURL("/about");
   });
 });
 

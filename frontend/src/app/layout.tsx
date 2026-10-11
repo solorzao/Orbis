@@ -1,26 +1,28 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { ThemeProvider } from "@/lib/theme";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 // Self-hosted (latin subset, variable weight) so builds never depend on
 // reaching Google Fonts. Files and OFL licences are in ./fonts.
+// The variables go on <html>: globals.css points the Soft Orbit token stacks
+// (--font-brand/heading/body/mono, and the --type-* shorthands built from
+// them) at these, and those are resolved on :root.
 const orbitron = localFont({
   src: "./fonts/orbitron-latin-wght-normal.woff2",
-  variable: "--font-brand",
+  variable: "--font-orbitron",
   weight: "400 900",
 });
 
 const spaceGrotesk = localFont({
   src: "./fonts/space-grotesk-latin-wght-normal.woff2",
-  variable: "--font-heading",
+  variable: "--font-space-grotesk",
   weight: "300 700",
 });
 
 const jetbrainsMono = localFont({
   src: "./fonts/jetbrains-mono-latin-wght-normal.woff2",
-  variable: "--font-mono",
+  variable: "--font-jetbrains-mono",
   weight: "100 800",
 });
 
@@ -62,13 +64,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme="dark" suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${orbitron.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable}`}
+    >
       <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('orbis-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t)}else{var d=window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',d?'dark':'light')}}catch(e){}})()`,
-          }}
-        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
@@ -94,11 +94,8 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body
-        className={`${orbitron.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} antialiased`}
-        style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
-      >
-        <ThemeProvider>{children}</ThemeProvider>
+      <body>
+        {children}
         <Analytics />
       </body>
     </html>
