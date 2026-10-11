@@ -252,6 +252,24 @@ class TestPurgeOrphanedNodes:
         assert "DELETE FROM kg_nodes" in call_sql
 
     @pytest.mark.asyncio
+    async def test_finds_orphans_with_not_exists(self):
+        """NOT IN over every edge can't hash in 4 MB of work_mem and ran for minutes."""
+        from app.services.knowledge_graph import purge_orphaned_nodes
+
+        pool = AsyncMock()
+        pool.execute = AsyncMock(return_value="DELETE 0")
+
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
+            await purge_orphaned_nodes()
+
+        sql = " ".join(pool.execute.call_args[0][0].split())
+        assert "NOT IN" not in sql
+        assert "NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.source_node_id = n.id)" in sql
+        assert "NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.target_node_id = n.id)" in sql
+
+    @pytest.mark.asyncio
     async def test_returns_zero_when_no_orphans(self):
         from app.services.knowledge_graph import purge_orphaned_nodes
 
