@@ -2,19 +2,22 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
-import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { LIVE_WINDOW_HOURS, MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
+import { useSidePanel } from "@/hooks/useSidePanel";
+import { useKeepFocus } from "@/hooks/useKeepFocus";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
-import PanelQueue from "@/components/PanelQueue";
+import NewsPanel from "@/components/NewsPanel";
+import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
 import AgentPanel from "@/components/AgentPanel";
+import SidePanel from "@/components/SidePanel";
 import Sky from "@/components/Sky";
 import OrbitRings from "@/components/OrbitRings";
 import type { GlobeControls } from "@/components/Globe";
@@ -34,7 +37,6 @@ export default function Home() {
   const [dayOffset, setDayOffset] = useState(0);
   const [hasOlderData, setHasOlderData] = useState(true);
 
-  const MAX_PANELS = 5;
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
 
@@ -42,26 +44,18 @@ export default function Home() {
   // so derived date math stays pure during render.
   const [nowTs, setNowTs] = useState(() => Date.now());
 
-  // Agent panel
-  const [agentOpen, setAgentOpen] = useState(false);
+  // Side panel (Co-pilot | Stories): open by default on wide screens
+  const side = useSidePanel();
+  const { showStories } = side;
+  // Minimize and close remove the focused control: keep focus in the Stories tab.
+  const storiesRef = useRef<HTMLDivElement>(null);
+  const keepStoriesFocus = useKeepFocus(storiesRef);
+
   const globeControlsRef = useRef<GlobeControls | null>(null);
 
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
-
-  // Track time slider height so the chat icon can sit above it on mobile
-  const [sliderHeight, setSliderHeight] = useState(0);
-  const sliderRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = sliderRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setSliderHeight(entry.contentRect.height);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const handleDayChange = useCallback((newOffset: number) => {
     const clamped = Math.max(0, Math.min(6, newOffset));
@@ -299,6 +293,7 @@ export default function Home() {
         (p) =>
           p.point.lat === point.lat && p.point.lng === point.lng && samePanelQuery(p.query, query),
       );
+      showStories();
       if (existing) {
         setExpandedPanelId(existing.panelId);
         return;
@@ -331,19 +326,28 @@ export default function Home() {
       setExpandedPanelId(panelId);
       fetchPanelData(panelId, point, query);
     },
-    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData],
+    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData, showStories],
   );
 
   const handleZoomChange = useCallback(() => {}, []);
 
-  const handleClosePanel = useCallback((panelId: string) => {
-    setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
-    setExpandedPanelId((prev) => (prev === panelId ? null : prev));
-  }, []);
+  const handleClosePanel = useCallback(
+    (panelId: string) => {
+      // Focus goes to the open place's pill, or to the tab when it was this one.
+      keepStoriesFocus(panelId === expandedPanelId ? null : expandedPanelId);
+      setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
+      setExpandedPanelId((prev) => (prev === panelId ? null : prev));
+    },
+    [expandedPanelId, keepStoriesFocus],
+  );
 
-  const handleMinimizePanel = useCallback(() => {
-    setExpandedPanelId(null);
-  }, []);
+  const handleMinimizePanel = useCallback(
+    (panelId: string) => {
+      keepStoriesFocus(panelId); // the place stays in Recent places
+      setExpandedPanelId(null);
+    },
+    [keepStoriesFocus],
+  );
 
   const handleExpandPanel = useCallback((panelId: string) => {
     setExpandedPanelId(panelId);
@@ -354,6 +358,43 @@ export default function Home() {
       updatePanel(panelId, { filters, filterSummary });
     },
     [updatePanel],
+  );
+
+  // Stories tab: the open places, then the active place's stories
+  const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
+  const storiesTab = (
+    <>
+      <RecentPlaces
+        places={panelQueue}
+        activeId={expandedPanelId}
+        onSelect={handleExpandPanel}
+        onClose={handleClosePanel}
+      />
+      {expandedPanel ? (
+        <NewsPanel
+          key={expandedPanel.panelId}
+          point={{ ...expandedPanel.point, articles: expandedPanel.articles }}
+          onClose={() => handleClosePanel(expandedPanel.panelId)}
+          onMinimize={() => handleMinimizePanel(expandedPanel.panelId)}
+          onLoadMore={(filters) => handleLoadMore(expandedPanel.panelId, filters)}
+          loadingMore={expandedPanel.loadingMore}
+          clusterSummary={expandedPanel.clusterSummary}
+          summaryLoading={expandedPanel.summaryLoading}
+          articlesLoading={expandedPanel.articlesLoading}
+          savedFilters={expandedPanel.filters}
+          savedFilterSummary={expandedPanel.filterSummary}
+          onFiltersChange={(filters, filterSummary) =>
+            handleFiltersChange(expandedPanel.panelId, filters, filterSummary)
+          }
+        />
+      ) : (
+        <p className="side-empty">
+          {panelQueue.length > 0
+            ? "Pick a place above, or click a dot on the globe."
+            : "Click a dot on the globe to see its stories here."}
+        </p>
+      )}
+    </>
   );
 
   return (
@@ -385,53 +426,15 @@ export default function Home() {
         isOffline={apiError}
       />
 
-      {/* Panel Queue */}
-      <PanelQueue
-        panelQueue={panelQueue}
-        expandedPanelId={expandedPanelId}
-        onExpandPanel={handleExpandPanel}
-        onClosePanel={handleClosePanel}
-        onMinimizePanel={handleMinimizePanel}
-        onLoadMore={handleLoadMore}
-        onFiltersChange={handleFiltersChange}
-      />
-
-      {/* Agent Toggle */}
-      {!agentOpen && (
-        <button
-          onClick={() => setAgentOpen(true)}
-          className="fixed left-3 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border-subtle)] text-blue-400 transition-all hover:border-blue-500/30 hover:bg-blue-500/10 sm:!bottom-8 sm:left-6 sm:h-12 sm:w-12"
-          style={{
-            background: "var(--surface-overlay)",
-            backdropFilter: "blur(12px)",
-            bottom: `${sliderHeight + 24}px`,
-          }}
-          aria-label="Toggle agent panel"
-          data-testid="agent-toggle"
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M3 15a2 2 0 0 0 2 2h12l4 4V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />
-          </svg>
-          {agentMessages.length > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[9px] font-bold text-white">
-              {agentMessages.length}
-            </span>
-          )}
-        </button>
-      )}
-
-      {/* Agent Panel */}
-      <AnimatePresence>
-        {agentOpen && (
+      {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
+      <SidePanel
+        tab={side.tab}
+        onTabChange={side.setTab}
+        open={side.open}
+        onOpenChange={side.setOpen}
+        storiesCount={panelQueue.length}
+        storiesRef={storiesRef}
+        copilot={
           <AgentPanel
             messages={agentMessages}
             isLoading={agentLoading}
@@ -441,10 +444,10 @@ export default function Home() {
             onStop={agentStop}
             onClear={agentClear}
             onCitationClick={handleCitationClick}
-            onClose={() => setAgentOpen(false)}
           />
-        )}
-      </AnimatePresence>
+        }
+        stories={storiesTab}
+      />
 
       {/* Time Slider + Status */}
       <TimeSlider
@@ -461,7 +464,6 @@ export default function Home() {
         isLive={!apiError && !loading && dayOffset === 0}
         isLoading={loading}
         isOffline={apiError}
-        sliderRef={sliderRef}
       />
     </main>
   );

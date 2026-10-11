@@ -7,6 +7,9 @@ import {
   filterPointsByTopic,
   getTopicColor,
   getSentimentColor,
+  sentimentKey,
+  sentimentBucket,
+  formatScore,
 } from "./clustering";
 import { mockArticles } from "./mockData";
 import type { ApiGlobePoint } from "./api";
@@ -106,6 +109,56 @@ describe("getSentimentColor", () => {
     [1, "p3"],
   ])("%s is --sentiment-%s", (score, bin) => {
     expect(getSentimentColor(score)).toBe(token(`sentiment-${bin}`));
+  });
+});
+
+describe("sentimentKey", () => {
+  it.each([
+    [-1, "n3"],
+    [-0.6, "n3"],
+    [-0.59, "n2"],
+    [-0.3, "n2"],
+    [-0.29, "n1"],
+    [-0.1, "n1"],
+    [-0.09, "neutral"],
+    [0, "neutral"],
+    [0.09, "neutral"],
+    [0.1, "p1"],
+    [0.29, "p1"],
+    [0.3, "p2"],
+    [0.59, "p2"],
+    [0.6, "p3"],
+    [1, "p3"],
+  ])("%s is %s", (score, key) => {
+    expect(sentimentKey(score)).toBe(key);
+  });
+});
+
+describe("sentimentBucket", () => {
+  // The panel's three filters split the tokens.md bins: n1-n3, neutral, p1-p3.
+  it.each([
+    [-0.8, "negative"],
+    [-0.1, "negative"],
+    [-0.09, "neutral"],
+    [0, "neutral"],
+    [0.09, "neutral"],
+    [0.1, "positive"],
+    [0.9, "positive"],
+  ])("%s is %s", (score, bucket) => {
+    expect(sentimentBucket(score)).toBe(bucket);
+  });
+});
+
+describe("formatScore", () => {
+  it.each([
+    [0.6, "+0.60"],
+    [-0.42, "−0.42"],
+    [0, "±0.00"],
+    [0.004, "±0.00"],
+    [-0.004, "±0.00"],
+    [1, "+1.00"],
+  ])("%s prints as %s", (score, text) => {
+    expect(formatScore(score)).toBe(text);
   });
 });
 

@@ -4,7 +4,8 @@
  * All tests run without a backend — Playwright intercepts API calls
  * and returns deterministic mock data.
  */
-import { type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { GLOBE_OVERSCAN_PX, HOME_VIEW } from "../src/lib/globeView";
 
 // ── Mock data ───────────────────────────────────────────────────────
 
@@ -217,5 +218,96 @@ export async function mockAgentRoute(page: Page, options?: Parameters<typeof bui
       },
       body,
     }),
+  );
+}
+
+// ── Clicking a dot ──────────────────────────────────────────────────
+
+/** three.js's default PerspectiveCamera fov, which globe.gl keeps (the app never sets it). */
+const FOV_DEG = 50;
+const CANVAS_TOP = -GLOBE_OVERSCAN_PX;
+
+/**
+ * Where a place sits on screen while the globe rests at HOME_VIEW (with
+ * reduced motion it holds there): the camera is `altitude` globe radii above
+ * the home point, looking at the centre.
+ */
+export function homeViewScreenPoint(
+  lat: number,
+  lng: number,
+  viewport: { width: number; height: number },
+  surfaceAltitude = 0.005, // half way up a dot (pointAltitude 0.01)
+) {
+  const rad = Math.PI / 180;
+  const r = 1 + surfaceAltitude;
+  const dLng = (lng - HOME_VIEW.lng) * rad; // turn the globe so the camera sits at lng 0
+  const p = [
+    r * Math.cos(lat * rad) * Math.sin(dLng),
+    r * Math.sin(lat * rad),
+    r * Math.cos(lat * rad) * Math.cos(dLng),
+  ];
+  const s = Math.sin(HOME_VIEW.lat * rad);
+  const c = Math.cos(HOME_VIEW.lat * rad);
+  const dist = 1 + HOME_VIEW.altitude;
+  const d = [p[0], p[1] - dist * s, p[2] - dist * c]; // from the camera
+  // Camera axes: right (1, 0, 0), up (0, c, -s), back (0, s, c).
+  const right = d[0];
+  const up = d[1] * c - d[2] * s;
+  const depth = -(d[1] * s + d[2] * c);
+  const height = viewport.height - CANVAS_TOP;
+  const focal = height / 2 / Math.tan((FOV_DEG / 2) * rad);
+  return {
+    x: viewport.width / 2 + (right / depth) * focal,
+    y: CANVAS_TOP + height / 2 - (up / depth) * focal,
+  };
+}
+
+/** Load the app with the API mocked and the globe holding still at its home view. */
+export async function gotoStillGlobe(page: Page, setup?: (page: Page) => Promise<void>) {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAllApiRoutes(page);
+  await setup?.(page); // routes added later win over the defaults
+  await page.goto("/");
+  await expect(page.getByTestId("globe").locator("canvas")).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId("status-pill").getByText("Live")).toBeVisible({ timeout: 10000 });
+}
+
+/** A dot from MOCK_GLOBE_POINTS. */
+export type MockPlace = { lat: number; lng: number; location_name: string };
+export const [PARIS, NEW_YORK, LONDON] = MOCK_GLOBE_POINTS;
+
+/**
+ * Click a dot, as a visitor would, and wait for its stories to open. globe.gl
+ * finds the hovered dot on its next frame, so the pointer rests first; a dot
+ * is a few pixels wide, so nearby pixels are tried too.
+ */
+export async function clickPlace(page: Page, place: MockPlace) {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("clickPlace needs a fixed viewport");
+  const { x, y } = homeViewScreenPoint(place.lat, place.lng, viewport);
+  const heading = page
+    .getByTestId("news-panel")
+    .getByRole("heading", { name: place.location_name, exact: true });
+  for (const [dx, dy] of [
+    [0, 0],
+    [0, -1],
+    [0, 1],
+    [-1, 0],
+    [1, 0],
+    [0, -2],
+    [0, 2],
+  ]) {
+    await page.mouse.move(x + dx, y + dy);
+    await page.waitForTimeout(150);
+    await page.mouse.down();
+    await page.mouse.up();
+    const opened = await heading
+      .waitFor({ state: "visible", timeout: 1000 })
+      .then(() => true)
+      .catch(() => false);
+    if (opened) return;
+  }
+  throw new Error(
+    `No dot for ${place.location_name} (tried around ${Math.round(x)}, ${Math.round(y)})`,
   );
 }

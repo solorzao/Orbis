@@ -461,11 +461,363 @@ kbd {
   }
 }
 
+/*
+ * Side panel: Co-pilot | Stories (mockup .side, line 330). Its top clears the
+ * top bar (whose bottom sits at about 62px) by more than 16px; its bottom
+ * leaves room for the timeline row PR 10 adds. Collapsed, it fades out and a
+ * pill takes its corner.
+ */
+.side {
+  position: fixed;
+  top: 96px;
+  right: 24px;
+  bottom: 124px;
+  width: 380px;
+  z-index: var(--z-panel);
+}
+.side[data-open="false"] {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.985);
+  visibility: hidden;
+  pointer-events: none;
+  /* fade out as it fades in: hidden only once the fade is over */
+  transition:
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out),
+    height var(--dur-slow) var(--ease-out),
+    visibility 0s linear var(--dur-slow);
+}
+.side-body {
+  padding-top: 8px;
+}
+.side-body:focus-visible {
+  outline-offset: -2px; /* inside the scroller, which would clip it */
+  border-radius: var(--radius-lg);
+}
+.side-body-copilot {
+  display: flex;
+  flex-direction: column;
+}
+.side-empty {
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.side-collapse svg {
+  transform: rotate(180deg); /* up, towards the pill's corner */
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.side-open {
+  position: fixed;
+  top: 96px;
+  right: 24px;
+  z-index: var(--z-panel);
+}
+.side-open.pill.lg {
+  height: 38px;
+}
+.side button:not(:disabled),
+.side-open {
+  cursor: pointer;
+}
+
+/* Stories tab: recent places, then a place's stories (mockup .insp, .art, lines 357-372) */
+.places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 8px 14px;
+}
+.place.pill {
+  gap: 0;
+  padding: 0 4px 0 0;
+}
+.place-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  min-width: 0;
+  max-width: 180px;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-pill);
+  color: inherit;
+}
+.place-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.place-close {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+.place-close:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.insp {
+  padding: 0 8px;
+  display: grid;
+  gap: 14px;
+}
+.insp-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.insp-head .end {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.insp-title {
+  margin: 0;
+  font: var(--type-title);
+  letter-spacing: var(--tracking-title);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.insp-count {
+  margin: 2px 0 0;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.insp-ai {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.insp-ai p {
+  margin: 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.insp-ai p.lbl,
+.lbl {
+  font: var(--type-label);
+  color: var(--text-muted);
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.insp-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin-top: 10px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.insp-search:focus-within {
+  border-color: var(--border-edge-a);
+}
+.insp-search:has(input:focus-visible) {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: 2px;
+}
+.insp-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+}
+.insp-search input:focus-visible {
+  outline: none; /* the pill shows the ring */
+}
+.insp-search input::placeholder {
+  color: var(--text-muted);
+}
+.insp-list {
+  padding: 4px;
+}
+.art {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+}
+.art:hover {
+  background: var(--surface-hover);
+}
+.art .h {
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+  overflow-wrap: anywhere; /* a long unbroken headline must not widen the panel */
+}
+.art a.h:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.art .m {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.art-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.art-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.insp-status {
+  margin: 0;
+  padding: 16px 12px;
+  text-align: center;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.insp-more {
+  display: flex;
+  justify-content: center;
+}
+.insp-more .pill:disabled {
+  opacity: 0.6;
+}
+.skel {
+  display: block;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-raised);
+  animation: skel 1.6s var(--ease-in-out) infinite;
+}
+.skel.short {
+  width: 60%;
+}
+@keyframes skel {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/*
+ * The old TimeSlider, until PR 10's bottom row replaces it and these rules.
+ * Centred at the bottom; from 1180px it centres in the space left of the side
+ * panel, so the two never overlap, and shrinks to fit there. Below 1180px it
+ * sits above the bottom sheet.
+ */
+.time-slider {
+  --ts-left: 24px;
+  --ts-right: 24px;
+  position: fixed;
+  z-index: 30;
+  left: var(--ts-left);
+  right: var(--ts-right);
+  bottom: 24px;
+  width: max-content;
+  max-width: calc(100vw - var(--ts-left) - var(--ts-right));
+  margin-inline: auto;
+}
+.time-slider > * {
+  max-width: 100%;
+}
+@media (min-width: 1180px) {
+  .time-slider {
+    --ts-right: calc(24px + 380px + 24px); /* the side panel's right, width and a gap */
+  }
+}
+@media (max-width: 639px) {
+  .time-slider {
+    --ts-left: 12px;
+    --ts-right: 12px;
+  }
+}
+
+/*
+ * Below 1180px the side panel is a bottom sheet (mockup lines 440-454): full
+ * width, 46vh open (less on short screens, so the time slider above it stays
+ * clear of the top bar), folded to its 56px tab bar when collapsed, and before
+ * hydration (no data-open yet). --sheet-h is set on the sheet and its later
+ * siblings: the time slider now, PR 10's timeline row after it, which must
+ * also come after the side panel in the DOM.
+ */
+@media (width < 1180px) {
+  .side,
+  .side ~ * {
+    /* 260px: the top bar (62px), the slider (152px) and the gaps around them */
+    --sheet-h: min(46vh, 100vh - 260px);
+  }
+  .side:not([data-open="true"]),
+  .side:not([data-open="true"]) ~ * {
+    --sheet-h: 56px;
+  }
+  .side,
+  .side[data-open="false"] {
+    top: auto;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    height: var(--sheet-h);
+    border-radius: var(--radius-xl);
+    opacity: 1;
+    transform: none;
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .side .ghead {
+    padding: 10px 12px; /* 34px tabs + 2px border: a 56px tab bar */
+  }
+  .side:not([data-open="true"]) .gbody {
+    display: none;
+  }
+  .side-collapse svg {
+    transform: none; /* down: the sheet folds to its tab bar */
+  }
+  .side:not([data-open="true"]) .side-collapse svg {
+    transform: rotate(180deg);
+  }
+  .side-open {
+    display: none; /* the tab bar stays, so no pill */
+  }
+  .time-slider {
+    bottom: calc(var(--sheet-h, 56px) + 24px);
+    transition: bottom var(--dur-slow) var(--ease-out);
+  }
+}
+@media (max-width: 639px) {
+  .side,
+  .side ~ * {
+    /* the top bar has two rows here (100px) and the slider is taller */
+    --sheet-h: min(46vh, 100vh - 310px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     transition-duration: 0ms !important;
     animation: none !important;
+  }
+  .side[data-open="false"] {
+    transition-delay: 0ms; /* hide at once, without waiting for a fade */
   }
 }

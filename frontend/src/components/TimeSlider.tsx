@@ -181,7 +181,8 @@ export default function TimeSlider({
     <div
       ref={sliderRef}
       data-testid="time-slider"
-      className="fixed bottom-3 left-1/2 z-30 -translate-x-1/2 sm:bottom-6 flex flex-col items-center gap-1.5"
+      // Placed by .time-slider in soft-orbit.css (beside the side panel, above the sheet)
+      className="time-slider flex flex-col items-center gap-1.5"
     >
       {/* Day selector chips */}
       <div

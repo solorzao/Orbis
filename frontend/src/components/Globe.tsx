@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import type { GlobeInstance } from "globe.gl";
 import { GlobePoint } from "@/types/news";
 import {
+  GLOBE_OVERSCAN_PX,
   HOME_VIEW,
   driftLng,
   durationMs,
@@ -229,7 +230,7 @@ export default function Globe({
       getGeometry: () => {
         const g = globeRef.current;
         if (!g) return null;
-        // The container is the canvas: full width, 2rem taller than the viewport.
+        // The container is the canvas: full width, GLOBE_OVERSCAN_PX taller than the viewport.
         const r = container.getBoundingClientRect();
         return {
           cx: r.left + r.width / 2,
@@ -243,7 +244,7 @@ export default function Globe({
     const handleResize = () => {
       if (globeRef.current) {
         globeRef.current.width(window.innerWidth);
-        globeRef.current.height(window.innerHeight + 32);
+        globeRef.current.height(window.innerHeight + GLOBE_OVERSCAN_PX);
       }
     };
     window.addEventListener("resize", handleResize);
@@ -290,7 +291,7 @@ export default function Globe({
       ref={containerRef}
       data-testid="globe"
       className="fixed inset-x-0 bottom-0"
-      style={{ top: "-2rem", zIndex: "var(--z-globe)" }}
+      style={{ top: -GLOBE_OVERSCAN_PX, zIndex: "var(--z-globe)" }}
     />
   );
 }
