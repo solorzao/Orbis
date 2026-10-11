@@ -30,7 +30,7 @@ test.describe("Globe Page", () => {
   });
 
   test("globe canvas renders", async ({ page }) => {
-    const canvas = page.locator("canvas");
+    const canvas = page.getByTestId("globe").locator("canvas");
     await expect(canvas).toBeVisible({ timeout: 10000 });
   });
 

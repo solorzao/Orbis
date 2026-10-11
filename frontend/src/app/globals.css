@@ -18,8 +18,6 @@
   --surface-overlay: var(--surface-glass);
   --border-accent: var(--border-edge-a);
   --text-motto: #4c8db4; /* AA ~4.6:1 over the sky haze; the mockup's #4482a8 is ~4.0:1 there */
-  --vignette: rgba(13, 12, 23, 0.7);
-  --shadow: rgba(3, 2, 12, 0.55);
   --inset-highlight: rgba(255, 255, 255, 0.07);
 }
 

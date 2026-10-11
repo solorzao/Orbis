@@ -9,12 +9,14 @@ import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
+import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
 import TopBar from "@/components/TopBar";
 import AgentPanel from "@/components/AgentPanel";
 import Sky from "@/components/Sky";
+import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
 const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
@@ -41,9 +43,10 @@ export default function Home() {
 
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false);
-  const globeControlsRef = useRef<{
-    flyTo: (lat: number, lng: number, altitude: number) => void;
-  } | null>(null);
+  const globeControlsRef = useRef<GlobeControls | null>(null);
+
+  // Reduced motion and low-power mode (also sets .low-power on <html>)
+  const { reduced, lowPower } = useMotionPrefs();
 
   // Track time slider height so the chat icon can sit above it on mobile
   const [sliderHeight, setSliderHeight] = useState(0);
@@ -364,6 +367,8 @@ export default function Home() {
         onReady={(controls) => {
           globeControlsRef.current = controls;
         }}
+        reduced={reduced}
+        lowPower={lowPower}
       />
 
       {/* Top bar: brand, topics, status and About in one grid */}

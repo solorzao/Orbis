@@ -3,3 +3,5 @@ node_modules/
 out/
 # Copied verbatim from the Soft Orbit mockup (prettier would rewrite 0.10 as 0.1); tokens.test.ts compares it.
 src/app/tokens.css
+# Natural Earth data vendored verbatim from three-globe (minified; see public/geo/README.md).
+public/geo/ne_110m_admin_0_countries.geojson

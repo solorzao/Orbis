@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import path from "path";
 import {
   apiPointsToGlobePoints,
   clusterArticles,
@@ -53,29 +55,57 @@ describe("filterPointsByTopic", () => {
   });
 });
 
+// The globe paints on a canvas, so it can't read CSS variables per frame;
+// these tests keep its colours equal to the Soft Orbit tokens.
+const TOKENS_CSS = readFileSync(path.resolve(__dirname, "../app/tokens.css"), "utf8");
+
+function token(name: string): string {
+  const match = TOKENS_CSS.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6});`));
+  if (!match) throw new Error(`--${name} not found in tokens.css`);
+  return match[1];
+}
+
+const TOPICS: Topic[] = [
+  "All",
+  "Politics",
+  "Conflict",
+  "Technology",
+  "Climate",
+  "Economy",
+  "Health",
+];
+
 describe("getTopicColor", () => {
-  it("returns correct color for known topics", () => {
-    expect(getTopicColor("Politics" as Topic)).toBeTruthy();
-    expect(getTopicColor("Conflict" as Topic)).toBeTruthy();
-    expect(getTopicColor("Technology" as Topic)).toBeTruthy();
-    expect(getTopicColor("Climate" as Topic)).toBeTruthy();
+  it.each(TOPICS)("%s matches its --topic-* token", (topic) => {
+    expect(getTopicColor(topic)).toBe(token(`topic-${topic.toLowerCase()}`));
   });
 
-  it("returns a color for the All topic", () => {
-    const color = getTopicColor("All" as Topic);
-    expect(color).toBeTruthy();
+  it("colours API points with the token of their topic", () => {
+    const [point] = apiPointsToGlobePoints([apiPoint({ topic: "economy" })]);
+    expect(point.color).toBe(token("topic-economy"));
   });
 });
 
 describe("getSentimentColor", () => {
-  it("returns green-ish for positive sentiment", () => {
-    const color = getSentimentColor(0.8);
-    expect(color).toBeTruthy();
-  });
-
-  it("returns red-ish for negative sentiment", () => {
-    const color = getSentimentColor(-0.8);
-    expect(color).toBeTruthy();
+  // tokens.md binning: n3 <= -0.6 < n2 <= -0.3 < n1 <= -0.1 < neutral < 0.1 <= p1 < 0.3 <= p2 < 0.6 <= p3
+  it.each([
+    [-1, "n3"],
+    [-0.6, "n3"],
+    [-0.59, "n2"],
+    [-0.3, "n2"],
+    [-0.29, "n1"],
+    [-0.1, "n1"],
+    [-0.09, "neutral"],
+    [0, "neutral"],
+    [0.09, "neutral"],
+    [0.1, "p1"],
+    [0.29, "p1"],
+    [0.3, "p2"],
+    [0.59, "p2"],
+    [0.6, "p3"],
+    [1, "p3"],
+  ])("%s is --sentiment-%s", (score, bin) => {
+    expect(getSentimentColor(score)).toBe(token(`sentiment-${bin}`));
   });
 });
 
