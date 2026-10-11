@@ -37,6 +37,22 @@ test.describe("Agent Panel", () => {
     await expect(page.getByTestId("agent-panel")).toBeVisible();
   });
 
+  test("the panel fades out on collapse before it hides", async ({ page }) => {
+    const side = page.getByTestId("side-panel");
+    await page.getByTestId("side-collapse").click();
+    // Still visible while it fades (visibility waits for the fade)...
+    expect(await side.evaluate((el) => getComputedStyle(el).visibility)).toBe("visible");
+    // ...then hidden.
+    await expect(side).not.toBeVisible();
+  });
+
+  test("with reduced motion the panel hides at once", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const side = page.getByTestId("side-panel");
+    await page.getByTestId("side-collapse").click();
+    expect(await side.evaluate((el) => getComputedStyle(el).visibility)).toBe("hidden");
+  });
+
   test("agent panel shows empty state prompt", async ({ page }) => {
     await openCopilot(page);
     await expect(page.locator("text=Ask about the news")).toBeVisible();

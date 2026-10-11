@@ -146,6 +146,23 @@ test.describe("Stories tab", () => {
     await expect(page.getByRole("tabpanel", { name: "Stories" })).toBeFocused();
   });
 
+  test("a long unbroken headline wraps instead of scrolling the panel sideways", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page, async (p) => {
+      await p.route("**/api/news/cluster*", (route) =>
+        route.fulfill({
+          json: [{ ...MOCK_ARTICLES[0], title: "Breaking".repeat(40) }, ...MOCK_ARTICLES.slice(1)],
+        }),
+      );
+    });
+    await clickPlace(page, PARIS);
+    const stories = page.getByRole("tabpanel", { name: "Stories" });
+    await expect(stories.getByRole("article")).toHaveCount(3);
+    const overflow = await stories.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+
   test("Load more appends the next page", async ({ page }) => {
     const TOTAL = 25;
     await gotoStillGlobe(page, async (p) => {

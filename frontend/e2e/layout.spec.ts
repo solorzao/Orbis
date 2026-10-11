@@ -9,10 +9,19 @@ const SIZES = [
   { width: 768, height: 1024 }, // one-row bar, at its tightest
   { width: 700, height: 800 }, // two-row bar, motto still shown
   { width: 390, height: 844 },
+  { width: 844, height: 390 }, // a phone on its side
 ];
 
 /** Below this width the side panel is a bottom sheet. */
 const SHEET_BELOW = 1180;
+
+/**
+ * The open sheet's height (soft-orbit.css): 46vh, less on short screens so
+ * the time slider above it stays clear of the top bar (two rows below 640px).
+ */
+function openSheetHeight({ width, height }: { width: number; height: number }) {
+  return Math.min(height * 0.46, height - (width < 640 ? 310 : 260));
+}
 
 // Chrome regions that must never touch. Later PRs add their regions here.
 // The time slider is the old one until PR 10's bottom row replaces it.
@@ -114,11 +123,11 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     await expect(page.getByTestId("side-open")).not.toBeVisible();
     await expect(page.getByTestId("side-collapse")).toHaveAccessibleName("Expand panel");
 
-    // A tab opens it to 46vh, and the time slider sits 12px above it.
+    // A tab opens it (46vh where there is room), and the time slider sits 12px above it.
     await page.getByTestId("side-tab-stories").click();
     await expect(side).toHaveAttribute("data-open", "true");
     box = (await side.boundingBox())!;
-    expect(Math.abs(box.height - size.height * 0.46)).toBeLessThan(1);
+    expect(Math.abs(box.height - openSheetHeight(size))).toBeLessThan(1);
     expect(box.y + box.height).toBe(size.height - 12);
     const slider = (await page.getByTestId("time-slider").boundingBox())!;
     expect(box.y - (slider.y + slider.height)).toBeCloseTo(12, 0);
