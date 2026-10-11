@@ -7,10 +7,19 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type PointerEvent,
 } from "react";
 import { fetchVolume, type ApiHourlyVolume } from "@/lib/api";
-import { HOUR_MS, LIVE_PRESETS, utcLabel, windowLabel, type TimeWindow } from "@/lib/timeWindow";
+import { useReplay } from "@/hooks/useReplay";
+import {
+  HOUR_MS,
+  LIVE_PRESETS,
+  utcLabel,
+  utcWeekday,
+  windowLabel,
+  type TimeWindow,
+} from "@/lib/timeWindow";
 import {
   CHART_DAYS,
   areaPath,
@@ -26,6 +35,10 @@ import {
 
 /** The ingestion cadence: new stories land every 15 minutes. */
 export const VOLUME_REFRESH_MS = 15 * 60_000;
+/** How long the replay shows each day: 8 days, 8 globe requests in under 13 s. */
+export const REPLAY_STEP_MS = 1600;
+
+const DAY_MS = 24 * HOUR_MS;
 
 // Chart geometry (mockup #area): the area from y 4 to 44, day labels below.
 const CHART_H = 62;
@@ -66,19 +79,24 @@ interface TimelineCapsuleProps {
   /** Stories and places on the globe for the window. */
   stories: number;
   places: number;
+  /** Reduced motion: the replay's days change without the playhead sweeping. */
+  reduced?: boolean;
 }
 
 /**
  * The timeline capsule (mockup .timeline): replay, a 7-day story-volume chart
  * with the current window as a soft band, and the window's label, story
  * count and presets. Drag on the chart (or use the two hidden range inputs)
- * to pick a range; a preset goes back to live.
+ * to pick a range; a preset goes back to live. Replay steps the window
+ * through the chart's UTC days, then returns to the window it started from;
+ * picking a window stops it.
  */
 export default function TimelineCapsule({
   timeWindow,
   onChange,
   stories,
   places,
+  reduced = false,
 }: TimelineCapsuleProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const now = useSyncExternalStore(subscribeMinute, minuteNow, noNowOnServer);
@@ -124,6 +142,31 @@ export default function TimelineCapsule({
     () => chartPoints(smooth(series, SMOOTH_HOURS), width, BASE - TOP),
     [series, width],
   );
+  const ticks = useMemo(() => (domain ? dayTicks(domain.start, domain.end) : []), [domain]);
+
+  // Replay: the chart's UTC days in turn, oldest first, then back.
+  const replaySteps = useMemo<TimeWindow[]>(
+    () =>
+      ticks.map((tick) => ({
+        kind: "range",
+        startTime: iso(tick.dayStart),
+        endTime: iso(tick.dayStart + DAY_MS),
+      })),
+    [ticks],
+  );
+  const replay = useReplay(replaySteps, REPLAY_STEP_MS, onChange);
+  /** The visitor picked a window: it replaces the replay rather than waiting for it. */
+  const choose = (next: TimeWindow) => {
+    replay.stop(false);
+    onChange(next);
+  };
+  const replayStart = replay.step?.kind === "range" ? Date.parse(replay.step.startTime) : null;
+  const replayDay =
+    replayStart === null
+      ? null
+      : now !== null && Math.floor(replayStart / DAY_MS) === Math.floor(now / DAY_MS)
+        ? "today"
+        : utcWeekday(replayStart);
 
   // Dragging on the chart: the preview band follows the pointer; the window
   // (and the globe's fetch) changes once, on release.
@@ -151,16 +194,21 @@ export default function TimelineCapsule({
     const range = rangeForDrag(drag.current.x0, x, domain.start, domain.end, w);
     drag.current = null;
     setPreview(null);
-    onChange({ kind: "range", ...range });
+    choose({ kind: "range", ...range });
   };
   const onPointerCancel = () => {
     drag.current = null;
     setPreview(null);
   };
 
-  const label = windowLabel(timeWindow);
-  const shown = preview ? { kind: "range" as const, ...preview } : timeWindow;
+  const label = replayDay
+    ? `Replay · ${replayDay[0].toUpperCase()}${replayDay.slice(1)}`
+    : windowLabel(timeWindow);
+  const shown = preview ? { kind: "range" as const, ...preview } : (replay.step ?? timeWindow);
   const span = now === null ? null : windowSpan(shown, now);
+  // The playhead marks the window's end, never later than now.
+  const playheadTo = span && now !== null ? Math.min(span.to, now) : 0;
+  const sweep = replay.playing && !reduced && span !== null;
   const x = (t: number) =>
     domain ? Math.min(width, Math.max(0, xForTime(t, domain.start, domain.end, width))) : 0;
 
@@ -173,7 +221,7 @@ export default function TimelineCapsule({
     domain && span ? clamp(Math.round((span.to - domain.start) / HOUR_MS), startIdx + 1, slots) : 1;
   const setIndices = (from: number, to: number) => {
     if (!domain) return;
-    onChange({
+    choose({
       kind: "range",
       startTime: iso(domain.start + from * HOUR_MS),
       endTime: iso(domain.start + to * HOUR_MS),
@@ -186,7 +234,6 @@ export default function TimelineCapsule({
     domain && total > 0
       ? `${plural(total, "story", "stories")}, busiest hour ${utcLabel(domain.start + peak * HOUR_MS)}`
       : "no stories counted yet";
-  const ticks = domain ? dayTicks(domain.start, domain.end) : [];
 
   return (
     <section
@@ -194,9 +241,18 @@ export default function TimelineCapsule({
       data-testid="timeline"
       aria-label="Time window and replay"
     >
-      <button type="button" className="aurora-btn play" aria-label="Replay the last 7 days">
+      <button
+        type="button"
+        className="aurora-btn play"
+        aria-label={replay.playing ? "Stop replay" : "Replay the last 7 days"}
+        onClick={() => (replay.playing ? replay.stop() : replay.start(timeWindow))}
+      >
         <svg width="16" height="16" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
-          <path d="M2.5 1.2l6.3 3.8-6.3 3.8z" />
+          {replay.playing ? (
+            <rect x="2.2" y="2.2" width="5.6" height="5.6" rx="1" />
+          ) : (
+            <path d="M2.5 1.2l6.3 3.8-6.3 3.8z" />
+          )}
         </svg>
       </button>
 
@@ -247,7 +303,19 @@ export default function TimelineCapsule({
             />
           </g>
           {span && (
-            <g className="playhead" style={{ transform: `translateX(${x(span.to)}px)` }}>
+            <g
+              // A new key per day restarts the sweep from that day's start.
+              key={sweep ? `sweep-${replay.index}` : "playhead"}
+              className={sweep ? "playhead sweep" : "playhead"}
+              style={
+                {
+                  transform: `translateX(${x(playheadTo)}px)`,
+                  "--from": `${x(span.from)}px`,
+                  "--to": `${x(playheadTo)}px`,
+                  "--step": `${REPLAY_STEP_MS}ms`,
+                } as CSSProperties
+              }
+            >
               <line x1={0} x2={0} y1={TOP - 2} y2={BASE + 2} />
               <circle cx={0} cy={TOP - 2} r={3.5} />
             </g>
@@ -308,14 +376,20 @@ export default function TimelineCapsule({
             <button
               key={p.hours}
               type="button"
-              aria-pressed={timeWindow.kind === "live" && timeWindow.hours === p.hours}
-              onClick={() => onChange({ kind: "live", hours: p.hours })}
+              aria-pressed={
+                !replay.playing && timeWindow.kind === "live" && timeWindow.hours === p.hours
+              }
+              onClick={() => choose({ kind: "live", hours: p.hours })}
             >
               {p.label}
             </button>
           ))}
         </div>
       </div>
+
+      <span role="status" className="sr-only">
+        {replayDay ? `Showing ${replayDay}` : ""}
+      </span>
     </section>
   );
 }

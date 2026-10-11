@@ -3,12 +3,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
-import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
-import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
+import { filterPointsByTopic } from "@/lib/clustering";
+import { fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
-import { DEFAULT_WINDOW, HOUR_MS, windowQuery, type TimeWindow } from "@/lib/timeWindow";
+import { DEFAULT_WINDOW, HOUR_MS, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { useAgent } from "@/hooks/useAgent";
+import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
@@ -29,12 +30,9 @@ const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
 export default function Home() {
   const [activeTopic, setActiveTopic] = useState<Topic>("All");
 
-  const [allPoints, setAllPoints] = useState<GlobePoint[]>([]);
-  const [apiError, setApiError] = useState(false);
-  const [loading, setLoading] = useState(true);
-
   // One time window for the globe, the panels and the timeline (lib/timeWindow).
   const [timeWindow, setTimeWindow] = useState<TimeWindow>(DEFAULT_WINDOW);
+  const { points: allPoints, error: apiError, loading } = useGlobePoints(timeWindow);
   // The old slider's day, until the timeline replaces it (PR 10, Task 10.6).
   const [dayOffset, setDayOffset] = useState(0);
   const [density, setDensity] = useState<{ hour: number; count: number }[]>([]);
@@ -56,9 +54,9 @@ export default function Home() {
   const { reduced, lowPower } = useMotionPrefs();
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
 
+  // The same window again (a preset clicked twice) keeps its dots: no refetch.
   const changeWindow = useCallback((next: TimeWindow) => {
-    setTimeWindow(next);
-    setLoading(true);
+    setTimeWindow((prev) => (sameWindow(prev, next) ? prev : next));
   }, []);
 
   // The old slider's day chips: today is live, an earlier day the 24 hours before it.
@@ -136,32 +134,6 @@ export default function Home() {
       clearTimeout(timer);
     };
   }, [dayOffset]);
-
-  // Fetch globe data on mount and whenever the window changes
-  useEffect(() => {
-    let cancelled = false;
-    const query = windowQuery(timeWindow);
-    const timer = setTimeout(() => {
-      fetchGlobeNews(query.timespan, 500, query.startTime, query.endTime)
-        .then((apiPoints) => {
-          if (cancelled) return;
-          setAllPoints(apiPointsToGlobePoints(apiPoints));
-          setApiError(false);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setAllPoints([]);
-          setApiError(true);
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-    }, 150);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [timeWindow]);
 
   // Filter points client-side — instant, no API call
   const points = filterPointsByTopic(allPoints, activeTopic);

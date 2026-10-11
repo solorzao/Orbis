@@ -765,6 +765,18 @@ kbd {
 .timeline .playhead circle {
   fill: var(--timeline-playhead);
 }
+/* replay: the playhead sweeps across each day as it shows (not with reduced motion) */
+.timeline .playhead.sweep {
+  animation: playhead-sweep var(--step) linear both;
+}
+@keyframes playhead-sweep {
+  from {
+    transform: translateX(var(--from));
+  }
+  to {
+    transform: translateX(var(--to));
+  }
+}
 .timeline .day {
   font: var(--type-data-sm);
   fill: var(--text-muted);

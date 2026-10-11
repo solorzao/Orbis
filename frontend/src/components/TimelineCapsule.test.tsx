@@ -30,9 +30,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderCapsule(window: TimeWindow = DEFAULT_WINDOW, onChange = vi.fn()) {
+function renderCapsule(window: TimeWindow = DEFAULT_WINDOW, onChange = vi.fn(), reduced = false) {
   const utils = render(
-    <TimelineCapsule timeWindow={window} onChange={onChange} stories={1234} places={56} />,
+    <TimelineCapsule
+      timeWindow={window}
+      onChange={onChange}
+      stories={1234}
+      places={56}
+      reduced={reduced}
+    />,
   );
   return { ...utils, onChange };
 }
@@ -188,6 +194,98 @@ describe("TimelineCapsule", () => {
       kind: "range",
       startTime: iso(CHART_START + 31 * H),
       endTime: iso(CHART_START + 32 * H),
+    });
+  });
+
+  describe("replay", () => {
+    const DAY = 24 * H;
+    // The chart's eight UTC days, Sun 4 Oct (from 12:00) to today, Sun 11 Oct.
+    const day = (i: number): TimeWindow => ({
+      kind: "range",
+      startTime: iso(Date.UTC(2026, 9, 4) + i * DAY),
+      endTime: iso(Date.UTC(2026, 9, 5) + i * DAY),
+    });
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    it("steps through the last 7 days, a day every 1.6 s, and announces each", async () => {
+      const { onChange } = renderCapsule();
+      const play = screen.getByRole("button", { name: "Replay the last 7 days" });
+
+      fireEvent.click(play);
+      expect(onChange).toHaveBeenLastCalledWith(day(0));
+      expect(play).toHaveAccessibleName("Stop replay");
+      expect(screen.getByRole("status")).toHaveTextContent("Showing Sun");
+      expect(screen.getByTestId("timeline-label")).toHaveTextContent("Replay · Sun");
+
+      await advance(1600);
+      expect(onChange).toHaveBeenLastCalledWith(day(1));
+      expect(screen.getByRole("status")).toHaveTextContent("Showing Mon");
+
+      await advance(6 * 1600);
+      expect(onChange).toHaveBeenLastCalledWith(day(7));
+      expect(screen.getByRole("status")).toHaveTextContent("Showing today");
+      expect(onChange).toHaveBeenCalledTimes(8);
+
+      // Then back to the window from before the replay.
+      await advance(1600);
+      expect(onChange).toHaveBeenLastCalledWith(DEFAULT_WINDOW);
+      expect(play).toHaveAccessibleName("Replay the last 7 days");
+      expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    });
+
+    it("stops when pressed again, back on the window from before", async () => {
+      const { onChange } = renderCapsule({ kind: "live", hours: 6 });
+      const play = screen.getByRole("button", { name: "Replay the last 7 days" });
+      fireEvent.click(play);
+      await advance(1600);
+
+      fireEvent.click(screen.getByRole("button", { name: "Stop replay" }));
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "live", hours: 6 });
+      await advance(5 * 1600);
+      expect(onChange).toHaveBeenCalledTimes(3);
+    });
+
+    it("stops when the visitor picks a preset, keeping their choice", async () => {
+      const { onChange } = renderCapsule();
+      fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "7d" }));
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "live", hours: 168 });
+      expect(screen.getByRole("button", { name: "Replay the last 7 days" })).toBeInTheDocument();
+      await advance(5 * 1600);
+      expect(onChange).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops when the visitor drags a range", async () => {
+      const { onChange } = renderCapsule();
+      fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
+      const el = chart();
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 41 });
+      fireEvent.pointerUp(el, { pointerId: 1, clientX: 129 });
+
+      expect(onChange).toHaveBeenLastCalledWith({
+        kind: "range",
+        startTime: iso(CHART_START + 10 * H),
+        endTime: iso(CHART_START + 32 * H),
+      });
+      await advance(5 * 1600);
+      expect(onChange).toHaveBeenCalledTimes(2);
+    });
+
+    it("sweeps the playhead across each day, unless motion is reduced", async () => {
+      const { unmount } = renderCapsule();
+      const playhead = () => screen.getByRole("img").querySelector(".playhead")!;
+      expect(playhead()).not.toHaveClass("sweep");
+      fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
+      expect(playhead()).toHaveClass("sweep");
+      unmount();
+
+      renderCapsule(DEFAULT_WINDOW, vi.fn(), true);
+      fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
+      expect(playhead()).not.toHaveClass("sweep");
     });
   });
 });
