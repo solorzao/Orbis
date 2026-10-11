@@ -9,48 +9,51 @@
   --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, monospace;
 }
 
-:root,
-[data-theme="dark"] {
-  --bg-page: #020a10;
-  --surface-panel: rgba(4, 16, 28, 0.88);
-  --surface-card: rgba(6, 20, 36, 0.7);
-  --surface-overlay: rgba(4, 14, 26, 0.75);
-  --text-primary: #c8e6f8;
-  --text-secondary: #6eaac8;
-  --text-muted: #3a7090;
-  --text-motto: #4280a4; /* 4.6:1 on --bg-page (WCAG AA) */
-  --border-subtle: rgba(0, 212, 255, 0.08);
-  --border-accent: rgba(0, 212, 255, 0.2);
-  --vignette: rgba(2, 6, 14, 0.7);
-  --shadow: rgba(0, 0, 0, 0.5);
-  --inset-highlight: rgba(0, 212, 255, 0.04);
-  --accent-cyan: #00d4ff;
-}
-
-[data-theme="light"] {
-  --bg-page: #f0f4f8;
-  --surface-panel: rgba(255, 255, 255, 0.85);
-  --surface-card: rgba(255, 255, 255, 0.7);
-  --surface-overlay: rgba(255, 255, 255, 0.75);
-  --text-primary: #1e293b;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  --text-motto: #5c6f8a; /* 4.6:1 on --bg-page (WCAG AA) */
-  --border-subtle: rgba(0, 0, 0, 0.08);
-  --border-accent: rgba(59, 130, 246, 0.2);
-  --vignette: rgba(240, 244, 248, 0.5);
-  --shadow: rgba(0, 0, 0, 0.1);
-  --inset-highlight: rgba(255, 255, 255, 0.5);
-}
-
+/* Aliases for pre-Soft-Orbit names; remove each once no component uses it. */
 :root {
-  --background: var(--bg-page);
-  --foreground: var(--text-primary);
+  --surface-panel: var(--surface-glass);
+  --surface-card: var(--surface-raised);
+  --surface-overlay: var(--surface-glass);
+  --border-accent: var(--border-edge-a);
+  --text-motto: var(--brand-motto-color); /* #4482a8, AA 4.6:1 (PR #42) */
+  --vignette: rgba(13, 12, 23, 0.7);
+  --shadow: rgba(3, 2, 12, 0.55);
+  --inset-highlight: rgba(255, 255, 255, 0.07);
 }
 
+/*
+ * Tokens as Tailwind colours (bg-glass, text-ink-2, border-line, ...).
+ *
+ * Some token names coincide with Tailwind v4 theme variables: --radius-sm/md/lg/xl,
+ * --font-mono, --ease-out and --ease-in-out. tokens.css is unlayered, so it overrides
+ * Tailwind's layered defaults. That is intended: rounded-xl (28px), font-mono and
+ * ease-out follow Soft Orbit.
+ */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-page: var(--bg-page);
+  --color-inset: var(--bg-inset);
+  --color-glass: var(--surface-glass);
+  --color-scrim: var(--surface-scrim);
+  --color-raised: var(--surface-raised);
+  --color-hover: var(--surface-hover);
+  --color-selected: var(--surface-selected);
+  --color-line: var(--border-subtle);
+  --color-line-2: var(--border-default);
+  --color-line-3: var(--border-strong);
+  --color-ink: var(--text-primary);
+  --color-ink-2: var(--text-secondary);
+  --color-ink-3: var(--text-muted);
+  --color-ink-inverse: var(--text-inverse);
+  --color-accent: var(--accent-primary);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-periwinkle: var(--accent-periwinkle);
+  --color-lavender: var(--accent-lavender);
+  --color-live: var(--signal-live);
+  --color-warning: var(--signal-warning);
+  --color-danger: var(--signal-danger);
+  --color-background: var(--bg-page);
+  --color-foreground: var(--text-primary);
 }
 
 * {
@@ -59,10 +62,18 @@
 
 body {
   margin: 0;
-  padding: 0;
-  background: var(--background);
-  color: var(--foreground);
+  background:
+    radial-gradient(1200px 800px at 12% 8%, var(--bg-haze-a), transparent 60%),
+    radial-gradient(1100px 900px at 92% 96%, var(--bg-haze-b), transparent 60%), var(--bg-page);
+  color: var(--text-primary);
+  font: var(--type-body);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: 3px;
 }
 
 /* Custom scrollbar for news panel */
@@ -75,12 +86,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 212, 255, 0.15);
+  background: rgba(214, 218, 255, 0.18);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 212, 255, 0.3);
+  background: rgba(214, 218, 255, 0.3);
 }
 
 /* Shimmer animation for loading skeletons */
@@ -91,47 +102,4 @@ body {
   100% {
     transform: translateX(100%);
   }
-}
-
-/* Holographic scanline overlay */
-@keyframes scanline-sweep {
-  0% {
-    transform: translateY(-100%);
-  }
-  100% {
-    transform: translateY(100vh);
-  }
-}
-
-.scanlines {
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 212, 255, 0.018) 2px,
-    rgba(0, 212, 255, 0.018) 4px
-  );
-}
-
-.scanlines::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 120px;
-  background: linear-gradient(transparent, rgba(0, 212, 255, 0.04), transparent);
-  animation: scanline-sweep 8s linear infinite;
-}
-
-[data-theme="light"] .scanlines {
-  background: none;
-}
-[data-theme="light"] .scanlines::before {
-  display: none;
-}
-
-/* Globe tooltip styling override */
-.scene-tooltip {
-  z-index: 100 !important;
-  pointer-events: none !important;
 }

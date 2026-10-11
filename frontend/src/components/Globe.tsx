@@ -235,8 +235,6 @@ export default function Globe({ points, onPointClick, onZoomChange, onReady }: G
           background: "radial-gradient(ellipse at center, transparent 40%, var(--vignette) 100%)",
         }}
       />
-      {/* Holographic scanline overlay */}
-      <div className="scanlines pointer-events-none absolute inset-0 z-[11]" />
       <div ref={containerRef} className="h-full w-full" />
     </div>
   );

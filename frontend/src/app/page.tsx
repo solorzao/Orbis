@@ -352,7 +352,7 @@ export default function Home() {
   );
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-[var(--bg-page)]">
+    <main className="relative h-screen w-screen overflow-hidden">
       {/* Globe */}
       <Globe
         points={points}
@@ -363,7 +363,8 @@ export default function Home() {
         }}
       />
 
-      {/* Branding */}
+      {/* Branding: frozen lockup (tokens.md). Colours, motto font and line
+          height are pinned so the Soft Orbit body text styles don't reach it. */}
       <div className="fixed top-3 left-3 z-50 flex items-center gap-2 sm:top-5 sm:left-6 sm:gap-3">
         <img
           src="/Orbis_logo_50_resize.png"
@@ -373,7 +374,7 @@ export default function Home() {
         />
         <div>
           <h1
-            className="text-sm font-bold tracking-[0.2em] text-[var(--text-primary)] uppercase sm:text-lg"
+            className="text-sm font-bold tracking-[0.2em] text-[var(--brand-wordmark-color)] uppercase sm:text-lg"
             style={{
               fontFamily: "var(--font-brand), sans-serif",
               textShadow: "0 0 30px rgba(0, 212, 255, 0.4)",
@@ -381,7 +382,10 @@ export default function Home() {
           >
             Orbis
           </h1>
-          <p className="hidden text-[9px] font-medium tracking-[0.3em] text-[var(--text-motto)] uppercase sm:block">
+          <p
+            className="hidden text-[9px] leading-[13.5px] font-medium tracking-[0.3em] text-[var(--text-motto)] uppercase sm:block"
+            style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
+          >
             Every Story, Everywhere
           </p>
         </div>
