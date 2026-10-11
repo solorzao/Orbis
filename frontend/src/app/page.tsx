@@ -6,6 +6,7 @@ import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
+import { countAfterPage, nextPage } from "@/lib/loadMore";
 import { useAgent } from "@/hooks/useAgent";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
@@ -239,25 +240,32 @@ export default function Home() {
         filters && (filters.sentiment || filters.search || filters.topics.length > 0);
 
       try {
-        // When filters are active, load ALL articles (unfiltered) so the
-        // client-side filter has the full dataset. Button disappears because
-        // count === articles.length. Clearing filters shows everything.
+        // In-panel filters work on the loaded stories, so they get bigger
+        // pages. Load more stays while pages come back full; a short page
+        // ends the list (see countAfterPage).
+        const { offset, limit } = nextPage(panel.articles.length, Boolean(isFiltered));
         const apiArticles = await fetchClusterArticles(
           panel.point.lat,
           panel.point.lng,
           0.75,
           topicFilter,
           panel.point.locationName,
-          isFiltered ? 0 : panel.articles.length,
-          isFiltered ? 50 : 20,
+          offset,
+          limit,
           (timeRange ?? dayWindow)?.startTime,
           (timeRange ?? dayWindow)?.endTime,
         );
         const mapped = mapArticles(apiArticles);
-        const allArticles = isFiltered ? mapped : [...panel.articles, ...mapped];
+        const allArticles = [...panel.articles, ...mapped];
+        const count = countAfterPage(
+          panel.point.count,
+          allArticles.length,
+          apiArticles.length,
+          limit,
+        );
         updatePanel(panelId, {
           articles: allArticles,
-          point: { ...panel.point, articles: allArticles, count: allArticles.length },
+          point: { ...panel.point, articles: allArticles, count },
           loadingMore: false,
         });
       } catch {

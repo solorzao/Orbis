@@ -156,25 +156,35 @@ async def get_articles_in_bounds(
     limit: int = 200,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
+    topics: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the newest articles inside a lat/lng bounding box, one per title.
 
-    The SQL function ``articles_in_bounds`` with the time window added: the
-    window is applied before the LIMIT, so an older window still gets its
-    newest *limit* articles. Either bound may be None.
+    The SQL function ``articles_in_bounds`` with the time window and a topic
+    filter added, both applied before the dedup and the LIMIT: an older window
+    still gets its newest *limit* articles, and a topic gets its newest *limit*
+    articles tagged with any of *topics*. Either bound, and *topics*, may be None.
+
+    Selects only the columns a ``NewsArticle`` reads: never the embedding.
+    Ties on ``published_at`` (a whole GDELT batch shares one) break on ``id``,
+    so offset paging over repeated calls neither repeats nor skips articles.
     """
     pool = await get_pool()
     rows = await pool.fetch(
         """
         SELECT * FROM (
-            SELECT DISTINCT ON (lower(title)) *
+            SELECT DISTINCT ON (lower(title))
+                   id, title, summary, source_url, source_name, source_language,
+                   published_at, ingested_at, latitude, longitude, country_code,
+                   region, topic_tags, sentiment_score, entities, image_url
             FROM articles
             WHERE ST_Within(location::geometry, ST_MakeEnvelope($2, $1, $4, $3, 4326))
               AND ($6::timestamptz IS NULL OR published_at >= $6)
               AND ($7::timestamptz IS NULL OR published_at <= $7)
+              AND ($8::text[] IS NULL OR topic_tags && $8)
             ORDER BY lower(title), published_at DESC
         ) deduped
-        ORDER BY published_at DESC
+        ORDER BY published_at DESC, id
         LIMIT $5
         """,
         min_lat,
@@ -184,6 +194,7 @@ async def get_articles_in_bounds(
         limit,
         start_time,
         end_time,
+        topics,
     )
     return [dict(r) for r in rows]
 
