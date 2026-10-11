@@ -247,7 +247,8 @@ export default function NewsPanel({
                   ? hasActiveFilters
                     ? `${filteredArticles.length} of ${point.count} Stories`
                     : `${point.count} Stories`
-                  : point.articles[0]?.countryCode}
+                  : // country_code is '' when GDELT gives no (or no ISO) country
+                    point.articles[0]?.countryCode || "1 Story"}
               </h2>
               <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                 {point.locationName || `${point.lat.toFixed(2)}°, ${point.lng.toFixed(2)}°`}

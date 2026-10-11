@@ -157,3 +157,8 @@ def test_article_malformed_image_url_becomes_none():
 
 def test_article_image_url_defaults_to_none():
     assert _make_article().image_url is None
+
+
+def test_country_code_is_documented_as_iso():
+    description = NewsArticle.model_fields["country_code"].description
+    assert description == "ISO 3166-1 alpha-2; '' if unknown"

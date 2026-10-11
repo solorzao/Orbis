@@ -1,7 +1,8 @@
 """Tests for the raw GKG → PostgreSQL ingestion service."""
 
+import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -150,12 +151,15 @@ class TestIngestFromRawGkg:
             patches["scrape_titles"],
             patches["upsert_articles"] as mock_upsert,
             patches["invalidate"],
-            patches["get_pool"],
+            patches["get_pool"] as mock_get_pool,
             patches["populate_graph"],
             patches["ml_enabled"],
         ):
             await _ingest_from_raw_gkg()
 
+        # The KG read-back includes country_fips for LOCATION node metadata.
+        kg_query = mock_get_pool.return_value.fetch.call_args[0][0]
+        assert "country_code, country_fips," in kg_query
         rows = mock_upsert.call_args[0][0]
         assert (rows[0]["country_code"], rows[0]["country_fips"]) == ("GB", "UK")
         # '' rather than NULL: NULL means "written before the FIPS to ISO switch".
@@ -260,6 +264,23 @@ class TestRunIngestionCycle:
             assert count == 0
 
     @pytest.mark.asyncio
+    async def test_skips_when_a_cycle_is_already_running(self, caplog):
+        from app.services import ingestion
+
+        with patch(
+            "app.services.ingestion._ingest_from_raw_gkg",
+            new_callable=AsyncMock,
+            return_value=5,
+        ) as mock_ingest:
+            async with ingestion._ingestion_lock:
+                with caplog.at_level(logging.INFO, logger="orbis.ingestion"):
+                    assert await ingestion.run_ingestion_cycle() == 0
+
+        mock_ingest.assert_not_awaited()
+        assert "already running" in caplog.text
+        assert not ingestion._ingestion_lock.locked()
+
+    @pytest.mark.asyncio
     async def test_backfill_runs_first(self):
         from app.services.ingestion import run_ingestion_cycle
 
@@ -332,104 +353,156 @@ class TestRunIngestionCycle:
 class _FakeArticlesPool:
     """In-memory stand-in for the queries the backfill issues.
 
-    ``rows`` are dicts with ``country_code`` and ``country_fips``. Each UPDATE
-    is recorded in ``updates`` as ``("code", fips, iso)`` for the indexable
-    ``country_code = $1`` statement, or ``("null",)`` for the NULL statement.
+    ``rows`` are dicts with ``id``, ``published_at``, ``country_code`` and
+    ``country_fips``. Each UPDATE is recorded in ``updates`` as
+    ``(fips, iso, sorted ids)``; codes in ``fail_codes`` raise instead.
     """
 
-    def __init__(self, rows: list[dict]):
+    def __init__(self, rows: list[dict], fail_codes: frozenset[str] = frozenset()):
         self.rows = rows
+        self.fail_codes = fail_codes
+        self.fetches = 0
         self.updates: list[tuple] = []
 
-    async def fetch(self, query, *args):
-        assert "country_fips IS NULL" in query
-        codes = {r["country_code"] for r in self.rows if r["country_fips"] is None}
-        return [{"country_code": c} for c in sorted(codes, key=lambda c: c or "")]
+    async def fetch(self, query, budget):
+        assert "WHERE country_fips IS NULL ORDER BY published_at DESC LIMIT $1" in query
+        self.fetches += 1
+        pending = [r for r in self.rows if r["country_fips"] is None]
+        pending.sort(key=lambda r: r["published_at"], reverse=True)
+        return [{"id": r["id"], "country_code": r["country_code"]} for r in pending[:budget]]
 
-    async def execute(self, query, *args):
-        assert "WHERE country_fips IS NULL AND " in query
-        # IS NOT DISTINCT FROM cannot use the country_code index.
-        assert "DISTINCT" not in query
-        if query.rstrip().endswith("country_code IS NULL"):
-            assert args == ()
-            self.updates.append(("null",))
-            original, fips, iso = None, "", ""
-        else:
-            assert query.rstrip().endswith("country_code = $1")
-            fips, iso = args
-            assert fips is not None
-            self.updates.append(("code", fips, iso))
-            original = fips
+    async def execute(self, query, fips, iso, ids):
+        assert "WHERE id = ANY($3::uuid[]) AND country_fips IS NULL" in query
+        if fips in self.fail_codes:
+            raise RuntimeError(f"update failed for {fips}")
+        self.updates.append((fips, iso, sorted(ids)))
         n = 0
         for r in self.rows:
-            if r["country_fips"] is None and r["country_code"] == original:
+            if r["id"] in ids and r["country_fips"] is None:
                 r["country_fips"], r["country_code"] = fips, iso
                 n += 1
         return f"UPDATE {n}"
 
 
+def _row(row_id, country_code, country_fips=None, hours_ago=0):
+    """An articles row; country_fips None means written before the ISO switch."""
+    return {
+        "id": row_id,
+        "published_at": datetime(2026, 10, 10, tzinfo=timezone.utc) - timedelta(hours=hours_ago),
+        "country_code": country_code,
+        "country_fips": country_fips,
+    }
+
+
+def _codes(rows):
+    return [(r["country_code"], r["country_fips"]) for r in rows]
+
+
 class TestBackfillIsoCountryCodes:
+    @pytest.fixture(autouse=True)
+    def _reset_backfill_state(self, monkeypatch):
+        from app.services import ingestion
+
+        monkeypatch.setattr(ingestion, "_backfill_idle_runs", 0)
+        self.invalidate = AsyncMock()
+        monkeypatch.setattr(ingestion, "invalidate", self.invalidate)
+
     @pytest.mark.asyncio
-    async def test_converts_pre_switch_fips_rows(self):
+    async def test_converts_pre_switch_rows_grouped_by_code(self):
         from app.services.ingestion import _backfill_iso_country_codes
 
         rows = [
-            {"country_code": "UK", "country_fips": None},
-            {"country_code": "UK", "country_fips": None},
-            {"country_code": "CH", "country_fips": None},
-            {"country_code": "ZZ", "country_fips": None},  # unknown FIPS
-            {"country_code": "GB", "country_fips": "UK"},  # already converted
+            _row("uk-1", "UK"),
+            _row("uk-2", "UK"),
+            _row("ch-1", "CH"),
+            _row("zz-1", "ZZ"),  # unknown FIPS
+            _row("gb-1", "GB", country_fips="UK"),  # already converted
         ]
         pool = _FakeArticlesPool(rows)
 
         assert await _backfill_iso_country_codes(pool) == 4
 
-        # One indexable UPDATE per distinct code, none for the NULL case.
-        assert pool.updates == [("code", "CH", "CN"), ("code", "UK", "GB"), ("code", "ZZ", "")]
-        assert rows == [
-            {"country_code": "GB", "country_fips": "UK"},
-            {"country_code": "GB", "country_fips": "UK"},
-            {"country_code": "CN", "country_fips": "CH"},
-            {"country_code": "", "country_fips": "ZZ"},
-            {"country_code": "GB", "country_fips": "UK"},
+        assert sorted(pool.updates) == [
+            ("CH", "CN", ["ch-1"]),
+            ("UK", "GB", ["uk-1", "uk-2"]),
+            ("ZZ", "", ["zz-1"]),
         ]
+        assert _codes(rows) == [("GB", "UK"), ("GB", "UK"), ("CN", "CH"), ("", "ZZ"), ("GB", "UK")]
+        self.invalidate.assert_awaited_once_with("db:*")
 
     @pytest.mark.asyncio
-    async def test_converts_rows_with_null_country_code(self):
+    async def test_null_and_empty_codes_share_one_update(self):
         from app.services.ingestion import _backfill_iso_country_codes
 
-        rows = [
-            {"country_code": None, "country_fips": None},
-            {"country_code": None, "country_fips": None},
-            {"country_code": "", "country_fips": None},  # empty string is not NULL
-        ]
+        rows = [_row("n-1", None), _row("n-2", None), _row("e-1", "")]
         pool = _FakeArticlesPool(rows)
 
         assert await _backfill_iso_country_codes(pool) == 3
 
-        # All NULL rows go through the one separate statement, marked converted with ''.
-        assert pool.updates == [("null",), ("code", "", "")]
-        assert rows == [{"country_code": "", "country_fips": ""}] * 3
+        assert pool.updates == [("", "", ["e-1", "n-1", "n-2"])]
+        assert _codes(rows) == [("", "")] * 3
 
     @pytest.mark.asyncio
-    async def test_is_idempotent(self):
+    async def test_converts_newest_rows_first_within_budget(self):
         from app.services.ingestion import _backfill_iso_country_codes
 
         rows = [
-            {"country_code": "SP", "country_fips": None},
-            {"country_code": None, "country_fips": None},
+            _row("old", "UK", hours_ago=48),
+            _row("new", "UK", hours_ago=1),
+            _row("mid", "SP", hours_ago=5),
         ]
         pool = _FakeArticlesPool(rows)
 
-        assert await _backfill_iso_country_codes(pool) == 2
-        pool.updates.clear()
+        assert await _backfill_iso_country_codes(pool, budget=2) == 2
+        assert [r["id"] for r in rows if r["country_fips"] is None] == ["old"]
+
+        assert await _backfill_iso_country_codes(pool, budget=2) == 1
+        assert _codes(rows) == [("GB", "UK"), ("GB", "UK"), ("ES", "SP")]
+
+    @pytest.mark.asyncio
+    async def test_failed_group_does_not_stop_the_others(self, caplog):
+        from app.services.ingestion import _backfill_iso_country_codes
+
+        rows = [_row("uk-1", "UK"), _row("ch-1", "CH")]
+        pool = _FakeArticlesPool(rows, fail_codes=frozenset({"UK"}))
+
+        with caplog.at_level(logging.WARNING, logger="orbis.ingestion"):
+            assert await _backfill_iso_country_codes(pool) == 1
+
+        assert _codes(rows) == [("UK", None), ("CN", "CH")]
+        assert "'UK'" in caplog.text
+        self.invalidate.assert_awaited_once_with("db:*")
+
+    @pytest.mark.asyncio
+    async def test_no_cache_invalidation_when_nothing_converted(self):
+        from app.services.ingestion import _backfill_iso_country_codes
+
+        pool = _FakeArticlesPool([_row("gb-1", "GB", country_fips="UK")])
 
         assert await _backfill_iso_country_codes(pool) == 0
         assert pool.updates == []
-        assert rows == [
-            {"country_code": "ES", "country_fips": "SP"},
-            {"country_code": "", "country_fips": ""},
-        ]
+        self.invalidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_switches_off_after_two_consecutive_empty_runs(self):
+        from app.services.ingestion import _backfill_iso_country_codes
+
+        rows = [_row("sp-1", "SP")]
+        pool = _FakeArticlesPool(rows)
+
+        assert await _backfill_iso_country_codes(pool) == 1
+        assert await _backfill_iso_country_codes(pool) == 0  # first empty run
+        # An old revision inserts a pre-switch row during the deploy overlap.
+        rows.append(_row("uk-1", "UK"))
+        assert await _backfill_iso_country_codes(pool) == 1  # converted; idle count resets
+        assert await _backfill_iso_country_codes(pool) == 0  # first empty run
+        assert await _backfill_iso_country_codes(pool) == 0  # second: switched off
+        rows.append(_row("ch-1", "CH"))
+        assert await _backfill_iso_country_codes(pool) == 0  # skipped, no query
+
+        assert pool.fetches == 5
+        assert len(pool.updates) == 2  # idempotent: empty runs issue no UPDATEs
+        assert _codes(rows) == [("ES", "SP"), ("GB", "UK"), ("CH", None)]
 
 
 class TestMLClassificationIntegration:

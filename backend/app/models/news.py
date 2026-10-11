@@ -85,7 +85,7 @@ class NewsArticle(BaseModel):
     ingested_at: datetime
     latitude: float
     longitude: float
-    country_code: str = ""
+    country_code: str = Field("", description="ISO 3166-1 alpha-2; '' if unknown")
     region: str = ""
     topic_tags: list[str] = Field(default_factory=list)
     sentiment_score: float = 0.0

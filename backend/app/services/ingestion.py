@@ -121,7 +121,7 @@ async def _ingest_from_raw_gkg() -> int:
     source_urls = [r["source_url"] for r in rows]
     db_rows = await pool.fetch(
         "SELECT id, title, source_url, latitude, longitude, region, "
-        "country_code, topic_tags, published_at FROM articles "
+        "country_code, country_fips, topic_tags, published_at FROM articles "
         "WHERE source_url = ANY($1::text[])",
         source_urls,
     )
@@ -143,37 +143,72 @@ async def _ingest_from_raw_gkg() -> int:
     return count
 
 
-async def _backfill_iso_country_codes(pool) -> int:
-    """Convert rows written before the FIPS to ISO switch (country_fips IS NULL).
+# Consecutive backfill runs that found nothing to convert. At
+# _BACKFILL_IDLE_RUNS_TO_STOP the backfill is skipped for the rest of the process.
+_backfill_idle_runs = 0
+_BACKFILL_IDLE_RUNS_TO_STOP = 2
 
-    Such rows hold GDELT's FIPS code in country_code. Each distinct value is
-    moved to country_fips and replaced by its ISO code (or '' if unknown),
-    matched with ``country_code = $1`` so the country_code index can be used.
-    Rows with a NULL country_code get their own statement and become ''/'',
-    so they are not re-selected every cycle. Once nothing is left, a run is
-    one SELECT that returns no rows.
+# Held for a whole ingestion cycle, so the startup run and the scheduler never overlap.
+_ingestion_lock = asyncio.Lock()
+
+
+async def _backfill_iso_country_codes(pool, budget: int = 5000) -> int:
+    """Convert up to *budget* rows written before the FIPS to ISO switch, newest first.
+
+    Pre-switch rows (country_fips IS NULL) hold GDELT's FIPS code in
+    country_code. Their ids are grouped by that code (NULL counts as ''), and
+    each group is updated by id: the code moves to country_fips and
+    country_code becomes the ISO code ('' if unknown). A failed group is
+    logged and skipped. If anything changed, the API cache is invalidated.
+
+    Cost: country_fips is not indexed, so every run's SELECT scans the whole
+    articles table, even when nothing is left to convert. After two
+    consecutive runs find no rows, the backfill is skipped for the rest of the
+    process. Two rather than one, so rows an old revision inserts during a
+    deploy overlap are still converted.
+
+    TODO(2026-10-18): remove the backfill and country_fips IS NULL handling
+    once pre-switch rows have aged out (7-day retention).
     """
-    fips_codes = await pool.fetch(
-        "SELECT DISTINCT country_code FROM articles WHERE country_fips IS NULL"
+    global _backfill_idle_runs
+    if _backfill_idle_runs >= _BACKFILL_IDLE_RUNS_TO_STOP:
+        return 0
+
+    rows = await pool.fetch(
+        "SELECT id, country_code FROM articles "
+        "WHERE country_fips IS NULL ORDER BY published_at DESC LIMIT $1",
+        budget,
     )
+    if not rows:
+        _backfill_idle_runs += 1
+        return 0
+    _backfill_idle_runs = 0
+
+    ids_by_fips: dict[str, list] = {}
+    for row in rows:
+        ids_by_fips.setdefault(row["country_code"] or "", []).append(row["id"])
+
     updated = 0
-    for row in fips_codes:
-        fips = row["country_code"]
-        if fips is None:
-            result = await pool.execute(
-                "UPDATE articles SET country_fips = '', country_code = '' "
-                "WHERE country_fips IS NULL AND country_code IS NULL"
-            )
-        else:
+    for fips, ids in ids_by_fips.items():
+        try:
             result = await pool.execute(
                 "UPDATE articles SET country_fips = $1, country_code = $2 "
-                "WHERE country_fips IS NULL AND country_code = $1",
+                "WHERE id = ANY($3::uuid[]) AND country_fips IS NULL",
                 fips,
                 fips_to_iso2(fips),
+                ids,
             )
-        updated += int(result.split()[-1])
+            updated += int(result.split()[-1])
+        except Exception:
+            logger.warning(
+                "ISO country code backfill failed for %d rows with code %r; continuing.",
+                len(ids),
+                fips,
+                exc_info=True,
+            )
     if updated:
         logger.info("Backfilled ISO country codes for %d articles.", updated)
+        await invalidate("db:*")
     return updated
 
 
@@ -198,18 +233,25 @@ async def run_ingestion_cycle() -> int:
     downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
     Then purges articles outside the retention window.
+
+    Cycles never overlap: if one is already running (the startup run and the
+    scheduler can coincide), this returns 0 without doing anything.
     """
-    try:
-        logger.info("Ingestion cycle starting …")
-        try:
-            await _backfill_iso_country_codes(await get_pool())
-        except Exception:
-            logger.warning("ISO country code backfill failed; continuing.", exc_info=True)
-        count = await _ingest_from_raw_gkg()
-        await _purge_old_articles()
-        await generate_embeddings()
-        logger.info("Ingestion cycle complete: %d articles.", count)
-        return count
-    except Exception:
-        logger.error("Ingestion cycle failed.", exc_info=True)
+    if _ingestion_lock.locked():
+        logger.info("Ingestion cycle already running; skipping this one.")
         return 0
+    async with _ingestion_lock:
+        try:
+            logger.info("Ingestion cycle starting …")
+            try:
+                await _backfill_iso_country_codes(await get_pool())
+            except Exception:
+                logger.warning("ISO country code backfill failed; continuing.", exc_info=True)
+            count = await _ingest_from_raw_gkg()
+            await _purge_old_articles()
+            await generate_embeddings()
+            logger.info("Ingestion cycle complete: %d articles.", count)
+            return count
+        except Exception:
+            logger.error("Ingestion cycle failed.", exc_info=True)
+            return 0

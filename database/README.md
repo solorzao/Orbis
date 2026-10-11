@@ -74,6 +74,8 @@ bash database/setup.sh
 
 The seed file inserts ~20 articles with worldwide geographic coverage, realistic titles, and timestamps relative to `NOW()` so the data always appears fresh.
 
+> **Re-seed local databases after migration `007_country_fips.sql`.** Rows seeded before 007 have no `country_fips`, so the ingestion backfill treats their ISO `country_code` as a FIPS code and rewrites it (for example `GB` becomes `GA`, Gabon). Delete those rows (or recreate the database) and run `seed.sql` again; the current seed sets `country_fips` on every row.
+
 ```bash
 psql "${DATABASE_URL}" -f database/seed.sql
 ```

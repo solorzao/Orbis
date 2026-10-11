@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+from app.services import country_codes
 from app.services.country_codes import fips_to_iso2
 
 SEED_SQL = Path(__file__).resolve().parents[2] / "database" / "seed.sql"
@@ -38,3 +39,22 @@ def test_seed_rows_carry_matching_fips():
     assert len(pairs) == sql.count("ST_SetSRID")
     for iso, fips in pairs:
         assert fips_to_iso2(fips) == iso, (iso, fips)
+
+
+def test_overrides_cover_gdelt_only_territories():
+    assert fips_to_iso2("JN") == "SJ"  # Jan Mayen
+    assert fips_to_iso2("WQ") == "UM"  # Wake Island
+    assert fips_to_iso2("BQ") == "UM"  # Navassa Island
+    assert fips_to_iso2("EU") == "TF"  # Europa Island
+    assert fips_to_iso2("CR") == "AU"  # Coral Sea Islands
+
+
+def test_withdrawn_iso_codes_are_unmapped():
+    assert fips_to_iso2("NT") == ""  # Netherlands Antilles (ISO AN withdrawn)
+    assert fips_to_iso2("YI") == ""  # Serbia and Montenegro (ISO CS withdrawn)
+
+
+def test_generated_header_records_source_and_checksum():
+    doc = country_codes.__doc__
+    assert "https://download.geonames.org/export/dump/countryInfo.txt" in doc
+    assert re.search(r"SHA-256: [0-9a-f]{64}\b", doc)
