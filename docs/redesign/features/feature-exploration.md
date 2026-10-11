@@ -819,7 +819,7 @@ SELECT type, count(*) FROM kg_nodes GROUP BY 1;
 SELECT rel_type, count(*), max(weight) FROM kg_edges GROUP BY 1;
 SELECT pg_size_pretty(pg_total_relation_size('articles'))   AS articles,
        pg_size_pretty(pg_total_relation_size('kg_edges'))   AS kg_edges,
-       pg_size_pretty(pg_relation_size('idx_articles_embedding')) AS hnsw;
+       pg_size_pretty(pg_relation_size('idx_articles_embedding_half')) AS hnsw;
 
 -- Most-mentioned people and orgs (entity radar feasibility)
 SELECT n.type, n.name, count(*) AS mentions

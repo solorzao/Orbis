@@ -18,6 +18,10 @@ from app.services.scraper import extract_article_text
 
 logger = logging.getLogger("orbis.retrieval")
 
+# An HNSW index scan returns at most hnsw.ef_search rows (pgvector default 40),
+# so semantic_search never asks for more. The agent already caps limit at 20.
+_HNSW_EF_SEARCH = 40
+
 
 def _get_openai_client() -> Any | None:
     """Return an AsyncOpenAI client, or None if unavailable."""
@@ -47,18 +51,21 @@ async def semantic_search(query: str, limit: int = 10) -> list[dict]:
         vec_str = "[" + ",".join(str(v) for v in vec) + "]"
 
         pool = await get_pool()
+        # The cast must match the half-precision HNSW index expression in
+        # database/migrations/008_halfvec_embedding_index.sql exactly, or the
+        # planner falls back to a sequential scan.
         rows = await pool.fetch(
             """
             SELECT id, title, source_url, source_name, latitude, longitude,
                    published_at, sentiment_score,
-                   embedding <=> $1::vector AS distance
+                   embedding::halfvec(1536) <=> $1::halfvec(1536) AS distance
             FROM articles
             WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> $1::vector
+            ORDER BY embedding::halfvec(1536) <=> $1::halfvec(1536)
             LIMIT $2
             """,
             vec_str,
-            limit,
+            min(limit, _HNSW_EF_SEARCH),
         )
         return [dict(r) for r in rows]
     except Exception:

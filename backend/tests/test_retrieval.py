@@ -1,24 +1,70 @@
 """Tests for the agent retrieval functions."""
 
+import re
 import uuid
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+HALFVEC_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "database"
+    / "migrations"
+    / "008_halfvec_embedding_index.sql"
+)
 
 
 def _fake_embedding(dim: int = 1536) -> list[float]:
     return [0.01 * (i % 100) for i in range(dim)]
 
 
+async def _run_semantic_search(
+    db_rows: list[dict] | None = None, **kwargs: Any
+) -> tuple[list[dict], str, list[Any]]:
+    """Run semantic_search against mocked OpenAI and pool clients.
+
+    Returns the results, the SQL with whitespace collapsed, and the query params.
+    """
+    from app.services.retrieval import semantic_search
+
+    mock_pool = AsyncMock()
+    mock_pool.fetch = AsyncMock(return_value=db_rows or [])
+
+    emb_obj = MagicMock()
+    emb_obj.embedding = _fake_embedding()
+    mock_response = MagicMock()
+    mock_response.data = [emb_obj]
+
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(return_value=mock_response)
+
+    with (
+        patch(
+            "app.services.retrieval._get_openai_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ),
+    ):
+        results = await semantic_search("climate change", **kwargs)
+
+    mock_client.embeddings.create.assert_called_once()
+    mock_pool.fetch.assert_called_once()
+    sql, *params = mock_pool.fetch.call_args[0]
+    return results, " ".join(sql.split()), params
+
+
 class TestSemanticSearch:
     @pytest.mark.asyncio
     async def test_semantic_search_queries_by_embedding(self):
-        from app.services.retrieval import semantic_search
-
-        article_id = uuid.uuid4()
         db_rows = [
             {
-                "id": article_id,
+                "id": uuid.uuid4(),
                 "title": "Climate summit begins",
                 "source_url": "https://example.com/1",
                 "source_name": "Example News",
@@ -30,34 +76,71 @@ class TestSemanticSearch:
             }
         ]
 
-        mock_pool = AsyncMock()
-        mock_pool.fetch = AsyncMock(return_value=db_rows)
-
-        emb_obj = MagicMock()
-        emb_obj.embedding = _fake_embedding()
-        mock_response = MagicMock()
-        mock_response.data = [emb_obj]
-
-        mock_client = AsyncMock()
-        mock_client.embeddings.create = AsyncMock(return_value=mock_response)
-
-        with (
-            patch(
-                "app.services.retrieval._get_openai_client",
-                return_value=mock_client,
-            ),
-            patch(
-                "app.services.retrieval.get_pool",
-                new_callable=AsyncMock,
-                return_value=mock_pool,
-            ),
-        ):
-            results = await semantic_search("climate change")
+        results, _sql, _params = await _run_semantic_search(db_rows)
 
         assert len(results) == 1
         assert results[0]["title"] == "Climate summit begins"
-        mock_client.embeddings.create.assert_called_once()
-        mock_pool.fetch.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_compares_at_half_precision(self):
+        _results, sql, _params = await _run_semantic_search()
+
+        assert "embedding::halfvec(1536) <=> $1::halfvec(1536) AS distance" in sql
+        assert "ORDER BY embedding::halfvec(1536) <=> $1::halfvec(1536)" in sql
+        assert "::vector" not in sql
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_matches_halfvec_index_expression(self):
+        # The planner uses the HNSW index only when the ORDER BY expression
+        # matches the index expression exactly; otherwise it scans the table.
+        migration = HALFVEC_MIGRATION.read_text(encoding="utf-8")
+        match = re.search(
+            r"USING hnsw \(\((embedding::halfvec\(\d+\))\) halfvec_cosine_ops\)",
+            migration,
+        )
+        assert match, "008 must index (embedding::halfvec(N)) halfvec_cosine_ops"
+        index_cast = match.group(1)
+        assert index_cast == "embedding::halfvec(1536)"
+
+        _results, sql, _params = await _run_semantic_search()
+        assert f"ORDER BY {index_cast} <=> " in sql
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("requested", "sent"), [(10, 10), (40, 40), (100, 40)])
+    async def test_semantic_search_caps_limit_at_hnsw_ef_search(self, requested, sent):
+        # An HNSW scan returns at most hnsw.ef_search (default 40) rows.
+        _results, _sql, params = await _run_semantic_search(limit=requested)
+
+        assert params[1] == sent
+
+
+class TestHalfvecMigration:
+    def test_rerun_drops_the_half_index_only_when_invalid(self):
+        # A rerun after a failure past the CREATE must keep the valid index the
+        # new backend depends on; only a failed (INVALID) build is dropped.
+        lines = [
+            line.strip()
+            for line in HALFVEC_MIGRATION.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("--")
+        ]
+        sql = "\n".join(lines)
+
+        assert "NOT i.indisvalid" in sql
+        assert r"AS half_index_invalid \gset" in sql
+        assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_articles_embedding_half" in sql
+        assert "DROP INDEX CONCURRENTLY IF EXISTS idx_articles_embedding;" in sql
+
+        half_drops = []
+        guarded = False
+        for line in lines:
+            if line == r"\if :half_index_invalid":
+                guarded = True
+            elif line == r"\endif":
+                guarded = False
+            elif line.startswith("DROP INDEX") and "idx_articles_embedding_half" in line:
+                half_drops.append((line, guarded))
+
+        assert half_drops == [("DROP INDEX CONCURRENTLY idx_articles_embedding_half;", True)]
 
 
 class TestGraphTraverse:

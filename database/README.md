@@ -25,7 +25,7 @@ PostgreSQL schema for the Orbis globe news explorer, powered by **Supabase** wit
 | `topic_tags`      | TEXT[]                  | Array of topic labels                 |
 | `sentiment_score` | DOUBLE PRECISION        | Range roughly -1.0 to 1.0            |
 | `entities`        | JSONB                   | Named entities extracted by AI        |
-| `embedding`       | VECTOR(1536)            | For future RAG / semantic search      |
+| `embedding`       | VECTOR(1536)            | OpenAI `text-embedding-3-small`, for semantic search. HNSW index `idx_articles_embedding_half` is built at half precision on `(embedding::halfvec(1536))`; queries must use that exact cast to hit it (migration 008) |
 | `image_url`       | TEXT                    | Thumbnail URL, nullable               |
 | `themes`          | TEXT[]                  | GDELT GKG themes; default `'{}'`      |
 | `persons`         | TEXT[]                  | GKG people; default `'{}'`            |
