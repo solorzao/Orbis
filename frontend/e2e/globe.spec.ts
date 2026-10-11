@@ -34,6 +34,18 @@ test.describe("Globe Page", () => {
     await expect(canvas).toBeVisible({ timeout: 10000 });
   });
 
+  test("the globe loads slim land outlines that browsers cache for good", async ({ page }) => {
+    const [res] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith("/geo/land-110m.v1.geojson")),
+      page.reload(),
+    ]);
+    expect(res.status()).toBe(200);
+    expect(res.headers()["cache-control"]).toBe("public, max-age=31536000, immutable");
+    const land = (await res.json()) as { features: { properties: Record<string, string> }[] };
+    expect(land.features.length).toBeGreaterThan(150);
+    expect(land.features.some((f) => f.properties.ISO_A2 === "AQ")).toBe(false);
+  });
+
   test("status bar shows story count", async ({ page }) => {
     await expect(page.locator("text=/\\d+ stories/")).toBeVisible({
       timeout: 10000,

@@ -14,8 +14,9 @@ import {
   type GlobeGeometry,
 } from "@/lib/globeView";
 
-// Natural Earth 1:110m countries, self-hosted (see public/geo/README.md).
-const LAND_URL = "/geo/ne_110m_admin_0_countries.geojson";
+// Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
+// immutable: a changed file gets a new version (see public/geo/README.md).
+const LAND_URL = "/geo/land-110m.v1.geojson";
 
 export interface GlobeControls {
   flyTo: (lat: number, lng: number, altitude: number) => void;
