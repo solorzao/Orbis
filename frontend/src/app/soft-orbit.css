@@ -696,7 +696,8 @@ kbd {
 /*
  * The old TimeSlider, until PR 10's bottom row replaces it and these rules.
  * Centred at the bottom; from 1180px it centres in the space left of the side
- * panel, so the two never overlap, and shrinks to fit there.
+ * panel, so the two never overlap, and shrinks to fit there. Below 1180px it
+ * sits above the bottom sheet.
  */
 .time-slider {
   --ts-left: 24px;
@@ -717,15 +718,58 @@ kbd {
   .time-slider {
     --ts-right: calc(24px + 380px + 24px); /* the side panel's right, width and a gap */
   }
-  :root:has(.side[data-open="false"]) .time-slider {
-    --ts-right: 24px;
-  }
 }
 @media (max-width: 639px) {
   .time-slider {
     --ts-left: 12px;
     --ts-right: 12px;
+  }
+}
+
+/*
+ * Below 1180px the side panel is a bottom sheet (mockup lines 440-454): full
+ * width, 46vh open, folded to its 56px tab bar when collapsed. --sheet-h
+ * tells the time slider (PR 10: the timeline row) where the sheet's top is.
+ */
+@media (width < 1180px) {
+  :root {
+    --sheet-h: 46vh;
+  }
+  :root:has(.side[data-open="false"]) {
+    --sheet-h: 56px;
+  }
+  .side,
+  .side[data-open="false"] {
+    top: auto;
+    left: 12px;
+    right: 12px;
     bottom: 12px;
+    width: auto;
+    height: var(--sheet-h);
+    border-radius: var(--radius-xl);
+    opacity: 1;
+    transform: none;
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .side .ghead {
+    padding: 10px 12px; /* 34px tabs + 2px border: a 56px tab bar */
+  }
+  .side[data-open="false"] .gbody {
+    display: none;
+  }
+  .side-collapse svg {
+    transform: none; /* down: the sheet folds to its tab bar */
+  }
+  .side[data-open="false"] .side-collapse svg {
+    transform: rotate(180deg);
+  }
+  .side-open {
+    display: none; /* the tab bar stays, so no pill */
+  }
+  .time-slider {
+    bottom: calc(var(--sheet-h) + 24px);
+    transition: bottom var(--dur-slow) var(--ease-out);
   }
 }
 
