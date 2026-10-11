@@ -147,24 +147,30 @@ async def _backfill_iso_country_codes(pool) -> int:
     """Convert rows written before the FIPS to ISO switch (country_fips IS NULL).
 
     Such rows hold GDELT's FIPS code in country_code. Each distinct value is
-    moved to country_fips and replaced by its ISO code (or '' if unknown).
-    Rows are matched on their original value with IS NOT DISTINCT FROM, so a
-    NULL country_code is converted too (to '') instead of being re-selected
-    every cycle. Once nothing is left, a run is one SELECT that returns no rows.
+    moved to country_fips and replaced by its ISO code (or '' if unknown),
+    matched with ``country_code = $1`` so the country_code index can be used.
+    Rows with a NULL country_code get their own statement and become ''/'',
+    so they are not re-selected every cycle. Once nothing is left, a run is
+    one SELECT that returns no rows.
     """
     fips_codes = await pool.fetch(
         "SELECT DISTINCT country_code FROM articles WHERE country_fips IS NULL"
     )
     updated = 0
     for row in fips_codes:
-        fips = row["country_code"] or ""
-        result = await pool.execute(
-            "UPDATE articles SET country_fips = $1, country_code = $2 "
-            "WHERE country_fips IS NULL AND country_code IS NOT DISTINCT FROM $3",
-            fips,
-            fips_to_iso2(fips),
-            row["country_code"],
-        )
+        fips = row["country_code"]
+        if fips is None:
+            result = await pool.execute(
+                "UPDATE articles SET country_fips = '', country_code = '' "
+                "WHERE country_fips IS NULL AND country_code IS NULL"
+            )
+        else:
+            result = await pool.execute(
+                "UPDATE articles SET country_fips = $1, country_code = $2 "
+                "WHERE country_fips IS NULL AND country_code = $1",
+                fips,
+                fips_to_iso2(fips),
+            )
         updated += int(result.split()[-1])
     if updated:
         logger.info("Backfilled ISO country codes for %d articles.", updated)

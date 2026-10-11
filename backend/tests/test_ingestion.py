@@ -330,10 +330,11 @@ class TestRunIngestionCycle:
 
 
 class _FakeArticlesPool:
-    """In-memory stand-in for the two queries the backfill issues.
+    """In-memory stand-in for the queries the backfill issues.
 
-    ``rows`` are dicts with ``country_code`` and ``country_fips``. The UPDATE
-    matches with Python ``==``, which treats None like SQL IS NOT DISTINCT FROM.
+    ``rows`` are dicts with ``country_code`` and ``country_fips``. Each UPDATE
+    is recorded in ``updates`` as ``("code", fips, iso)`` for the indexable
+    ``country_code = $1`` statement, or ``("null",)`` for the NULL statement.
     """
 
     def __init__(self, rows: list[dict]):
@@ -345,9 +346,20 @@ class _FakeArticlesPool:
         codes = {r["country_code"] for r in self.rows if r["country_fips"] is None}
         return [{"country_code": c} for c in sorted(codes, key=lambda c: c or "")]
 
-    async def execute(self, query, fips, iso, original):
-        assert "IS NOT DISTINCT FROM $3" in query
-        self.updates.append((fips, iso, original))
+    async def execute(self, query, *args):
+        assert "WHERE country_fips IS NULL AND " in query
+        # IS NOT DISTINCT FROM cannot use the country_code index.
+        assert "DISTINCT" not in query
+        if query.rstrip().endswith("country_code IS NULL"):
+            assert args == ()
+            self.updates.append(("null",))
+            original, fips, iso = None, "", ""
+        else:
+            assert query.rstrip().endswith("country_code = $1")
+            fips, iso = args
+            assert fips is not None
+            self.updates.append(("code", fips, iso))
+            original = fips
         n = 0
         for r in self.rows:
             if r["country_fips"] is None and r["country_code"] == original:
@@ -372,6 +384,8 @@ class TestBackfillIsoCountryCodes:
 
         assert await _backfill_iso_country_codes(pool) == 4
 
+        # One indexable UPDATE per distinct code, none for the NULL case.
+        assert pool.updates == [("code", "CH", "CN"), ("code", "UK", "GB"), ("code", "ZZ", "")]
         assert rows == [
             {"country_code": "GB", "country_fips": "UK"},
             {"country_code": "GB", "country_fips": "UK"},
@@ -384,14 +398,18 @@ class TestBackfillIsoCountryCodes:
     async def test_converts_rows_with_null_country_code(self):
         from app.services.ingestion import _backfill_iso_country_codes
 
-        rows = [{"country_code": None, "country_fips": None}]
+        rows = [
+            {"country_code": None, "country_fips": None},
+            {"country_code": None, "country_fips": None},
+            {"country_code": "", "country_fips": None},  # empty string is not NULL
+        ]
         pool = _FakeArticlesPool(rows)
 
-        assert await _backfill_iso_country_codes(pool) == 1
+        assert await _backfill_iso_country_codes(pool) == 3
 
-        # Matched on the original NULL, and marked converted with ''.
-        assert pool.updates == [("", "", None)]
-        assert rows == [{"country_code": "", "country_fips": ""}]
+        # All NULL rows go through the one separate statement, marked converted with ''.
+        assert pool.updates == [("null",), ("code", "", "")]
+        assert rows == [{"country_code": "", "country_fips": ""}] * 3
 
     @pytest.mark.asyncio
     async def test_is_idempotent(self):

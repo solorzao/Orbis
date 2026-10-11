@@ -8,6 +8,11 @@ import urllib.request
 URL = "https://download.geonames.org/export/dump/countryInfo.txt"
 OUT = "backend/app/services/country_codes.py"
 
+# FIPS codes GDELT uses that GeoNames lacks, applied after the GeoNames pairs.
+# GDELT uses FIPS GZ for the Gaza Strip, but GeoNames lists only WE (West Bank)
+# for ISO PS. ISO PS covers both Palestinian territories, so GZ maps to PS too.
+OVERRIDES = {"GZ": "PS"}
+
 text = urllib.request.urlopen(URL, timeout=30).read().decode("utf-8")
 pairs = {}
 for line in text.splitlines():
@@ -17,6 +22,7 @@ for line in text.splitlines():
     iso, fips = cols[0].strip(), cols[3].strip()
     if iso and fips:
         pairs[fips] = iso
+pairs.update(OVERRIDES)
 
 body = "\n".join(f'    "{f}": "{i}",' for f, i in sorted(pairs.items()))
 with open(OUT, "w", encoding="utf-8", newline="\n") as fh:

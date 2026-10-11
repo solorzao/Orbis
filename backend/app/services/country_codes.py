@@ -99,6 +99,7 @@ FIPS_TO_ISO2: dict[str, str] = {
     "GT": "GT",
     "GV": "GN",
     "GY": "GY",
+    "GZ": "PS",
     "HA": "HT",
     "HK": "HK",
     "HM": "HM",
