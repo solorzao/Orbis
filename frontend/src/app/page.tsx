@@ -10,11 +10,13 @@ import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
+import { useSidePanel } from "@/hooks/useSidePanel";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
 import TopBar from "@/components/TopBar";
 import AgentPanel from "@/components/AgentPanel";
+import SidePanel from "@/components/SidePanel";
 import Sky from "@/components/Sky";
 import OrbitRings from "@/components/OrbitRings";
 import type { GlobeControls } from "@/components/Globe";
@@ -41,6 +43,10 @@ export default function Home() {
   // Snapshot of "now" captured at mount and when the user changes the day,
   // so derived date math stays pure during render.
   const [nowTs, setNowTs] = useState(() => Date.now());
+
+  // Side panel (Co-pilot | Stories): open by default on wide screens
+  const side = useSidePanel();
+  const { showStories } = side;
 
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false);
@@ -299,6 +305,7 @@ export default function Home() {
         (p) =>
           p.point.lat === point.lat && p.point.lng === point.lng && samePanelQuery(p.query, query),
       );
+      showStories();
       if (existing) {
         setExpandedPanelId(existing.panelId);
         return;
@@ -331,7 +338,7 @@ export default function Home() {
       setExpandedPanelId(panelId);
       fetchPanelData(panelId, point, query);
     },
-    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData],
+    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData, showStories],
   );
 
   const handleZoomChange = useCallback(() => {}, []);
@@ -383,6 +390,17 @@ export default function Home() {
         isLive={!apiError && !loading && dayOffset === 0}
         isLoading={loading}
         isOffline={apiError}
+      />
+
+      {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
+      <SidePanel
+        tab={side.tab}
+        onTabChange={side.setTab}
+        open={side.open}
+        onOpenChange={side.setOpen}
+        storiesCount={panelQueue.length}
+        copilot={<p className="side-empty">Ask the co-pilot about the news on the globe.</p>}
+        stories={<p className="side-empty">Click a dot on the globe to see its stories here.</p>}
       />
 
       {/* Panel Queue */}

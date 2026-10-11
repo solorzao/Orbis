@@ -461,6 +461,90 @@ kbd {
   }
 }
 
+/*
+ * Side panel: Co-pilot | Stories (mockup .side, line 330). Its top clears the
+ * top bar (whose bottom sits at about 62px) by more than 16px; its bottom
+ * leaves room for the timeline row PR 10 adds. Collapsed, it fades out and a
+ * pill takes its corner.
+ */
+.side {
+  position: fixed;
+  top: 96px;
+  right: 24px;
+  bottom: 124px;
+  width: 380px;
+  z-index: var(--z-panel);
+}
+.side[data-open="false"] {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.985);
+  visibility: hidden;
+  pointer-events: none;
+}
+.side-body {
+  padding-top: 8px;
+}
+.side-body-copilot {
+  display: flex;
+  flex-direction: column;
+}
+.side-empty {
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.side-collapse svg {
+  transform: rotate(180deg); /* up, towards the pill's corner */
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.side-open {
+  position: fixed;
+  top: 96px;
+  right: 24px;
+  z-index: var(--z-panel);
+}
+.side-open.pill.lg {
+  height: 38px;
+}
+
+/*
+ * The old TimeSlider, until PR 10's bottom row replaces it and these rules.
+ * Centred at the bottom; from 1180px it centres in the space left of the side
+ * panel, so the two never overlap, and shrinks to fit there.
+ */
+.time-slider {
+  --ts-left: 24px;
+  --ts-right: 24px;
+  position: fixed;
+  z-index: 30;
+  left: var(--ts-left);
+  right: var(--ts-right);
+  bottom: 24px;
+  width: max-content;
+  max-width: calc(100vw - var(--ts-left) - var(--ts-right));
+  margin-inline: auto;
+}
+.time-slider > * {
+  max-width: 100%;
+}
+@media (min-width: 1180px) {
+  .time-slider {
+    --ts-right: calc(24px + 380px + 24px); /* the side panel's right, width and a gap */
+  }
+  :root:has(.side[data-open="false"]) .time-slider {
+    --ts-right: 24px;
+  }
+}
+@media (max-width: 639px) {
+  .time-slider {
+    --ts-left: 12px;
+    --ts-right: 12px;
+    bottom: 12px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
