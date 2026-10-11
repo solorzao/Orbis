@@ -1,20 +1,22 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { filterPointsByTopic } from "@/lib/clustering";
-import { fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
+import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
-import { DEFAULT_WINDOW, HOUR_MS, sameWindow, type TimeWindow } from "@/lib/timeWindow";
+import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
-import TimeSlider from "@/components/TimeSlider";
+import BottomBar from "@/components/BottomBar";
+import LayerSwitcher, { type GlobeLayer } from "@/components/LayerSwitcher";
+import TimelineCapsule from "@/components/TimelineCapsule";
 import NewsPanel from "@/components/NewsPanel";
 import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
@@ -33,10 +35,7 @@ export default function Home() {
   // One time window for the globe, the panels and the timeline (lib/timeWindow).
   const [timeWindow, setTimeWindow] = useState<TimeWindow>(DEFAULT_WINDOW);
   const { points: allPoints, error: apiError, loading } = useGlobePoints(timeWindow);
-  // The old slider's day, until the timeline replaces it (PR 10, Task 10.6).
-  const [dayOffset, setDayOffset] = useState(0);
-  const [density, setDensity] = useState<{ hour: number; count: number }[]>([]);
-  const [hasOlderData, setHasOlderData] = useState(true);
+  const [layer, setLayer] = useState<GlobeLayer>("dots");
 
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
@@ -53,30 +52,14 @@ export default function Home() {
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
+  // Intensity is computed per vertex for every place: too slow for a low-power
+  // device without WebGPU, and three-globe can't tell us cheaply if it has it.
+  const globeLayer: GlobeLayer = lowPower ? "dots" : layer;
 
   // The same window again (a preset clicked twice) keeps its dots: no refetch.
   const changeWindow = useCallback((next: TimeWindow) => {
     setTimeWindow((prev) => (sameWindow(prev, next) ? prev : next));
   }, []);
-
-  // The old slider's day chips: today is live, an earlier day the 24 hours before it.
-  const handleDayChange = useCallback(
-    (newOffset: number) => {
-      const day = Math.max(0, Math.min(6, newOffset));
-      setDayOffset(day);
-      const end = Date.now() - day * 24 * HOUR_MS;
-      changeWindow(
-        day === 0
-          ? DEFAULT_WINDOW
-          : {
-              kind: "range",
-              startTime: new Date(end - 24 * HOUR_MS).toISOString(),
-              endTime: new Date(end).toISOString(),
-            },
-      );
-    },
-    [changeWindow],
-  );
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     if (action.type === "flyTo" && globeControlsRef.current) {
@@ -103,37 +86,6 @@ export default function Home() {
       window.open(citation.url, "_blank", "noopener,noreferrer");
     }
   }, []);
-
-  // Fetch density when dayOffset changes (with cancellation to prevent 429s)
-  useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      fetchDensity(dayOffset)
-        .then((d) => {
-          if (cancelled) return;
-          setDensity(d);
-          if (dayOffset < 6) {
-            fetchDensity(dayOffset + 1)
-              .then((older) => {
-                if (cancelled) return;
-                setHasOlderData(older.some((h) => h.count > 0));
-              })
-              .catch(() => {
-                if (!cancelled) setHasOlderData(false);
-              });
-          } else {
-            setHasOlderData(false);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) setDensity([]);
-        });
-    }, 150);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [dayOffset]);
 
   // Filter points client-side — instant, no API call
   const points = filterPointsByTopic(allPoints, activeTopic);
@@ -382,6 +334,7 @@ export default function Home() {
         }}
         reduced={reduced}
         lowPower={lowPower}
+        layer={globeLayer}
       />
 
       {/* Orbital rings around the globe */}
@@ -419,22 +372,22 @@ export default function Home() {
         stories={storiesTab}
       />
 
-      {/* Time Slider + Status */}
-      <TimeSlider
-        density={density}
-        onChange={(range) => {
-          if (range) changeWindow({ kind: "range", ...range });
-          else handleDayChange(dayOffset);
-        }}
-        onDayChange={handleDayChange}
-        dayOffset={dayOffset}
-        hasOlderData={hasOlderData}
-        totalStories={points.reduce((sum, p) => sum + p.count, 0)}
-        totalLocations={points.length}
-        isLive={!apiError && !loading && timeWindow.kind === "live"}
-        isLoading={loading}
-        isOffline={apiError}
-      />
+      {/* Bottom row: layers and the timeline. After the side panel: the CSS
+          keeps it clear of the panel, and above the sheet, by sibling selectors. */}
+      <BottomBar>
+        <LayerSwitcher
+          layer={globeLayer}
+          onChange={setLayer}
+          unavailable={lowPower ? { intensity: "Intensity is off in low-power mode" } : undefined}
+        />
+        <TimelineCapsule
+          timeWindow={timeWindow}
+          onChange={changeWindow}
+          stories={points.reduce((sum, p) => sum + p.count, 0)}
+          places={points.length}
+          reduced={reduced}
+        />
+      </BottomBar>
     </main>
   );
 }

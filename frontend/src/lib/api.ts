@@ -128,17 +128,6 @@ export function fetchClusterSummary(
   return apiFetch<ApiClusterSummary>("/api/news/summary", params);
 }
 
-export interface ApiHourlyDensity {
-  hour: number;
-  count: number;
-}
-
-export function fetchDensity(offsetDays = 0): Promise<ApiHourlyDensity[]> {
-  const params: Record<string, string> = {};
-  if (offsetDays > 0) params.offset_days = String(offsetDays);
-  return apiFetch<ApiHourlyDensity[]>("/api/news/density", params);
-}
-
 /** Stories in one UTC hour; `hour` is its start, e.g. "2026-10-11T14:00:00Z". */
 export interface ApiHourlyVolume {
   hour: string;

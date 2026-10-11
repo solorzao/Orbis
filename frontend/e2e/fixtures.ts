@@ -101,10 +101,22 @@ export const MOCK_SUMMARY = {
     "Paris is at the center of multiple stories today, including France's new climate policy, an EU summit on trade and security, and a major tech funding round.",
 };
 
-export const MOCK_DENSITY = Array.from({ length: 24 }, (_, i) => ({
-  hour: i,
-  count: Math.floor(Math.random() * 20) + 1,
-}));
+/**
+ * /api/news/volume?days=7 as the backend returns it: every hour from the hour
+ * seven days ago to the current one (169), oldest first, with a daily swell.
+ */
+export function mockVolume(now = Date.now()) {
+  const hour = 3_600_000;
+  const current = Math.floor(now / hour) * hour;
+  return Array.from({ length: 169 }, (_, i) => {
+    const t = current - (168 - i) * hour;
+    const h = new Date(t).getUTCHours();
+    return {
+      hour: new Date(t).toISOString().replace(".000Z", "Z"),
+      count: 20 + Math.round(15 * Math.sin(((h - 8) / 24) * 2 * Math.PI)) + (i % 5),
+    };
+  });
+}
 
 export const MOCK_TOPICS = [
   { topic: "Politics", count: 42 },
@@ -174,8 +186,8 @@ export async function mockAllApiRoutes(page: Page) {
   // Cluster summary
   await page.route("**/api/news/summary*", (route) => route.fulfill({ json: MOCK_SUMMARY }));
 
-  // Density
-  await page.route("**/api/news/density*", (route) => route.fulfill({ json: MOCK_DENSITY }));
+  // Story volume for the timeline
+  await page.route("**/api/news/volume*", (route) => route.fulfill({ json: mockVolume() }));
 
   // Topics
   await page.route("**/api/topics*", (route) => route.fulfill({ json: MOCK_TOPICS }));

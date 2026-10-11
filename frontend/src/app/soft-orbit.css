@@ -464,8 +464,8 @@ kbd {
 /*
  * Side panel: Co-pilot | Stories (mockup .side, line 330). Its top clears the
  * top bar (whose bottom sits at about 62px) by more than 16px; its bottom
- * leaves room for the timeline row PR 10 adds. Collapsed, it fades out and a
- * pill takes its corner.
+ * (124px) leaves room for the bottom row (84px from 20px up) below it.
+ * Collapsed, it fades out and a pill takes its corner.
  */
 .side {
   position: fixed;
@@ -879,50 +879,82 @@ kbd {
 }
 
 /*
- * The old TimeSlider, until PR 10's bottom row replaces it and these rules.
- * Centred at the bottom; from 1180px it centres in the space left of the side
- * panel, so the two never overlap, and shrinks to fit there. Below 1180px it
- * sits above the bottom sheet.
+ * Bottom row: layers | timeline | (surges, PR 14), one grid so the tracks
+ * can't overlap. The side tracks never shrink below their content (as in the
+ * top bar: a plain 1fr would let the layers, whose min-width is 0, spill into
+ * the capsule); only the middle one does. From 1180px the row ends left
+ * of the open side panel (its right, width and a 24px gap), so it never slides
+ * under it; collapsed (only data-open="false": before hydration the panel shows
+ * open), the row spans the width again. It must come after the side panel in
+ * the DOM for these sibling selectors.
  */
-.time-slider {
-  --ts-left: 24px;
-  --ts-right: 24px;
+.bottombar {
   position: fixed;
-  z-index: 30;
-  left: var(--ts-left);
-  right: var(--ts-right);
-  bottom: 24px;
-  width: max-content;
-  max-width: calc(100vw - var(--ts-left) - var(--ts-right));
-  margin-inline: auto;
+  left: 24px;
+  right: 24px;
+  bottom: 20px;
+  z-index: var(--z-panel);
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 640px) minmax(max-content, 1fr);
+  align-items: end;
+  gap: 24px;
+  pointer-events: none; /* the globe stays draggable between the tracks */
 }
-.time-slider > * {
-  max-width: 100%;
+.bottombar > * {
+  pointer-events: auto;
+  min-width: 0;
+}
+.bottombar .layers {
+  grid-column: 1;
+  justify-self: start;
+  margin-bottom: 4px; /* mockup: 24px from the bottom, the capsule 20px */
+}
+.bottombar .timeline {
+  grid-column: 2;
+  width: 100%;
 }
 @media (min-width: 1180px) {
-  .time-slider {
-    --ts-right: calc(24px + 380px + 24px); /* the side panel's right, width and a gap */
+  .bottombar {
+    transition: right var(--dur-slow) var(--ease-out);
+  }
+  .side:not([data-open="false"]) ~ .bottombar {
+    right: calc(24px + 380px + 24px);
   }
 }
-@media (max-width: 639px) {
-  .time-slider {
-    --ts-left: 12px;
-    --ts-right: 12px;
+/* Narrow: no chart, story count or layers; the play button, label and presets stay. */
+@media (max-width: 760px) {
+  .bottombar .layers {
+    display: none;
+  }
+  .timeline {
+    height: 64px;
+  }
+  .timeline .play {
+    width: 44px;
+    height: 44px;
+  }
+  .timeline .chart,
+  .timeline .count {
+    display: none;
+  }
+  .timeline .meta {
+    flex: 1;
+    justify-items: start;
   }
 }
 
 /*
  * Below 1180px the side panel is a bottom sheet (mockup lines 440-454): full
- * width, 46vh open (less on short screens, so the time slider above it stays
+ * width, 46vh open (less on short screens, so the bottom row above it stays
  * clear of the top bar), folded to its 56px tab bar when collapsed, and before
  * hydration (no data-open yet). --sheet-h is set on the sheet and its later
- * siblings: the time slider now, PR 10's timeline row after it, which must
- * also come after the side panel in the DOM.
+ * siblings, the bottom row among them, which stacks the layers over the
+ * timeline 12px above the sheet.
  */
 @media (width < 1180px) {
   .side,
   .side ~ * {
-    /* 260px: the top bar (62px), the slider (152px) and the gaps around them */
+    /* 260px: the top bar (62px), the bottom row (138px) and the gaps around them */
     --sheet-h: min(46vh, 100vh - 260px);
   }
   .side:not([data-open="true"]),
@@ -958,15 +990,28 @@ kbd {
   .side-open {
     display: none; /* the tab bar stays, so no pill */
   }
-  .time-slider {
+  .bottombar {
+    left: 12px;
+    right: 12px;
     bottom: calc(var(--sheet-h, 56px) + 24px);
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    row-gap: 12px; /* regions keep 12px apart */
     transition: bottom var(--dur-slow) var(--ease-out);
+  }
+  .bottombar .layers,
+  .bottombar .timeline {
+    grid-column: 1;
+  }
+  .bottombar .layers {
+    justify-self: center;
+    margin-bottom: 0;
   }
 }
 @media (max-width: 639px) {
   .side,
   .side ~ * {
-    /* the top bar has two rows here (100px) and the slider is taller */
+    /* the top bar has two rows here (100px) */
     --sheet-h: min(46vh, 100vh - 310px);
   }
 }

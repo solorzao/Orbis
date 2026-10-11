@@ -14,25 +14,31 @@ const SIZES = [
 
 /** Below this width the side panel is a bottom sheet. */
 const SHEET_BELOW = 1180;
+/** At this width and below, the layer switcher hides and the capsule drops its chart. */
+const NARROW_MAX = 760;
 
 /**
  * The open sheet's height (soft-orbit.css): 46vh, less on short screens so
- * the time slider above it stays clear of the top bar (two rows below 640px).
+ * the bottom row above it stays clear of the top bar (two rows below 640px),
+ * and never below its 56px tab bar.
  */
 function openSheetHeight({ width, height }: { width: number; height: number }) {
-  return Math.min(height * 0.46, height - (width < 640 ? 310 : 260));
+  return Math.max(56, Math.min(height * 0.46, height - (width < 640 ? 310 : 260)));
 }
 
 // Chrome regions that must never touch. Later PRs add their regions here.
-// The time slider is the old one until PR 10's bottom row replaces it.
-const REGIONS = ["brand", "topic-filter", "status-pill", "side-panel", "time-slider"];
 const TOP_BAR = ["brand", "topic-filter", "status-pill"];
+
+/** The regions shown at a width: the side panel (or its reopen pill), the bottom row. */
+function regionsAt(width: number, side: "side-panel" | "side-open" = "side-panel") {
+  return [...TOP_BAR, side, "timeline", ...(width > NARROW_MAX ? ["layer-switcher"] : [])];
+}
 
 type Box = { id: string; x: number; y: number; w: number; h: number };
 
-async function boxes(page: Page) {
+async function boxes(page: Page, ids: string[]) {
   const out: Box[] = [];
-  for (const id of REGIONS) {
+  for (const id of ids) {
     const el = page.getByTestId(id);
     if (!(await el.isVisible())) continue;
     const b = await el.boundingBox();
@@ -53,7 +59,7 @@ function tooClose(a: Box, b: Box) {
 
 async function settle(page: Page, size: { width: number; height: number }) {
   await page.setViewportSize(size);
-  // No transitions, so the panel and sheet measure at their final size.
+  // No transitions, so the panel, sheet and bottom row measure at their final place.
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAllApiRoutes(page);
   await page.goto("/");
@@ -65,9 +71,9 @@ async function settle(page: Page, size: { width: number; height: number }) {
   await expect(page.getByTestId("status-pill").getByText("Live")).toBeVisible({ timeout: 10000 });
 }
 
-async function expectApart(page: Page, width: number, state: string) {
-  const b = await boxes(page);
-  expect(b.map((r) => r.id).sort(), `${state}: regions shown`).toEqual([...REGIONS].sort());
+async function expectApart(page: Page, width: number, state: string, ids: string[]) {
+  const b = await boxes(page, ids);
+  expect(b.map((r) => r.id).sort(), `${state}: regions shown`).toEqual([...ids].sort());
   for (let i = 0; i < b.length; i++)
     for (let j = i + 1; j < b.length; j++)
       expect(tooClose(b[i], b[j]), `${state}: ${b[i].id} vs ${b[j].id}`).toBe(false);
@@ -76,7 +82,7 @@ async function expectApart(page: Page, width: number, state: string) {
     expect(r.x, `${state}: ${r.id} left edge`).toBeGreaterThanOrEqual(0);
     expect(r.x + r.w, `${state}: ${r.id} right edge`).toBeLessThanOrEqual(width);
   }
-  return b;
+  return Object.fromEntries(b.map((r) => [r.id, r])) as Record<string, Box>;
 }
 
 for (const size of SIZES) {
@@ -86,23 +92,44 @@ for (const size of SIZES) {
     await settle(page, size);
     const side = page.getByTestId("side-panel");
     await expect(side).toHaveAttribute("data-open", String(!sheet)); // the default for the width
-    const b = await expectApart(page, size.width, sheet ? "sheet collapsed" : "side panel open");
+    const state = sheet ? "sheet collapsed" : "side panel open";
+    const b = await expectApart(page, size.width, state, regionsAt(size.width));
 
     // The topics may scroll, but a crowded side must not squeeze them to nothing.
-    const topics = b.find((r) => r.id === "topic-filter");
-    expect(topics?.w ?? 0, "topic-filter width").toBeGreaterThanOrEqual(200);
+    expect(b["topic-filter"]?.w ?? 0, "topic-filter width").toBeGreaterThanOrEqual(200);
 
     if (sheet) {
-      // Open, the sheet is at its tallest and the time slider moves up above it.
+      // Open, the sheet is at its tallest and the bottom row moves up above it.
       await page.getByTestId("side-collapse").click();
       await expect(side).toHaveAttribute("data-open", "true");
-      await expectApart(page, size.width, "sheet open");
-    } else {
-      // The floating panel clears the top bar by at least 16px.
-      const barBottom = Math.max(...b.filter((r) => TOP_BAR.includes(r.id)).map((r) => r.y + r.h));
-      const panel = b.find((r) => r.id === "side-panel")!;
-      expect(panel.y - barBottom, "side panel below the top bar").toBeGreaterThanOrEqual(16);
+      await expectApart(page, size.width, "sheet open", regionsAt(size.width));
+      return;
     }
+
+    // The floating panel clears the top bar by at least 16px...
+    const barBottom = Math.max(...TOP_BAR.map((id) => b[id].y + b[id].h));
+    const panel = b["side-panel"];
+    expect(panel.y - barBottom, "side panel below the top bar").toBeGreaterThanOrEqual(16);
+    // ...and the bottom row ends 24px left of it: its grid never slides under the panel.
+    for (const id of ["layer-switcher", "timeline"]) {
+      expect(b[id].x + b[id].w, `${id} left of the side panel`).toBeLessThanOrEqual(panel.x - 24);
+    }
+
+    // Collapsed, the panel gives way to its pill and the bottom row spans the width again,
+    // the capsule in the middle.
+    await page.getByTestId("side-collapse").click();
+    await expect(side).toHaveAttribute("data-open", "false");
+    const collapsed = await expectApart(
+      page,
+      size.width,
+      "side panel collapsed",
+      regionsAt(size.width, "side-open"),
+    );
+    const timeline = collapsed["timeline"];
+    expect(Math.abs(timeline.x + timeline.w / 2 - size.width / 2), "capsule centred").toBeLessThan(
+      1,
+    );
+    expect(timeline.w, "capsule at its full width").toBeCloseTo(640, 0);
   });
 }
 
@@ -112,6 +139,21 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
   }) => {
     await settle(page, size);
     const side = page.getByTestId("side-panel");
+    const layers = page.getByTestId("layer-switcher");
+
+    /** The bottom row sits 12px above the sheet, the layers 12px above the capsule. */
+    const expectRowAboveSheet = async () => {
+      const sheetBox = (await side.boundingBox())!;
+      const timeline = (await page.getByTestId("timeline").boundingBox())!;
+      expect(sheetBox.y - (timeline.y + timeline.height)).toBeCloseTo(12, 0);
+      if (size.width > NARROW_MAX) {
+        const l = (await layers.boundingBox())!;
+        expect(timeline.y - (l.y + l.height)).toBeCloseTo(12, 0);
+        expect(l.x + l.width / 2).toBeCloseTo(size.width / 2, 0); // centred over the capsule
+      } else {
+        await expect(layers).not.toBeVisible();
+      }
+    };
 
     // Collapsed: the 56px tab bar along the bottom, tabs in reach, no pill.
     let box = (await side.boundingBox())!;
@@ -122,15 +164,15 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     await expect(page.getByTestId("side-tab-copilot")).toBeVisible();
     await expect(page.getByTestId("side-open")).not.toBeVisible();
     await expect(page.getByTestId("side-collapse")).toHaveAccessibleName("Expand panel");
+    await expectRowAboveSheet();
 
-    // A tab opens it (46vh where there is room), and the time slider sits 12px above it.
+    // A tab opens it (46vh where there is room), and the bottom row moves up with it.
     await page.getByTestId("side-tab-stories").click();
     await expect(side).toHaveAttribute("data-open", "true");
     box = (await side.boundingBox())!;
     expect(Math.abs(box.height - openSheetHeight(size))).toBeLessThan(1);
     expect(box.y + box.height).toBe(size.height - 12);
-    const slider = (await page.getByTestId("time-slider").boundingBox())!;
-    expect(box.y - (slider.y + slider.height)).toBeCloseTo(12, 0);
+    await expectRowAboveSheet();
 
     // And folds back to its tab bar, keeping focus on its button (no pill to move to).
     await page.getByTestId("side-collapse").click();
@@ -150,6 +192,10 @@ test.describe("before hydration (server HTML, no JavaScript)", () => {
     await expect(side).not.toHaveAttribute("data-open");
     await expect(side).toBeVisible();
     await expect(page.getByTestId("side-open")).not.toBeVisible();
+    // The bottom row already ends clear of it.
+    const panel = (await side.boundingBox())!;
+    const timeline = (await page.getByTestId("timeline").boundingBox())!;
+    expect(timeline.x + timeline.width).toBeLessThanOrEqual(panel.x - 24);
   });
 
   test("below 1180px the sheet shows folded to its tab bar", async ({ page }) => {
@@ -160,7 +206,7 @@ test.describe("before hydration (server HTML, no JavaScript)", () => {
     const box = (await side.boundingBox())!;
     expect(box.height).toBe(56);
     expect(box.y + box.height).toBe(844 - 12);
-    const slider = (await page.getByTestId("time-slider").boundingBox())!;
-    expect(box.y - (slider.y + slider.height)).toBeCloseTo(12, 0);
+    const timeline = (await page.getByTestId("timeline").boundingBox())!;
+    expect(box.y - (timeline.y + timeline.height)).toBeCloseTo(12, 0);
   });
 });
