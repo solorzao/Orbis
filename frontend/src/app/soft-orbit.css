@@ -718,6 +718,100 @@ kbd {
 }
 
 /*
+ * Timeline capsule (mockup .timeline, lines 411-419): replay, the 7-day
+ * volume chart and the window's label and presets. No position or width: the
+ * bottom row's grid places and sizes it.
+ */
+.timeline {
+  height: var(--timeline-height);
+  padding: 0 18px 0 10px;
+  gap: 14px;
+  border-radius: var(--timeline-radius);
+}
+.timeline .play {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  padding: 0;
+  flex: none;
+  cursor: pointer;
+}
+.timeline .chart {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  height: 62px;
+  border-radius: var(--radius-md);
+  cursor: crosshair;
+  touch-action: none; /* a drag picks a range, never scrolls */
+  user-select: none;
+}
+.timeline .chart:has(input:focus-visible) {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: 2px;
+}
+.timeline .chart svg {
+  display: block;
+  overflow: visible;
+}
+.timeline .band {
+  fill: var(--timeline-window);
+}
+.timeline .playhead line {
+  stroke: var(--timeline-playhead);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.timeline .playhead circle {
+  fill: var(--timeline-playhead);
+}
+.timeline .day {
+  font: var(--type-data-sm);
+  fill: var(--text-muted);
+}
+.timeline .day.today {
+  fill: var(--text-primary);
+}
+.timeline .meta {
+  flex: none;
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+}
+.timeline .pos {
+  font: var(--type-data);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.timeline .count {
+  font: var(--type-label);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.timeline .pr {
+  display: flex;
+  gap: 2px;
+}
+.timeline .pr button {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.timeline .pr button:hover {
+  color: var(--text-primary);
+}
+.timeline .pr button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+/*
  * The old TimeSlider, until PR 10's bottom row replaces it and these rules.
  * Centred at the bottom; from 1180px it centres in the space left of the side
  * panel, so the two never overlap, and shrinks to fit there. Below 1180px it

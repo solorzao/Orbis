@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchTopics } from "./api";
+import {
+  fetchGlobeNews,
+  fetchClusterArticles,
+  fetchClusterSummary,
+  fetchTopics,
+  fetchVolume,
+} from "./api";
 
 const mockFetch = vi.fn();
 
@@ -98,5 +104,33 @@ describe("fetchTopics", () => {
     const url = new URL(mockFetch.mock.calls[0][0]);
     expect(url.pathname).toBe("/api/topics");
     expect([...url.searchParams.keys()]).toHaveLength(0);
+  });
+});
+
+describe("fetchVolume", () => {
+  it("asks /api/news/volume for the given days and returns the hours", async () => {
+    const hours = [{ hour: "2026-10-11T14:00:00Z", count: 31 }];
+    mockFetch.mockReturnValue(jsonResponse(hours));
+    await expect(fetchVolume(7)).resolves.toEqual(hours);
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/api/news/volume");
+    expect(url.searchParams.get("days")).toBe("7");
+  });
+
+  it("passes an abort signal through to fetch", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    const controller = new AbortController();
+    await fetchVolume(3, controller.signal);
+    expect(mockFetch.mock.calls[0][1]).toEqual({ signal: controller.signal });
+  });
+});
+
+describe("fetchGlobeNews with a signal", () => {
+  it("passes the abort signal through to fetch", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    const controller = new AbortController();
+    await fetchGlobeNews("6h", 500, undefined, undefined, controller.signal);
+    expect(mockFetch.mock.calls[0][1]).toEqual({ signal: controller.signal });
+    expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get("timespan")).toBe("6h");
   });
 });
