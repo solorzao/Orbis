@@ -1,4 +1,13 @@
 @import "tailwindcss";
+@import "./tokens.css";
+
+/* Self-hosted fonts (next/font on <html>) behind the token stacks. */
+:root {
+  --font-brand: var(--font-orbitron), Orbitron, sans-serif;
+  --font-heading: var(--font-space-grotesk), "Space Grotesk", system-ui, sans-serif;
+  --font-body: var(--font-space-grotesk), "Space Grotesk", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, monospace;
+}
 
 :root,
 [data-theme="dark"] {
