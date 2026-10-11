@@ -256,11 +256,13 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                         title, summary, source_url, source_name, source_language,
                         published_at, latitude, longitude, location,
                         country_code, region, topic_tags, sentiment_score,
-                        entities, image_url, country_fips
+                        entities, image_url, country_fips,
+                        themes, persons, orgs, names, counts
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8,
                         ST_SetSRID(ST_MakePoint($8, $7), 4326)::geography,
-                        $9, $10, $11, $12, $13, $14, $15
+                        $9, $10, $11, $12, $13, $14, $15,
+                        $16, $17, $18, $19, $20
                     )
                     ON CONFLICT (source_url) DO UPDATE SET
                         title = EXCLUDED.title,
@@ -274,7 +276,12 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                         sentiment_score = EXCLUDED.sentiment_score,
                         topic_tags = EXCLUDED.topic_tags,
                         entities = EXCLUDED.entities,
-                        image_url = EXCLUDED.image_url
+                        image_url = EXCLUDED.image_url,
+                        themes = EXCLUDED.themes,
+                        persons = EXCLUDED.persons,
+                        orgs = EXCLUDED.orgs,
+                        names = EXCLUDED.names,
+                        counts = EXCLUDED.counts
                     """,
                     article.get("title", ""),
                     article.get("summary"),
@@ -293,6 +300,11 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                     # Never NULL: NULL marks rows written before the FIPS to ISO
                     # switch, which the ingestion backfill converts.
                     article.get("country_fips") or "",
+                    article.get("themes", []),
+                    article.get("persons", []),
+                    article.get("orgs", []),
+                    article.get("names", []),
+                    json.dumps(article.get("counts", [])),
                 )
                 count += 1
 

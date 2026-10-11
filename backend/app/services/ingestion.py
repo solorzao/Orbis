@@ -1,8 +1,9 @@
 """GDELT raw GKG → PostgreSQL ingestion service.
 
 Periodically downloads the latest GDELT GKG data file (published every
-15 minutes), extracts articles with city-level locations, scrapes their
-titles, and upserts them into the database.
+15 minutes), extracts articles with city-level locations, takes their
+titles from GDELT (scraping the page only when GDELT has none), and
+upserts them with their GKG fields into the database.
 """
 
 from __future__ import annotations
@@ -40,15 +41,37 @@ def _dedup_key(title: str) -> str:
     return title.strip().lower()
 
 
+async def _assign_titles(articles: list[dict]) -> None:
+    """Set each article's ``title``: GDELT's page title, else a scraped <title>.
+
+    Only records without a usable GDELT title are scraped. Articles left
+    without a title are dropped by the caller.
+    """
+    untitled = []
+    for a in articles:
+        if a.get("page_title"):
+            a["title"] = a["page_title"]
+        else:
+            untitled.append(a)
+    if untitled:
+        await scrape_titles(untitled)
+    scraped = sum(1 for a in untitled if a.get("title"))
+    logger.info(
+        "Titles: %d from GDELT, %d scraped, %d dropped.",
+        len(articles) - len(untitled),
+        scraped,
+        len(untitled) - scraped,
+    )
+
+
 async def _ingest_from_raw_gkg() -> int:
-    """Fetch the latest GKG file, scrape titles, and upsert to DB."""
+    """Fetch the latest GKG file, take or scrape titles, and upsert to DB."""
     articles = await fetch_raw_gkg()
     if not articles:
         logger.warning("GKG raw file: 0 city-level articles.")
         return 0
 
-    # Scrape <title> tags from article URLs
-    await scrape_titles(articles)
+    await _assign_titles(articles)
 
     # Convert to DB upsert format, deduplicating by normalized title
     seen_titles: set[str] = set()
@@ -87,9 +110,15 @@ async def _ingest_from_raw_gkg() -> int:
                 "region": a.get("location_name", ""),
                 "topic_tags": topic_tags,
                 "sentiment_score": sentiment,
-                "entities": {},
+                "entities": {"tone": a["tone_detail"]} if a.get("tone_detail") else {},
                 "image_url": a.get("image_url") or None,
-                "persons": a.get("persons", []),
+                # GKG fields stored on the row
+                "themes": a.get("themes", []),
+                "persons": a.get("persons", []),  # also feeds the knowledge graph
+                "orgs": a.get("organizations", []),
+                "names": a.get("names", []),
+                "counts": a.get("counts", []),
+                # Knowledge graph only
                 "organizations": a.get("organizations", []),
                 "mentioned_locations": a.get("mentioned_locations", []),
             }

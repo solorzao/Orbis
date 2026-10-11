@@ -12,7 +12,7 @@ from app.config import settings
 
 
 def _make_gkg_article(url="https://example.com/story", title="Test Headline"):
-    """Build a dict as fetch_raw_gkg would return."""
+    """Build a dict as fetch_raw_gkg would return; *title* is GDELT's page title."""
     return {
         "url": url,
         "domain": "example.com",
@@ -21,10 +21,15 @@ def _make_gkg_article(url="https://example.com/story", title="Test Headline"):
         "location_name": "Tehran, Tehran, Iran",
         "country_code": "IR",
         "tone": -2.5,
-        "themes": "GENERAL_GOVERNMENT",
+        "page_title": title,
+        "themes": ["GENERAL_GOVERNMENT"],
+        "persons": [],
+        "organizations": [],
+        "names": [],
+        "counts": [],
+        "mentioned_locations": [],
         "image_url": "https://example.com/img.jpg",
         "published_at": datetime(2026, 3, 5, tzinfo=timezone.utc),
-        "title": title,
     }
 
 
@@ -48,7 +53,7 @@ def _common_patches(articles, ml_enabled=True):
     mock_pool = AsyncMock()
     mock_pool.fetch = AsyncMock(return_value=[_mock_db_row(a["url"]) for a in articles])
 
-    titled = [a for a in articles if a.get("title")]
+    titled = [a for a in articles if a.get("page_title")]
 
     patches = {
         "fetch_raw_gkg": patch(
@@ -219,6 +224,166 @@ class TestIngestFromRawGkg:
             await _ingest_from_raw_gkg()
             row = mock_upsert.call_args[0][0][0]
             assert row["sentiment_score"] == -1.0
+
+
+async def _scrape_only_urls_ending_scraped(batch):
+    """Stand-in for scrape_titles: titles the URLs ending in /scraped, fails the rest."""
+    for a in batch:
+        if a["url"].endswith("/scraped"):
+            a["title"] = "Scraped headline from the page"
+    return batch
+
+
+class TestTitlesAndGkgFields:
+    """Titles come from GDELT's PAGE_TITLE first; GKG fields land on the row."""
+
+    @pytest.mark.asyncio
+    async def test_gdelt_titles_are_used_without_scraping(self, caplog):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [_make_gkg_article(title="Ceasefire talks resume in Cairo")]
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"] as mock_scrape,
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+            caplog.at_level(logging.INFO, logger="orbis.ingestion"),
+        ):
+            await _ingest_from_raw_gkg()
+
+        mock_scrape.assert_not_awaited()
+        assert mock_upsert.call_args[0][0][0]["title"] == "Ceasefire talks resume in Cairo"
+        assert "Titles: 1 from GDELT, 0 scraped, 0 dropped." in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_only_records_without_a_gdelt_title_are_scraped(self, caplog):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [
+            _make_gkg_article(url="https://example.com/gdelt", title="Headline from GDELT"),
+            _make_gkg_article(url="https://example.com/scraped", title=""),
+            _make_gkg_article(url="https://example.com/failed", title=""),
+        ]
+        patches = _common_patches(articles, ml_enabled=False)
+        patches["scrape_titles"] = patch(
+            "app.services.ingestion.scrape_titles",
+            new_callable=AsyncMock,
+            side_effect=_scrape_only_urls_ending_scraped,
+        )
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"] as mock_scrape,
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+            caplog.at_level(logging.INFO, logger="orbis.ingestion"),
+        ):
+            await _ingest_from_raw_gkg()
+
+        scraped_urls = [a["url"] for a in mock_scrape.await_args.args[0]]
+        assert scraped_urls == ["https://example.com/scraped", "https://example.com/failed"]
+        rows = mock_upsert.call_args[0][0]
+        assert [(r["source_url"], r["title"]) for r in rows] == [
+            ("https://example.com/gdelt", "Headline from GDELT"),
+            ("https://example.com/scraped", "Scraped headline from the page"),
+        ]
+        assert "Titles: 1 from GDELT, 1 scraped, 1 dropped." in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_rows_carry_the_gkg_fields(self):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        tone_detail = {"tone": -3.2, "pos": 1.5, "neg": 4.7, "polarity": 6.2, "words": 512}
+        counts = [{"type": "KILL", "n": 4, "object": "", "country": "ZA", "place": "Beitbridge"}]
+        articles = [_make_gkg_article()]
+        articles[0].update(
+            themes=["KILL", "TERROR"],
+            persons=["Benjamin Netanyahu"],
+            organizations=["United Nations"],
+            names=["Gaza Strip", "Yellow Line"],
+            counts=counts,
+            tone_detail=tone_detail,
+        )
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
+            await _ingest_from_raw_gkg()
+
+        row = mock_upsert.call_args[0][0][0]
+        assert row["themes"] == ["KILL", "TERROR"]
+        assert row["persons"] == ["Benjamin Netanyahu"]
+        assert row["orgs"] == ["United Nations"]
+        assert row["names"] == ["Gaza Strip", "Yellow Line"]
+        assert row["counts"] == counts
+        assert row["entities"] == {"tone": tone_detail}
+
+    @pytest.mark.asyncio
+    async def test_entities_empty_and_fields_default_when_absent(self):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [{"url": "https://example.com/bare", "page_title": "A bare GKG record"}]
+        articles[0].update(lat=1.0, lng=2.0, published_at=datetime(2026, 3, 5, tzinfo=timezone.utc))
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
+            await _ingest_from_raw_gkg()
+
+        row = mock_upsert.call_args[0][0][0]
+        assert row["entities"] == {}
+        assert [row[k] for k in ("themes", "persons", "orgs", "names", "counts")] == [[]] * 5
+
+    @pytest.mark.asyncio
+    async def test_knowledge_graph_still_gets_people_orgs_and_locations(self):
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        mentioned = [{"name": "Israel", "country_code": "IL", "country_fips": "IS"}]
+        articles = [_make_gkg_article()]
+        articles[0].update(
+            persons=["Benjamin Netanyahu"],
+            organizations=["United Nations"],
+            mentioned_locations=mentioned,
+        )
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"],
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"] as mock_graph,
+            patches["ml_enabled"],
+        ):
+            await _ingest_from_raw_gkg()
+
+        [graph_article] = mock_graph.await_args.args[0]
+        assert graph_article["persons"] == ["Benjamin Netanyahu"]
+        assert graph_article["organizations"] == ["United Nations"]
+        assert graph_article["mentioned_locations"] == mentioned
 
 
 class TestRunIngestionCycle:

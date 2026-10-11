@@ -1,5 +1,6 @@
 """Tests for the SQL the database helpers send (the pool is mocked; no live database)."""
 
+import json
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -46,8 +47,51 @@ async def test_upsert_writes_country_fips_and_never_null():
     # Every placeholder has an argument and vice versa.
     assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
 
-    fips_values = [call.args[-1] for call in conn.execute.await_args_list]
+    fips_values = [call.args[15] for call in conn.execute.await_args_list]  # $15
     assert fips_values == ["UK", "", ""]
+
+
+GKG_COLUMNS = ("themes", "persons", "orgs", "names", "counts")
+
+
+@pytest.mark.asyncio
+async def test_upsert_writes_gkg_fields_as_16_to_20():
+    pool, conn = _mock_pool()
+    counts = [{"type": "KILL", "n": 4, "object": "", "country": "ZA", "place": "Beitbridge"}]
+    articles = [
+        {
+            "source_url": "https://example.com/a",
+            "themes": ["KILL", "TERROR"],
+            "persons": ["Benjamin Netanyahu"],
+            "orgs": ["United Nations"],
+            "names": ["Gaza Strip"],
+            "counts": counts,
+        },
+        {"source_url": "https://example.com/b"},  # none of the GKG keys
+    ]
+
+    with patch("app.services.database.get_pool", new_callable=AsyncMock, return_value=pool):
+        assert await upsert_articles(articles) == 2
+
+    sql, *args = conn.execute.await_args_list[0].args
+    flat = _sql(sql)
+    insert_columns = re.search(r"INSERT INTO articles \((.*?)\) VALUES", flat).group(1)
+    values = re.search(r"VALUES \((.*?)\) ON CONFLICT", flat).group(1)
+    assert [c.strip() for c in insert_columns.split(",")][-5:] == list(GKG_COLUMNS)
+    assert [v.strip() for v in values.split(",")][-5:] == ["$16", "$17", "$18", "$19", "$20"]
+    for column in GKG_COLUMNS:
+        assert f"{column} = EXCLUDED.{column}" in flat
+    assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args) == 20
+
+    assert args[15:] == [
+        ["KILL", "TERROR"],
+        ["Benjamin Netanyahu"],
+        ["United Nations"],
+        ["Gaza Strip"],
+        json.dumps(counts),
+    ]
+    _, *bare_args = conn.execute.await_args_list[1].args
+    assert bare_args[15:] == [[], [], [], [], "[]"]
 
 
 START = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)
