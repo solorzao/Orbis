@@ -508,6 +508,190 @@ kbd {
 .side-open.pill.lg {
   height: 38px;
 }
+.side button:not(:disabled),
+.side-open {
+  cursor: pointer;
+}
+
+/* Stories tab: recent places, then a place's stories (mockup .insp, .art, lines 357-372) */
+.places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 8px 14px;
+}
+.place.pill {
+  gap: 0;
+  padding: 0 4px 0 0;
+}
+.place-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  min-width: 0;
+  max-width: 180px;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-pill);
+  color: inherit;
+}
+.place-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.place-close {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+.place-close:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.insp {
+  padding: 0 8px;
+  display: grid;
+  gap: 14px;
+}
+.insp-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.insp-head .end {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.insp-title {
+  margin: 0;
+  font: var(--type-title);
+  letter-spacing: var(--tracking-title);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.insp-count {
+  margin: 2px 0 0;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.insp-ai {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.insp-ai p {
+  margin: 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+.insp-ai p.lbl,
+.lbl {
+  font: var(--type-label);
+  color: var(--text-muted);
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.insp-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin-top: 10px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.insp-search:focus-within {
+  border-color: var(--border-edge-a);
+}
+.insp-search:has(input:focus-visible) {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: 2px;
+}
+.insp-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+}
+.insp-search input:focus-visible {
+  outline: none; /* the pill shows the ring */
+}
+.insp-search input::placeholder {
+  color: var(--text-muted);
+}
+.insp-list {
+  padding: 4px;
+}
+.art {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+}
+.art:hover {
+  background: var(--surface-hover);
+}
+.art .h {
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+}
+.art a.h:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.art .m {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.insp-status {
+  margin: 0;
+  padding: 16px 12px;
+  text-align: center;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.insp-more {
+  display: flex;
+  justify-content: center;
+}
+.insp-more .pill:disabled {
+  opacity: 0.6;
+}
+.skel {
+  display: block;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-raised);
+  animation: skel 1.6s var(--ease-in-out) infinite;
+}
+.skel.short {
+  width: 60%;
+}
+@keyframes skel {
+  50% {
+    opacity: 0.4;
+  }
+}
 
 /*
  * The old TimeSlider, until PR 10's bottom row replaces it and these rules.

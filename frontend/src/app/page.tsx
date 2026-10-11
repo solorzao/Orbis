@@ -13,7 +13,8 @@ import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
-import PanelQueue from "@/components/PanelQueue";
+import NewsPanel from "@/components/NewsPanel";
+import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
 import AgentPanel from "@/components/AgentPanel";
 import SidePanel from "@/components/SidePanel";
@@ -363,6 +364,43 @@ export default function Home() {
     [updatePanel],
   );
 
+  // Stories tab: the open places, then the active place's stories
+  const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
+  const storiesTab = (
+    <>
+      <RecentPlaces
+        places={panelQueue}
+        activeId={expandedPanelId}
+        onSelect={handleExpandPanel}
+        onClose={handleClosePanel}
+      />
+      {expandedPanel ? (
+        <NewsPanel
+          key={expandedPanel.panelId}
+          point={{ ...expandedPanel.point, articles: expandedPanel.articles }}
+          onClose={() => handleClosePanel(expandedPanel.panelId)}
+          onMinimize={handleMinimizePanel}
+          onLoadMore={(filters) => handleLoadMore(expandedPanel.panelId, filters)}
+          loadingMore={expandedPanel.loadingMore}
+          clusterSummary={expandedPanel.clusterSummary}
+          summaryLoading={expandedPanel.summaryLoading}
+          articlesLoading={expandedPanel.articlesLoading}
+          savedFilters={expandedPanel.filters}
+          savedFilterSummary={expandedPanel.filterSummary}
+          onFiltersChange={(filters, filterSummary) =>
+            handleFiltersChange(expandedPanel.panelId, filters, filterSummary)
+          }
+        />
+      ) : (
+        <p className="side-empty">
+          {panelQueue.length > 0
+            ? "Pick a place above, or click a dot on the globe."
+            : "Click a dot on the globe to see its stories here."}
+        </p>
+      )}
+    </>
+  );
+
   return (
     <main className="relative h-screen w-screen overflow-hidden">
       {/* Starfield, under everything */}
@@ -400,18 +438,7 @@ export default function Home() {
         onOpenChange={side.setOpen}
         storiesCount={panelQueue.length}
         copilot={<p className="side-empty">Ask the co-pilot about the news on the globe.</p>}
-        stories={<p className="side-empty">Click a dot on the globe to see its stories here.</p>}
-      />
-
-      {/* Panel Queue */}
-      <PanelQueue
-        panelQueue={panelQueue}
-        expandedPanelId={expandedPanelId}
-        onExpandPanel={handleExpandPanel}
-        onClosePanel={handleClosePanel}
-        onMinimizePanel={handleMinimizePanel}
-        onLoadMore={handleLoadMore}
-        onFiltersChange={handleFiltersChange}
+        stories={storiesTab}
       />
 
       {/* Agent Toggle */}

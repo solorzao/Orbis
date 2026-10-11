@@ -35,15 +35,36 @@ export function getPrimaryTopicColor(article: NewsArticle): string {
   return TOPIC_COLORS.All;
 }
 
-/** Soft Orbit's diverging sentiment bins (tokens.md "Sentiment"). */
+export type SentimentKey = keyof typeof SENTIMENT_COLORS;
+
+/** Soft Orbit's diverging sentiment bin (tokens.md "Sentiment"), as in --sentiment-{key}. */
+export function sentimentKey(score: number): SentimentKey {
+  if (score <= -0.6) return "n3";
+  if (score <= -0.3) return "n2";
+  if (score <= -0.1) return "n1";
+  if (score < 0.1) return "neutral";
+  if (score < 0.3) return "p1";
+  if (score < 0.6) return "p2";
+  return "p3";
+}
+
 export function getSentimentColor(score: number): string {
-  if (score <= -0.6) return SENTIMENT_COLORS.n3;
-  if (score <= -0.3) return SENTIMENT_COLORS.n2;
-  if (score <= -0.1) return SENTIMENT_COLORS.n1;
-  if (score < 0.1) return SENTIMENT_COLORS.neutral;
-  if (score < 0.3) return SENTIMENT_COLORS.p1;
-  if (score < 0.6) return SENTIMENT_COLORS.p2;
-  return SENTIMENT_COLORS.p3;
+  return SENTIMENT_COLORS[sentimentKey(score)];
+}
+
+export type SentimentBucket = "positive" | "neutral" | "negative";
+
+/** The news panel's three sentiment filters, on the same bins: n1-n3, neutral, p1-p3. */
+export function sentimentBucket(score: number): SentimentBucket {
+  const key = sentimentKey(score);
+  return key === "neutral" ? "neutral" : key.startsWith("p") ? "positive" : "negative";
+}
+
+/** A signed score as printed next to its colour (mockup fmtScore): "+0.60", "−0.42", "±0.00". */
+export function formatScore(score: number): string {
+  const rounded = Math.round(score * 100) / 100;
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "−" : "±";
+  return sign + Math.abs(rounded).toFixed(2);
 }
 
 /**
