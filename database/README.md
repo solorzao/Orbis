@@ -27,6 +27,11 @@ PostgreSQL schema for the Orbis globe news explorer, powered by **Supabase** wit
 | `entities`        | JSONB                   | Named entities extracted by AI        |
 | `embedding`       | VECTOR(1536)            | For future RAG / semantic search      |
 | `image_url`       | TEXT                    | Thumbnail URL, nullable               |
+| `themes`          | TEXT[]                  | GDELT GKG themes; default `'{}'`      |
+| `persons`         | TEXT[]                  | GKG people; default `'{}'`            |
+| `orgs`            | TEXT[]                  | GKG organisations; default `'{}'`     |
+| `names`           | TEXT[]                  | Most frequent GKG proper names; default `'{}'` |
+| `counts`          | JSONB                   | GKG typed counts (killed, arrested, ...); default `'[]'` |
 
 ### SQL Functions
 
