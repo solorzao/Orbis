@@ -12,7 +12,7 @@
 - Feature report: `docs/redesign/features/feature-exploration.md` (data audit, feature specs F1 to F5, Q1 to Q4, D1 to D8, cost model).
 - Chosen UI direction: `docs/redesign/ui/soft-orbit/` (`mockup.html`, `tokens.md`, `tokens.json`).
 - Design system (published): https://claude.ai/artifact/MZ88T7Yogx1w4RsaiqgymQ (Orbis Soft Orbit: tokens, brand book, 10 component previews).
-- Owner decisions (2026-10-10): Haiku 5.5 (done, PR #41); show publisher images, blur conflict images; add the GDELT Events feed; keep history short with a bias towards recent events (no long-term narratives); motto contrast fix (PR #42).
+- Owner decisions (2026-10-10): Haiku 5.5 (done, PR #41); show publisher images, blur conflict images; add the GDELT Events feed; keep history short with a bias towards recent events (no long-term narratives); motto contrast fix (PR #42); half-precision embedding index and storing more GKG fields, including GDELT page titles (2026-10-11).
 
 **Working rules for every PR:**
 - Branch from `origin/main`; one PR per numbered item; run the checks below locally; open the PR; wait for every check to finish green before handing it over.
@@ -29,22 +29,25 @@
 |---|---|---|---|
 | 1 | 1 Foundations | Agent globe actions actually fly the globe | none |
 | 2 | 1 | Embed every new article each cycle | none |
+| 2b | 1 | Half-precision embedding index | 2 |
 | 3 | 1 | Expose article images (https only) in the API | none |
 | 4a | 1 | Migration: `articles.country_fips` column | none |
 | 4b | 1 | Store ISO country codes; backfill old rows | 4a merged and deployed |
 | 5 | 1 | Daily LLM spend cap | none |
 | 6 | 1 | Fix summary grid mismatch and cluster time filtering | none |
-| 7 | 1 | Store more GKG fields (themes, persons, orgs, counts, page title) | 4b |
+| 7a | 1 | Migration: GKG field columns | 4b |
+| 7b | 1 | Knowledge graph: co-mentions on demand | none |
+| 7c | 1 | Store GKG fields and take titles from GDELT | 7a deployed, 7b |
 | 8 | 2 UI foundation | Soft Orbit tokens and fonts in the frontend | none |
 | 9 | 2 | Soft Orbit shell: sky, glass panels, layout, pills | 8 |
 | 10 | 2 | Timeline capsule and layer switcher | 9 |
 | 11 | 2 | Co-pilot console restyle with action pills | 1, 9 |
 | 12 | 3 Quick wins | City hover card (image, headline, topic mix, tone, sparkline) | 3, 9 |
-| 13 | 3 | Co-coverage arcs layer and link inspector | 7, 9 |
+| 13 | 3 | Co-coverage arcs layer and link inspector | 7c, 9 |
 | 14 | 3 | Surge alerts ticker and "since your last visit" strip | 9 |
-| 15 | 4 Flagships | Story threads backend (embedding clusters, synopses) | 2, 5, 7 |
+| 15 | 4 Flagships | Story threads backend (embedding clusters, synopses) | 2, 5, 7c |
 | 16 | 4 | Threads panel with spread replay and aurora arcs | 13, 15 |
-| 17 | 4 | Entity tracker | 7, 9 |
+| 17 | 4 | Entity tracker | 7c, 9 |
 | 18 | 4 | Investigation board (split view, pins mirrored on the globe) | 12, 13 |
 | 19 | 5 Events | GDELT Events ingestion: daily country-pair rollups | 4b |
 | 20 | 5 | Relation arcs layer (cooperation and conflict) | 13, 19 |
@@ -259,6 +262,44 @@ git commit -m "feat(embeddings): embed the whole backlog each cycle, capped per 
 ```
 
 **Manual check after deploy:** in the logs, the first cycle after deploy shows "Generated embeddings for N articles." with N above 100.
+
+---
+
+### Task 2b (PR 2b): Half-precision embedding index (owner-approved 2026-10-11)
+
+Shrink the HNSW index by half. The `embedding` column stays `VECTOR(1536)`, so there is no table rewrite and no re-embedding. Only the index and the similarity query use `halfvec`.
+
+**Files:**
+- Create: `database/migrations/008_halfvec_embedding_index.sql`
+- Modify: `backend/app/services/retrieval.py` (`semantic_search`)
+- Test: `backend/tests/test_retrieval.py`
+
+**Migration:**
+```sql
+-- 008_halfvec_embedding_index.sql
+-- Index embeddings at half precision: the HNSW index is half the size, which
+-- matters with 2 GiB of RAM on the B1ms server. The column stays VECTOR(1536);
+-- the similarity query casts to halfvec(1536) so it can use this index.
+-- CONCURRENTLY never blocks ingestion writes or API reads while the index
+-- builds; psql runs each statement in autocommit mode, as CONCURRENTLY requires.
+
+SET maintenance_work_mem = '256MB';
+-- A failed concurrent build leaves an INVALID index that IF NOT EXISTS would keep.
+DROP INDEX CONCURRENTLY IF EXISTS idx_articles_embedding_half;
+CREATE INDEX CONCURRENTLY idx_articles_embedding_half
+    ON articles USING hnsw ((embedding::halfvec(1536)) halfvec_cosine_ops);
+DROP INDEX CONCURRENTLY IF EXISTS idx_articles_embedding;
+```
+
+**Query:** in `semantic_search`, use `embedding::halfvec(1536) <=> $1::halfvec(1536)` for both the `distance` column and the `ORDER BY`. The expression must match the index expression exactly, or the planner falls back to a sequential scan.
+
+**Tests:**
+- The SQL sent by `semantic_search` orders by `embedding::halfvec(1536) <=> $1::halfvec(1536)`.
+- A cross-file check: the migration's index expression `(embedding::halfvec(1536)) halfvec_cosine_ops` and the query's `embedding::halfvec(1536) <=>` use the same cast, so a later edit can't silently desync them.
+
+**Deploy safety:** migrations and the backend deploy run in parallel. The old code's `embedding <=> $1::vector` and the new code before the index exists both still work, as a sequential scan over at most a few tens of thousands of rows.
+
+**Verify after deploy:** `EXPLAIN` the new query on production and expect `Index Scan using idx_articles_embedding_half`. Compare `pg_relation_size` against the old 96 MB index.
 
 ---
 
@@ -628,9 +669,114 @@ Scope from the feature report (section on bugs):
 
 Write a failing test for each in `backend/tests/test_news_router.py` (mock the pool and assert the SQL receives the window bounds and the topic filter), then fix. Bite-sized steps will be written when this PR starts, after re-reading `routers/news.py` and `services/database.py` at that commit.
 
-### Task 7 (PR 7): Store more GKG fields
+### Production baseline (2026-10-11)
 
-Per the feature report's D2: parse and store V2Themes, V2Persons, V2Organizations, V2Counts (casualties, arrests, protests), V2Tone, and the page title field, replacing the publisher-page scraping for titles. Schema: `articles.themes TEXT[]`, `persons TEXT[]`, `orgs TEXT[]`, `counts JSONB`, and fill `entities` instead of `{}`. Migration first (same pattern as 4a), then code. Measure CPU on the B1ms database (watch "CPU credits remaining") after deploy.
+- `articles`: 12,627 rows after about 19 hours (about 660 an hour, so about 110K at 7-day retention), 209 MB in total. Every row is embedded; the float32 HNSW index is 96 MB. pgvector 0.8.2, `shared_buffers` 256 MB, `maintenance_work_mem` 97 MB.
+- `kg_edges`: 150 MB with 725K edges, 568K of them `CO_MENTIONED`. That is already bigger than `articles`, and grows to about 1.3 GB at 7 days at today's volume.
+- In a current GKG file (2026-10-11 14:00), all 448 city-level records carry `<PAGE_TITLE>`, which gives 357 distinct titles. Ingestion currently keeps about 160 a cycle (the rest fail title scraping). Taking titles from GDELT therefore roughly doubles article volume. Word-count filtering hardly helps: 96% of these pages have 100+ words.
+- Averages per city-level record: 33 distinct themes, 4.2 persons, 3.0 orgs, 10.7 distinct names, 1.2 counts, 384 bytes of extras XML.
+
+Because of the volume increase, the knowledge-graph change (7b) lands before the title change (7c).
+
+### Task 7a (PR 7a): Migration: GKG field columns
+
+**Files:**
+- Create: `database/migrations/009_gkg_fields.sql`
+
+```sql
+-- 009_gkg_fields.sql
+-- GKG fields kept on the article row (filled by the ingestion change that
+-- follows this migration): GDELT themes, people, organisations, the most
+-- frequent proper names, and typed counts (killed, arrested, protesting, ...).
+-- Tone details go into the existing entities JSONB.
+-- Constant defaults make this catalog-only, but fail fast rather than queue
+-- API reads behind an ingestion transaction's lock.
+SET lock_timeout = '5s';
+ALTER TABLE articles
+    ADD COLUMN IF NOT EXISTS themes  TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS persons TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS orgs    TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS names   TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS counts  JSONB  NOT NULL DEFAULT '[]';
+```
+
+No GIN indexes yet. The PRs that query these columns (15 threads, 17 entity tracker) add them, so ingestion doesn't pay index maintenance before anything reads them. `nearby_articles` and friends return `SETOF articles`, so new columns don't break them. Merge and deploy this before 7c.
+
+### Task 7b (PR 7b): Knowledge graph: co-mentions on demand
+
+`populate_graph` writes a `CO_MENTIONED` row for every pair of entities in every article. That is O(n²) awaited round trips (an UPDATE, then an INSERT), and those rows are 78% of `kg_edges`. Stop writing them, and compute co-mentions when the agent asks.
+
+**Files:**
+- Modify: `backend/app/services/knowledge_graph.py`: remove step 7 (the `combinations(...)` loop, plus `entity_node_ids` and the `itertools` import if unused).
+- Modify: `backend/app/services/retrieval.py`: `graph_traverse` and `entity_lookup`.
+- Test: `backend/tests/test_knowledge_graph.py`, `backend/tests/test_retrieval.py`.
+
+**Behaviour:**
+- Traversal ignores stored `CO_MENTIONED` edges (`AND e.rel_type <> 'CO_MENTIONED'` in both halves of the recursive CTE, and wherever `entity_lookup` reads edges). The existing rows age out within 7 days through `ON DELETE CASCADE` on `article_id`; no data migration is needed.
+- When `rel_type` is None or `'CO_MENTIONED'`, add on-demand co-mentions: the entities that share an ARTICLE node with the start entity through `MENTIONED_IN` edges. Each one's `weight` is the number of distinct shared article nodes, top 20 by weight, returned as `rel_type='CO_MENTIONED'`, `depth=1`, with one representative `article_id` so the article fetch still works. With `rel_type='CO_MENTIONED'`, return only these.
+  ```sql
+  SELECT n.id, n.type, n.name, 'CO_MENTIONED' AS rel_type,
+         count(DISTINCT e2.target_node_id)::int AS weight,
+         (array_agg(e2.article_id ORDER BY e2.created_at DESC))[1] AS article_id,
+         1 AS depth
+  FROM kg_edges e1
+  JOIN kg_edges e2 ON e2.target_node_id = e1.target_node_id
+                  AND e2.rel_type = 'MENTIONED_IN'
+                  AND e2.source_node_id <> $1
+  JOIN kg_nodes n ON n.id = e2.source_node_id
+  WHERE e1.source_node_id = $1 AND e1.rel_type = 'MENTIONED_IN'
+  GROUP BY n.id, n.type, n.name
+  ORDER BY weight DESC
+  LIMIT 20
+  ```
+  (`MENTIONED_IN` edges point from the entity to the ARTICLE node. Check this against `populate_graph` before relying on it.)
+- Agent tool descriptions in `agent.py` still name `CO_MENTIONED`, which is still a valid relationship. Change them only if a description says how it is stored.
+
+**Tests:**
+- `populate_graph` no longer sends any `CO_MENTIONED` SQL.
+- `graph_traverse(rel_type='CO_MENTIONED')` runs the aggregation and not the CTE.
+- The default traversal excludes stored `CO_MENTIONED` edges and merges the computed ones.
+
+**Verify after deploy:** a co-pilot question such as "Who is connected to <a person in today's news>?" still lists related people and organisations. `kg_edges` stops growing by about 30K rows an hour.
+
+### Task 7c (PR 7c): Store GKG fields and take titles from GDELT
+
+Depends on 7a being deployed and 7b merged.
+
+**Files:**
+- Modify: `backend/app/services/gdelt.py` (`fetch_raw_gkg`), `backend/app/services/ingestion.py` (`_ingest_from_raw_gkg`), `backend/app/services/database.py` (`upsert_articles`).
+- Test: `backend/tests/test_gdelt.py`, `backend/tests/test_ingestion.py`, `backend/tests/test_database.py`.
+
+**Parse in `fetch_raw_gkg`** (0-based GKG 2.1 columns; add each to the comment block listing field indices):
+- `page_title` from field 26 (`V2EXTRASXML`), `<PAGE_TITLE>…</PAGE_TITLE>`:
+  - Apply `html.unescape`, collapse whitespace, and cap at 300 characters.
+  - Return `''` when the tag is missing, the title is 5 characters or fewer, or `_is_usable_title` rejects it.
+- `themes` from field 7 (`V1THEMES`): distinct, non-empty, first-seen order, capped at 64.
+- `persons` (field 11) and `organizations` (field 13): already parsed; cap each at 30.
+- `names` from field 23 (`V2.1ALLNAMES`, `Name,offset;…`): count repeats per name and keep the top 15 by count, ties broken by the earliest offset.
+- `counts` from field 6 (`V2.1COUNTS`), falling back to field 5 (`V1COUNTS`):
+  - Blocks look like `TYPE#N#OBJECT#LOCTYPE#LOCNAME#FIPS#ADM1#LAT#LNG#FEATUREID[#OFFSET]`.
+  - Keep only the types `AFFECT, ARREST, KIDNAP, KILL, PROTEST, SEIZE, WOUND`. Others in the field are theme names such as `SOC_GENERALCRIME`.
+  - Store `{"type", "n": int, "object", "country": fips_to_iso2(FIPS) or "", "place": LOCNAME}`.
+  - Skip blocks whose N isn't an integer, drop exact duplicates, and cap at 10.
+- `tone_detail` from field 15 (`V1.5TONE`): `{"tone", "pos", "neg", "polarity", "words": int}` from positions 0, 1, 2, 3 and 6. Omit it if the field is malformed. The existing `tone` float stays.
+
+**Ingest:**
+- The title is `page_title` when present. Call `scrape_titles` only for records without one.
+- Log `"Titles: %d from GDELT, %d scraped, %d dropped."`, replacing the scrape-only log line or adding to it.
+- Rows gain `themes`, `persons`, `orgs` (from `organizations`), `names`, `counts`, and `entities = {"tone": tone_detail}` (or `{}`).
+- The knowledge graph still receives `persons`, `organizations` and `mentioned_locations` as today.
+
+**Upsert:**
+- Add `themes, persons, orgs, names, counts` as `$16`–`$20`, with `counts` sent as `json.dumps`, and update all five on conflict.
+- The existing placeholder-count test must still pass.
+
+**Check:** `ml_models` sends titles in parallel chunks. Confirm that about 400 titles a cycle stays inside its timeout.
+
+**Verify after deploy:**
+- Each cycle logs about 300+ upserts and the new title line.
+- Spot-check a fresh row's `themes`, `persons`, `names`, `counts` and `entities`.
+- After 24 hours, check the database's "CPU credits remaining" and `pg_total_relation_size('articles')`.
 
 ---
 
