@@ -802,7 +802,7 @@ Depends on 7a being deployed and 7b merged.
   - Add `top_headline`, `top_image_url`, topic mix and tone to the `/api/news` globe payload, so hovering never fetches.
   - Build the `HoverCard`: image, or the topic glyph when there's no image or it's a logo. Conflict images are blurred until clicked. Sentiment score is printed next to its colour.
 - **PR 13 (arcs):**
-  - Add `/api/links`: co-coverage pairs from the knowledge graph's `CO_MENTIONED` and `LOCATED_AT` edges over the selected window, with story counts. Cache it with `s-maxage`.
+  - Add `/api/links`: co-coverage pairs computed on demand over the selected window, from the article rows' `persons` and `orgs` arrays (filled by 7c) and the knowledge graph's `MENTIONED_IN` and `LOCATED_AT` edges, with story counts. (Stored `CO_MENTIONED` edges stop with 7b.) Cache it with `s-maxage`.
   - `ConnectionArc` layer, arc label pill, and a link inspector showing the shared entities and stories.
 - **PR 14 (alerts):**
   - Surges: an hourly z-score per cell over the 7-day baseline, at no LLM cost.
