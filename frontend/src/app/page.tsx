@@ -16,6 +16,7 @@ import PanelQueue from "@/components/PanelQueue";
 import TopBar from "@/components/TopBar";
 import AgentPanel from "@/components/AgentPanel";
 import Sky from "@/components/Sky";
+import OrbitRings from "@/components/OrbitRings";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -47,6 +48,7 @@ export default function Home() {
 
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
+  const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
 
   // Track time slider height so the chat icon can sit above it on mobile
   const [sliderHeight, setSliderHeight] = useState(0);
@@ -370,6 +372,9 @@ export default function Home() {
         reduced={reduced}
         lowPower={lowPower}
       />
+
+      {/* Orbital rings around the globe */}
+      <OrbitRings getGeometry={getGlobeGeometry} reduced={reduced} lowPower={lowPower} />
 
       {/* Top bar: brand, topics, status and About in one grid */}
       <TopBar

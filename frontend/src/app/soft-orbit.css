@@ -39,6 +39,17 @@ kbd {
   pointer-events: none;
 }
 
+/* orbital rings (mockup #orbits): over the globe, under the chrome, never hit-tested */
+.orbits {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: var(--z-orbit);
+  pointer-events: none;
+  overflow: visible;
+}
+
 /* glass */
 .glass {
   background: var(--glass-panel-background);
