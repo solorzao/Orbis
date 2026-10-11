@@ -1,12 +1,16 @@
 """Tests for GDELT raw GKG file parsing and title scraping."""
 
 import io
+import threading
+import time
 import zipfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.services import gdelt
 from app.services.gdelt import (
+    _HTML_COMMENT_RE,
     _clean_title,
     _gdelt_https_url,
     _is_usable_title,
@@ -172,6 +176,44 @@ class TestCleanTitle:
         assert _clean_title("Just a moment...") == ""
         assert _clean_title("<title>Attention Required! | Cloudflare</title>") == ""
 
+    def test_strips_tag_like_text(self):
+        # Documented trade-off: anything shaped like a tag goes, even if it was text.
+        assert _clean_title("Rates x<y>z today") == "Rates xz today"
+
+    def test_strips_nul_bytes(self):
+        # Postgres TEXT rejects NUL; one bad title would roll back the whole upsert.
+        assert _clean_title("Storm\x00 hits the\x00 coast") == "Storm hits the coast"
+
+    def test_unterminated_comment_is_dropped_to_the_end(self):
+        assert _clean_title("Headline before a comment <!-- never closed") == (
+            "Headline before a comment"
+        )
+
+    def test_reads_at_most_2000_characters(self):
+        # Output is capped at 300, so nothing past the first 2,000 raw characters matters.
+        assert _clean_title("Headline words" + " " * 2000 + "tail") == "Headline words"
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["<!--" * 50_000, "<a" * 100_000, "<!--" + "x" * 200_000, "<PAGE_TITLE>" * 17_000],
+        ids=["open-comments", "open-tags", "one-open-comment", "page-title-tags"],
+    )
+    def test_pathological_markup_is_fast(self, raw):
+        t0 = time.perf_counter()
+        _clean_title(raw)
+        assert time.perf_counter() - t0 < 0.5
+
+
+class TestCommentRegex:
+    def test_unterminated_comments_are_linear(self):
+        """Lazy `.*?-->` alone retries from every `<!--` to the end: 16.8 s on 80 KB."""
+        t0 = time.perf_counter()
+        assert _HTML_COMMENT_RE.sub("", "<!--" * 50_000) == ""
+        assert time.perf_counter() - t0 < 0.5
+
+    def test_closed_comments_still_end_at_the_first_close(self):
+        assert _HTML_COMMENT_RE.sub("", "a<!-- x -->b<!-- y -->c") == "abc"
+
 
 class TestParsePageTitle:
     def test_reads_page_title_from_extras(self):
@@ -192,6 +234,22 @@ class TestParsePageTitle:
     def test_strips_an_escaped_comment_too(self):
         escaped = ZEROHEDGE_RAW.replace("<!-- -->", "&lt;!-- --&gt;")
         assert _parse_page_title(f"<PAGE_TITLE>{escaped}</PAGE_TITLE>") == ZEROHEDGE_CLEAN
+
+    def test_unterminated_tag_gives_empty(self):
+        assert _parse_page_title("<PAGE_TITLE>Ceasefire talks resume in Cairo") == ""
+
+    @pytest.mark.parametrize(
+        "extras",
+        [
+            "<PAGE_TITLE>" * 17_000,  # 200 KB of openers, no closer: 11.5 s with the old regex
+            "<PAGE_TITLE>" + "<!--" * 50_000 + "</PAGE_TITLE>",
+        ],
+        ids=["open-tags", "comment-flood"],
+    )
+    def test_pathological_extras_are_fast(self, extras):
+        t0 = time.perf_counter()
+        assert _parse_page_title(extras) == ""
+        assert time.perf_counter() - t0 < 0.5
 
     @pytest.mark.parametrize(
         "extras",
@@ -618,6 +676,53 @@ class TestGkgFields:
         assert article["names"] == []
 
     @pytest.mark.asyncio
+    async def test_nul_bytes_are_removed_from_every_field(self):
+        """Postgres TEXT, TEXT[] and JSONB reject NUL; one record must not sink the upsert."""
+        record = _make_gkg_record(
+            url="https://example.com/a\x00b",
+            domain="exam\x00ple.com",
+            themes="KILL\x00;TERROR",
+            persons="benjamin\x00 netanyahu",
+            organizations="united\x00 nations",
+            counts="KILL#4#peo\x00ple#0#####",
+            names="Gaza\x00 Strip,73",
+            extras="<PAGE_TITLE>Storm\x00 hits the coast</PAGE_TITLE>",
+        )
+        [article] = await _fetch_records([record])
+
+        def strings(value):
+            if isinstance(value, str):
+                yield value
+            elif isinstance(value, dict):
+                for v in value.values():
+                    yield from strings(v)
+            elif isinstance(value, list):
+                for v in value:
+                    yield from strings(v)
+
+        assert not [s for s in strings(article) if "\x00" in s]
+        assert article["url"] == "https://example.com/ab"
+        assert article["page_title"] == "Storm hits the coast"
+        assert article["themes"] == ["KILL", "TERROR"]
+        assert article["persons"] == ["Benjamin Netanyahu"]
+        assert article["counts"][0]["object"] == "people"
+
+    @pytest.mark.asyncio
+    async def test_records_are_parsed_off_the_event_loop(self):
+        threads = []
+        real_parse = gdelt._parse_gkg
+
+        def spy(raw):
+            threads.append(threading.current_thread())
+            return real_parse(raw)
+
+        with patch("app.services.gdelt._parse_gkg", side_effect=spy):
+            [article] = await _fetch_records([_make_gkg_record()])
+
+        assert article["url"] == "https://example.com/article-1"
+        assert threads and threads[0] is not threading.main_thread()
+
+    @pytest.mark.asyncio
     async def test_persons_and_organizations_capped_at_30(self):
         record = _make_gkg_record(
             persons=";".join(f"person {i}" for i in range(40)),
@@ -695,6 +800,22 @@ class TestScrapeTitles:
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await scrape_titles(articles)
         assert result[0]["title"] == ZEROHEDGE_CLEAN
+
+    @pytest.mark.asyncio
+    async def test_strips_nul_from_scraped_titles(self):
+        articles = [{"url": "https://example.com/storm", "domain": "example.com"}]
+
+        mock_resp = MagicMock()
+        mock_resp.content = b"<html><title>Storm\x00 hits the coast</title></html>"
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await scrape_titles(articles)
+        assert result[0]["title"] == "Storm hits the coast"
 
 
 # ---------------------------------------------------------------------------

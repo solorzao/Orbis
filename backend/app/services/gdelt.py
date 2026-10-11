@@ -237,22 +237,31 @@ _MAX_COUNTS = 10
 # V2.1COUNTS also carries theme names (e.g. SOC_GENERALCRIME); keep the count types.
 _COUNT_TYPES = frozenset({"AFFECT", "ARREST", "KIDNAP", "KILL", "PROTEST", "SEIZE", "WOUND"})
 
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# Only the first 2,000 raw characters are cleaned: the output is capped at 300,
+# and the cap bounds the regex work on hostile input.
+_MAX_RAW_TITLE_CHARS = 2000
+# An unterminated comment runs to the end of the text. Without the "|$"
+# alternative, every "<!--" rescans to the end: quadratic (16.8 s on 80 KB).
+_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 # Real tags only (a letter after "<" or "</"), so "Inflation < 2%" survives.
+# Text shaped like a tag ("x<y>z") is stripped too.
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^<>]*>")
-_PAGE_TITLE_RE = re.compile(r"<PAGE_TITLE>(.*?)</PAGE_TITLE>", re.DOTALL)
+_PAGE_TITLE_OPEN = "<PAGE_TITLE>"
+_PAGE_TITLE_CLOSE = "</PAGE_TITLE>"
 
 
 def _clean_title(raw: str) -> str:
     """Return a display-ready headline from a raw page title, or '' if unusable.
 
     Shared by GDELT's PAGE_TITLE and scraped <title> tags so both are cleaned
-    alike: strip HTML comments (React leaves ``<!-- -->`` in some titles) and
-    tags, unescape entities, collapse whitespace, cap at 300 characters.
-    Comments are stripped again after unescaping in case they arrived escaped;
-    tags are not, so a headline quoting ``<div>`` keeps it.
+    alike: drop NUL bytes (Postgres rejects them), strip HTML comments (React
+    leaves ``<!-- -->`` in some titles) and tags, unescape entities, collapse
+    whitespace, cap at 300 characters. Comments are stripped again after
+    unescaping in case they arrived escaped; tags are not, so a headline
+    quoting ``&lt;div&gt;`` keeps it.
     """
-    text = _HTML_TAG_RE.sub("", _HTML_COMMENT_RE.sub("", raw))
+    text = raw[:_MAX_RAW_TITLE_CHARS].replace("\x00", "")
+    text = _HTML_TAG_RE.sub("", _HTML_COMMENT_RE.sub("", text))
     text = _HTML_COMMENT_RE.sub("", html_mod.unescape(text))
     text = " ".join(text.split())
     if len(text) <= 5 or not _is_usable_title(text):
@@ -266,9 +275,17 @@ def _field(fields: list[str], index: int) -> str:
 
 
 def _parse_page_title(extras: str) -> str:
-    """Title from V2EXTRASXML's ``<PAGE_TITLE>``, cleaned; '' if missing or unusable."""
-    match = _PAGE_TITLE_RE.search(extras)
-    return _clean_title(match.group(1)) if match else ""
+    """Title from V2EXTRASXML's ``<PAGE_TITLE>``, cleaned; '' if missing or unusable.
+
+    Uses str.find rather than a lazy regex, which rescans to the end from
+    every unclosed opener (11.5 s on 120 KB of them).
+    """
+    start = extras.find(_PAGE_TITLE_OPEN)
+    if start < 0:
+        return ""
+    start += len(_PAGE_TITLE_OPEN)
+    end = extras.find(_PAGE_TITLE_CLOSE, start)
+    return _clean_title(extras[start:end]) if end >= 0 else ""
 
 
 def _parse_themes(raw: str) -> list[str]:
@@ -414,8 +431,18 @@ async def fetch_raw_gkg() -> list[dict]:
     except Exception:
         logger.error("Failed to unzip GKG file.", exc_info=True)
         return []
+    # NUL survives decoding, and Postgres TEXT, TEXT[] and JSONB reject it: one
+    # such record would roll back the whole upsert transaction.
+    raw = raw.replace("\x00", "")
 
-    # 3. Parse TSV — one record per document
+    # 3. Parse off the event loop: the per-record work is CPU-bound, and the
+    # container also serves the API.
+    return await asyncio.to_thread(_parse_gkg, raw)
+
+
+def _parse_gkg(raw: str) -> list[dict]:
+    """Parse a decoded GKG 2.1 file into city-level articles (see fetch_raw_gkg)."""
+    # One record per line, tab-separated.
     # GKG 2.1 field indices (0-based, tab-delimited):
     #  0: GKGRECORDID
     #  1: V2.1DATE (YYYYMMDDHHMMSS)
@@ -433,7 +460,8 @@ async def fetch_raw_gkg() -> list[dict]:
     # 26: V2EXTRASXML (<PAGE_TITLE>...</PAGE_TITLE> among other tags)
     articles: dict[str, dict] = {}  # keyed by URL for dedup
 
-    for line in raw.strip().split("\n"):
+    lines = raw.strip().split("\n")
+    for line in lines:
         fields = line.split("\t")
         if len(fields) < 16:
             continue
@@ -527,7 +555,7 @@ async def fetch_raw_gkg() -> list[dict]:
 
     logger.info(
         "GKG raw file: %d records, %d with city-level locations.",
-        len(raw.strip().split("\n")),
+        len(lines),
         len(articles),
     )
     return list(articles.values())

@@ -112,13 +112,17 @@ async def _ingest_from_raw_gkg() -> int:
                 "sentiment_score": sentiment,
                 "entities": {"tone": a["tone_detail"]} if a.get("tone_detail") else {},
                 "image_url": a.get("image_url") or None,
-                # GKG fields stored on the row
+                # GKG fields written to articles columns by upsert_articles
                 "themes": a.get("themes", []),
-                "persons": a.get("persons", []),  # also feeds the knowledge graph
+                # persons: the articles.persons column AND populate_graph's PERSON nodes
+                "persons": a.get("persons", []),
+                # orgs: the articles.orgs column (upsert_articles reads this key)
                 "orgs": a.get("organizations", []),
                 "names": a.get("names", []),
                 "counts": a.get("counts", []),
-                # Knowledge graph only
+                # Read only by populate_graph (below), not written by upsert_articles:
+                # organizations -> ORG nodes (same list as orgs),
+                # mentioned_locations -> country LOCATION nodes.
                 "organizations": a.get("organizations", []),
                 "mentioned_locations": a.get("mentioned_locations", []),
             }
