@@ -94,7 +94,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="antialiased">
+      <body>
         {children}
         <Analytics />
       </body>

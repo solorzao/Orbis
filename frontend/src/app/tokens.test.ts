@@ -25,6 +25,10 @@ describe("Soft Orbit tokens", () => {
     expect(fromApp).toEqual(fromMockup);
   });
 
+  it("are unlayered, so they override Tailwind's layered theme defaults", () => {
+    expect(readFileSync(TOKENS, "utf8")).not.toMatch(/@layer/);
+  });
+
   // next/font puts the self-hosted families on <html> under hashed names; these
   // lines point the token stacks at them. Without them the app falls back to
   // whatever Space Grotesk / Orbitron the visitor happens to have installed.

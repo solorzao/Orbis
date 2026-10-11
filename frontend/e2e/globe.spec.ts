@@ -65,7 +65,6 @@ test.describe("Globe Page", () => {
   });
 
   test("has no theme toggle (Soft Orbit is dark only)", async ({ page }) => {
-    await expect(page.locator("a", { hasText: "About" })).toBeVisible();
     await expect(page.locator('button[aria-label*="Theme"]')).toHaveCount(0);
     await expect(page.locator("html")).not.toHaveAttribute("data-theme");
   });

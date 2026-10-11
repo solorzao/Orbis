@@ -15,7 +15,7 @@
   --surface-card: var(--surface-raised);
   --surface-overlay: var(--surface-glass);
   --border-accent: var(--border-edge-a);
-  --text-motto: var(--brand-motto-color); /* #4482a8, AA 4.6:1 (PR #42) */
+  --text-motto: #4c8db4; /* AA ~4.6:1 over the sky haze; the mockup's #4482a8 is ~4.0:1 there */
   --vignette: rgba(13, 12, 23, 0.7);
   --shadow: rgba(3, 2, 12, 0.55);
   --inset-highlight: rgba(255, 255, 255, 0.07);
@@ -67,8 +67,10 @@ body {
     radial-gradient(1100px 900px at 92% 96%, var(--bg-haze-b), transparent 60%), var(--bg-page);
   color: var(--text-primary);
   font: var(--type-body);
+  line-height: 1.5715; /* 22/14, unitless so smaller text scales until components adopt --type-* */
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 :focus-visible {
