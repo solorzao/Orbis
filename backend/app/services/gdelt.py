@@ -13,6 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from app.services.country_codes import fips_to_iso2
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -307,6 +309,7 @@ async def fetch_raw_gkg() -> list[dict]:
         for loc_block in locations_raw.split(";"):
             parts = loc_block.split("#")
             # Fields: Type#FullName#CountryCode#ADM1Code#Lat#Lng#FeatureID
+            # CountryCode is FIPS 10-4; we store ISO 3166-1 alpha-2 and keep the raw code.
             if len(parts) < 7:
                 continue
             loc_type = parts[0]
@@ -320,7 +323,8 @@ async def fetch_raw_gkg() -> list[dict]:
             if loc_type in ("3", "4") and city_loc is None:
                 city_loc = {
                     "fullname": parts[1],
-                    "country_code": parts[2],
+                    "country_code": fips_to_iso2(parts[2]),
+                    "country_fips": parts[2],
                     "lat": lat,
                     "lng": lng,
                 }
@@ -331,7 +335,8 @@ async def fetch_raw_gkg() -> list[dict]:
                 mentioned_locations.append(
                     {
                         "name": parts[1].strip(),
-                        "country_code": parts[2],
+                        "country_code": fips_to_iso2(parts[2]),
+                        "country_fips": parts[2],
                         "lat": lat,
                         "lng": lng,
                     }
@@ -374,6 +379,7 @@ async def fetch_raw_gkg() -> list[dict]:
             "lng": city_loc["lng"],
             "location_name": city_loc["fullname"],
             "country_code": city_loc["country_code"],
+            "country_fips": city_loc["country_fips"],
             "tone": tone,
             "themes": themes,
             "persons": persons,

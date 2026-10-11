@@ -19,7 +19,8 @@ PostgreSQL schema for the Orbis globe news explorer, powered by **Supabase** wit
 | `location`        | GEOGRAPHY(Point, 4326)  | PostGIS geography for spatial queries |
 | `latitude`        | DOUBLE PRECISION        | Numeric latitude                      |
 | `longitude`       | DOUBLE PRECISION        | Numeric longitude                     |
-| `country_code`    | TEXT                    | ISO 3166-1 alpha-2                    |
+| `country_code`    | TEXT                    | ISO 3166-1 alpha-2 (`''` if unknown)  |
+| `country_fips`    | TEXT                    | Raw GDELT FIPS 10-4 code; NULL = row predates the ISO switch (backfilled by ingestion) |
 | `region`          | TEXT                    | Continent / sub-region                |
 | `topic_tags`      | TEXT[]                  | Array of topic labels                 |
 | `sentiment_score` | DOUBLE PRECISION        | Range roughly -1.0 to 1.0            |
@@ -72,6 +73,8 @@ bash database/setup.sh
 ## Seeding Data
 
 The seed file inserts ~20 articles with worldwide geographic coverage, realistic titles, and timestamps relative to `NOW()` so the data always appears fresh.
+
+> **Re-seed local databases after migration `007_country_fips.sql`.** Rows seeded before 007 have no `country_fips`, so the ingestion backfill treats their ISO `country_code` as a FIPS code and rewrites it (for example `GB` becomes `GA`, Gabon). Delete those rows (or recreate the database) and run `seed.sql` again; the current seed sets `country_fips` on every row.
 
 ```bash
 psql "${DATABASE_URL}" -f database/seed.sql

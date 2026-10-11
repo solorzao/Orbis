@@ -203,8 +203,9 @@ async def keyword_search(
             idx += 1
 
         if country:
+            # Stored codes are upper-case ISO 3166-1 alpha-2.
             conditions.append(f"country_code = ${idx}")
-            params.append(country)
+            params.append(country.strip().upper())
             idx += 1
 
         if time_range:

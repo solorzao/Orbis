@@ -129,6 +129,7 @@ async def populate_graph(articles: list[dict]) -> int:
                                 "lat": article.get("latitude"),
                                 "lng": article.get("longitude"),
                                 "country_code": article.get("country_code", ""),
+                                "country_fips": article.get("country_fips", ""),
                             }
                         ),
                     )
@@ -187,6 +188,7 @@ async def populate_graph(articles: list[dict]) -> int:
                                 "lat": loc.get("lat"),
                                 "lng": loc.get("lng"),
                                 "country_code": loc.get("country_code", ""),
+                                "country_fips": loc.get("country_fips", ""),
                             }
                         ),
                     )

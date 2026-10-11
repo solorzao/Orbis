@@ -204,11 +204,11 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                         title, summary, source_url, source_name, source_language,
                         published_at, latitude, longitude, location,
                         country_code, region, topic_tags, sentiment_score,
-                        entities, image_url
+                        entities, image_url, country_fips
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8,
                         ST_SetSRID(ST_MakePoint($8, $7), 4326)::geography,
-                        $9, $10, $11, $12, $13, $14
+                        $9, $10, $11, $12, $13, $14, $15
                     )
                     ON CONFLICT (source_url) DO UPDATE SET
                         title = EXCLUDED.title,
@@ -217,6 +217,7 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                         longitude = EXCLUDED.longitude,
                         location = EXCLUDED.location,
                         country_code = EXCLUDED.country_code,
+                        country_fips = EXCLUDED.country_fips,
                         region = EXCLUDED.region,
                         sentiment_score = EXCLUDED.sentiment_score,
                         topic_tags = EXCLUDED.topic_tags,
@@ -237,6 +238,9 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
                     article.get("sentiment_score", 0.0),
                     json.dumps(article.get("entities", {})),
                     article.get("image_url"),
+                    # Never NULL: NULL marks rows written before the FIPS to ISO
+                    # switch, which the ingestion backfill converts.
+                    article.get("country_fips") or "",
                 )
                 count += 1
 

@@ -74,7 +74,9 @@ RETRIEVAL_TOOLS: list[dict] = [
             },
             "country": {
                 "type": "string",
-                "description": "Two-letter country code",
+                "description": (
+                    "ISO 3166-1 alpha-2 country code (e.g. ES = Spain, GB = United Kingdom)"
+                ),
                 "default": None,
             },
             "time_range": {

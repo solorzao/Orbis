@@ -151,6 +151,24 @@ class TestKeywordSearch:
         assert call_args[0][1] == "election"  # terms param
         assert call_args[0][2] == "politics"  # topic param
 
+    @pytest.mark.asyncio
+    async def test_keyword_search_uppercases_country_code(self):
+        from app.services.retrieval import keyword_search
+
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            await keyword_search(country="es")
+
+        query, country, _limit = mock_pool.fetch.call_args[0]
+        assert "country_code = $1" in query
+        assert country == "ES"
+
 
 class TestTrendingTopics:
     @pytest.mark.asyncio

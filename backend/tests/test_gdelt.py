@@ -258,6 +258,61 @@ class TestFetchRawGkg:
             assert articles[0]["organizations"] == []
 
 
+async def _fetch_records(records: list[str]) -> list[dict]:
+    """Run fetch_raw_gkg against a fake GKG file holding *records*."""
+    zip_bytes = _make_gkg_zip(records)
+    index_text = "100 abc http://data.gdeltproject.org/gdeltv2/test.gkg.csv.zip"
+
+    async def mock_download(url):
+        if "lastupdate" in url:
+            return index_text.encode()
+        return zip_bytes
+
+    with patch(
+        "app.services.gdelt._download_bytes",
+        new_callable=AsyncMock,
+        side_effect=mock_download,
+    ):
+        return await fetch_raw_gkg()
+
+
+class TestCountryCodes:
+    """GKG location codes are FIPS 10-4; articles store ISO and keep the raw code."""
+
+    @pytest.mark.asyncio
+    async def test_city_location_country_is_iso_with_raw_fips_kept(self):
+        record = _make_gkg_record(
+            locations="4#London, London, United Kingdom#UK#UKH9#51.5#-0.12#-2643743"
+        )
+        articles = await _fetch_records([record])
+        assert len(articles) == 1
+        assert articles[0]["country_code"] == "GB"
+        assert articles[0]["country_fips"] == "UK"
+
+    @pytest.mark.asyncio
+    async def test_country_mentions_are_iso_with_raw_fips_kept(self):
+        record = _make_gkg_record(
+            locations=(
+                "1#China#CH##35#105#CH;"
+                "1#Spain#SP##40#-4#SP;"
+                "4#London, London, United Kingdom#UK#UKH9#51.5#-0.12#-2643743"
+            )
+        )
+        articles = await _fetch_records([record])
+        mentions = articles[0]["mentioned_locations"]
+        assert [(m["name"], m["country_code"], m["country_fips"]) for m in mentions] == [
+            ("China", "CN", "CH"),
+            ("Spain", "ES", "SP"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unknown_fips_gives_empty_iso_but_keeps_raw_code(self):
+        record = _make_gkg_record(locations="4#Somewhere#ZZ#ZZ00#10.0#20.0#123")
+        articles = await _fetch_records([record])
+        assert articles[0]["country_code"] == ""
+        assert articles[0]["country_fips"] == "ZZ"
+
+
 # ---------------------------------------------------------------------------
 # scrape_titles
 # ---------------------------------------------------------------------------

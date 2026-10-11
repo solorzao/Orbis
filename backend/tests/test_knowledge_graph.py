@@ -1,5 +1,6 @@
 """Tests for the knowledge graph population service."""
 
+import json
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -142,6 +143,40 @@ class TestPopulateGraph:
         execute_calls = conn.execute.call_args_list
         located_at_calls = [c for c in execute_calls if len(c[0]) >= 4 and c[0][3] == "LOCATED_AT"]
         assert len(located_at_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_location_metadata_keeps_iso_and_fips_codes(self):
+        from app.services.knowledge_graph import populate_graph
+
+        pool, conn = _mock_pool()
+        article = _make_article(
+            persons=[],
+            organizations=[],
+            topic_tags=[],
+            region="London, London, United Kingdom",
+            country_code="GB",
+            country_fips="UK",
+            mentioned_locations=[
+                {"name": "China", "country_code": "CN", "country_fips": "CH", "lat": 35, "lng": 105}
+            ],
+        )
+
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
+            await populate_graph([article])
+
+        metadata = {
+            c.args[2]: json.loads(c.args[3])
+            for c in conn.fetchval.call_args_list
+            if len(c.args) >= 4 and c.args[1] == "LOCATION"
+        }
+        city = metadata["London, London, United Kingdom"]
+        assert (city["country_code"], city["country_fips"]) == ("GB", "UK")
+        assert (metadata["China"]["country_code"], metadata["China"]["country_fips"]) == (
+            "CN",
+            "CH",
+        )
 
     @pytest.mark.asyncio
     async def test_creates_about_topic_edges(self):
