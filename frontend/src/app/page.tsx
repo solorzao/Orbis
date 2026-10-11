@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
@@ -13,7 +14,6 @@ import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
 import PanelQueue from "@/components/PanelQueue";
 import TopicFilter from "@/components/TopicFilter";
-import ThemeToggle from "@/components/ThemeToggle";
 import AgentPanel from "@/components/AgentPanel";
 
 // Globe requires `window` — load without SSR
@@ -394,8 +394,14 @@ export default function Home() {
       {/* Topic Filters */}
       <TopicFilter activeTopic={activeTopic} onTopicChange={setActiveTopic} />
 
-      {/* Theme Toggle */}
-      <ThemeToggle />
+      {/* About: a temporary pill until PR 9 moves it into the top bar */}
+      <Link
+        href="/about"
+        title="About Orbis"
+        className="fixed top-3 right-3 z-50 flex h-[var(--pill-height-sm)] items-center rounded-full border border-line-2 bg-glass px-3 tracking-[var(--tracking-label)] text-ink-2 backdrop-blur-[var(--blur-glass)] transition-colors duration-[var(--dur-fast)] [font:var(--type-label)] hover:border-line-3 hover:text-ink sm:top-5 sm:right-6 sm:h-[var(--pill-height)]"
+      >
+        About
+      </Link>
 
       {/* Panel Queue */}
       <PanelQueue

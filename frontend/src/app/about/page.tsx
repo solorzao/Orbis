@@ -21,6 +21,8 @@ export default function AboutPage() {
           min-height: 100vh;
           background: var(--bg-page);
           color: var(--text-primary);
+          /* body's type style has a fixed 22px line height; the large title needs a ratio */
+          line-height: 1.5;
         }
         .about-hero {
           max-width: 640px;
