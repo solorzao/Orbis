@@ -44,6 +44,10 @@ OVERRIDES = {
     "YI": "",  # Serbia and Montenegro (ISO CS, withdrawn 2006)
 }
 
+# OVERRIDES keys allowed to replace an existing GeoNames mapping. Removals
+# ("" values, such as NT and YI) are deliberate by definition and need no entry.
+DELIBERATE_REPLACEMENTS: set[str] = set()
+
 ANCHORS = {"SP": "ES", "UK": "GB", "CH": "CN", "GM": "DE", "AS": "AU"}
 
 
@@ -63,6 +67,13 @@ for line in raw.decode("utf-8").splitlines():
     if iso and fips:
         check(fips not in pairs, f"FIPS {fips} is listed for both {pairs.get(fips)} and {iso}")
         pairs[fips] = iso
+
+collisions = sorted(
+    f"{fips} (GeoNames {pairs[fips]}, override {iso})"
+    for fips, iso in OVERRIDES.items()
+    if iso and fips in pairs and fips not in DELIBERATE_REPLACEMENTS
+)
+check(not collisions, f"overrides replace GeoNames codes: {collisions}")
 
 for fips, iso in OVERRIDES.items():
     if iso:

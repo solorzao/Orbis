@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 
 from app.config import settings
 from app.services.cache import invalidate
@@ -150,6 +151,8 @@ _BACKFILL_IDLE_RUNS_TO_STOP = 2
 
 # Held for a whole ingestion cycle, so the startup run and the scheduler never overlap.
 _ingestion_lock = asyncio.Lock()
+# time.monotonic() when the cycle holding _ingestion_lock started.
+_cycle_started_at: float | None = None
 
 
 async def _backfill_iso_country_codes(pool, budget: int = 5000) -> int:
@@ -192,8 +195,11 @@ async def _backfill_iso_country_codes(pool, budget: int = 5000) -> int:
     for fips, ids in ids_by_fips.items():
         try:
             result = await pool.execute(
+                # Re-check the code so a row changed since the SELECT is not
+                # converted from a stale value (it is picked up next run).
                 "UPDATE articles SET country_fips = $1, country_code = $2 "
-                "WHERE id = ANY($3::uuid[]) AND country_fips IS NULL",
+                "WHERE id = ANY($3::uuid[]) AND country_fips IS NULL "
+                "AND coalesce(country_code, '') = $1",
                 fips,
                 fips_to_iso2(fips),
                 ids,
@@ -237,10 +243,13 @@ async def run_ingestion_cycle() -> int:
     Cycles never overlap: if one is already running (the startup run and the
     scheduler can coincide), this returns 0 without doing anything.
     """
+    global _cycle_started_at
     if _ingestion_lock.locked():
-        logger.info("Ingestion cycle already running; skipping this one.")
+        running_for = time.monotonic() - (_cycle_started_at or time.monotonic())
+        logger.warning("Ingestion cycle already running for %.0fs; skipping this one.", running_for)
         return 0
     async with _ingestion_lock:
+        _cycle_started_at = time.monotonic()
         try:
             logger.info("Ingestion cycle starting …")
             try:

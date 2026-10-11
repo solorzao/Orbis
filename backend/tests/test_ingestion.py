@@ -1,6 +1,7 @@
 """Tests for the raw GKG → PostgreSQL ingestion service."""
 
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -264,21 +265,41 @@ class TestRunIngestionCycle:
             assert count == 0
 
     @pytest.mark.asyncio
-    async def test_skips_when_a_cycle_is_already_running(self, caplog):
+    async def test_skips_when_a_cycle_is_already_running(self, caplog, monkeypatch):
         from app.services import ingestion
 
+        monkeypatch.setattr(ingestion, "_cycle_started_at", time.monotonic() - 42)
         with patch(
             "app.services.ingestion._ingest_from_raw_gkg",
             new_callable=AsyncMock,
             return_value=5,
         ) as mock_ingest:
             async with ingestion._ingestion_lock:
-                with caplog.at_level(logging.INFO, logger="orbis.ingestion"):
+                with caplog.at_level(logging.WARNING, logger="orbis.ingestion"):
                     assert await ingestion.run_ingestion_cycle() == 0
 
         mock_ingest.assert_not_awaited()
-        assert "already running" in caplog.text
+        [record] = [r for r in caplog.records if "already running" in r.getMessage()]
+        assert record.levelno == logging.WARNING
+        assert "running for 42s" in record.getMessage()
         assert not ingestion._ingestion_lock.locked()
+
+    @pytest.mark.asyncio
+    async def test_records_when_the_running_cycle_started(self, monkeypatch):
+        from app.services import ingestion
+
+        monkeypatch.setattr(ingestion, "_cycle_started_at", None)
+        with (
+            patch("app.services.ingestion._backfill_iso_country_codes", new_callable=AsyncMock),
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion._ingest_from_raw_gkg", new_callable=AsyncMock),
+            patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
+            patch("app.services.ingestion.generate_embeddings", new_callable=AsyncMock),
+        ):
+            before = time.monotonic()
+            await ingestion.run_ingestion_cycle()
+
+        assert before <= ingestion._cycle_started_at <= time.monotonic()
 
     @pytest.mark.asyncio
     async def test_backfill_runs_first(self):
@@ -358,9 +379,15 @@ class _FakeArticlesPool:
     ``(fips, iso, sorted ids)``; codes in ``fail_codes`` raise instead.
     """
 
-    def __init__(self, rows: list[dict], fail_codes: frozenset[str] = frozenset()):
+    def __init__(
+        self,
+        rows: list[dict],
+        fail_codes: frozenset[str] = frozenset(),
+        after_fetch=None,
+    ):
         self.rows = rows
         self.fail_codes = fail_codes
+        self.after_fetch = after_fetch  # called once the SELECT has returned
         self.fetches = 0
         self.updates: list[tuple] = []
 
@@ -369,16 +396,22 @@ class _FakeArticlesPool:
         self.fetches += 1
         pending = [r for r in self.rows if r["country_fips"] is None]
         pending.sort(key=lambda r: r["published_at"], reverse=True)
-        return [{"id": r["id"], "country_code": r["country_code"]} for r in pending[:budget]]
+        result = [{"id": r["id"], "country_code": r["country_code"]} for r in pending[:budget]]
+        if self.after_fetch:
+            self.after_fetch(self.rows)
+        return result
 
     async def execute(self, query, fips, iso, ids):
-        assert "WHERE id = ANY($3::uuid[]) AND country_fips IS NULL" in query
+        assert (
+            "WHERE id = ANY($3::uuid[]) AND country_fips IS NULL "
+            "AND coalesce(country_code, '') = $1"
+        ) in query
         if fips in self.fail_codes:
             raise RuntimeError(f"update failed for {fips}")
         self.updates.append((fips, iso, sorted(ids)))
         n = 0
         for r in self.rows:
-            if r["id"] in ids and r["country_fips"] is None:
+            if r["id"] in ids and r["country_fips"] is None and (r["country_code"] or "") == fips:
                 r["country_fips"], r["country_code"] = fips, iso
                 n += 1
         return f"UPDATE {n}"
@@ -458,6 +491,24 @@ class TestBackfillIsoCountryCodes:
 
         assert await _backfill_iso_country_codes(pool, budget=2) == 1
         assert _codes(rows) == [("GB", "UK"), ("GB", "UK"), ("ES", "SP")]
+
+    @pytest.mark.asyncio
+    async def test_skips_rows_whose_code_changed_after_the_select(self):
+        from app.services.ingestion import _backfill_iso_country_codes
+
+        def old_revision_rewrites_uk_2(rows):
+            rows[1]["country_code"] = "FR"  # still pre-switch: country_fips stays NULL
+
+        rows = [_row("uk-1", "UK"), _row("uk-2", "UK")]
+        pool = _FakeArticlesPool(rows, after_fetch=old_revision_rewrites_uk_2)
+
+        assert await _backfill_iso_country_codes(pool) == 1
+        # Not converted from the stale "UK"; picked up with its new code next run.
+        assert _codes(rows) == [("GB", "UK"), ("FR", None)]
+
+        pool.after_fetch = None
+        assert await _backfill_iso_country_codes(pool) == 1
+        assert _codes(rows) == [("GB", "UK"), ("FR", "FR")]
 
     @pytest.mark.asyncio
     async def test_failed_group_does_not_stop_the_others(self, caplog):
