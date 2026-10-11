@@ -43,6 +43,8 @@ describe("RecentPlaces", () => {
       .filter((b) => b.hasAttribute("aria-pressed"));
     expect(picks.map((b) => b.textContent)).toEqual(["Paris5", "London3", "48.9°, 2.4°2"]);
     expect(picks[0]).toHaveAttribute("title", "Paris, France");
+    // Where focus goes when the open place is minimized (useKeepFocus)
+    expect(picks.map((b) => b.getAttribute("data-place"))).toEqual(["a", "b", "c"]);
   });
 
   it("marks only the active place as pressed", () => {

@@ -42,6 +42,7 @@ export default function RecentPlaces({ places, activeId, onSelect, onClose }: Re
             <button
               type="button"
               className="place-pick"
+              data-place={entry.panelId}
               aria-pressed={active}
               title={name}
               onClick={() => onSelect(entry.panelId)}

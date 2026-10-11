@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { useState } from "react";
+import { createRef, useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import SidePanel from "./SidePanel";
 import type { SideTab } from "@/hooks/useSidePanel";
@@ -146,6 +146,24 @@ describe("SidePanel", () => {
     fireEvent.click(tab("Stories"));
     expect(panel()).toHaveAttribute("data-open", "true");
     expect(tab("Stories")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("lets focus land on a tab panel, and hands out the Stories panel", () => {
+    const storiesRef = createRef<HTMLDivElement>();
+    render(
+      <SidePanel
+        tab="stories"
+        onTabChange={() => {}}
+        open
+        onOpenChange={() => {}}
+        copilot={null}
+        stories={<p>Stories content</p>}
+        storiesRef={storiesRef}
+      />,
+    );
+    const stories = screen.getByRole("tabpanel", { name: "Stories" });
+    expect(storiesRef.current).toBe(stories);
+    expect(stories).toHaveAttribute("tabindex", "-1");
   });
 
   it("reports changes through its callbacks", () => {

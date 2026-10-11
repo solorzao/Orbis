@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { SideTab } from "@/hooks/useSidePanel";
 
 const TABS: { id: SideTab; label: string }[] = [
@@ -17,6 +17,8 @@ interface SidePanelProps {
   stories: ReactNode;
   /** Places open in the Stories tab, shown as a badge on the collapsed pill. */
   storiesCount?: number;
+  /** The Stories tab panel, where focus lands when a place's controls go (useKeepFocus). */
+  storiesRef?: Ref<HTMLDivElement>;
 }
 
 /** False when CSS hides the element (the reopen pill is hidden on the sheet). */
@@ -42,6 +44,7 @@ export default function SidePanel({
   copilot,
   stories,
   storiesCount = 0,
+  storiesRef,
 }: SidePanelProps) {
   const id = useId();
   const tabId = (t: SideTab) => `${id}-tab-${t}`;
@@ -149,9 +152,11 @@ export default function SidePanel({
         {TABS.map((t) => (
           <div
             key={t.id}
+            ref={t.id === "stories" ? storiesRef : undefined}
             id={panelId(t.id)}
             role="tabpanel"
             aria-labelledby={tabId(t.id)}
+            tabIndex={-1}
             className={`gbody side-body side-body-${t.id}`}
             hidden={tab !== t.id}
           >

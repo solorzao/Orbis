@@ -114,6 +114,38 @@ test.describe("Stories tab", () => {
     await expect(page.getByText("Click a dot on the globe to see its stories here.")).toBeVisible();
   });
 
+  test("minimize, Escape and close keep keyboard focus in the Stories tab", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await clickPlace(page, PARIS);
+    await clickPlace(page, LONDON);
+    const panel = page.getByTestId("news-panel");
+    const london = recentPlaces(page).getByRole("button", { name: /^London/ });
+
+    // Minimize: focus goes to the place's pill, which reopens it.
+    await panel.getByRole("button", { name: "Minimize panel" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(london).toBeFocused();
+    await expect(london).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Enter");
+    await expect(london).toHaveAttribute("aria-pressed", "true");
+
+    // Escape from the search box does the same.
+    await panel.getByRole("searchbox", { name: "Search headlines" }).focus();
+    await page.keyboard.press("Escape");
+    await expect(london).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    // × on another place: focus goes to the open place's pill.
+    await recentPlaces(page).getByRole("button", { name: "Close Paris" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(london).toBeFocused();
+
+    // Closing the open place leaves no pill to take it: the Stories panel does.
+    await panel.getByRole("button", { name: "Close panel" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("tabpanel", { name: "Stories" })).toBeFocused();
+  });
+
   test("Load more appends the next page", async ({ page }) => {
     const TOTAL = 25;
     await gotoStillGlobe(page, async (p) => {

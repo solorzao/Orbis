@@ -10,6 +10,7 @@ import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery"
 import { useAgent } from "@/hooks/useAgent";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
+import { useKeepFocus } from "@/hooks/useKeepFocus";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import TimeSlider from "@/components/TimeSlider";
 import NewsPanel from "@/components/NewsPanel";
@@ -47,6 +48,9 @@ export default function Home() {
   // Side panel (Co-pilot | Stories): open by default on wide screens
   const side = useSidePanel();
   const { showStories } = side;
+  // Minimize and close remove the focused control: keep focus in the Stories tab.
+  const storiesRef = useRef<HTMLDivElement>(null);
+  const keepStoriesFocus = useKeepFocus(storiesRef);
 
   const globeControlsRef = useRef<GlobeControls | null>(null);
 
@@ -328,14 +332,23 @@ export default function Home() {
 
   const handleZoomChange = useCallback(() => {}, []);
 
-  const handleClosePanel = useCallback((panelId: string) => {
-    setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
-    setExpandedPanelId((prev) => (prev === panelId ? null : prev));
-  }, []);
+  const handleClosePanel = useCallback(
+    (panelId: string) => {
+      // Focus goes to the open place's pill, or to the tab when it was this one.
+      keepStoriesFocus(panelId === expandedPanelId ? null : expandedPanelId);
+      setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
+      setExpandedPanelId((prev) => (prev === panelId ? null : prev));
+    },
+    [expandedPanelId, keepStoriesFocus],
+  );
 
-  const handleMinimizePanel = useCallback(() => {
-    setExpandedPanelId(null);
-  }, []);
+  const handleMinimizePanel = useCallback(
+    (panelId: string) => {
+      keepStoriesFocus(panelId); // the place stays in Recent places
+      setExpandedPanelId(null);
+    },
+    [keepStoriesFocus],
+  );
 
   const handleExpandPanel = useCallback((panelId: string) => {
     setExpandedPanelId(panelId);
@@ -363,7 +376,7 @@ export default function Home() {
           key={expandedPanel.panelId}
           point={{ ...expandedPanel.point, articles: expandedPanel.articles }}
           onClose={() => handleClosePanel(expandedPanel.panelId)}
-          onMinimize={handleMinimizePanel}
+          onMinimize={() => handleMinimizePanel(expandedPanel.panelId)}
           onLoadMore={(filters) => handleLoadMore(expandedPanel.panelId, filters)}
           loadingMore={expandedPanel.loadingMore}
           clusterSummary={expandedPanel.clusterSummary}
@@ -421,6 +434,7 @@ export default function Home() {
         open={side.open}
         onOpenChange={side.setOpen}
         storiesCount={panelQueue.length}
+        storiesRef={storiesRef}
         copilot={
           <AgentPanel
             messages={agentMessages}

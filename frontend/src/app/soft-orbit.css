@@ -484,6 +484,10 @@ kbd {
 .side-body {
   padding-top: 8px;
 }
+.side-body:focus-visible {
+  outline-offset: -2px; /* inside the scroller, which would clip it */
+  border-radius: var(--radius-lg);
+}
 .side-body-copilot {
   display: flex;
   flex-direction: column;
