@@ -233,15 +233,17 @@ async def populate_graph(articles: list[dict]) -> int:
 async def purge_orphaned_nodes() -> int:
     """Delete kg_nodes that have no edges pointing to or from them.
 
+    NOT EXISTS lets each node probe the source and target indexes. The old
+    NOT IN (… UNION …) form could not hash every edge id in 4 MB of work_mem,
+    so it compared each node with each edge: minutes per cycle at 800K edges.
+
     Returns the number of nodes deleted.
     """
     pool = await get_pool()
     status = await pool.execute(
-        "DELETE FROM kg_nodes WHERE id NOT IN ("
-        "  SELECT source_node_id FROM kg_edges "
-        "  UNION "
-        "  SELECT target_node_id FROM kg_edges"
-        ")"
+        "DELETE FROM kg_nodes n "
+        "WHERE NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.source_node_id = n.id) "
+        "AND NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.target_node_id = n.id)"
     )
     count = int(status.split()[-1])
     if count:
