@@ -4,6 +4,9 @@ import type { GlobePoint } from "@/types/news";
 /** Where the camera rests, and the centre of the calm drift. */
 export const HOME_VIEW = { lat: 20, lng: 0, altitude: 2.5 };
 
+/** The globe canvas starts this far above the viewport and is this much taller. */
+export const GLOBE_OVERSCAN_PX = 32;
+
 /** Drift amplitude: a few degrees out and back (mockup `frame`). */
 const DRIFT_DEG = 5;
 

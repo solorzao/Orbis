@@ -675,6 +675,18 @@ kbd {
   font: var(--type-label);
   color: var(--text-muted);
 }
+.art-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.art-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c);
+}
 .insp-status {
   margin: 0;
   padding: 16px 12px;

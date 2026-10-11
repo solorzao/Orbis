@@ -28,6 +28,21 @@ const TONES = [
 
 const MAX_SUMMARIZE = 10;
 
+/** Topics with a --topic-* token; any other tag gets the neutral "All" colour. */
+const TOPIC_TOKENS = new Set([
+  "politics",
+  "conflict",
+  "technology",
+  "climate",
+  "economy",
+  "health",
+]);
+
+function topicColor(tag: string): string {
+  const key = tag.toLowerCase();
+  return TOPIC_TOKENS.has(key) ? `var(--topic-${key})` : "var(--topic-all)";
+}
+
 function timeAgo(dateString: string): string {
   const now = new Date();
   const date = new Date(dateString);
@@ -335,6 +350,15 @@ export default function NewsPanel({
             <div className="m">
               <span>{article.sourceName}</span>
               <span suppressHydrationWarning>{timeAgo(article.publishedAt)}</span>
+              {article.topicTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="art-tag"
+                  style={{ "--c": topicColor(tag) } as CSSProperties}
+                >
+                  {tag}
+                </span>
+              ))}
               <span
                 className="sent"
                 style={

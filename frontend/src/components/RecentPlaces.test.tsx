@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import RecentPlaces from "./RecentPlaces";
 import type { PanelEntry } from "@/types/news";
+import { MAX_PANELS } from "@/lib/panelQuery";
 
 function entry(panelId: string, locationName: string | undefined, count = 4): PanelEntry {
   return {
@@ -71,7 +72,8 @@ describe("RecentPlaces", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("shows at most the five newest places", () => {
+  it("shows at most the MAX_PANELS (5) newest places", () => {
+    expect(MAX_PANELS).toBe(5);
     const many = ["a", "b", "c", "d", "e", "f"].map((id) => entry(id, `Place ${id}, X`));
     render(<RecentPlaces places={many} activeId={null} onSelect={() => {}} onClose={() => {}} />);
     const closers = screen.getAllByRole("button", { name: /^Close/ });

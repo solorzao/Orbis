@@ -101,6 +101,25 @@ describe("NewsPanel", () => {
     expect(negative.style.getPropertyValue("--sc")).toBe("var(--sentiment-n2)");
   });
 
+  it("tags each row with its topics, coloured by the topic tokens", () => {
+    render(
+      <NewsPanel
+        point={point({
+          articles: [article("t1", "Mixed story", 0, ["Climate", "Economy", "sport"])],
+        })}
+        onClose={() => {}}
+      />,
+    );
+    const row = rows()[0];
+    const tags = Array.from(row.querySelectorAll<HTMLElement>(".art-tag"));
+    expect(tags.map((t) => t.textContent)).toEqual(["Climate", "Economy", "sport"]);
+    expect(tags.map((t) => t.style.getPropertyValue("--c"))).toEqual([
+      "var(--topic-climate)",
+      "var(--topic-economy)",
+      "var(--topic-all)", // not one of the six topics
+    ]);
+  });
+
   it("filters by search, topic and tone, with pills that show their state", () => {
     render(<NewsPanel point={point()} onClose={() => {}} />);
     const all = screen.getByRole("button", { name: "All" });

@@ -2,9 +2,7 @@
 
 import type { CSSProperties } from "react";
 import type { PanelEntry } from "@/types/news";
-
-/** The queue's cap in page.tsx (MAX_PANELS). */
-const MAX_SHOWN = 5;
+import { MAX_PANELS } from "@/lib/panelQuery";
 
 interface RecentPlacesProps {
   /** Open places, oldest first. */
@@ -34,7 +32,7 @@ export default function RecentPlaces({ places, activeId, onSelect, onClose }: Re
 
   return (
     <div className="places" role="group" aria-label="Recent places" data-testid="recent-places">
-      {places.slice(-MAX_SHOWN).map((entry) => {
+      {places.slice(-MAX_PANELS).map((entry) => {
         const { name, short } = placeNames(entry);
         const active = entry.panelId === activeId;
         return (

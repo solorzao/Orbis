@@ -6,6 +6,9 @@ import type { PanelQuery, Topic } from "@/types/news";
  */
 export const LIVE_WINDOW_HOURS = 24;
 
+/** Places open at once in the Stories tab (Recent places); a new one closes the oldest. */
+export const MAX_PANELS = 5;
+
 /**
  * The query a panel keeps from the moment its dot is clicked: the active
  * topic and the globe's window, or live, the last LIVE_WINDOW_HOURS up to

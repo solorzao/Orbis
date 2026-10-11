@@ -5,6 +5,7 @@
  * and returns deterministic mock data.
  */
 import { expect, type Page } from "@playwright/test";
+import { GLOBE_OVERSCAN_PX, HOME_VIEW } from "../src/lib/globeView";
 
 // ── Mock data ───────────────────────────────────────────────────────
 
@@ -222,16 +223,14 @@ export async function mockAgentRoute(page: Page, options?: Parameters<typeof bui
 
 // ── Clicking a dot ──────────────────────────────────────────────────
 
-/** HOME_VIEW in src/lib/globeView.ts (its lng is 0); with reduced motion the globe rests there. */
-const HOME = { lat: 20, altitude: 2.5 };
-/** three.js's default PerspectiveCamera fov, which globe.gl keeps. */
+/** three.js's default PerspectiveCamera fov, which globe.gl keeps (the app never sets it). */
 const FOV_DEG = 50;
-/** The globe canvas starts 2rem above the viewport and is 2rem taller (Globe.tsx). */
-const CANVAS_TOP = -32;
+const CANVAS_TOP = -GLOBE_OVERSCAN_PX;
 
 /**
- * Where a place sits on screen while the globe rests at its home view: the
- * camera is `altitude` globe radii above (HOME.lat, 0), looking at the centre.
+ * Where a place sits on screen while the globe rests at HOME_VIEW (with
+ * reduced motion it holds there): the camera is `altitude` globe radii above
+ * the home point, looking at the centre.
  */
 export function homeViewScreenPoint(
   lat: number,
@@ -241,14 +240,15 @@ export function homeViewScreenPoint(
 ) {
   const rad = Math.PI / 180;
   const r = 1 + surfaceAltitude;
+  const dLng = (lng - HOME_VIEW.lng) * rad; // turn the globe so the camera sits at lng 0
   const p = [
-    r * Math.cos(lat * rad) * Math.sin(lng * rad),
+    r * Math.cos(lat * rad) * Math.sin(dLng),
     r * Math.sin(lat * rad),
-    r * Math.cos(lat * rad) * Math.cos(lng * rad),
+    r * Math.cos(lat * rad) * Math.cos(dLng),
   ];
-  const s = Math.sin(HOME.lat * rad);
-  const c = Math.cos(HOME.lat * rad);
-  const dist = 1 + HOME.altitude;
+  const s = Math.sin(HOME_VIEW.lat * rad);
+  const c = Math.cos(HOME_VIEW.lat * rad);
+  const dist = 1 + HOME_VIEW.altitude;
   const d = [p[0], p[1] - dist * s, p[2] - dist * c]; // from the camera
   // Camera axes: right (1, 0, 0), up (0, c, -s), back (0, s, c).
   const right = d[0];

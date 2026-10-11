@@ -6,7 +6,7 @@ import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } 
 import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
-import { LIVE_WINDOW_HOURS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { LIVE_WINDOW_HOURS, MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { useAgent } from "@/hooks/useAgent";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
@@ -37,7 +37,6 @@ export default function Home() {
   const [dayOffset, setDayOffset] = useState(0);
   const [hasOlderData, setHasOlderData] = useState(true);
 
-  const MAX_PANELS = 5;
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
 
