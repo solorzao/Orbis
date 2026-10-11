@@ -182,6 +182,18 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
   });
 }
 
+test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {
+  const size = { width: 900, height: 300 }; // 100vh - 260px would be 40px
+  await settle(page, size);
+  await page.getByTestId("side-tab-stories").click();
+  const side = page.getByTestId("side-panel");
+  await expect(side).toHaveAttribute("data-open", "true");
+  const box = (await side.boundingBox())!;
+  expect(box.height).toBe(openSheetHeight(size));
+  expect(box.height).toBe(56);
+  await expect(page.getByTestId("side-tab-copilot")).toBeVisible();
+});
+
 test.describe("before hydration (server HTML, no JavaScript)", () => {
   test.use({ javaScriptEnabled: false });
 

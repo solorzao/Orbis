@@ -954,8 +954,9 @@ kbd {
 @media (width < 1180px) {
   .side,
   .side ~ * {
-    /* 260px: the top bar (62px), the bottom row (138px) and the gaps around them */
-    --sheet-h: min(46vh, 100vh - 260px);
+    /* 260px: the top bar (62px), the bottom row (138px) and the gaps around them;
+       never below the 56px tab bar, however short the screen */
+    --sheet-h: max(56px, min(46vh, 100vh - 260px));
   }
   .side:not([data-open="true"]),
   .side:not([data-open="true"]) ~ * {
@@ -1012,7 +1013,7 @@ kbd {
   .side,
   .side ~ * {
     /* the top bar has two rows here (100px) */
-    --sheet-h: min(46vh, 100vh - 310px);
+    --sheet-h: max(56px, min(46vh, 100vh - 310px));
   }
 }
 
