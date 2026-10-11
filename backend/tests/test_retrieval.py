@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import pytest
 
 from app.services import retrieval
@@ -482,6 +483,71 @@ class TestGraphTraverse:
         assert result["connections"] == co_rows
         assert [a["id"] for a in result["articles"]] == [co_article]
         assert "timed out" in caplog.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "cleanup_error",
+        [
+            asyncpg.exceptions.ConnectionDoesNotExistError("connection lost"),
+            asyncpg.exceptions.InterfaceError("the underlying connection is closed"),
+            ConnectionResetError("connection reset by peer"),
+        ],
+    )
+    async def test_failed_rollback_after_timeout_still_returns_co_mentions(
+        self, cleanup_error, caplog
+    ):
+        from app.services.retrieval import graph_traverse
+
+        co_article = uuid.uuid4()
+        co_rows = [_co_mention_row("Jane Doe", 4, co_article)]
+        mock_pool = _graph_pool(
+            _start_row(),
+            _routed_fetch(
+                co_mentions=co_rows,
+                traverse=asyncio.TimeoutError(),
+                articles=[_article_row(co_article)],
+            ),
+        )
+        # ROLLBACK of the cancelled traversal fails: the connection is gone
+        mock_pool.tx.__aexit__.side_effect = cleanup_error
+
+        with (
+            patch(
+                "app.services.retrieval.get_pool",
+                new_callable=AsyncMock,
+                return_value=mock_pool,
+            ),
+            caplog.at_level(logging.WARNING, logger="orbis.retrieval"),
+        ):
+            result = await graph_traverse("John Doe")
+
+        assert result["entity"]["name"] == "John Doe"
+        assert result["connections"] == co_rows
+        assert [a["id"] for a in result["articles"]] == [co_article]
+        assert "timed out" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_traversal_errors_without_a_timeout_are_not_swallowed(self):
+        from app.services.retrieval import graph_traverse
+
+        # Only cleanup after a timeout is forgiven; a failing query still
+        # fails the tool call, as before.
+        mock_pool = _graph_pool(
+            _start_row(),
+            _routed_fetch(
+                co_mentions=[_co_mention_row("Jane Doe", 4, uuid.uuid4())],
+                traverse=asyncpg.exceptions.UndefinedColumnError("column does not exist"),
+            ),
+        )
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            result = await graph_traverse("John Doe")
+
+        assert result == _EMPTY_GRAPH
 
     @pytest.mark.asyncio
     async def test_co_mentioned_filter_computes_co_mentions_without_cte(self):
