@@ -718,6 +718,61 @@ kbd {
 }
 
 /*
+ * Layer switcher (mockup .layers, lines 405-410), without its position: the
+ * bottom row places it. The base layers are a segmented control; .sep and
+ * .tg are the overlay toggles (Links, Threads) later PRs add after a divider.
+ */
+.layers {
+  gap: 4px;
+}
+.layers .seg {
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.layers .seg button {
+  cursor: pointer;
+}
+.layers .seg button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.layers .seg button[aria-disabled="true"]:hover {
+  color: var(--text-muted);
+}
+.layers .sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border-default);
+  margin: 0 4px;
+}
+.layers .tg {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.layers .tg::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+}
+.layers .tg[aria-pressed="true"] {
+  color: var(--text-primary);
+}
+.layers .tg[aria-pressed="true"]::before {
+  border: 0;
+  background: linear-gradient(120deg, var(--accent-primary), var(--accent-lavender));
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+
+/*
  * Timeline capsule (mockup .timeline, lines 411-419): replay, the 7-day
  * volume chart and the window's label and presets. No position or width: the
  * bottom row's grid places and sizes it.

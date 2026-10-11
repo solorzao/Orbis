@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  HEATMAP,
   driftLng,
   durationMs,
+  heatmapPoints,
   hexToRgba,
   pointTooltipHtml,
   projectedRadius,
@@ -108,5 +110,39 @@ describe("ringRepeatMs", () => {
     { reduced: true, lowPower: true },
   ])("emits one ring and stops when reduced=$reduced, lowPower=$lowPower", (motion) => {
     expect(ringRepeatMs(motion)).toBe(0);
+  });
+});
+
+describe("heatmapPoints", () => {
+  const places = Array.from({ length: 300 }, (_, i) => ({ id: i, count: (i * 37) % 101 }));
+
+  it("uses every place where WebGPU computes the heatmap", () => {
+    expect(heatmapPoints(places, { gpu: true })).toHaveLength(300);
+  });
+
+  it("keeps the busiest places on the main-thread fallback, busiest first", () => {
+    const heat = heatmapPoints(places, { gpu: false });
+    expect(heat).toHaveLength(HEATMAP.maxPointsWithoutGpu);
+    expect(HEATMAP.maxPointsWithoutGpu).toBe(60);
+    const counts = heat.map((p) => p.count);
+    expect(counts).toEqual([...counts].sort((a, b) => b - a));
+    const quietestKept = Math.min(...counts);
+    const dropped = places.filter((p) => !heat.includes(p));
+    expect(dropped.every((p) => p.count <= quietestKept)).toBe(true);
+  });
+
+  it("leaves the input alone", () => {
+    const copy = [...places];
+    heatmapPoints(places, { gpu: false });
+    expect(places).toEqual(copy);
+  });
+
+  it("matches the mockup's heatmap settings", () => {
+    expect(HEATMAP).toMatchObject({
+      bandwidth: 1.8,
+      colorSaturation: 1.8,
+      baseAltitude: 0.006,
+      topAltitude: 0.04,
+    });
   });
 });

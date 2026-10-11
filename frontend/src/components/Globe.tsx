@@ -5,15 +5,19 @@ import type { GlobeInstance } from "globe.gl";
 import { GlobePoint } from "@/types/news";
 import {
   GLOBE_OVERSCAN_PX,
+  HEATMAP,
   HOME_VIEW,
   driftLng,
   durationMs,
+  hasWebGpu,
+  heatmapPoints,
   hexToRgba,
   pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
   type GlobeGeometry,
 } from "@/lib/globeView";
+import type { GlobeLayer } from "@/components/LayerSwitcher";
 
 // Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
 // immutable: a changed file gets a new version (see public/geo/README.md).
@@ -34,6 +38,8 @@ interface GlobeProps {
   reduced?: boolean;
   /** Low-power mode: the globe holds still. */
   lowPower?: boolean;
+  /** Dots (the default) or Intensity, a heatmap of the same places; dots hide under it. */
+  layer?: GlobeLayer;
 }
 
 interface LandFeature {
@@ -59,6 +65,7 @@ export default function Globe({
   onReady,
   reduced = false,
   lowPower = false,
+  layer = "dots",
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -79,6 +86,8 @@ export default function Globe({
   const altitudeRef = useRef(HOME_VIEW.altitude);
   const pointsRef = useRef(points);
   pointsRef.current = points;
+  const layerRef = useRef(layer);
+  layerRef.current = layer;
   const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Once the visitor grabs, scrolls or flies the globe, the drift is over for good.
@@ -138,6 +147,14 @@ export default function Globe({
           return `rgba(${r},${g},${b},${opacity})`;
         };
       })
+      // Intensity (mockup initGlobe): a heatmap weighted by each place's story count
+      .heatmapPointLat("lat")
+      .heatmapPointLng("lng")
+      .heatmapPointWeight("count")
+      .heatmapBandwidth(HEATMAP.bandwidth)
+      .heatmapColorSaturation(HEATMAP.colorSaturation)
+      .heatmapBaseAltitude(HEATMAP.baseAltitude)
+      .heatmapTopAltitude(HEATMAP.topAltitude)
       .ringMaxRadius(2)
       .ringPropagationSpeed(1.2)
       .ringRepeatPeriod(ringRepeatMs(motionRef.current))
@@ -154,7 +171,7 @@ export default function Globe({
         // Debounce: re-set pointsData to force pointRadius re-evaluation
         if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
         zoomTimerRef.current = setTimeout(() => {
-          if (globeRef.current) {
+          if (globeRef.current && layerRef.current === "dots") {
             const pts = [...pointsRef.current];
             globeRef.current.pointsData(pts);
             globeRef.current.ringsData(pts);
@@ -278,13 +295,21 @@ export default function Globe({
     }
   }, [reduced, lowPower, isLoaded]);
 
-  // Update points and rings when data changes
+  // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {
-    if (globeRef.current && isLoaded) {
-      globeRef.current.pointsData(points);
-      globeRef.current.ringsData(points);
+    const globe = globeRef.current;
+    if (!globe || !isLoaded) return;
+    if (layer === "intensity") {
+      globe.pointsData([]);
+      globe.ringsData([]);
+      const heat = heatmapPoints(points, { gpu: hasWebGpu() });
+      globe.heatmapsData(heat.length ? [heat] : []);
+    } else {
+      globe.heatmapsData([]);
+      globe.pointsData(points);
+      globe.ringsData(points);
     }
-  }, [points, isLoaded]);
+  }, [points, layer, isLoaded]);
 
   return (
     <div
