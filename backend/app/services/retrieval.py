@@ -12,6 +12,8 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+import asyncpg
+
 from app.config import settings
 from app.services.database import get_pool
 from app.services.scraper import extract_article_text
@@ -111,13 +113,17 @@ _CO_MENTIONS_TIMEOUT_S = 2.0
 
 _GRAPH_CONNECTION_LIMIT = 50
 
-# Stored-edge reads expand a node to at most its N newest edges, so their cost
-# no longer grows with how many edges a hub (a hot entity, topic or region) has.
+# Stored-edge reads expand a node to at most N of its most recent edges, so
+# their cost no longer grows with how many edges a hub (a hot entity, topic or
+# region) has. Recency is per ingestion batch, not per edge: populate_graph
+# writes a whole 15-minute batch in one transaction and created_at defaults to
+# now(), so every edge in a batch has the same created_at. For a hub with more
+# than N edges in its latest batch, the N read are an arbitrary N of that batch.
 # N is the whole connection budget: graph_traverse returns depth-1 rows first
-# and at most _GRAPH_CONNECTION_LIMIT rows in all, so a node's older edges
+# and at most _GRAPH_CONNECTION_LIMIT rows in all, so a node's other edges
 # could never add a row, and with every stored edge weighted 1 they would only
-# change which tied row wins (the newest is the better pick). A larger N buys
-# nothing and multiplies per hop: depth 3 reads up to N^3 edges.
+# change which tied row wins. A larger N buys nothing and multiplies per hop:
+# depth 3 reads up to N^3 edges.
 _RECENT_EDGES_PER_NODE = _GRAPH_CONNECTION_LIMIT
 _STORED_EDGES_TIMEOUT_S = 2.0
 
@@ -229,6 +235,7 @@ async def _traverse_stored_edges(
         ORDER BY depth, weight DESC
         LIMIT {limit_param}
     """
+    timed_out = False
     try:
         async with pool.acquire() as conn, conn.transaction():
             # A bitmap scan reads all of a node's edges before sorting them;
@@ -239,12 +246,30 @@ async def _traverse_stored_edges(
             # from a hot entity took 2 s instead of 45 ms on a production-
             # sized graph. SET LOCAL ends with this transaction.
             await conn.execute("SET LOCAL enable_bitmapscan = off")
-            rows = await conn.fetch(query, *params, timeout=_STORED_EDGES_TIMEOUT_S)
+            try:
+                rows = await conn.fetch(query, *params, timeout=_STORED_EDGES_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                timed_out = True
+                raise
     except asyncio.TimeoutError:
         logger.warning(
             "Stored-edge traversal from node %s timed out after %.1fs; skipping it.",
             start_id,
             _STORED_EDGES_TIMEOUT_S,
+        )
+        return []
+    except (asyncpg.PostgresError, asyncpg.InterfaceError, ConnectionError, OSError):
+        # After a timeout, the ROLLBACK or the connection's release can fail
+        # too (e.g. the connection dropped); that replaces the TimeoutError
+        # but is still just the timeout. Any other failure propagates.
+        if not timed_out:
+            raise
+        logger.warning(
+            "Stored-edge traversal from node %s timed out after %.1fs and its "
+            "cleanup failed; skipping it.",
+            start_id,
+            _STORED_EDGES_TIMEOUT_S,
+            exc_info=True,
         )
         return []
     return [dict(r) for r in rows]
@@ -402,9 +427,12 @@ async def trending_topics(hours: int = 24) -> list[dict]:
         return []
 
 
-# entity_lookup reads both from the entity's newest stored edges ($2 of them):
-# the heaviest 20 edges (all weigh 1 today, so the newest), and the 10 most
-# recently published articles behind them.
+# entity_lookup reads both from $2 of the entity's most recent stored edges,
+# recent by ingestion batch (see _RECENT_EDGES_PER_NODE): the heaviest 20 of
+# them (all weigh 1 today, so 20 from the latest batches, ties arbitrary) and
+# the 10 most recently published articles among those edges' articles. For a
+# hub whose latest batch alone exceeds $2 edges, that is an arbitrary sample
+# of that batch, not the entity's 10 most recent articles overall.
 _ENTITY_EDGES_SQL = f"""
     SELECT n.id, n.type, n.name, h.rel_type, h.weight, n.metadata::text
     FROM ({_recent_edges_sql("$1", "$2")}) h
