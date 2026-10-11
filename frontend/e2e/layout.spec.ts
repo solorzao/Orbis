@@ -6,6 +6,8 @@ const SIZES = [
   { width: 1440, height: 900 },
   { width: 1280, height: 800 },
   { width: 1024, height: 768 },
+  { width: 768, height: 1024 }, // one-row bar, at its tightest
+  { width: 700, height: 800 }, // two-row bar, motto still shown
   { width: 390, height: 844 },
 ];
 
@@ -39,6 +41,11 @@ for (const size of SIZES) {
     await mockAllApiRoutes(page);
     await page.goto("/");
     await page.getByTestId("topic-filter").waitFor();
+    // Measure the settled bar: self-hosted fonts in, status at its final width.
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+    });
+    await expect(page.getByTestId("status-pill").getByText("Live")).toBeVisible({ timeout: 10000 });
     const b = await boxes(page);
     for (let i = 0; i < b.length; i++)
       for (let j = i + 1; j < b.length; j++)
