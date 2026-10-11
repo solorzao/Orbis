@@ -152,6 +152,9 @@ async def get_globe_data(
 # Grid cell size must match get_globe_points() call in get_globe_data().
 _CELL_SIZE = 1.0
 
+# Newest articles fetched per cell: the most "Load more" can page through.
+_CELL_FETCH_LIMIT = 300
+
 
 async def _fetch_cell_articles(
     lat: float,
@@ -172,7 +175,7 @@ async def _fetch_cell_articles(
         lng - half,
         lat + half,
         lng + half,
-        limit=50,
+        limit=_CELL_FETCH_LIMIT,
         start_time=start_time,
         end_time=end_time,
     )
@@ -245,13 +248,25 @@ async def get_cluster_summary(
         None,
         description="Ignored: the place name is resolved server-side from the cell's articles",
     ),
+    start_time: str | None = Query(None, description="ISO start time"),
+    end_time: str | None = Query(None, description="ISO end time"),
 ) -> ClusterSummaryResponse:
     """Return an AI-generated summary for the cluster at a location."""
     resolved = _resolve_topic(topic)
-    articles = await _fetch_cell_articles(lat, lng, resolved)
+    start_dt = _parse_iso(start_time)
+    end_dt = _parse_iso(end_time)
+    articles = await _fetch_cell_articles(lat, lng, resolved, start_time=start_dt, end_time=end_dt)
     nearby = articles[:10]
 
-    summary_text = await summarise_cluster(nearby, lat, lng, topic=resolved)
+    summary_text = await summarise_cluster(
+        nearby,
+        lat,
+        lng,
+        topic=resolved,
+        cell_size=_CELL_SIZE,
+        start_time=start_dt,
+        end_time=end_dt,
+    )
     return ClusterSummaryResponse(
         lat=lat,
         lng=lng,

@@ -1,11 +1,13 @@
-"""Tests for the article upsert in app.services.database."""
+"""Tests for the SQL the database helpers send (the pool is mocked; no live database)."""
 
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.services import database
 from app.services.database import upsert_articles
 
 
@@ -46,3 +48,107 @@ async def test_upsert_writes_country_fips_and_never_null():
 
     fips_values = [call.args[-1] for call in conn.execute.await_args_list]
     assert fips_values == ["UK", "", ""]
+
+
+START = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)
+END = datetime(2026, 3, 8, 10, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def pool():
+    mock = MagicMock()
+    mock.fetch = AsyncMock(return_value=[])
+    with patch.object(database, "get_pool", AsyncMock(return_value=mock)):
+        yield mock
+
+
+def _globe_row(**overrides):
+    row = {
+        "lat": 40.5,
+        "lng": -74.5,
+        "article_count": 3,
+        "top_headline": "Match report",
+        "topic_tags": ["sport"],
+        "location_name": "New York",
+        "topics": ["conflict", "sport"],
+    }
+    return {**row, **overrides}
+
+
+class TestGetArticlesInBounds:
+    @pytest.mark.asyncio
+    async def test_window_and_limit_are_query_parameters(self, pool):
+        await database.get_articles_in_bounds(
+            40.0, -75.0, 41.0, -74.0, limit=300, start_time=START, end_time=END
+        )
+
+        query, *args = pool.fetch.call_args.args
+        assert args == [40.0, -75.0, 41.0, -74.0, 300, START, END]
+        assert "published_at >= $6" in query
+        assert "published_at <= $7" in query
+
+    @pytest.mark.asyncio
+    async def test_window_is_applied_before_the_limit(self, pool):
+        await database.get_articles_in_bounds(
+            40.0, -75.0, 41.0, -74.0, limit=300, start_time=START, end_time=END
+        )
+
+        query = pool.fetch.call_args.args[0]
+        assert query.index("published_at >= $6") < query.index("LIMIT $5")
+
+    @pytest.mark.asyncio
+    async def test_envelope_takes_lng_lat_order(self, pool):
+        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0)
+
+        query = pool.fetch.call_args.args[0]
+        assert "ST_MakeEnvelope($2, $1, $4, $3, 4326)" in query
+
+    @pytest.mark.asyncio
+    async def test_either_bound_may_be_given_alone(self, pool):
+        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0, start_time=START)
+        assert pool.fetch.call_args.args[-2:] == (START, None)
+
+        await database.get_articles_in_bounds(40.0, -75.0, 41.0, -74.0, end_time=END)
+        assert pool.fetch.call_args.args[-2:] == (None, END)
+
+
+class TestGetGlobePoints:
+    @pytest.mark.asyncio
+    async def test_windowed_query_aggregates_cell_topics(self, pool):
+        pool.fetch.return_value = [_globe_row()]
+
+        await database.get_globe_points(cell_size=1.0, start_time=START, end_time=END)
+
+        assert pool.fetch.call_count == 1
+        query = pool.fetch.call_args.args[0]
+        assert "unnest(topic_tags)" in query
+        assert "array_agg(DISTINCT tag)" in query
+
+    @pytest.mark.asyncio
+    async def test_fallback_query_aggregates_cell_topics(self, pool):
+        pool.fetch.side_effect = [[], [_globe_row()]]
+
+        await database.get_globe_points(cell_size=1.0)
+
+        assert pool.fetch.call_count == 2
+        fallback = pool.fetch.call_args_list[1].args[0]
+        assert "unnest(topic_tags)" in fallback
+        assert "array_agg(DISTINCT tag)" in fallback
+
+    @pytest.mark.asyncio
+    async def test_rows_carry_all_cell_topics_and_newest_topic(self, pool):
+        pool.fetch.return_value = [_globe_row()]
+
+        [point] = await database.get_globe_points(cell_size=1.0)
+
+        assert point["topic"] == "sport"  # newest story's first tag, for the dot colour
+        assert point["topics"] == ["conflict", "sport"]
+
+    @pytest.mark.asyncio
+    async def test_cell_without_tags_has_no_topics(self, pool):
+        pool.fetch.return_value = [_globe_row(topic_tags=None, topics=None)]
+
+        [point] = await database.get_globe_points(cell_size=1.0)
+
+        assert point["topic"] == "general"
+        assert point["topics"] == []

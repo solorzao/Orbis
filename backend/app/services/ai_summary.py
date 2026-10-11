@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import anthropic
 
@@ -61,28 +62,49 @@ def _cell_place(articles: list[NewsArticle]) -> str:
     return ""
 
 
+def _window_key(start_time: datetime | None, end_time: datetime | None) -> str:
+    """The time window as a cache-key part: each bound floored to the hour.
+
+    The frontend's day window shifts by milliseconds between clicks, so exact
+    bounds would never hit the cache. ``live`` means no window.
+    """
+    if start_time is None and end_time is None:
+        return "live"
+
+    def hour(dt: datetime | None) -> str:
+        return dt.astimezone(timezone.utc).strftime("%Y%m%d%H") if dt else ""
+
+    return f"{hour(start_time)}-{hour(end_time)}"
+
+
 async def summarise_cluster(
     articles: list[NewsArticle],
     lat: float,
     lng: float,
     topic: str | None = None,
+    *,
+    cell_size: float,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
 ) -> str:
     """Generate a 2-3 sentence summary for a cluster of articles.
 
     Uses Claude Haiku via the Anthropic SDK.  Results are cached in Redis
-    for ``settings.summary_cache_ttl`` seconds, keyed by grid cell and
-    topic so that different topic filters get separate summaries. Every
-    prompt input derives from the cell's articles, so the key is complete.
+    for ``settings.summary_cache_ttl`` seconds, keyed by grid cell (of
+    *cell_size* degrees, the globe dots' grid), time window and topic, so
+    each dot, window and topic filter gets its own summary. Every prompt
+    input derives from the cell's articles, so the key is complete.
     """
     if not articles:
         return ""
 
-    # Snap to the same grid used for clustering → stable cache key.
-    cell_lat = int(lat // settings.cluster_resolution_deg)
-    cell_lng = int(lng // settings.cluster_resolution_deg)
+    # Snap to the dots' grid → one stable cache key per dot.
+    cell_lat = int(lat // cell_size)
+    cell_lng = int(lng // cell_size)
+    window = _window_key(start_time, end_time)
     topic_suffix = f":{topic}" if topic else ""
-    # v2: Haiku 5.5 prompt without raw coordinates (older entries narrate them)
-    cache_key = f"summary:v2:{cell_lat}:{cell_lng}{topic_suffix}"
+    # v3: 1° cells and a time window (v2 keys were 2° cells over all time)
+    cache_key = f"summary:v3:{cell_lat}:{cell_lng}:{window}{topic_suffix}"
 
     cached = await get_cached(cache_key)
     if cached is not None:

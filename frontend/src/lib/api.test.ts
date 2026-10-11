@@ -65,6 +65,30 @@ describe("fetchClusterSummary", () => {
     expect(url.pathname).toBe("/api/news/summary");
     expect(url.searchParams.get("radius")).toBe("3");
   });
+
+  it("sends the selected time window", async () => {
+    mockFetch.mockReturnValue(jsonResponse({ summary: "test" }));
+    await fetchClusterSummary(
+      51.5,
+      -0.1,
+      0.75,
+      undefined,
+      undefined,
+      "2026-03-07T10:00:00.000Z",
+      "2026-03-08T10:00:00.000Z",
+    );
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.searchParams.get("start_time")).toBe("2026-03-07T10:00:00.000Z");
+    expect(url.searchParams.get("end_time")).toBe("2026-03-08T10:00:00.000Z");
+  });
+
+  it("omits the window when none is selected", async () => {
+    mockFetch.mockReturnValue(jsonResponse({ summary: "test" }));
+    await fetchClusterSummary(51.5, -0.1);
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.searchParams.has("start_time")).toBe(false);
+    expect(url.searchParams.has("end_time")).toBe(false);
+  });
 });
 
 describe("fetchTopics", () => {

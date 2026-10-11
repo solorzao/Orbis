@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters } from "@/types/news";
-import { apiPointsToGlobePoints } from "@/lib/clustering";
+import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
 import { useAgent } from "@/hooks/useAgent";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
@@ -160,8 +160,7 @@ export default function Home() {
   }, [timeRange, dayWindow]);
 
   // Filter points client-side — instant, no API call
-  const points =
-    activeTopic === "All" ? allPoints : allPoints.filter((p) => p.topic === activeTopic);
+  const points = filterPointsByTopic(allPoints, activeTopic);
 
   const updatePanel = useCallback((panelId: string, updates: Partial<PanelEntry>) => {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
@@ -217,6 +216,8 @@ export default function Home() {
           0.75,
           point.locationName,
           topicFilter,
+          (timeRange ?? dayWindow)?.startTime,
+          (timeRange ?? dayWindow)?.endTime,
         );
         updatePanel(panelId, { clusterSummary: result.summary, summaryLoading: false });
       } catch {

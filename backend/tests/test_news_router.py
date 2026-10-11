@@ -128,6 +128,29 @@ class TestGetGlobeData:
             assert call_kwargs["start_time"].hour == 14
             assert call_kwargs["end_time"].hour == 18
 
+    @pytest.mark.asyncio
+    async def test_returns_every_topic_in_the_cell(self):
+        from app.routers.news import get_globe_data
+
+        row = {**_make_globe_row(topic="sport"), "topics": ["conflict", "sport"]}
+        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[row]):
+            [point] = await get_globe_data(timespan="24h", limit=100)
+        assert point.topic == "sport"
+        assert point.topics == ["conflict", "sport"]
+
+    @pytest.mark.asyncio
+    async def test_cached_points_without_topics_still_load(self):
+        """Entries cached before `topics` existed stay valid until their TTL ends."""
+        from app.routers.news import get_globe_data
+
+        with patch(
+            "app.routers.news.get_cached",
+            new_callable=AsyncMock,
+            return_value=[_make_globe_row(topic="conflict")],
+        ):
+            [point] = await get_globe_data(timespan="24h", limit=100)
+        assert point.topics == []
+
 
 class TestGetClusterArticles:
     @pytest.mark.asyncio
@@ -311,6 +334,68 @@ class TestGetClusterArticles:
             assert call_kwargs["end_time"].hour == 12
 
 
+class TestGetClusterSummary:
+    @pytest.mark.asyncio
+    async def test_window_reaches_db_and_summary(self):
+        from app.routers.news import _CELL_SIZE, get_cluster_summary
+
+        rows = [_make_db_row("Floods in Valencia")]
+        with (
+            patch(
+                "app.routers.news.get_articles_in_bounds",
+                new_callable=AsyncMock,
+                return_value=rows,
+            ) as mock_bounds,
+            patch(
+                "app.routers.news.summarise_cluster", new_callable=AsyncMock, return_value="S."
+            ) as mock_summary,
+        ):
+            result = await get_cluster_summary(
+                lat=39.5,
+                lng=-0.5,
+                topic=None,
+                location_name=None,
+                start_time="2026-03-07T10:00:00Z",
+                end_time="2026-03-08T10:00:00Z",
+            )
+
+        start = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)
+        end = datetime(2026, 3, 8, 10, tzinfo=timezone.utc)
+        assert mock_bounds.call_args.kwargs["start_time"] == start
+        assert mock_bounds.call_args.kwargs["end_time"] == end
+        kwargs = mock_summary.call_args.kwargs
+        assert kwargs["cell_size"] == _CELL_SIZE
+        assert kwargs["start_time"] == start
+        assert kwargs["end_time"] == end
+        assert result.summary == "S."
+
+    @pytest.mark.asyncio
+    async def test_no_window_means_live(self):
+        from app.routers.news import get_cluster_summary
+
+        with (
+            patch(
+                "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[]
+            ) as mock_bounds,
+            patch(
+                "app.routers.news.summarise_cluster", new_callable=AsyncMock, return_value=""
+            ) as mock_summary,
+        ):
+            await get_cluster_summary(
+                lat=39.5,
+                lng=-0.5,
+                topic=None,
+                location_name=None,
+                start_time=None,
+                end_time=None,
+            )
+
+        assert mock_bounds.call_args.kwargs["start_time"] is None
+        assert mock_bounds.call_args.kwargs["end_time"] is None
+        assert mock_summary.call_args.kwargs["start_time"] is None
+        assert mock_summary.call_args.kwargs["end_time"] is None
+
+
 class TestGetDensity:
     @pytest.mark.asyncio
     async def test_returns_24_hourly_buckets(self):
@@ -386,3 +471,41 @@ async def test_cluster_endpoint_survives_malformed_image_url(monkeypatch):
     assert resp.status_code == 200
     images = {a["title"]: a["image_url"] for a in resp.json()}
     assert images == {"Good image": "https://img.example.com/a.jpg", "Bad image": None}
+
+
+@pytest.mark.asyncio
+async def test_cluster_endpoint_pages_past_50_within_a_window(monkeypatch):
+    """Load more keeps going past the 50th article of a day's window."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import app
+    from app.middleware import security
+
+    monkeypatch.setattr(security.settings, "api_key", "")
+    rows = [_make_db_row(f"Article {i}") for i in range(120)]
+
+    async def in_bounds(*_bounds, limit, **_window):
+        return rows[:limit]  # the database honours the limit
+
+    with patch(
+        "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, side_effect=in_bounds
+    ) as mock_bounds:
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                "/api/news/cluster",
+                params={
+                    "lat": 40.5,
+                    "lng": -74.5,
+                    "start_time": "2026-03-07T10:00:00Z",
+                    "end_time": "2026-03-08T10:00:00Z",
+                    "offset": 50,
+                    "limit": 20,
+                },
+            )
+
+    assert resp.status_code == 200
+    assert [a["title"] for a in resp.json()] == [f"Article {i}" for i in range(50, 70)]
+    kwargs = mock_bounds.call_args.kwargs
+    assert kwargs["start_time"] == datetime(2026, 3, 7, 10, tzinfo=timezone.utc)
+    assert kwargs["end_time"] == datetime(2026, 3, 8, 10, tzinfo=timezone.utc)

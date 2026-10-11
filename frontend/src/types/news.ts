@@ -31,7 +31,10 @@ export interface GlobePoint {
   isCluster: boolean;
   count: number;
   locationName?: string;
+  /** Sets the colour: the newest story's topic. */
   topic: Topic;
+  /** Every topic in the cell, for the topic filter. */
+  topics?: Topic[];
 }
 
 export interface PanelFilters {

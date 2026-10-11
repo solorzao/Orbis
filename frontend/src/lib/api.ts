@@ -11,6 +11,8 @@ export interface ApiGlobePoint {
   article_count: number;
   top_headline: string;
   topic: string;
+  /** Every topic in the cell; `topic` is only the newest story's. */
+  topics?: string[];
   location_name?: string;
 }
 
@@ -106,6 +108,8 @@ export function fetchClusterSummary(
   radius = 0.75,
   locationName?: string,
   topic?: string,
+  startTime?: string,
+  endTime?: string,
 ): Promise<ApiClusterSummary> {
   const params: Record<string, string> = {
     lat: String(lat),
@@ -114,6 +118,8 @@ export function fetchClusterSummary(
   };
   if (locationName) params.location_name = locationName;
   if (topic && topic !== "All") params.topic = topic;
+  if (startTime) params.start_time = startTime;
+  if (endTime) params.end_time = endTime;
   return apiFetch<ApiClusterSummary>("/api/news/summary", params);
 }
 
