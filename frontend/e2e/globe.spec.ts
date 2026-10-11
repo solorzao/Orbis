@@ -56,6 +56,13 @@ test.describe("Globe Page", () => {
     await expect(page.locator("text=/\\d+ stories/")).toBeVisible();
   });
 
+  test("status pill shows the UTC clock and Live once loaded", async ({ page }) => {
+    const status = page.getByTestId("status-pill");
+    await expect(status).toBeVisible();
+    await expect(status.getByText(/^\d{2}:\d{2}$/)).toBeVisible();
+    await expect(status.getByText("Live")).toBeVisible({ timeout: 10000 });
+  });
+
   test("agent toggle button is visible", async ({ page }) => {
     await expect(page.getByTestId("agent-toggle")).toBeVisible();
   });

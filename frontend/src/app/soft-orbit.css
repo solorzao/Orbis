@@ -291,6 +291,159 @@ kbd {
   box-shadow: 0 0 10px currentColor;
 }
 
+/*
+ * Top bar: three tracks, so the brand, topics and status can never overlap.
+ * The side tracks never shrink below their content; only the centre does,
+ * and the topics scroll inside it.
+ */
+.topbar {
+  position: fixed;
+  top: 18px;
+  left: 24px;
+  right: 24px;
+  z-index: var(--z-panel);
+  display: grid;
+  grid-template-columns:
+    minmax(max-content, 1fr) minmax(0, max-content)
+    minmax(max-content, 1fr);
+  align-items: start;
+  gap: 24px;
+  pointer-events: none; /* the globe stays draggable between controls */
+}
+.topbar > * {
+  pointer-events: auto;
+}
+.topbar-left {
+  justify-self: start;
+  margin-top: 2px; /* the frozen lockup sits 20px from the top */
+}
+.topbar-center {
+  justify-self: center;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.topbar-right {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.topbar-right .pill.lg {
+  height: 38px;
+}
+.topics {
+  padding: 4px;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+.topics-scroll {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-radius: var(--radius-pill);
+}
+.topics-scroll::-webkit-scrollbar {
+  display: none;
+}
+.topics-scroll[data-fade="left"] {
+  mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+.topics-scroll[data-fade="right"] {
+  mask-image: linear-gradient(to left, transparent, #000 24px);
+}
+.topics-scroll[data-fade="both"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 24px,
+    #000 calc(100% - 24px),
+    transparent
+  );
+}
+.topics .pill {
+  border-color: transparent;
+  height: 28px;
+  flex: none;
+  cursor: pointer;
+}
+.topics .pill:focus-visible {
+  outline-offset: -2px; /* the scroller would clip an outer ring */
+}
+.status {
+  height: 38px;
+  padding: 0 14px;
+  gap: 10px;
+}
+.status .clock {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.status .num {
+  font: var(--type-data-lg);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.status .lbl,
+.status .state {
+  font: var(--type-label);
+}
+.status .lbl {
+  color: var(--text-muted);
+}
+.status .offline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--signal-danger);
+}
+.status .offline::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+@media (max-width: 1180px) {
+  .status .lbl {
+    display: none;
+  }
+}
+/* Two rows: brand and status, then the topics across the full width. */
+@media (max-width: 760px) {
+  .topbar {
+    grid-template-columns: 1fr auto;
+    row-gap: 12px;
+  }
+  .topbar-center {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+  }
+}
+/* Phones: the lockup's mobile position (12px) and no clock. */
+@media (max-width: 639px) {
+  .topbar {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+  }
+  .topbar-left {
+    margin-top: 0;
+  }
+  .status .clock {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

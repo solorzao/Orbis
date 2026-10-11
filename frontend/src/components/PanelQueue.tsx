@@ -54,8 +54,8 @@ export default function PanelQueue({
       {/* Minimized tab stack -- desktop: right edge, mobile: bottom row */}
       {minimizedPanels.length > 0 && (
         <>
-          {/* Desktop: vertical stack on right */}
-          <div className="fixed right-3 top-16 z-40 hidden flex-col gap-2 sm:flex">
+          {/* Wide: vertical stack on right, under the one-row top bar */}
+          <div className="fixed top-16 right-3 z-40 hidden flex-col gap-2 min-[761px]:flex">
             <AnimatePresence>
               {minimizedPanels.map((entry) => (
                 <PanelTab
@@ -68,8 +68,8 @@ export default function PanelQueue({
             </AnimatePresence>
           </div>
 
-          {/* Mobile: vertical stack on right, under category bar */}
-          <div className="fixed right-3 top-28 z-40 flex flex-col gap-2 sm:hidden">
+          {/* Up to 760px the top bar has two rows: stack under the topics */}
+          <div className="fixed top-28 right-3 z-40 flex flex-col gap-2 sm:top-32 min-[761px]:hidden">
             <AnimatePresence>
               {minimizedPanels.map((entry) => (
                 <PanelTab
