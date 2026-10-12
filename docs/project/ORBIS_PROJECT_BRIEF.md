@@ -8,7 +8,7 @@ Orbis is a web app that lets users interact with a 3D globe to discover, explore
 
 ## Tech Stack
 
-- **Frontend:** React / Next.js + globe.gl (Three.js-based) + Tailwind CSS + Framer Motion
+- **Frontend:** React / Next.js + globe.gl (Three.js-based) + Tailwind CSS
 - **Backend:** Python FastAPI
 - **Database:** Supabase (PostgreSQL + PostGIS + pgvector + Auth)
 - **Cache:** Upstash Redis
