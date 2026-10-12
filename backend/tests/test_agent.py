@@ -646,3 +646,61 @@ def test_enriched_citations_keep_web_links():
     enriched = _enrich_citations(raw, article_index)
 
     assert [c["url"] for c in enriched] == ["", "HTTPS://example.com/a", "http://example.com/b"]
+
+
+async def _planner_system(scope) -> str:
+    plan = '{"tools": [{"name": "keyword_search", "args": {"terms": "x"}}]}'
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=_make_mock_response(plan))
+    with patch("app.services.agent._get_anthropic_client", return_value=mock_client):
+        await plan_retrieval("What is happening here?", None, scope)
+    return mock_client.messages.create.call_args.kwargs["system"]
+
+
+@pytest.mark.asyncio
+async def test_with_screen_context_the_planner_is_told_what_the_line_is():
+    scope = _scope(place="Madrid, Spain", topic="Politics", start_time=_START, end_time=_END)
+
+    system = await _planner_system(scope)
+
+    assert "Screen context:" in system
+    assert "data" in system and "here" in system
+    assert "Leave keyword_search's topic and time_range unset" in system
+    assert "Madrid" not in system  # static text: user data stays in the user turn
+    assert system.startswith(await _planner_system(None))
+
+
+@pytest.mark.asyncio
+async def test_without_screen_context_the_planner_system_is_unchanged():
+    system = await _planner_system(None)
+    assert "Screen context" not in system
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_time_range_gives_way_to_the_screen_window():
+    """A replay of one day must not become "the last 24 h" because the model said "30 days"."""
+    scope = _scope(start_time=_START, end_time=_END)
+    plan = (
+        '{"tools": [{"name": "keyword_search", "args": {"terms": "x", "time_range": "30 days"}}]}'
+    )
+    calls, _ = await _planned("Elections?", scope, plan)
+
+    search = AsyncMock(return_value=[])
+    with patch.dict("app.services.agent._TOOL_DISPATCH", {"keyword_search": search}):
+        await execute_retrieval(calls)
+
+    search.assert_awaited_once_with(terms="x", start_time=_START, end_time=_END)
+
+
+@pytest.mark.asyncio
+async def test_without_a_screen_an_unknown_time_range_is_still_24_hours():
+    plan = (
+        '{"tools": [{"name": "keyword_search", "args": {"terms": "x", "time_range": "30 days"}}]}'
+    )
+    calls, _ = await _planned("Elections?", None, plan)
+
+    search = AsyncMock(return_value=[])
+    with patch.dict("app.services.agent._TOOL_DISPATCH", {"keyword_search": search}):
+        await execute_retrieval(calls)
+
+    search.assert_awaited_once_with(terms="x", time_range="24 hours")
