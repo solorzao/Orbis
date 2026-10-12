@@ -27,7 +27,6 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       functions: ${{ steps.filter.outputs.functions }}
-      database: ${{ steps.filter.outputs.database }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
@@ -38,8 +37,6 @@ jobs:
               - 'backend/**'
             functions:
               - 'functions/**'
-            database:
-              - 'database/**'
 
   build-and-push:
     name: Build & Push Docker Image
@@ -63,7 +60,10 @@ jobs:
 
   deploy-backend:
     name: Deploy Backend to Azure
-    needs: build-and-push
+    # After the migrations, so new code never runs against a schema without its
+    # columns; a failed migration blocks the deploy. Skipped, as before, when no
+    # image was built (run-migrations always runs, so it never skips this).
+    needs: [build-and-push, run-migrations]
     runs-on: ubuntu-latest
     steps:
       - uses: azure/login@v2
@@ -105,10 +105,12 @@ jobs:
           az functionapp keys set -g "$RESOURCE_GROUP" -n "$ML_FUNCTION_APP" \
             --key-type functionKeys --key-name orbis-api --key-value "$KEY" -o none
 
+  # Every run, not only when database/** changed: a run waiting in the deploy
+  # concurrency group is cancelled when a newer one queues, and the newer run's
+  # change filter sees only its own push, so a migration could be skipped for
+  # good. Applied migrations are tracked in schema_migrations and skipped.
   run-migrations:
     name: Run Database Migrations
-    needs: changes
-    if: needs.changes.outputs.database == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -124,7 +126,8 @@ jobs:
           echo "::add-mask::$URL"
           echo "DATABASE_URL=$URL" >> "$GITHUB_ENV"
       - name: Install PostgreSQL client
-        run: sudo apt-get install -y postgresql-client
+        # ubuntu-latest ships psql (postgresql-client-16); install only if it's gone.
+        run: command -v psql > /dev/null || sudo apt-get install -y postgresql-client
 
       - name: Wait for database connectivity
         run: |
