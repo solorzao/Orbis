@@ -155,7 +155,7 @@ class Surge(BaseModel):
 
     lat: float  # the 1° cell's centre, as its globe dot has it
     lng: float
-    place: str  # display_place of the lead's region
+    place: str  # display_place of the lead's region and country_code
     recent: int  # distinct stories in the last 2 hours
     baseline: float  # distinct stories per 2 hours over the 166 hours before
     ratio: float  # recent / max(baseline, 0.5); the frontend shows "20×+" above 20
@@ -168,7 +168,7 @@ class DeltaPlace(BaseModel):
 
     lat: float  # the 1° cell's centre, as its globe dot has it
     lng: float
-    place: str  # display_place of the lead's region
+    place: str  # display_place of the lead's region and country_code
     new: int  # distinct stories since the visit
     lead: GlobeLead  # the newest of them, preferring an https image
 

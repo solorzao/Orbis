@@ -1,6 +1,7 @@
 """Tests for what changed since a visit: the SQL sent (pool mocked), then its results on a real
 database."""
 
+import itertools
 import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,7 +34,15 @@ def _fetched(pool) -> tuple[str, list]:
 def _row(lat=40.5, lng=-73.5, new=12, stories=1286, places=212, **lead):
     """A row of the delta query: the totals, then one top place (None: no place)."""
     row = {"new_stories": stories, "new_places": places, "lat": lat, "lng": lng, "new": new}
-    columns = ("title", "source_name", "published_at", "image_url", "region", "topic_tags")
+    columns = (
+        "title",
+        "source_name",
+        "published_at",
+        "image_url",
+        "region",
+        "country_code",
+        "topic_tags",
+    )
     if lat is None:
         return {**row, "new": None, **dict.fromkeys(columns)}
     return {
@@ -43,6 +52,7 @@ def _row(lat=40.5, lng=-73.5, new=12, stories=1286, places=212, **lead):
         "published_at": datetime(2026, 10, 12, 13, 45, tzinfo=timezone.utc),
         "image_url": "https://cdn.example.com/s.jpg",
         "region": "New York, New York, United States",
+        "country_code": "US",
         "topic_tags": ["politics"],
         **lead,
     }
@@ -75,6 +85,17 @@ class TestDeltaQuery:
         query, _ = _fetched(pool)
         assert "ORDER BY new DESC, lat_cell, lng_cell LIMIT 5" in query
         assert query.endswith("ORDER BY top.new DESC, top.lat_cell, top.lng_cell")
+
+    @pytest.mark.asyncio
+    async def test_the_lead_brings_its_region_and_country_for_the_place(self, pool):
+        await delta.get_delta(SINCE)
+
+        query, _ = _fetched(pool)
+        assert "lead.region, lead.country_code, lead.topic_tags" in query
+        assert (
+            "SELECT title, source_name, published_at, image_url, region, country_code, topic_tags"
+            " FROM articles WHERE published_at = COALESCE(" in query
+        )
 
     @pytest.mark.asyncio
     async def test_each_with_its_newest_imaged_story_as_lead(self, pool):
@@ -134,6 +155,15 @@ class TestGetDelta:
         ]
 
     @pytest.mark.asyncio
+    async def test_the_place_follows_the_articles_country(self, pool):
+        """GDELT files Gaza under Israel; its code is PS."""
+        pool.fetch.return_value = [_row(region="Gaza, Israel", country_code="PS")]
+
+        [place] = (await delta.get_delta(SINCE))["top"]
+
+        assert place["place"] == "Gaza, Palestine"
+
+    @pytest.mark.asyncio
     async def test_nothing_new_is_zeros_and_no_places(self, pool):
         pool.fetch.return_value = [_row(None, stories=0, places=0)]
 
@@ -149,8 +179,10 @@ _INSERT = """
     INSERT INTO articles (title, source_url, source_name, published_at, latitude, longitude,
                           location, region, country_code, topic_tags, image_url)
     VALUES ($1, $2, $3, $4, $5, $6, ST_SetSRID(ST_MakePoint($6, $5), 4326)::geography,
-            $7, 'ZZ', $8, $9)
+            $7, $8, $9, $10)
 """
+
+_URLS = itertools.count()  # source_url is unique, across a test's inserts too
 
 
 async def _insert(pg, rows: list[dict]) -> None:
@@ -159,16 +191,17 @@ async def _insert(pg, rows: list[dict]) -> None:
         [
             (
                 f"zzsurge-{r['title']}",
-                f"https://zzsurge.example/delta/{i}",
+                f"https://zzsurge.example/delta/{next(_URLS)}",
                 r.get("source", "outlet.example"),
                 r["at"],
                 r["lat"],
                 r["lng"],
                 r.get("region", "Testville"),
+                r.get("country", "ZZ"),  # no such code: the region shows as stored
                 r.get("tags", ["general"]),
                 r.get("image"),
             )
-            for i, r in enumerate(rows)
+            for r in rows
         ],
     )
 
@@ -238,6 +271,14 @@ class TestDeltaOnPostgres:
 
         assert place["lead"]["title"] == "zzsurge-40.7,-74.0 story 2"
         assert place["lead"]["sensitive"] is True
+
+    @pytest.mark.asyncio
+    async def test_the_place_follows_the_articles_country(self, pg):
+        await _insert(pg, _new(31.5, 34.45, 2, region="Gaza, Israel", country="PS"))
+
+        [place] = (await _db_delta(pg))["top"]
+
+        assert place["place"] == "Gaza, Palestine"
 
     @pytest.mark.asyncio
     async def test_nothing_new(self, pg):

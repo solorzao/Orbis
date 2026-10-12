@@ -55,10 +55,10 @@ def delta_query(since: datetime) -> tuple[Any, ...]:
         SELECT totals.new_stories, totals.new_places,
                top.lat_cell + 0.5 AS lat, top.lng_cell + 0.5 AS lng, top.new,
                lead.title, lead.source_name, lead.published_at, lead.image_url,
-               lead.region, lead.topic_tags
+               lead.region, lead.country_code, lead.topic_tags
         FROM totals
         LEFT JOIN (top CROSS JOIN LATERAL (
-            SELECT title, source_name, published_at, image_url, region, topic_tags
+            SELECT title, source_name, published_at, image_url, region, country_code, topic_tags
             FROM articles
             WHERE published_at = COALESCE(top.newest_with_image, top.newest)
               AND (top.newest_with_image IS NULL OR image_url LIKE 'https://%')
@@ -86,7 +86,7 @@ async def get_delta(since: datetime) -> dict[str, Any]:
             {
                 "lat": row["lat"],
                 "lng": row["lng"],
-                "place": display_place(row["region"]),
+                "place": display_place(row["region"], row["country_code"]),
                 "new": row["new"],
                 "lead": globe_lead(row),
             }

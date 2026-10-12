@@ -107,10 +107,10 @@ def surges_query(now: datetime, topic: str | None) -> tuple[Any, ...]:
                top.recent, top.baseline, top.ratio,
                {", ".join(f"top.{t}" for t in GLOBE_TOPIC_TAGS)},
                lead.title, lead.source_name, lead.published_at, lead.image_url,
-               lead.region, lead.topic_tags
+               lead.region, lead.country_code, lead.topic_tags
         FROM top
         CROSS JOIN LATERAL (
-            SELECT title, source_name, published_at, image_url, region, topic_tags
+            SELECT title, source_name, published_at, image_url, region, country_code, topic_tags
             FROM articles
             WHERE published_at = COALESCE(top.newest_with_image, top.newest)
               AND (top.newest_with_image IS NULL OR image_url LIKE 'https://%')
@@ -146,7 +146,7 @@ def _surge(row: Any, topic: str | None) -> dict[str, Any]:
     return {
         "lat": row["lat"],
         "lng": row["lng"],
-        "place": display_place(row["region"]),
+        "place": display_place(row["region"], row["country_code"]),
         "recent": row["recent"],
         "baseline": round(row["baseline"], 2),
         "ratio": round(row["ratio"], 2),

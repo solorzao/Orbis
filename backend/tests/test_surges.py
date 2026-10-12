@@ -1,5 +1,6 @@
 """Tests for surge detection: the SQL sent (pool mocked), then its results on a real database."""
 
+import itertools
 import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -48,6 +49,7 @@ def _surge_row(**overrides):
         "published_at": datetime(2026, 10, 12, 14, 15, tzinfo=timezone.utc),
         "image_url": "https://cdn.example.com/k.jpg",
         "region": "Kinshasa, Congo (General), Congo",
+        "country_code": "CD",
         "topic_tags": ["conflict", "politics"],
     }
     return {**row, **overrides}
@@ -117,6 +119,17 @@ class TestSurgesQuery:
         )
 
     @pytest.mark.asyncio
+    async def test_the_lead_brings_its_region_and_country_for_the_place(self, pool):
+        await surges.get_surges(NOW)
+
+        query, _ = _fetched(pool)
+        assert "lead.region, lead.country_code, lead.topic_tags" in query
+        assert (
+            "SELECT title, source_name, published_at, image_url, region, country_code, topic_tags"
+            " FROM articles WHERE published_at = COALESCE(" in query
+        )
+
+    @pytest.mark.asyncio
     async def test_reads_named_columns_never_the_embedding(self, pool):
         await surges.get_surges(NOW, "politics")
 
@@ -164,7 +177,7 @@ class TestGetSurges:
         assert surge == {
             "lat": -4.5,
             "lng": 15.5,
-            "place": "Kinshasa, Congo",
+            "place": "Kinshasa, Democratic Republic of the Congo",  # CD's name
             "recent": 21,
             "baseline": 0.73,
             "ratio": 28.57,
@@ -178,6 +191,15 @@ class TestGetSurges:
                 "sensitive": True,
             },
         }
+
+    @pytest.mark.asyncio
+    async def test_the_place_follows_the_articles_country(self, pool):
+        """GDELT files Gaza under Israel; its code is PS."""
+        pool.fetch.return_value = [_surge_row(region="Gaza, Israel", country_code="PS")]
+
+        [surge] = await surges.get_surges(NOW)
+
+        assert surge["place"] == "Gaza, Palestine"
 
     @pytest.mark.asyncio
     async def test_a_filtered_surge_is_the_topics(self, pool):
@@ -212,23 +234,26 @@ _INSERT = """
 """
 
 
+_URLS = itertools.count()  # source_url is unique, across a test's inserts too
+
+
 async def _insert(pg, rows: list[dict]) -> None:
     await pg.executemany(
         _INSERT,
         [
             (
                 f"zzsurge-{r['title']}",
-                f"https://zzsurge.example/{i}",
+                f"https://zzsurge.example/{next(_URLS)}",
                 r["source"],
                 r["at"],
                 r["lat"],
                 r["lng"],
                 r.get("region", "Testville"),
-                "ZZ",
+                r.get("country", "ZZ"),  # no such code: the region shows as stored
                 r.get("tags", ["general"]),
                 r.get("image"),
             )
-            for i, r in enumerate(rows)
+            for r in rows
         ],
     )
 
@@ -261,11 +286,7 @@ class TestSurgesOnPostgres:
         """A surging cell (10 distinct titles, 4 sources, 2 in the week before) surges;
         a syndicated one (12 copies of one title, 1 source) doesn't."""
         surging = _stories(-4.3, 15.3, 10, tags=["conflict"], region="Kinshasa, Congo")
-        # The same stories again from other outlets, outlet names tacked on: still 10.
-        surging += [
-            {**s, "title": f"{s['title']} - Outlet{i}", "source": f"copy{i}.example"}
-            for i, s in enumerate(surging[:5])
-        ]
+        assert len({s["source"] for s in surging}) == 4
         week = [
             {
                 "title": f"old {i}",
@@ -298,6 +319,33 @@ class TestSurgesOnPostgres:
         assert surge["topic"] == "conflict"
         assert surge["place"] == "Kinshasa, Congo"
         assert surge["lead"]["sensitive"] is True
+
+    @pytest.mark.asyncio
+    async def test_copies_of_seven_stories_are_seven_not_a_surge(self, pg):
+        """Fails only the 8-story threshold: 28 rows from 5 sources, but each of the 7
+        stories four times over, outlet names tacked on."""
+        stories = _stories(-33.9, 18.4, 7, sources=5)
+        copies = [
+            {**s, "title": f"{s['title']}{suffix}", "source": f"copy{i}.example"}
+            for s in stories
+            for i, suffix in enumerate([" - Reuters", " | BBC News", " : AP"])
+        ]
+        await _insert(pg, stories + copies)
+
+        assert await _db_surges(pg) == []
+
+        # One more story and it surges, copies counted once: 8 / 0.5.
+        await _insert(pg, _stories(-33.9, 18.4, 1, sources=5, prefix="one more"))
+        [surge] = await _db_surges(pg)
+        assert (surge["recent"], surge["ratio"]) == (8, 16.0)
+
+    @pytest.mark.asyncio
+    async def test_the_place_follows_the_articles_country(self, pg):
+        await _insert(pg, _stories(31.5, 34.45, 8, sources=3, region="Gaza, Israel", country="PS"))
+
+        [surge] = await _db_surges(pg)
+
+        assert surge["place"] == "Gaza, Palestine"
 
     @pytest.mark.asyncio
     async def test_three_sources_are_needed(self, pg):
@@ -370,7 +418,30 @@ class TestSurgesOnPostgres:
         assert surge["lead"]["image_url"] == "https://cdn.example/lead.jpg"
 
     @pytest.mark.asyncio
-    async def test_no_stories_in_two_hours_is_no_surges(self, pg):
+    async def test_an_outage_is_no_surges_and_the_week_is_not_read(self, pg):
+        """Nothing in the last 2 hours: a burst 3 hours ago, which surged in its own window."""
         await _insert(pg, _stories(-4.3, 15.3, 10, minutes_ago=180))
+        assert len(await _db_surges(pg, now=DB_NOW - timedelta(hours=2))) == 1
 
-        assert await _db_surges(pg) == []
+        conn = _Recorder(pg)
+        with patch.object(surges, "get_pool", AsyncMock(return_value=conn)):
+            assert await surges.get_surges(DB_NOW) == []
+
+        # The recent window is the clock's, as the guard's is, so the guard can't change
+        # the answer: what it saves is the surge query, which never runs.
+        assert conn.fetched == []
+
+
+class _Recorder:
+    """A connection that records the queries sent through ``fetch``."""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self.fetched: list[str] = []
+
+    async def fetchval(self, query, *args):
+        return await self.conn.fetchval(query, *args)
+
+    async def fetch(self, query, *args):
+        self.fetched.append(query)
+        return await self.conn.fetch(query, *args)
