@@ -236,18 +236,36 @@ class TestDisplayTheme:
             ("ECON_STOCKMARKET", "Economy: stock market"),
             ("ENV_CLIMATECHANGE", "Environment: climate change"),
             ("TAX_WEAPONS_MISSILE", "Weapons: missile"),
-            # Named-entity families: the name in title case, short ones as acronyms.
-            ("TAX_TERROR_GROUP_HAMAS", "Terror group: Hamas"),
-            ("TAX_TERROR_GROUP_ISLAMIC_STATE", "Terror group: Islamic State"),
-            ("TAX_TERROR_GROUP_AL_QAEDA", "Terror group: Al Qaeda"),
-            ("TAX_TERROR_GROUP_ISIS", "Terror group: ISIS"),
-            ("TAX_POLITICAL_PARTY_REPUBLICANS", "Political party: Republicans"),
-            ("TAX_POLITICAL_PARTY_BJP", "Political party: BJP"),
-            ("TAX_AIDGROUPS_RED_CROSS", "Aid group: Red Cross"),
-            ("TAX_AIDGROUPS_SAVE_THE_CHILDREN", "Aid group: Save the Children"),
-            ("TAX_AIDGROUPS_DOCTORS_WITHOUT_BORDERS", "Aid group: Doctors Without Borders"),
-            ("TAX_AIDGROUPS_UN_REFUGEE_AGENCY", "Aid group: UN Refugee Agency"),
-            ("TAX_POLITICAL_PARTY", "Political party"),
+            # Named-entity families: the bare name, never the family, which GDELT
+            # gives by keyword (the BJP is tagged a terror group as often as a
+            # party). In title case; short one-word names as acronyms.
+            ("TAX_TERROR_GROUP_HAMAS", "Hamas"),
+            ("TAX_TERROR_GROUP_ISLAMIC_STATE", "Islamic State"),
+            ("TAX_TERROR_GROUP_AL_QAEDA", "Al Qaeda"),
+            ("TAX_TERROR_GROUP_ISIS", "ISIS"),
+            ("TAX_TERROR_GROUP_BHARATIYA_JANATA_PARTY", "Bharatiya Janata Party"),
+            ("TAX_POLITICAL_PARTY_BHARATIYA_JANATA_PARTY", "Bharatiya Janata Party"),
+            ("TAX_TERROR_GROUP_SINN_FEIN", "Sinn Féin"),
+            ("TAX_POLITICAL_PARTY_REPUBLICANS", "Republicans"),
+            ("TAX_POLITICAL_PARTY_BJP", "BJP"),
+            ("TAX_AIDGROUPS_RED_CROSS", "Red Cross"),
+            ("TAX_AIDGROUPS_SAVE_THE_CHILDREN", "Save the Children"),
+            ("TAX_AIDGROUPS_DOCTORS_WITHOUT_BORDERS", "Doctors Without Borders"),
+            ("TAX_AIDGROUPS_UN_REFUGEE_AGENCY", "UN Refugee Agency"),
+            (
+                "TAX_AIDGROUPS_ASSOCIATION_OF_SOUTHEAST_ASIAN_NATIONS",
+                "Association of Southeast Asian Nations",
+            ),
+            # Names title case gets wrong.
+            ("TAX_POLITICAL_PARTY_LABOUR_MP", "Labour MP"),
+            ("TAX_AIDGROUPS_UNICEF", "UNICEF"),
+            ("TAX_TERROR_GROUP_ALQAEDA", "Al Qaeda"),
+            ("TAX_TERROR_GROUP_DAASH", "Daesh"),
+            ("TAX_TERROR_GROUP_DAESH", "Daesh"),
+            # A family without a name says nothing (and "Terror group" may be wrong).
+            ("TAX_TERROR_GROUP", ""),
+            ("TAX_POLITICAL_PARTY", ""),
+            ("TAX_AIDGROUPS", ""),
             # World Bank: the number goes, the topic stays.
             ("WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE", "Fragility, conflict and violence"),
             ("WB_2433_CONFLICT_AND_VIOLENCE", "Conflict and violence"),
@@ -311,6 +329,18 @@ class TestDisplayTheme:
             "Armed conflict",
             "Sanctions",
         ]
+
+    def test_a_name_in_two_families_is_one_label(self):
+        """GDELT tags the BJP both a party and a terror group: one label, the name."""
+        rows = [
+            {"theme": "TAX_POLITICAL_PARTY_BHARATIYA_JANATA_PARTY", "n": 6},
+            {"theme": "TAX_TERROR_GROUP_BHARATIYA_JANATA_PARTY", "n": 6},
+            {"theme": "TAX_TERROR_GROUP_SINN_FEIN", "n": 2},
+            {"theme": "TAX_POLITICAL_PARTY_SINN_FEIN", "n": 2},
+            {"theme": "TAX_TERROR_GROUP_ALQAEDA", "n": 1},
+            {"theme": "TAX_TERROR_GROUP_AL_QAEDA", "n": 1},
+        ]
+        assert links.top_themes(rows) == ["Bharatiya Janata Party", "Sinn Féin", "Al Qaeda"]
 
 
 class TestCleanEntities:

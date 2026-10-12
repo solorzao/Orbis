@@ -274,18 +274,25 @@ _THEME_GROUPS = (
     ("MANMADE_DISASTER", "Man-made disaster"),
     ("NATURAL_DISASTER", "Natural disaster"),
 )
-# Families of names (taxonomy themes without the TAX_), shown as
-# "Family: Name": "TERROR_GROUP_HAMAS" -> "Terror group: Hamas".
-_NAMED_FAMILIES = (
-    ("TERROR_GROUP_", "Terror group"),
-    ("POLITICAL_PARTY_", "Political party"),
-    ("AIDGROUPS_", "Aid group"),
-)
+# Families of names (taxonomy themes without the TAX_), shown as the bare
+# name: "TERROR_GROUP_HAMAS" -> "Hamas". Never the family, which GDELT
+# gives by keyword: the BJP, Sinn Féin and the Peshmerga are tagged terror
+# groups about as often as parties, and ASEAN and FEMA aid groups. A name
+# in two families is then one label.
+_NAMED_FAMILIES = ("TERROR_GROUP", "POLITICAL_PARTY", "AIDGROUPS")
+# Names that title case gets wrong.
+_NAME_OVERRIDES = {
+    "ALQAEDA": "Al Qaeda",
+    "DAASH": "Daesh",
+    "DAESH": "Daesh",
+    "SINN_FEIN": "Sinn Féin",
+    "UNICEF": "UNICEF",
+}
 # Lower case inside a name ("Save the Children"); acronyms kept in one.
 _NAME_SMALL_WORDS = frozenset(
     {"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to"}
 )
-_NAME_ACRONYMS = frozenset({"EU", "UK", "UN", "US"})
+_NAME_ACRONYMS = frozenset({"EU", "MP", "UK", "UN", "US"})
 # A one-word name this short is an acronym: ISIS, BJP, ANC, PKK.
 _MAX_ACRONYM_CHARS = 4
 # Families shown as "Family: theme".
@@ -480,8 +487,11 @@ def _name_words(code: str) -> str:
     """A name's code in title case: "SAVE_THE_CHILDREN" -> "Save the Children".
 
     A one-word name of up to four letters is an acronym (ISIS, BJP), as are
-    EU, UK, UN and US anywhere; small words after the first are lower case.
+    EU, MP, UK, UN and US anywhere; small words after the first are lower
+    case. _NAME_OVERRIDES spells the names this gets wrong.
     """
+    if code in _NAME_OVERRIDES:
+        return _NAME_OVERRIDES[code]
     words = [word for word in code.split("_") if word]
     if len(words) == 1 and len(words[0]) <= _MAX_ACRONYM_CHARS:
         return words[0]
@@ -502,8 +512,9 @@ def display_theme(theme: str) -> str:
     Themes that say nothing about a link (DROPPED_THEME_PREFIXES,
     DROPPED_THEMES) show as nothing, as does anything but a plain theme
     code. Otherwise the family prefix, a World Bank number and trailing
-    digits go; then the theme reads as a known label, a group's or a
-    family's, or its own words in sentence case.
+    digits go; then the theme reads as a known label, a group's, a bare
+    name (a party, armed group or aid group: "Hamas"), a family's, or its
+    own words in sentence case.
     """
     if not isinstance(theme, str) or not _THEME_CHARS.fullmatch(theme):
         return ""
@@ -520,10 +531,9 @@ def display_theme(theme: str) -> str:
     for start, label in _THEME_GROUPS:
         if code.startswith(start):
             return label
-    for prefix, family in _NAMED_FAMILIES:
-        if code.startswith(prefix):
-            name = _name_words(code[len(prefix) :])
-            return f"{family}: {name}" if name else family
+    for family in _NAMED_FAMILIES:
+        if code == family or code.startswith(f"{family}_"):
+            return _name_words(code[len(family) + 1 :])
     for prefix, family in _THEME_FAMILIES:
         if code.startswith(prefix):
             words = _theme_words(code[len(prefix) :])
