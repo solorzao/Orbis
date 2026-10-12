@@ -453,13 +453,19 @@ _SURGES_TTL = 300
 # run their own.
 _surges_in_flight: dict[str, asyncio.Task[list[Surge]]] = {}
 
+# Seconds the shared surge query may take (it measures well under 1 s). The
+# pool sets no command timeout, so without this a hung query (a half-open
+# connection) would hold every later surges miss and delta in the process.
+_SURGES_QUERY_TIMEOUT = 15
+
 
 async def _cached_surges(tag: str | None) -> list[Surge]:
     """The surging places for a topic tag (None for all), from Redis when there.
 
     On a miss, one query per key runs at a time and every concurrent caller
-    gets its answer, or its error (nothing is cached then). A caller that is
-    cancelled leaves the query running for the others.
+    gets its answer, or its error (nothing is cached then): a TimeoutError
+    after 15 s. A caller that is cancelled leaves the query running for the
+    others.
     """
     cache_k = f"db:surges:v1:{tag or ''}"
     cached = await get_cached(cache_k)
@@ -475,7 +481,9 @@ async def _cached_surges(tag: str | None) -> list[Surge]:
 
 
 async def _load_surges(cache_k: str, tag: str | None) -> list[Surge]:
-    surges = [Surge(**s) for s in await get_surges(_now(), tag)]
+    async with asyncio.timeout(_SURGES_QUERY_TIMEOUT):
+        rows = await get_surges(_now(), tag)
+    surges = [Surge(**s) for s in rows]
     await set_cached(cache_k, [s.model_dump(mode="json") for s in surges], _SURGES_TTL)
     return surges
 
@@ -496,8 +504,9 @@ async def get_news_surges(
     """Places whose coverage is surging now, most surging first: at most 8.
 
     A 1° cell surges when its distinct stories of the last 2 hours are at
-    least 3 times its usual 2 hours over the week before (counted as at least
-    half a story), with at least 8 stories from at least 3 sources. A topic
+    least 3 times its usual 2 hours before then (over the data held, up to a
+    week; counted as at least half a story), with at least 8 stories from at
+    least 3 sources. A topic
     counts its stories only. No stories at all in the last 2 hours (a feed
     outage) is no surges.
     """

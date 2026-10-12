@@ -157,7 +157,9 @@ class Surge(BaseModel):
     lng: float
     place: str  # display_place of the lead's region and country_code
     recent: int  # distinct stories in the last 2 hours
-    baseline: float  # distinct stories per 2 hours over the 166 hours before
+    # Distinct stories before the last 2 hours, per 2-hour block of data held
+    # (from the oldest story kept, up to 83 blocks at 7 days' retention).
+    baseline: float
     ratio: float  # recent / max(baseline, 0.5); the frontend shows "20×+" above 20
     topic: str  # the topic filter's tag, else the most common of the six ("general" if none)
     lead: GlobeLead  # the newest recent story, preferring an https image

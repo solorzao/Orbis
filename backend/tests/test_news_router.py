@@ -1421,6 +1421,37 @@ class TestSurgesSingleFlight:
         assert first.cancelled()
         assert surges_db.await_count == 1
 
+    @pytest.mark.asyncio
+    async def test_a_hung_query_times_out_for_every_waiter(self, monkeypatch, surges_db):
+        """A query that never returns (a half-open connection) can't hold up every later
+        surges or delta request: it gives up, nothing is cached, and the next miss retries."""
+        import asyncio
+
+        import app.routers.news as news
+
+        assert news._SURGES_QUERY_TIMEOUT == 15
+        monkeypatch.setattr(news, "_SURGES_QUERY_TIMEOUT", 0.01)
+
+        async def hung(*_args):
+            await asyncio.Event().wait()  # never set
+
+        surges_db.side_effect = hung
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            waiters = [asyncio.create_task(news._cached_surges(None)) for _ in range(2)]
+            results = await asyncio.wait_for(
+                asyncio.gather(*waiters, return_exceptions=True), timeout=5
+            )
+
+        assert [type(r) for r in results] == [TimeoutError, TimeoutError]
+        assert surges_db.await_count == 1
+        mock_set.assert_not_awaited()
+        assert news._surges_in_flight == {}
+
+        surges_db.side_effect = None
+        surges_db.return_value = [SURGE]
+        assert len(await news._cached_surges(None)) == 1
+        assert surges_db.await_count == 2
+
 
 # ── /api/news/delta: what changed since a visit ─────────────────────────
 
