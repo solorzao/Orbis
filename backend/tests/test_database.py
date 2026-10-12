@@ -144,7 +144,6 @@ def _globe_row(**overrides):
         "top_headline": "Match report",
         "topic_tags": ["sport"],
         "location_name": "New York",
-        "topics": ["conflict", "sport"],
     }
     return {**row, **overrides}
 
@@ -293,33 +292,34 @@ class TestGetArticlesInBounds:
 
 class TestGetGlobePoints:
     @pytest.mark.asyncio
-    async def test_windowed_query_aggregates_cell_topics(self, pool):
+    async def test_query_spends_nothing_on_a_cells_topic_list(self, pool):
+        """Nothing reads a cell's every tag any more: no unnest over the window's stories."""
         pool.fetch.return_value = [_globe_row()]
 
         await database.get_globe_points(cell_size=1.0, start_time=START, end_time=END)
 
         assert pool.fetch.call_count == 1
         query = _sql(pool.fetch.call_args.args[0])
-        assert "unnest(topic_tags)" in query
-        assert "array_agg(DISTINCT tag)" in query
+        assert "unnest" not in query
+        assert "array_agg" not in query
+        assert "cell_topics" not in query
 
     @pytest.mark.asyncio
-    async def test_rows_carry_all_cell_topics_and_newest_topic(self, pool):
+    async def test_rows_carry_the_newest_storys_topic(self, pool):
         pool.fetch.return_value = [_globe_row()]
 
         [point] = await database.get_globe_points(cell_size=1.0)
 
         assert point["topic"] == "sport"  # newest story's first tag, for the dot colour
-        assert point["topics"] == ["conflict", "sport"]
+        assert "topics" not in point
 
     @pytest.mark.asyncio
-    async def test_cell_without_tags_has_no_topics(self, pool):
-        pool.fetch.return_value = [_globe_row(topic_tags=None, topics=None)]
+    async def test_cell_without_tags_is_general(self, pool):
+        pool.fetch.return_value = [_globe_row(topic_tags=None)]
 
         [point] = await database.get_globe_points(cell_size=1.0)
 
         assert point["topic"] == "general"
-        assert point["topics"] == []
 
     @pytest.mark.asyncio
     async def test_topic_filters_the_stories_before_cells_are_ranked_and_limited(self, pool):
@@ -386,14 +386,11 @@ class TestGetGlobePoints:
     @pytest.mark.asyncio
     async def test_a_filtered_cell_takes_the_topic_as_its_colour(self, pool):
         """The newest matching story may list another tag first; the dot is still the topic's."""
-        pool.fetch.return_value = [
-            _globe_row(topic_tags=["sport", "politics"], topics=["politics", "sport"])
-        ]
+        pool.fetch.return_value = [_globe_row(topic_tags=["sport", "politics"])]
 
         [point] = await database.get_globe_points(cell_size=1.0, topic="politics")
 
         assert point["topic"] == "politics"
-        assert point["topics"] == ["politics", "sport"]
 
 
 class TestGetHourlyVolume:

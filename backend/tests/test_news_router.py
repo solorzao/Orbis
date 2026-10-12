@@ -155,27 +155,29 @@ class TestGetGlobeData:
             assert call_kwargs["end_time"].hour == 18
 
     @pytest.mark.asyncio
-    async def test_returns_every_topic_in_the_cell(self):
-        from app.routers.news import get_globe_data
-
-        row = {**_make_globe_row(topic="sport"), "topics": ["conflict", "sport"]}
-        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[row]):
-            [point] = await get_globe_data(timespan="24h", limit=100)
-        assert point.topic == "sport"
-        assert point.topics == ["conflict", "sport"]
-
-    @pytest.mark.asyncio
-    async def test_cached_points_without_topics_still_load(self):
-        """Entries cached before `topics` existed stay valid until their TTL ends."""
+    async def test_points_carry_no_topic_list(self):
+        """Only the dot's own topic goes out; a cell's every tag is no longer sent."""
         from app.routers.news import get_globe_data
 
         with patch(
-            "app.routers.news.get_cached",
+            "app.routers.news.get_globe_points",
             new_callable=AsyncMock,
-            return_value=[_make_globe_row(topic="conflict")],
+            return_value=[_make_globe_row(topic="sport")],
         ):
             [point] = await get_globe_data(timespan="24h", limit=100)
-        assert point.topics == []
+        assert point.topic == "sport"
+        assert "topics" not in point.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_points_cached_with_a_topic_list_still_load(self):
+        """Entries cached while `topics` was sent stay valid until their TTL ends."""
+        from app.routers.news import get_globe_data
+
+        cached = {**_make_globe_row(topic="conflict"), "topics": ["conflict", "sport"]}
+        with patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=[cached]):
+            [point] = await get_globe_data(timespan="24h", limit=100)
+        assert point.topic == "conflict"
+        assert "topics" not in point.model_dump()
 
 
 class TestGetGlobeDataCache:

@@ -29,7 +29,7 @@ describe("apiPointsToGlobePoints", () => {
   it("colours and sizes a dot by the server's topic and count", () => {
     // A topic-filtered cell: the server sends the topic's tag and its stories' count.
     const [climate, other] = apiPointsToGlobePoints([
-      apiPoint({ topic: "environment", article_count: 2, topics: ["environment", "sport"] }),
+      apiPoint({ topic: "environment", article_count: 2 }),
       apiPoint({ topic: "sport" }),
     ]);
     expect(climate.topic).toBe("Climate");

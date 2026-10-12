@@ -14,8 +14,6 @@ export interface ApiGlobePoint {
   top_headline: string;
   /** The newest story's topic, or the topic asked for: it sets the dot colour. */
   topic: string;
-  /** Every topic of the cell's stories (of the topic asked for, when one was). */
-  topics?: string[];
   location_name?: string;
 }
 

@@ -340,14 +340,13 @@ async def get_globe_points(
     points, never older stories.
 
     Groups articles into grid cells of *cell_size* degrees, picking the
-    most recent headline and its first topic per cell (the dot colour), and
-    collecting every topic in the cell.
+    most recent headline and its first topic per cell (the dot colour).
 
     *topic*, an article tag such as ``"politics"``, keeps only the stories
     tagged with it, before the cells are counted, ranked and limited: the
     cells are the busiest for that topic, ``article_count`` and
-    ``top_headline`` are of its stories alone, ``topic`` is the tag (the dot
-    is the topic's colour) and ``topics`` is every tag of those stories.
+    ``top_headline`` are of its stories alone, and ``topic`` is the tag (the
+    dot is the topic's colour).
     """
     pool = await get_pool()
 
@@ -371,7 +370,6 @@ async def get_globe_points(
                 "article_count": row["article_count"],
                 "top_headline": row["top_headline"] or "",
                 "topic": topic or (tags[0] if tags else "general"),
-                "topics": list(row["topics"] or []),
                 "location_name": row["location_name"] or "",
             }
         )
@@ -398,7 +396,7 @@ def _globe_points_query(
         args.append(topic)
         conditions.append(f"topic_tags && ARRAY[${len(args)}::text]")
     # The WHERE filters the stories before anything reads them: the per-cell
-    # ranking, the counts, the topics and the LIMIT all see matching rows only.
+    # ranking, the counts and the LIMIT all see matching rows only.
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     cell = f"${len(args) + 1}"
     query = f"""
@@ -427,16 +425,9 @@ def _globe_points_query(
                 MAX(CASE WHEN rn = 1 THEN region END) AS location_name
             FROM clustered
             GROUP BY lat, lng
-        ),
-        cell_topics AS (
-            SELECT lat, lng, array_agg(DISTINCT tag) AS topics
-            FROM clustered
-            CROSS JOIN LATERAL unnest(topic_tags) AS tag
-            GROUP BY lat, lng
         )
-        SELECT cells.*, cell_topics.topics
+        SELECT *
         FROM cells
-        LEFT JOIN cell_topics USING (lat, lng)
         ORDER BY article_count DESC
         LIMIT ${len(args) + 2}
     """

@@ -17,7 +17,6 @@ function apiPoint(name: string, topic = "politics"): ApiGlobePoint {
     article_count: 3,
     top_headline: name,
     topic,
-    topics: [topic],
     location_name: name,
   };
 }
