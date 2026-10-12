@@ -2,9 +2,9 @@
  * Co-coverage links between countries (/api/links): the Links layer's arcs,
  * their look on the globe and the pill that names one.
  */
-import type { ApiLink } from "@/lib/api";
-import { mapApiTopic } from "@/lib/clustering";
-import type { CountryLink, LinkCountry } from "@/types/news";
+import type { ApiLink, ApiLinkDetail } from "@/lib/api";
+import { apiArticlesToNewsArticles, mapApiTopic, mapTopicMix } from "@/lib/clustering";
+import type { CountryLink, LinkCountry, LinkDetail, Topic } from "@/types/news";
 
 /** How links are ranked: surprisingly often together (lift), or by stories (count). */
 export type LinkRank = "lift" | "count";
@@ -169,4 +169,37 @@ export function arcPillText(link: CountryLink): { n: number; text: string } {
   const verb = link.n === 1 ? "story links" : "stories link";
   const topic = link.topic === "All" ? "" : `, mostly ${link.topic.toLowerCase()}`;
   return { n: link.n, text: `${verb} ${from.name} and ${to.name}${topic}` };
+}
+
+/** A link's names from its origin: "US ↔ IR" for its pill, "United States and Iran" in full. */
+export function linkPairLabel(link: CountryLink): { short: string; long: string } {
+  const [from, to] = linkEnds(link);
+  return { short: `${from.iso} ↔ ${to.iso}`, long: `${from.name} and ${to.name}` };
+}
+
+/** The topic most of a link's stories carry (its topic mix), else the arc's. */
+export function linkTopic(mix: Partial<Record<Topic, number>>, fallback: Topic): Topic {
+  let best: Topic = fallback;
+  let most = 0;
+  for (const [topic, n] of Object.entries(mix) as [Topic, number][]) {
+    if (n > most) {
+      best = topic;
+      most = n;
+    }
+  }
+  return best;
+}
+
+export function toLinkDetail(api: ApiLinkDetail): LinkDetail {
+  return {
+    a: api.a,
+    b: api.b,
+    n: api.n,
+    lift: api.lift,
+    topicMix: mapTopicMix(api.topic_mix),
+    tone: api.tone,
+    shared: api.shared,
+    themes: api.themes,
+    articles: apiArticlesToNewsArticles(api.articles),
+  };
 }

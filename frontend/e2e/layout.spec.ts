@@ -186,7 +186,7 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     await expectRowAboveSheet();
 
     // A tab opens it (46vh where there is room), and the bottom row moves up with it.
-    await page.getByTestId("side-tab-stories").click();
+    await page.getByTestId("side-tab-inspect").click();
     await expect(side).toHaveAttribute("data-open", "true");
     box = (await side.boundingBox())!;
     expect(Math.abs(box.height - openSheetHeight(size))).toBeLessThan(1);
@@ -196,7 +196,7 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     // And folds back to its tab bar, keeping focus on its button (no pill to move to).
     await page.getByTestId("side-collapse").click();
     await expect(side).toHaveAttribute("data-open", "false");
-    await expect(page.getByTestId("side-tab-stories")).toBeVisible();
+    await expect(page.getByTestId("side-tab-inspect")).toBeVisible();
     await expect(page.getByTestId("side-collapse")).toBeFocused();
   });
 }
@@ -249,7 +249,7 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {
   const size = { width: 900, height: 300 }; // 100vh - 260px would be 40px
   await settle(page, size);
-  await page.getByTestId("side-tab-stories").click();
+  await page.getByTestId("side-tab-inspect").click();
   const side = page.getByTestId("side-panel");
   await expect(side).toHaveAttribute("data-open", "true");
   const box = (await side.boundingBox())!;

@@ -51,7 +51,7 @@ interface AgentMessageProps {
   activeTools?: readonly string[];
   onCitationClick?: (citation: Citation) => void;
   onFlyTo?: (action: GlobeAction) => void;
-  /** Opens the Stories tab at an action's place, or null when the globe has no dot there. */
+  /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
 }
 

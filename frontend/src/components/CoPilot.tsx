@@ -17,7 +17,7 @@ const FOLLOW_SLACK_PX = 24;
 
 /** What the visitor sees, live: the co-pilot's context pills read it. */
 export interface ScreenContext {
-  /** The place open in the Stories tab, e.g. "Madrid, Spain". */
+  /** The place open in the Inspect tab, e.g. "Madrid, Spain". */
   place?: string;
   topic: Topic;
   window: TimeWindow;
@@ -68,7 +68,7 @@ interface CoPilotProps {
   onClear: () => void;
   onCitationClick: (citation: Citation) => void;
   onFlyTo: (action: GlobeAction) => void;
-  /** Opens the Stories tab at an action's place, or null when the globe has no dot there. */
+  /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
 }
 

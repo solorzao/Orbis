@@ -714,6 +714,85 @@ kbd {
 .insp-more .pill:disabled {
   opacity: 0.6;
 }
+
+/* Link inspector (mockup inspectHTML, link branch; .readouts and .ro, lines 357-372) */
+.insp-kicker {
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.insp-kicker span + span::before {
+  content: "·";
+  margin-right: 8px;
+}
+.insp-amp {
+  color: var(--text-muted);
+  margin: 0 2px;
+}
+.insp-lead {
+  margin: 6px 0 0;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.readouts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.ro {
+  min-width: 0;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.ro > span {
+  display: block;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.ro b {
+  display: block;
+  font: var(--type-data-lg);
+  font-weight: 300;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ro b.ro-text {
+  font: var(--type-body-sm);
+}
+.pill-theme {
+  border-style: dashed;
+}
+.insp-list-lbl {
+  padding: 10px 12px 2px;
+}
+.insp-note {
+  margin: 0 0 10px;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.link-explain .insp-ai {
+  margin-bottom: 10px;
+}
+.link-explain .aurora-btn .ai {
+  margin: 0;
+  color: inherit;
+  background: rgba(11, 10, 22, 0.18);
+}
+.link-explain .aurora-btn:not(:disabled) {
+  cursor: pointer;
+}
+.link-explain .aurora-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+@media (max-width: 420px) {
+  .readouts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .skel {
   display: block;
   height: 10px;

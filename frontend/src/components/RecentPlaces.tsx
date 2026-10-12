@@ -1,16 +1,19 @@
 "use client";
 
-import type { CSSProperties } from "react";
-import type { PanelEntry } from "@/types/news";
+import type { CSSProperties, ReactNode } from "react";
+import type { LinkEntry, PanelEntry } from "@/types/news";
 import { MAX_PANELS } from "@/lib/panelQuery";
+import { linkPairLabel } from "@/lib/links";
 
 interface RecentPlacesProps {
-  /** Open places, oldest first. */
+  /** Open places. */
   places: PanelEntry[];
-  /** The place whose stories show below. */
+  /** Open links between countries. */
+  links?: LinkEntry[];
+  /** The place or link inspected below. */
   activeId: string | null;
-  onSelect: (panelId: string) => void;
-  onClose: (panelId: string) => void;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
 }
 
 /** The full place name, and the part before its first comma for the pill. */
@@ -23,41 +26,102 @@ function placeNames(entry: PanelEntry): { name: string; short: string } {
   return { name: point.locationName, short: point.locationName.split(",")[0].trim() };
 }
 
+interface Pill {
+  id: string;
+  createdAt: number;
+  /** Hover text: the full name. */
+  title: string;
+  /** For screen readers, when the pill's text is shorthand. */
+  label?: string;
+  /** Who the × closes. */
+  closeName: string;
+  content: ReactNode;
+  count: number;
+}
+
+const stories = (n: number) => `${n} ${n === 1 ? "story" : "stories"}`;
+
+function placePill(entry: PanelEntry): Pill {
+  const { name, short } = placeNames(entry);
+  return {
+    id: entry.panelId,
+    createdAt: entry.createdAt,
+    title: name,
+    closeName: short,
+    count: entry.point.count,
+    content: (
+      <>
+        <span
+          className="dot"
+          aria-hidden="true"
+          style={{ "--c": entry.point.color } as CSSProperties}
+        />
+        <span className="place-name">{short}</span>
+      </>
+    ),
+  };
+}
+
+function linkPill(entry: LinkEntry): Pill {
+  const { short, long } = linkPairLabel(entry.link);
+  const n = entry.detail?.n ?? entry.link.n;
+  return {
+    id: entry.linkId,
+    createdAt: entry.createdAt,
+    title: long,
+    label: `${long}, ${stories(n)}`,
+    closeName: long,
+    count: n,
+    content: <span className="place-name">{short}</span>,
+  };
+}
+
 /**
- * The places opened from the globe, as a row of pills at the top of the
- * Stories tab: pick one to read its stories, × to close it.
+ * The places and links opened from the globe, as a row of pills at the top of
+ * the Inspect tab, oldest first: pick one to inspect it, × to close it. A
+ * link reads "US ↔ IR", from where most of its stories come.
  */
-export default function RecentPlaces({ places, activeId, onSelect, onClose }: RecentPlacesProps) {
-  if (places.length === 0) return null;
+export default function RecentPlaces({
+  places,
+  links = [],
+  activeId,
+  onSelect,
+  onClose,
+}: RecentPlacesProps) {
+  if (places.length + links.length === 0) return null;
+  // A stable sort: what opened at the same moment keeps its order.
+  const pills = [...places.map(placePill), ...links.map(linkPill)]
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-MAX_PANELS);
 
   return (
-    <div className="places" role="group" aria-label="Recent places" data-testid="recent-places">
-      {places.slice(-MAX_PANELS).map((entry) => {
-        const { name, short } = placeNames(entry);
-        const active = entry.panelId === activeId;
+    <div
+      className="places"
+      role="group"
+      aria-label="Recent places and links"
+      data-testid="recent-places"
+    >
+      {pills.map((pill) => {
+        const active = pill.id === activeId;
         return (
-          <span key={entry.panelId} className={`pill place${active ? " on" : ""}`}>
+          <span key={pill.id} className={`pill place${active ? " on" : ""}`}>
             <button
               type="button"
               className="place-pick"
-              data-place={entry.panelId}
+              data-place={pill.id}
               aria-pressed={active}
-              title={name}
-              onClick={() => onSelect(entry.panelId)}
+              aria-label={pill.label}
+              title={pill.title}
+              onClick={() => onSelect(pill.id)}
             >
-              <span
-                className="dot"
-                aria-hidden="true"
-                style={{ "--c": entry.point.color } as CSSProperties}
-              />
-              <span className="place-name">{short}</span>
-              <span className="num">{entry.point.count}</span>
+              {pill.content}
+              <span className="num">{pill.count}</span>
             </button>
             <button
               type="button"
               className="place-close"
-              aria-label={`Close ${short}`}
-              onClick={() => onClose(entry.panelId)}
+              aria-label={`Close ${pill.closeName}`}
+              onClick={() => onClose(pill.id)}
             >
               <svg
                 width="8"

@@ -110,10 +110,10 @@ test.describe("Globe Page", () => {
     await expect(status.getByText("Live")).toBeVisible({ timeout: 10000 });
   });
 
-  test("the side panel shows the Co-pilot and Stories tabs", async ({ page }) => {
+  test("the side panel shows the Co-pilot and Inspect tabs", async ({ page }) => {
     await expect(page.getByTestId("side-panel")).toBeVisible();
     await expect(page.getByTestId("side-tab-copilot")).toBeVisible();
-    await expect(page.getByTestId("side-tab-stories")).toBeVisible();
+    await expect(page.getByTestId("side-tab-inspect")).toBeVisible();
   });
 
   test("the timeline and the layer switcher are at the bottom", async ({ page }) => {

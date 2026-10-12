@@ -67,7 +67,7 @@ function AiSkeleton() {
 }
 
 /**
- * A place's stories in the side panel's Stories tab (mockup `.insp`, `.art`):
+ * A place's stories in the side panel's Inspect tab (mockup `.insp`, `.art`):
  * the AI summary on a scrim, filter pills, and one row per story with its
  * signed tone. Minimize keeps the place in Recent places; close drops it.
  */

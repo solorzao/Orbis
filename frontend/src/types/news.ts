@@ -10,6 +10,8 @@ export interface NewsArticle {
   latitude: number;
   longitude: number;
   countryCode: string;
+  /** Where the story is placed, e.g. "Paris, France" ("" when unknown). */
+  region?: string;
   topicTags: string[];
   sentimentScore: number; // -1 to 1, negative = bad, positive = good
 }
@@ -121,3 +123,47 @@ export interface PanelEntry {
   filters?: PanelFilters;
   filterSummary?: string | null;
 }
+
+/** What the link inspector shows for a pair (/api/links/detail), the pair in code order. */
+export interface LinkDetail {
+  a: LinkCountry;
+  b: LinkCountry;
+  n: number;
+  lift: number;
+  /** Stories per topic pill (a story with two topics counts for both). */
+  topicMix: Partial<Record<Topic, number>>;
+  tone: number;
+  /** People and organisations named in two or more of the stories. */
+  shared: { name: string; type: "person" | "org"; n: number }[];
+  /** The stories' top themes, as words. */
+  themes: string[];
+  /** The newest distinct stories that link the two. */
+  articles: NewsArticle[];
+}
+
+/** A link's explanation: Claude's words (ai), or a message saying why there are none. */
+export interface LinkExplanation {
+  text: string;
+  ai: boolean;
+}
+
+/** A link open in the Inspect tab, its query fixed when it was opened (like a panel's). */
+export interface LinkEntry {
+  linkId: string;
+  /** The link as its arc had it: its ends, numbers and origin. */
+  link: CountryLink;
+  query: PanelQuery;
+  detail: LinkDetail | null;
+  detailLoading: boolean;
+  detailError?: boolean;
+  /** When the detail landed (Date.now()), for its stories' ages. */
+  loadedAt?: number;
+  explanation: LinkExplanation | null;
+  explaining: boolean;
+  createdAt: number;
+}
+
+/** What the Inspect tab shows: a place's stories, or a link between two countries. */
+export type Inspection =
+  | { kind: "place"; panelId: string }
+  | { kind: "link"; linkId: string; a: string; b: string; query: PanelQuery };

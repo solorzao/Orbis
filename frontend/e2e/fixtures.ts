@@ -622,19 +622,56 @@ export async function clickPlace(page: Page, place: MockPlace) {
   );
 }
 
-// ── Hovering an arc ─────────────────────────────────────────────────
+// ── Hovering and clicking an arc ────────────────────────────────────
+
+type MockLink = (typeof MOCK_LINKS_LIFT)[number];
+
+/**
+ * Where the top of a link's arc is on screen while the globe rests at
+ * HOME_VIEW: the midpoint of the curve three-globe draws from the link's
+ * origin (lib/links arcApex).
+ */
+function arcTop(page: Page, link: MockLink) {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("arcs need a fixed viewport");
+  const [start, end] = link.from === link.b.iso ? [link.b, link.a] : [link.a, link.b];
+  const apex = arcApex(start, end);
+  return homeViewScreenPoint(apex.lat, apex.lng, viewport, apex.altitude);
+}
+
+/**
+ * Click the top of a link's arc, as a visitor would, until its inspector
+ * opens. As with clickPlace, the pointer rests first (globe.gl finds the arc
+ * under it on its next frame) and nearby pixels are tried: the arc is thin.
+ */
+export async function clickArc(page: Page, link: MockLink, heading: string) {
+  const { x, y } = arcTop(page, link);
+  const opened = page
+    .getByTestId("link-inspector")
+    .getByRole("heading", { name: heading, exact: true });
+  for (const [dx, dy] of NEARBY) {
+    await page.mouse.move(x + dx, y + dy);
+    await page.waitForTimeout(150);
+    await page.mouse.down();
+    await page.mouse.up();
+    const shown = await opened
+      .waitFor({ state: "visible", timeout: 1000 })
+      .then(() => true)
+      .catch(() => false);
+    if (shown) return;
+  }
+  throw new Error(
+    `No arc for ${link.a.iso}-${link.b.iso} (around ${Math.round(x)}, ${Math.round(y)})`,
+  );
+}
 
 /**
  * Rest the pointer on the top of a link's arc (lib/links arcApex, the curve
  * three-globe draws) until its pill shows. The arc is a thin tube, so nearby
  * pixels are tried too. Returns the pill.
  */
-export async function hoverArc(page: Page, link: (typeof MOCK_LINKS_LIFT)[number]) {
-  const viewport = page.viewportSize();
-  if (!viewport) throw new Error("hoverArc needs a fixed viewport");
-  const [start, end] = link.from === link.b.iso ? [link.b, link.a] : [link.a, link.b];
-  const apex = arcApex(start, end);
-  const { x, y } = homeViewScreenPoint(apex.lat, apex.lng, viewport, apex.altitude);
+export async function hoverArc(page: Page, link: MockLink) {
+  const { x, y } = arcTop(page, link);
   const pill = page.locator('[data-testid="arc-pill"][data-placed="true"]');
   for (const [dx, dy] of NEARBY) {
     await page.mouse.move(x + dx, y + dy);

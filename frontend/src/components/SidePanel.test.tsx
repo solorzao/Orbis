@@ -7,11 +7,11 @@ import type { SideTab } from "@/hooks/useSidePanel";
 function Harness({
   initialTab = "copilot",
   initialOpen = true,
-  storiesCount,
+  inspectCount,
 }: {
   initialTab?: SideTab;
   initialOpen?: boolean;
-  storiesCount?: number;
+  inspectCount?: number;
 }) {
   const [tab, setTab] = useState<SideTab>(initialTab);
   const [open, setOpen] = useState(initialOpen);
@@ -22,8 +22,8 @@ function Harness({
       open={open}
       onOpenChange={setOpen}
       copilot={<p>Co-pilot content</p>}
-      stories={<p>Stories content</p>}
-      storiesCount={storiesCount}
+      inspect={<p>Inspect content</p>}
+      inspectCount={inspectCount}
     />
   );
 }
@@ -32,28 +32,28 @@ const panel = () => screen.getByTestId("side-panel");
 const tab = (name: string) => screen.getByRole("tab", { name });
 
 describe("SidePanel", () => {
-  it("is a labelled region with Co-pilot and Stories tabs", () => {
+  it("is a labelled region with Co-pilot and Inspect tabs", () => {
     render(<Harness />);
-    expect(screen.getByRole("region", { name: "Co-pilot and stories" })).toBe(panel());
+    expect(screen.getByRole("region", { name: "Co-pilot and inspector" })).toBe(panel());
     expect(panel()).toHaveClass("glass", "side");
     const tabs = screen.getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["Co-pilot", "Stories"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["Co-pilot", "Inspect"]);
     expect(screen.getByRole("tablist")).toHaveClass("seg");
     expect(screen.getByTestId("side-tab-copilot")).toBe(tab("Co-pilot"));
-    expect(screen.getByTestId("side-tab-stories")).toBe(tab("Stories"));
+    expect(screen.getByTestId("side-tab-inspect")).toBe(tab("Inspect"));
   });
 
   it("marks the active tab selected, with a roving tabindex", () => {
-    render(<Harness initialTab="stories" />);
-    expect(tab("Stories")).toHaveAttribute("aria-selected", "true");
-    expect(tab("Stories")).toHaveAttribute("tabindex", "0");
+    render(<Harness initialTab="inspect" />);
+    expect(tab("Inspect")).toHaveAttribute("aria-selected", "true");
+    expect(tab("Inspect")).toHaveAttribute("tabindex", "0");
     expect(tab("Co-pilot")).toHaveAttribute("aria-selected", "false");
     expect(tab("Co-pilot")).toHaveAttribute("tabindex", "-1");
   });
 
   it("ties each tab to its panel", () => {
     render(<Harness />);
-    for (const name of ["Co-pilot", "Stories"]) {
+    for (const name of ["Co-pilot", "Inspect"]) {
       const t = tab(name);
       const panelId = t.getAttribute("aria-controls");
       expect(panelId).toBeTruthy();
@@ -67,11 +67,11 @@ describe("SidePanel", () => {
   it("shows only the active tab's content, and clicking a tab switches it", () => {
     render(<Harness />);
     expect(screen.getByText("Co-pilot content")).toBeVisible();
-    expect(screen.getByText("Stories content")).not.toBeVisible();
+    expect(screen.getByText("Inspect content")).not.toBeVisible();
 
-    fireEvent.click(tab("Stories"));
-    expect(tab("Stories")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Stories content")).toBeVisible();
+    fireEvent.click(tab("Inspect"));
+    expect(tab("Inspect")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Inspect content")).toBeVisible();
     expect(screen.getByText("Co-pilot content")).not.toBeVisible();
   });
 
@@ -80,21 +80,21 @@ describe("SidePanel", () => {
     tab("Co-pilot").focus();
 
     fireEvent.keyDown(tab("Co-pilot"), { key: "ArrowRight" });
-    expect(tab("Stories")).toHaveAttribute("aria-selected", "true");
-    expect(tab("Stories")).toHaveFocus();
+    expect(tab("Inspect")).toHaveAttribute("aria-selected", "true");
+    expect(tab("Inspect")).toHaveFocus();
 
-    fireEvent.keyDown(tab("Stories"), { key: "ArrowRight" }); // wraps
+    fireEvent.keyDown(tab("Inspect"), { key: "ArrowRight" }); // wraps
     expect(tab("Co-pilot")).toHaveAttribute("aria-selected", "true");
     expect(tab("Co-pilot")).toHaveFocus();
 
     fireEvent.keyDown(tab("Co-pilot"), { key: "ArrowLeft" }); // wraps back
-    expect(tab("Stories")).toHaveFocus();
+    expect(tab("Inspect")).toHaveFocus();
 
-    fireEvent.keyDown(tab("Stories"), { key: "Home" });
+    fireEvent.keyDown(tab("Inspect"), { key: "Home" });
     expect(tab("Co-pilot")).toHaveFocus();
     fireEvent.keyDown(tab("Co-pilot"), { key: "End" });
-    expect(tab("Stories")).toHaveFocus();
-    expect(tab("Stories")).toHaveAttribute("aria-selected", "true");
+    expect(tab("Inspect")).toHaveFocus();
+    expect(tab("Inspect")).toHaveAttribute("aria-selected", "true");
   });
 
   it("collapses to a Co-pilot pill and expands back", () => {
@@ -121,31 +121,31 @@ describe("SidePanel", () => {
   });
 
   it("moves focus to the pill on collapse and back to the active tab on expand", () => {
-    render(<Harness initialTab="stories" />);
+    render(<Harness initialTab="inspect" />);
     fireEvent.click(screen.getByTestId("side-collapse"));
     expect(screen.getByTestId("side-open")).toHaveFocus();
 
     fireEvent.click(screen.getByTestId("side-open"));
-    expect(tab("Stories")).toHaveFocus();
+    expect(tab("Inspect")).toHaveFocus();
   });
 
-  it("shows a stories badge on the pill only when there are places", () => {
-    const { unmount } = render(<Harness initialOpen={false} storiesCount={3} />);
+  it("shows a badge on the pill only when places or links are open", () => {
+    const { unmount } = render(<Harness initialOpen={false} inspectCount={3} />);
     const pill = screen.getByTestId("side-open");
     expect(pill.querySelector(".num")).toHaveTextContent("3");
-    expect(pill).toHaveAccessibleName("Open Co-pilot, 3 places in Stories");
+    expect(pill).toHaveAccessibleName("Open Co-pilot, 3 open in Inspect");
     unmount();
 
-    render(<Harness initialOpen={false} storiesCount={0} />);
+    render(<Harness initialOpen={false} inspectCount={0} />);
     expect(screen.getByTestId("side-open").querySelector(".num")).toBeNull();
     expect(screen.getByTestId("side-open")).toHaveAccessibleName("Open Co-pilot");
   });
 
   it("names the pill after the active tab", () => {
-    render(<Harness initialTab="stories" initialOpen={false} storiesCount={1} />);
+    render(<Harness initialTab="inspect" initialOpen={false} inspectCount={1} />);
     const pill = screen.getByTestId("side-open");
-    expect(pill).toHaveTextContent("Stories");
-    expect(pill).toHaveAccessibleName("Open Stories, 1 place in Stories");
+    expect(pill).toHaveTextContent("Inspect");
+    expect(pill).toHaveAccessibleName("Open Inspect, 1 open in Inspect");
   });
 
   it("leaves the default to CSS until the width is known (server render)", () => {
@@ -156,7 +156,7 @@ describe("SidePanel", () => {
         open={null}
         onOpenChange={() => {}}
         copilot={null}
-        stories={null}
+        inspect={null}
       />,
     );
     expect(panel()).not.toHaveAttribute("data-open");
@@ -165,27 +165,27 @@ describe("SidePanel", () => {
 
   it("opens when a tab is chosen while collapsed (the sheet's tab bar)", () => {
     render(<Harness initialOpen={false} />);
-    fireEvent.click(tab("Stories"));
+    fireEvent.click(tab("Inspect"));
     expect(panel()).toHaveAttribute("data-open", "true");
-    expect(tab("Stories")).toHaveAttribute("aria-selected", "true");
+    expect(tab("Inspect")).toHaveAttribute("aria-selected", "true");
   });
 
-  it("lets focus land on a tab panel, and hands out the Stories panel", () => {
-    const storiesRef = createRef<HTMLDivElement>();
+  it("lets focus land on a tab panel, and hands out the Inspect panel", () => {
+    const inspectRef = createRef<HTMLDivElement>();
     render(
       <SidePanel
-        tab="stories"
+        tab="inspect"
         onTabChange={() => {}}
         open
         onOpenChange={() => {}}
         copilot={null}
-        stories={<p>Stories content</p>}
-        storiesRef={storiesRef}
+        inspect={<p>Inspect content</p>}
+        inspectRef={inspectRef}
       />,
     );
-    const stories = screen.getByRole("tabpanel", { name: "Stories" });
-    expect(storiesRef.current).toBe(stories);
-    expect(stories).toHaveAttribute("tabindex", "-1");
+    const inspect = screen.getByRole("tabpanel", { name: "Inspect" });
+    expect(inspectRef.current).toBe(inspect);
+    expect(inspect).toHaveAttribute("tabindex", "-1");
   });
 
   it("reports changes through its callbacks", () => {
@@ -198,11 +198,11 @@ describe("SidePanel", () => {
         open
         onOpenChange={onOpenChange}
         copilot={null}
-        stories={null}
+        inspect={null}
       />,
     );
-    fireEvent.click(tab("Stories"));
-    expect(onTabChange).toHaveBeenCalledWith("stories");
+    fireEvent.click(tab("Inspect"));
+    expect(onTabChange).toHaveBeenCalledWith("inspect");
     expect(onOpenChange).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("side-collapse"));
     expect(onOpenChange).toHaveBeenCalledWith(false);

@@ -1,5 +1,6 @@
-import type { Topic } from "@/types/news";
+import type { PanelQuery, Topic } from "@/types/news";
 import { windowQuery, type TimeWindow } from "@/lib/timeWindow";
+import { queryWindow } from "@/lib/panelQuery";
 import { LINKS_LIMIT, type LinkRank } from "@/lib/links";
 
 // Same-origin /api/* routes are proxied to the backend by
@@ -210,6 +211,72 @@ export function fetchLinks({
   params.rank = rank;
   params.limit = String(limit);
   return apiFetch<ApiLink[]>("/api/links", params, signal);
+}
+
+/** One link for the inspector (/api/links/detail): the pair always in code order. */
+export interface ApiLinkDetail {
+  a: ApiLinkCountry;
+  b: ApiLinkCountry;
+  n: number;
+  lift: number;
+  /** Stories per topic tag (a story may count twice). */
+  topic_mix: Record<string, number>;
+  tone: number;
+  shared: { name: string; type: "person" | "org"; n: number }[];
+  themes: string[];
+  articles: ApiNewsArticle[];
+}
+
+export interface LinkQuery {
+  a: string;
+  b: string;
+  /** The query the link was opened with (panelQuery). */
+  query: PanelQuery;
+  signal?: AbortSignal;
+}
+
+/**
+ * A link's numbers, shared names, themes and newest stories, for the window
+ * and topic it was opened on: a live window by its timespan (as the arc was
+ * fetched, and one URL for everyone at the edge), a range by its bounds.
+ */
+export function fetchLinkDetail({ a, b, query, signal }: LinkQuery): Promise<ApiLinkDetail> {
+  const params: Record<string, string> = { a, b, ...windowParams(queryWindow(query)) };
+  if (query.topic) params.topic = query.topic;
+  return apiFetch<ApiLinkDetail>("/api/links/detail", params, signal);
+}
+
+/**
+ * Claude's 2-3 sentences on what links two countries' coverage, for the
+ * window the link was opened on (its bounds as fixed then) and its topic.
+ * It may answer with a message instead (see isExplainFallback).
+ */
+export async function explainLink({ a, b, query }: LinkQuery): Promise<{ text: string }> {
+  const res = await fetch(apiUrl("/api/links/explain").toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      a,
+      b,
+      start_time: query.startTime,
+      end_time: query.endTime,
+      ...(query.topic ? { topic: query.topic } : {}),
+    }),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+  return res.json() as Promise<{ text: string }>;
+}
+
+/** What the inspector shows when the explanation request itself fails. */
+export const LINK_EXPLAIN_FAILED = "Couldn't explain this link right now. Try again in a moment.";
+
+/** links.py NOT_ENOUGH_COVERAGE (api.test.ts keeps it equal). */
+const NOT_ENOUGH_COVERAGE = "Not enough coverage in this window to explain the link.";
+
+/** Whether an explanation's text is a message (paused, failed, too few stories), not Claude's. */
+export function isExplainFallback(text: string): boolean {
+  const t = text.trim();
+  return isSummaryFallback(t) || t === NOT_ENOUGH_COVERAGE || t === LINK_EXPLAIN_FAILED;
 }
 
 export function fetchClusterArticles(

@@ -7,6 +7,10 @@ import {
   fetchVolume,
   fetchPlacePreview,
   fetchLinks,
+  fetchLinkDetail,
+  explainLink,
+  isExplainFallback,
+  LINK_EXPLAIN_FAILED,
   isSummaryFallback,
   SUMMARY_FALLBACKS,
 } from "./api";
@@ -255,6 +259,94 @@ describe("fetchLinks", () => {
       limit: "20",
     });
     expect(init.signal).toBe(controller.signal);
+  });
+});
+
+const LIVE_QUERY = {
+  startTime: "2026-10-11T12:00:00.000Z",
+  endTime: "2026-10-12T12:00:00.000Z",
+  live: true,
+  hours: 24 as const,
+};
+const RANGE_QUERY = {
+  topic: "Climate" as const,
+  startTime: "2026-10-06T00:00:00.000Z",
+  endTime: "2026-10-07T00:00:00.000Z",
+  live: false,
+};
+
+describe("fetchLinkDetail", () => {
+  it("asks for a link opened on a live window by its timespan (one URL for everyone)", async () => {
+    mockFetch.mockReturnValue(jsonResponse({}));
+    await fetchLinkDetail({ a: "US", b: "IR", query: LIVE_QUERY });
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/api/links/detail");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ a: "US", b: "IR", timespan: "24h" });
+  });
+
+  it("asks for a range's link by its bounds and topic", async () => {
+    mockFetch.mockReturnValue(jsonResponse({}));
+    await fetchLinkDetail({ a: "IR", b: "US", query: RANGE_QUERY });
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      a: "IR",
+      b: "US",
+      start_time: RANGE_QUERY.startTime,
+      end_time: RANGE_QUERY.endTime,
+      topic: "Climate",
+    });
+  });
+});
+
+describe("explainLink", () => {
+  it("posts the pair and the link's frozen window and topic", async () => {
+    mockFetch.mockReturnValue(jsonResponse({ text: "Talks." }));
+    await expect(explainLink({ a: "US", b: "IR", query: RANGE_QUERY })).resolves.toEqual({
+      text: "Talks.",
+    });
+    const [called, init] = mockFetch.mock.calls[0];
+    expect(new URL(called).pathname).toBe("/api/links/explain");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(JSON.parse(init.body)).toEqual({
+      a: "US",
+      b: "IR",
+      start_time: RANGE_QUERY.startTime,
+      end_time: RANGE_QUERY.endTime,
+      topic: "Climate",
+    });
+  });
+
+  it("sends a live link's bounds as fixed when it was opened, without a topic for All", async () => {
+    mockFetch.mockReturnValue(jsonResponse({ text: "Talks." }));
+    await explainLink({ a: "US", b: "IR", query: LIVE_QUERY });
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({
+      a: "US",
+      b: "IR",
+      start_time: LIVE_QUERY.startTime,
+      end_time: LIVE_QUERY.endTime,
+    });
+  });
+
+  it("throws on a non-OK response (the ai rate limit's 429)", async () => {
+    mockFetch.mockReturnValue(jsonResponse(null, 429));
+    await expect(explainLink({ a: "US", b: "IR", query: LIVE_QUERY })).rejects.toThrow("API 429");
+  });
+});
+
+describe("isExplainFallback", () => {
+  it("knows the summary fallbacks and the not-enough-coverage message", () => {
+    // links.py returns NOT_ENOUGH_COVERAGE as the text when no headline is left.
+    const source = readFileSync(
+      path.resolve(__dirname, "../../../backend/app/services/links.py"),
+      "utf8",
+    );
+    const notEnough = /NOT_ENOUGH_COVERAGE = "([^"]+)"/.exec(source)?.[1];
+    expect(notEnough).toBeTruthy();
+    expect(isExplainFallback(notEnough!)).toBe(true);
+    for (const message of SUMMARY_FALLBACKS) expect(isExplainFallback(message)).toBe(true);
+    expect(isExplainFallback(LINK_EXPLAIN_FAILED)).toBe(true);
+    expect(isExplainFallback("Coverage links the two over nuclear talks.")).toBe(false);
   });
 });
 

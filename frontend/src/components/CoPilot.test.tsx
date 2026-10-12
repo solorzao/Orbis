@@ -409,7 +409,7 @@ describe("CoPilot", () => {
       const box = layOut(screen.getByTestId("agent-log"));
       resized();
 
-      box.clientHeight = 0; // Stories tab: the log is display: none
+      box.clientHeight = 0; // Inspect tab: the log is display: none
       resized();
       box.scrollHeight = 1600;
       rerender(<CoPilot {...props} messages={longer("A long answer.")} />);

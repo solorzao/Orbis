@@ -8,9 +8,12 @@ import {
   linkArcs,
   linkEnds,
   linkKey,
+  linkPairLabel,
+  linkTopic,
   toCountryLinks,
+  toLinkDetail,
 } from "./links";
-import type { ApiLink } from "./api";
+import type { ApiLink, ApiLinkDetail, ApiNewsArticle } from "./api";
 import type { CountryLink } from "@/types/news";
 
 const US = { iso: "US", name: "United States", lat: 39.8, lng: -98.6 };
@@ -153,6 +156,83 @@ describe("arcPillText", () => {
     expect(arcPillText(link({ n: 1, topic: "sports", from: "IR" }))).toEqual({
       n: 1,
       text: "story links Iran and United States",
+    });
+  });
+});
+
+describe("linkPairLabel", () => {
+  it("names a link by its codes and its countries, from its origin", () => {
+    expect(linkPairLabel(link())).toEqual({ short: "US ↔ IR", long: "United States and Iran" });
+    expect(linkPairLabel(link({ from: "IR" }))).toEqual({
+      short: "IR ↔ US",
+      long: "Iran and United States",
+    });
+  });
+});
+
+describe("linkTopic", () => {
+  it("is the topic most of the link's stories carry, else the arc's", () => {
+    expect(linkTopic({ Politics: 3, Conflict: 9 }, "Politics")).toBe("Conflict");
+    expect(linkTopic({}, "Economy")).toBe("Economy");
+  });
+});
+
+describe("toLinkDetail", () => {
+  const article: ApiNewsArticle = {
+    id: "s1",
+    title: "Talks resume",
+    summary: null,
+    source_url: "https://example.com/talks",
+    source_name: "Reuters",
+    source_language: "en",
+    published_at: "2026-10-12T11:00:00Z",
+    ingested_at: "2026-10-12T11:05:00Z",
+    latitude: 38.9,
+    longitude: -77,
+    country_code: "US",
+    region: "Washington, United States",
+    topic_tags: ["politics"],
+    sentiment_score: -0.1,
+    entities: {},
+  };
+
+  it("maps the topic mix to topic pills and the stories to articles", () => {
+    const api: ApiLinkDetail = {
+      a: IR,
+      b: US,
+      n: 41,
+      lift: 1.8,
+      topic_mix: { politics: 20, environment: 4, sports: 2 },
+      tone: -0.3,
+      shared: [{ name: "IAEA", type: "org", n: 9 }],
+      themes: ["nuclear talks"],
+      articles: [article],
+    };
+    expect(toLinkDetail(api)).toEqual({
+      a: IR,
+      b: US,
+      n: 41,
+      lift: 1.8,
+      topicMix: { Politics: 20, Climate: 4 },
+      tone: -0.3,
+      shared: [{ name: "IAEA", type: "org", n: 9 }],
+      themes: ["nuclear talks"],
+      articles: [
+        {
+          id: "s1",
+          title: "Talks resume",
+          summary: undefined,
+          sourceUrl: "https://example.com/talks",
+          sourceName: "Reuters",
+          publishedAt: "2026-10-12T11:00:00Z",
+          latitude: 38.9,
+          longitude: -77,
+          countryCode: "US",
+          region: "Washington, United States",
+          topicTags: ["politics"],
+          sentimentScore: -0.1,
+        },
+      ],
     });
   });
 });
