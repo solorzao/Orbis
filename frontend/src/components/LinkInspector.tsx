@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import { formatScore, sentimentKey } from "@/lib/clustering";
 import { formatAgo } from "@/lib/hoverCard";
 import { linkEnds, linkTopic } from "@/lib/links";
@@ -47,6 +47,14 @@ export default function LinkInspector({
   onExplain,
 }: LinkInspectorProps) {
   const { link, detail, query, explanation, explaining } = entry;
+  const explanationRef = useRef<HTMLDivElement>(null);
+
+  // Claude's text takes the Explain button's place: the focus follows it there
+  // rather than falling to the page (a message keeps the button, and its focus).
+  useEffect(() => {
+    const active = document.activeElement;
+    if (explanation?.ai && (!active || active === document.body)) explanationRef.current?.focus();
+  }, [explanation]);
   const [from, to] = linkEnds(link);
   const n = detail?.n ?? link.n;
   const lift = detail?.lift ?? link.lift;
@@ -228,7 +236,12 @@ export default function LinkInspector({
       >
         {explaining && <AiSkeleton />}
         {explanation?.ai ? (
-          <div className="scrim insp-ai">
+          <div
+            ref={explanationRef}
+            className="scrim insp-ai"
+            data-testid="link-explanation"
+            tabIndex={-1}
+          >
             <p>
               <span className="ai">AI</span>
               {explanation.text}
@@ -238,11 +251,14 @@ export default function LinkInspector({
           <>
             {explanation && !explaining && <p className="insp-note">{explanation.text}</p>}
             <div>
+              {/* aria-disabled while it loads: disabled would drop the keyboard focus */}
               <button
                 type="button"
                 className="aurora-btn"
-                disabled={explaining}
-                onClick={onExplain}
+                aria-disabled={explaining || undefined}
+                onClick={() => {
+                  if (!explaining) onExplain();
+                }}
               >
                 <span className="ai">AI</span> {explaining ? "Explaining…" : "Explain this link"}
               </button>

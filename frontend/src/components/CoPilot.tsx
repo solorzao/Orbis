@@ -10,7 +10,7 @@ import {
 } from "@/hooks/useAgent";
 import { windowBounds, windowLabel, type TimeWindow } from "@/lib/timeWindow";
 import type { Topic } from "@/types/news";
-import AgentMessage from "./AgentMessage";
+import AgentMessage, { type LinksAction } from "./AgentMessage";
 
 /** Within this of the bottom, the log follows new messages. */
 const FOLLOW_SLACK_PX = 24;
@@ -70,8 +70,8 @@ interface CoPilotProps {
   onFlyTo: (action: GlobeAction) => void;
   /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
-  /** Turns the Links layer on for an answer's places, or null when that does not apply. */
-  showLinksFor?: (actions: GlobeAction[]) => (() => void) | null;
+  /** Show links for an answer's places (Links' state and how to turn it on), or null. */
+  showLinksFor?: (actions: GlobeAction[]) => LinksAction | null;
 }
 
 /**

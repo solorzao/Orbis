@@ -53,8 +53,14 @@ interface AgentMessageProps {
   onFlyTo?: (action: GlobeAction) => void;
   /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
-  /** Turns the Links layer on for an answer's places, or null when that does not apply. */
-  showLinksFor?: (actions: GlobeAction[]) => (() => void) | null;
+  /** Show links for an answer's places (Links' state and how to turn it on), or null. */
+  showLinksFor?: (actions: GlobeAction[]) => LinksAction | null;
+}
+
+/** The Show links pill: pressed (and inert) while Links is on. */
+export interface LinksAction {
+  on: boolean;
+  turnOn: () => void;
 }
 
 /**
@@ -175,7 +181,14 @@ function AgentMessage({
             </button>
           )}
           {showLinks && (
-            <button type="button" className="pill" onClick={showLinks}>
+            // Stays once Links is on, pressed: so the focus has somewhere to stay.
+            <button
+              type="button"
+              className="pill"
+              aria-pressed={showLinks.on}
+              aria-disabled={showLinks.on || undefined}
+              onClick={showLinks.on ? undefined : showLinks.turnOn}
+            >
               Show links
             </button>
           )}

@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
   type CSSProperties,
   type PointerEvent,
+  type Ref,
 } from "react";
 import { fetchVolume, type ApiHourlyVolume } from "@/lib/api";
 import { useReplay } from "@/hooks/useReplay";
@@ -82,6 +83,8 @@ interface TimelineCapsuleProps {
   places: number;
   /** Reduced motion: the replay's days change without the playhead sweeping. */
   reduced?: boolean;
+  /** The replay button, for focus that has nowhere else to go (the Links chip). */
+  playRef?: Ref<HTMLButtonElement>;
 }
 
 /**
@@ -99,6 +102,7 @@ export default function TimelineCapsule({
   stories,
   places,
   reduced = false,
+  playRef,
 }: TimelineCapsuleProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const now = useSyncExternalStore(subscribeMinute, minuteNow, noNowOnServer);
@@ -247,6 +251,7 @@ export default function TimelineCapsule({
     >
       <button
         type="button"
+        ref={playRef}
         className="aurora-btn play"
         aria-label={replay.playing ? "Stop replay" : "Replay the last 7 days"}
         onClick={() => (replay.playing ? replay.stop() : replay.start(timeWindow))}

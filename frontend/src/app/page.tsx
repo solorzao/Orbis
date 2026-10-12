@@ -97,6 +97,7 @@ export default function Home() {
   const keepInspectFocus = useKeepFocus(inspectRef);
 
   const globeControlsRef = useRef<GlobeControls | null>(null);
+  const playRef = useRef<HTMLButtonElement>(null);
 
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
@@ -472,7 +473,9 @@ export default function Home() {
   // are in two or more countries (by the globe's dots there) and it is off.
   const showLinksFor = useCallback(
     (actions: GlobeAction[]) =>
-      !linksOn && actionCountries(actions, points).length >= 2 ? () => setLinksOn(true) : null,
+      actionCountries(actions, points).length >= 2
+        ? { on: linksOn, turnOn: () => setLinksOn(true) }
+        : null,
     [linksOn, points],
   );
 
@@ -618,7 +621,15 @@ export default function Home() {
           linksStatus={linksNote}
         />
         {/* Where the layers are hidden (phones), Links has a chip of its own. */}
-        {linksOn && <LinksChip status={linksNote} onOff={() => setLinksOn(false)} />}
+        {linksOn && (
+          <LinksChip
+            status={linksNote}
+            onOff={() => {
+              setLinksOn(false);
+              playRef.current?.focus(); // the chip goes: the focus moves on, not to the page
+            }}
+          />
+        )}
         <TimelineCapsule
           timeWindow={timeWindow}
           onChange={changeWindow}
@@ -626,6 +637,7 @@ export default function Home() {
           stories={points.reduce((sum, p) => sum + p.count, 0)}
           places={points.length}
           reduced={reduced}
+          playRef={playRef}
         />
       </BottomBar>
 

@@ -101,13 +101,18 @@ test.describe("Inspect tab: a link", () => {
       "41 stories link United States and Iran, mostly politics",
     );
 
-    // Explain: the button waits, then Claude's words come with the AI badge.
-    await inspector.getByRole("button", { name: "AI Explain this link" }).click();
-    await expect(inspector.getByRole("button", { name: "AI Explaining…" })).toBeDisabled();
+    // Explain, from the keyboard: the button waits (keeping the focus), then
+    // Claude's words come with the AI badge, and the focus with them.
+    await inspector.getByRole("button", { name: "AI Explain this link" }).focus();
+    await page.keyboard.press("Enter");
+    const waiting = inspector.getByRole("button", { name: "AI Explaining…" });
+    await expect(waiting).toHaveAttribute("aria-disabled", "true");
+    await expect(waiting).toBeFocused();
     answer();
     const explanation = inspector.getByText(MOCK_LINK_EXPLAIN.text);
     await expect(explanation).toBeVisible();
     await expect(explanation.locator(".ai")).toHaveText("AI");
+    await expect(inspector.getByTestId("link-explanation")).toBeFocused();
     await expect(inspector.getByRole("button", { name: /Explain/ })).toHaveCount(0);
     // It explains the window the link was opened on: that day's bounds, frozen.
     const body = explainAsked[0];

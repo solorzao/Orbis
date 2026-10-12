@@ -245,15 +245,19 @@ test.describe("Link hints", () => {
       "Show links",
     ]);
     expect(asked).toBe(0);
-    await actions.getByRole("button", { name: "Show links" }).click();
+    // From the keyboard: Enter on the pill.
+    const show = actions.getByRole("button", { name: "Show links" });
+    await show.focus();
+    await page.keyboard.press("Enter");
     await expect(linksToggle(page)).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("globe")).toHaveAttribute(
       "data-arcs",
       String(MOCK_LINKS_LIFT.length),
     );
     expect(asked).toBe(1);
-    // Links is on now: the pill has done its job.
-    await expect(actions.getByRole("button", { name: "Show links" })).toHaveCount(0);
+    // Links is on now: the pill stays, pressed, with the focus still on it.
+    await expect(show).toHaveAttribute("aria-pressed", "true");
+    await expect(show).toBeFocused();
     await expect(page.getByTestId("side-tab-copilot")).toHaveAttribute("aria-selected", "true");
   });
 });
@@ -366,8 +370,13 @@ test.describe("Links on a phone", () => {
     await chip.tap();
     await expect(globe).toHaveAttribute("data-arcs", "0");
     await expect(chip).toHaveCount(0);
+    // The chip is gone: focus goes to the timeline's play button, not the page.
+    await expect(page.getByRole("button", { name: "Replay the last 7 days" })).toBeFocused();
     // Links is off again, so the co-pilot offers it again.
-    await expect(page.getByRole("button", { name: "Show links" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Show links" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   test("the chip says when the window has no links", async ({ page }) => {

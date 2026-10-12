@@ -188,13 +188,47 @@ describe("LinkInspector", () => {
       expect(onExplain).toHaveBeenCalledTimes(1);
     });
 
-    it("disables the button while it loads", () => {
+    it("marks the button unavailable while it loads, keeping it focusable", () => {
       const { onExplain } = renderInspector(loaded({ explaining: true }));
       const button = screen.getByRole("button", { name: "AI Explaining…" });
-      expect(button).toBeDisabled();
+      // aria-disabled, not disabled: a disabled button would drop the keyboard focus.
+      expect(button).not.toBeDisabled();
+      expect(button).toHaveAttribute("aria-disabled", "true");
       expect(screen.getByTestId("link-explain")).toHaveAttribute("aria-busy", "true");
       fireEvent.click(button);
       expect(onExplain).not.toHaveBeenCalled();
+    });
+
+    it("keeps focus on the button while it loads, then moves it to the explanation", () => {
+      const props = { onClose: vi.fn(), onMinimize: vi.fn(), onExplain: vi.fn() };
+      const { rerender } = render(<LinkInspector entry={loaded()} {...props} />);
+      const button = screen.getByRole("button", { name: "AI Explain this link" });
+      button.focus();
+      rerender(<LinkInspector entry={loaded({ explaining: true })} {...props} />);
+      expect(screen.getByRole("button", { name: "AI Explaining…" })).toHaveFocus();
+
+      rerender(
+        <LinkInspector entry={loaded({ explanation: { text: "Talks.", ai: true } })} {...props} />,
+      );
+      // The button gave way to the text: focus goes there, not to the page.
+      const explanation = screen.getByTestId("link-explanation");
+      expect(explanation).toHaveFocus();
+      expect(explanation).toHaveAttribute("tabindex", "-1");
+    });
+
+    it("leaves focus on the button when a message comes instead", () => {
+      const props = { onClose: vi.fn(), onMinimize: vi.fn(), onExplain: vi.fn() };
+      const { rerender } = render(
+        <LinkInspector entry={loaded({ explaining: true })} {...props} />,
+      );
+      screen.getByRole("button", { name: "AI Explaining…" }).focus();
+      rerender(
+        <LinkInspector
+          entry={loaded({ explanation: { text: "Summary generation failed.", ai: false } })}
+          {...props}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "AI Explain this link" })).toHaveFocus();
     });
 
     it("shows Claude's explanation with the AI badge, in place of the button", () => {

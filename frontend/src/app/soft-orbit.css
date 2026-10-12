@@ -781,10 +781,10 @@ kbd {
   color: inherit;
   background: rgba(11, 10, 22, 0.18);
 }
-.link-explain .aurora-btn:not(:disabled) {
+.link-explain .aurora-btn {
   cursor: pointer;
 }
-.link-explain .aurora-btn:disabled {
+.link-explain .aurora-btn[aria-disabled="true"] {
   opacity: 0.6;
   cursor: progress;
 }
