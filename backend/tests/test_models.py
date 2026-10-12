@@ -95,6 +95,7 @@ def _hover_point(**lead_overrides) -> GlobeDataPoint:
         "published_at": datetime(2026, 10, 12, 9, 45, tzinfo=timezone.utc),
         "image_url": "https://cdn.example.com/a.jpg",
         "topic": "conflict",
+        "sensitive": True,
         **lead_overrides,
     }
     return GlobeDataPoint(
@@ -131,6 +132,7 @@ def test_globe_data_point_carries_the_hover_card_data():
             "published_at": "2026-10-12T09:45:00Z",
             "image_url": "https://cdn.example.com/a.jpg",
             "topic": "conflict",
+            "sensitive": True,
         },
         "topic_mix": {"politics": 3, "conflict": 2},
         "tone": -0.25,
@@ -155,6 +157,16 @@ def test_globe_data_point_round_trips_through_json():
 )
 def test_globe_lead_image_is_https_only(image_url):
     assert _hover_point(image_url=image_url).lead.image_url is None
+
+
+def test_globe_lead_is_not_sensitive_unless_told():
+    lead = GlobeLead(
+        title="Rates held",
+        source_name="Reuters",
+        published_at=datetime(2026, 10, 12, 9, 45, tzinfo=timezone.utc),
+        topic="economy",
+    )
+    assert lead.sensitive is False
 
 
 def test_globe_lead_keeps_a_public_https_image():

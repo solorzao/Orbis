@@ -126,6 +126,8 @@ class GlobeLead(BaseModel):
     published_at: datetime
     image_url: HttpsOnlyImageUrl = None
     topic: str  # the story's first tag, "general" when it has none
+    # Conflict among any of its tags: the card veils its image until asked.
+    sensitive: bool = False
 
 
 class GlobeDataPoint(BaseModel):

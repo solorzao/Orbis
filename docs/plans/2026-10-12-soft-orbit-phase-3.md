@@ -106,7 +106,7 @@ WITH cells AS (
   FROM articles
   WHERE <window> [AND topic_tags && ARRAY[$t::text]]
   GROUP BY 1, 2
-  ORDER BY article_count DESC
+  ORDER BY article_count DESC, 1, 2
   LIMIT $limit
 )
 SELECT cells.*, lead.*
@@ -117,13 +117,15 @@ CROSS JOIN LATERAL (
   WHERE a.latitude  >= cells.lat - $c / 2 AND a.latitude  < cells.lat + $c / 2
     AND a.longitude >= cells.lng - $c / 2 AND a.longitude < cells.lng + $c / 2
     AND <window, same predicate> [AND topic filter]
-  ORDER BY (a.image_url LIKE 'https://%') DESC, a.published_at DESC
+  ORDER BY (a.image_url LIKE 'https://%') DESC NULLS LAST, a.published_at DESC
   LIMIT 1
 ) lead
 ```
 
 Notes:
 - **Lead story:** the lateral prefers the newest story that has an `https` image, so the headline and the image always belong to the same story. If that ordering costs more than 0.5 s at 7 days on production, use `published_at = cells.newest` as measured, and say so.
+- **`NULLS LAST`:** a NULL `image_url`'s `LIKE` is NULL, and `DESC` sorts NULLs first, so without it a story with no image outranks the https one. The shipped query looks the lead up by `published_at = COALESCE(newest_with_image, newest)` (a whole GDELT batch shares one time) and, when the cell has an https image, keeps only https stories at that time.
+- **Ties:** `ORDER BY article_count DESC, 1, 2` breaks ties by the cell, so the top 500 are the same cells every time.
 - **Parameters:** keep them positional and build the predicates in Python, the way the existing function does.
 
 **Dot colour:** with no topic filter, `topic` becomes the cell's **most common** of the six topics (ties go to the lead's first tag; `general` when the cell has none). This replaces "the newest story's first tag", so a dot's colour stops flickering with each new story. With a filter, it stays the filter's tag.

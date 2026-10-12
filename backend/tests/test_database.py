@@ -334,7 +334,8 @@ class TestGetGlobePoints:
             "MAX(published_at) FILTER (WHERE image_url LIKE 'https://%') AS newest_with_image"
             in cells
         )
-        assert "GROUP BY 1, 2 ORDER BY article_count DESC LIMIT $4 )" in cells
+        # Ties broken by the cell, so the busiest 500 are the same cells every time.
+        assert "GROUP BY 1, 2 ORDER BY article_count DESC, 1, 2 LIMIT $4 )" in cells
         assert "mode()" not in query and "DISTINCT ON" not in query
 
     @pytest.mark.asyncio
@@ -349,8 +350,17 @@ class TestGetGlobePoints:
         # The same FLOOR as the grouping: a cell's newest story always matches its cell.
         assert "FLOOR(latitude / $3) = cells.lat_cell" in lead
         assert "FLOOR(longitude / $3) = cells.lng_cell" in lead
-        assert "ORDER BY (image_url LIKE 'https://%') DESC, id LIMIT 1 ) lead" in lead
-        assert query.endswith("ORDER BY cells.article_count DESC")
+        # A cell with an https image takes only an https story at that time: a NULL
+        # image_url's LIKE is NULL, which DESC would otherwise sort first.
+        assert (
+            "AND (cells.newest_with_image IS NULL OR image_url LIKE 'https://%')" in lead
+        )
+        assert (
+            "ORDER BY (image_url LIKE 'https://%') DESC NULLS LAST, id LIMIT 1 ) lead" in lead
+        )
+        assert query.endswith(
+            "ORDER BY cells.article_count DESC, cells.lat_cell, cells.lng_cell"
+        )
 
     @pytest.mark.asyncio
     async def test_parameters_with_a_range_and_no_topic(self, pool):
@@ -360,7 +370,7 @@ class TestGetGlobePoints:
         query, args = _fetched(pool)
         assert args == [START, END, 1.0, 500]
         assert "ARRAY[" not in query
-        assert "IS NULL" not in query
+        assert not re.search(r"\$\d+(::\w+)? IS NULL", query)  # no parameter tests
         # The window filters the cells and the lead alike.
         assert query.count("WHERE published_at BETWEEN $1 AND $2") == 1
         assert query.count("AND published_at BETWEEN $1 AND $2") == 1
@@ -390,7 +400,7 @@ class TestGetGlobePoints:
         window = "published_at BETWEEN $1 AND $2 AND topic_tags && ARRAY[$3::text]"
         assert query.count(window) == 2  # the cells' counts and the lead
         assert query.index(window) < query.index(
-            "GROUP BY 1, 2 ORDER BY article_count DESC LIMIT $5"
+            "GROUP BY 1, 2 ORDER BY article_count DESC, 1, 2 LIMIT $5"
         )
         assert "FLOOR(latitude / $4)" in query
         assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
@@ -436,12 +446,32 @@ class TestGetGlobePoints:
             "published_at": datetime(2026, 3, 8, 9, 45, tzinfo=timezone.utc),
             "image_url": "https://cdn.example.com/a.jpg",
             "topic": "conflict",  # the lead's first tag
+            "sensitive": True,
         }
         assert point["topic_mix"] == {"politics": 3, "conflict": 2}  # the topics it has
         assert point["tone"] == pytest.approx(-0.123, abs=1e-9)
         assert point["location_name"] == "South Island, New Zealand"
         assert point["country_code"] == "NZ"
         assert "topics" not in point
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tags", "sensitive"),
+        [
+            (["conflict"], True),
+            (["politics", "conflict"], True),  # any of its tags, not just the first
+            (["politics"], False),
+            ([], False),
+            (None, False),
+        ],
+    )
+    async def test_a_conflict_lead_is_sensitive(self, pool, tags, sensitive):
+        """The card veils a sensitive lead's image: conflict anywhere in its tags."""
+        pool.fetch.return_value = [_globe_row(topic_tags=tags)]
+
+        [point] = await database.get_globe_points(cell_size=1.0)
+
+        assert point["lead"]["sensitive"] is sensitive
 
     @pytest.mark.asyncio
     async def test_a_cell_is_coloured_by_its_most_common_topic(self, pool):

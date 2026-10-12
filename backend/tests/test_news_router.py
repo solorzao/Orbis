@@ -193,6 +193,7 @@ def _make_hover_row(**overrides):
             "published_at": datetime(2026, 10, 12, 9, 45, tzinfo=timezone.utc),
             "image_url": "http://cdn.example.com/a.jpg",
             "topic": "conflict",
+            "sensitive": True,
         },
         "topic_mix": {"politics": 3, "conflict": 2},
         "tone": -0.25,
@@ -221,6 +222,7 @@ class TestGetGlobeDataHover:
             "published_at": "2026-10-12T09:45:00Z",
             "image_url": None,  # http: the card shows https images only
             "topic": "conflict",
+            "sensitive": True,
         }
         assert point["topic_mix"] == {"politics": 3, "conflict": 2}
         assert point["tone"] == -0.25

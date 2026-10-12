@@ -405,6 +405,8 @@ async def get_globe_points(
                     "published_at": row["published_at"],
                     "image_url": row["image_url"],
                     "topic": lead_tags[0] if lead_tags else "general",
+                    # The card veils its image: conflict anywhere in its tags.
+                    "sensitive": "conflict" in lead_tags,
                 },
                 "topic_mix": mix,
                 "tone": round(row["tone"] or 0.0, 3),
@@ -439,8 +441,11 @@ def _globe_points_query(
 
     One pass over the window's stories counts each cell, its six topics, its
     tone and its newest story's time (with and without an https image); only
-    the busiest *limit* cells then look up their lead, by that exact time
-    (an index lookup on published_at) in the same cell, window and topic.
+    the busiest *limit* cells (ties broken by the cell, so the set is the same
+    every time) then look up their lead, by that exact time (an index lookup
+    on published_at) in the same cell, window and topic. A whole GDELT batch
+    shares a time, so a cell with an https image takes only an https story at
+    it: a NULL image_url's LIKE is NULL, which DESC alone would sort first.
     A correlated subquery per topic, or DISTINCT ON over the window, took
     11-15 s on production; this shape took 0.16-0.24 s.
     """
@@ -470,7 +475,7 @@ def _globe_points_query(
             FROM articles
             {f"WHERE {where}" if where else ""}
             GROUP BY 1, 2
-            ORDER BY article_count DESC
+            ORDER BY article_count DESC, 1, 2
             LIMIT ${len(args) + 2}
         )
         SELECT
@@ -491,13 +496,14 @@ def _globe_points_query(
             SELECT title, source_name, published_at, image_url, region, country_code, topic_tags
             FROM articles
             WHERE published_at = COALESCE(cells.newest_with_image, cells.newest)
+              AND (cells.newest_with_image IS NULL OR image_url LIKE 'https://%')
               AND FLOOR(latitude / {cell}) = cells.lat_cell
               AND FLOOR(longitude / {cell}) = cells.lng_cell
               {f"AND {where}" if where else ""}
-            ORDER BY (image_url LIKE 'https://%') DESC, id
+            ORDER BY (image_url LIKE 'https://%') DESC NULLS LAST, id
             LIMIT 1
         ) lead
-        ORDER BY cells.article_count DESC
+        ORDER BY cells.article_count DESC, cells.lat_cell, cells.lng_cell
     """
     return query, *args, cell_size, limit
 
