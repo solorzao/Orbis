@@ -152,9 +152,34 @@ describe("useAgent", () => {
     });
 
     const [citation] = result.current.messages[1].citations!;
+    expect(citation.index).toBeUndefined();
     expect(citation.title).toBe("Floods in Lagos");
     expect(citation.source_name).toBe("Reuters");
     expect(citation.url).toBe("https://example.com/a");
+  });
+
+  it("keeps the number each citation is cited by", async () => {
+    const cite = { url: "https://e.com", source_name: "Wire", lat: 0, lng: 0 };
+    mockFetch.mockResolvedValue(
+      doneResponse({
+        citations: [
+          { ...cite, index: 4, title: "Four" },
+          { ...cite, index: null, title: "None" },
+          { ...cite, index: "2", title: "Text" },
+        ],
+      }),
+    );
+    const { result } = renderHook(() => useAgent());
+
+    await act(async () => {
+      await result.current.ask("Lagos?");
+    });
+
+    expect(result.current.messages[1].citations!.map((c) => c.index)).toEqual([
+      4,
+      undefined,
+      undefined,
+    ]);
   });
 
   it("sends the screen context in the request body", async () => {

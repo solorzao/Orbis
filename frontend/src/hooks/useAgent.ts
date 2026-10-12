@@ -4,6 +4,8 @@ import { useState, useRef, useCallback } from "react";
 import type { Topic } from "@/types/news";
 
 export interface Citation {
+  /** The number the answer cites it by ("[4]"); absent from older answers. */
+  index?: number;
   title: string;
   url: string;
   source_name: string;
@@ -77,6 +79,7 @@ function readCitations(raw: unknown): Citation[] {
   return raw
     .filter((c) => c && typeof c === "object")
     .map((c) => ({
+      index: Number.isInteger(c.index) && c.index > 0 ? c.index : undefined,
       title: cleanLabel(c.title, MAX_TITLE),
       url: typeof c.url === "string" ? c.url : "",
       source_name: cleanLabel(c.source_name),

@@ -6,6 +6,7 @@ import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } 
 import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
@@ -19,7 +20,7 @@ import TimelineCapsule from "@/components/TimelineCapsule";
 import NewsPanel from "@/components/NewsPanel";
 import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
-import AgentPanel from "@/components/AgentPanel";
+import CoPilot from "@/components/CoPilot";
 import SidePanel from "@/components/SidePanel";
 import Sky from "@/components/Sky";
 import OrbitRings from "@/components/OrbitRings";
@@ -281,6 +282,15 @@ export default function Home() {
 
   // Stories tab: the open places, then the active place's stories
   const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
+
+  // Co-pilot: "Show stories here" takes the click path for the dot at an action's place.
+  const showStoriesFor = useCallback(
+    (action: GlobeAction) => {
+      const point = pointAt(points, action.lat, action.lng);
+      return point ? () => handlePointClick(point) : null;
+    },
+    [points, handlePointClick],
+  );
   const storiesTab = (
     <>
       <RecentPlaces
@@ -358,15 +368,22 @@ export default function Home() {
         storiesCount={panelQueue.length}
         storiesRef={storiesRef}
         copilot={
-          <AgentPanel
+          <CoPilot
             messages={agentMessages}
             isLoading={agentLoading}
             isDisabled={agentDisabled}
             activeTools={activeTools}
+            context={{
+              place: expandedPanel?.point.locationName,
+              topic: activeTopic,
+              window: timeWindow,
+            }}
             onAsk={agentAsk}
             onStop={agentStop}
             onClear={agentClear}
             onCitationClick={handleCitationClick}
+            onFlyTo={handleGlobeAction}
+            showStoriesFor={showStoriesFor}
           />
         }
         stories={storiesTab}

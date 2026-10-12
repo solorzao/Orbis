@@ -133,12 +133,14 @@ export function buildAgentSSE(options: {
   answer: string;
   tools?: string[];
   citations?: Array<{
+    index?: number;
     title: string;
     url: string;
     source_name: string;
     lat: number;
     lng: number;
   }>;
+  globe_actions?: Array<{ type: "flyTo"; lat: number; lng: number; label?: string }>;
 }): string {
   const lines: string[] = [];
 
@@ -157,7 +159,7 @@ export function buildAgentSSE(options: {
   lines.push(
     `data: ${JSON.stringify({
       citations: options.citations ?? [],
-      globe_actions: [],
+      globe_actions: options.globe_actions ?? [],
       tools_used: options.tools ?? [],
     })}`,
   );
