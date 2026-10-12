@@ -45,6 +45,8 @@ Point = tuple[str, float, float]  # name, lat, lng
 SUPPLEMENT_CORRECTIONS: dict[str, Point] = {
     # GDELT's median (16.0, 146.0) lies in the Northern Mariana Islands.
     "MU": ("Mauritius", -20.28, 57.58),
+    # GDELT's median (19.4, 144.9) is among the northern islands; most people live on Saipan.
+    "MP": ("Northern Mariana Islands", 15.2, 145.75),
 }
 
 # Codes in neither source. Approximate: they only anchor arcs.

@@ -78,6 +78,11 @@ def test_a_wrong_gdelt_point_is_corrected():
     assert _degrees_apart((point.lat, point.lng), (-20.2, 57.5)) <= 1.0
 
 
+def test_the_northern_mariana_islands_are_on_saipan():
+    # GDELT's median (19.4, 144.9) is out among the northern islands; most people live on Saipan.
+    assert COUNTRY_CENTROIDS["MP"] == Centroid("Northern Mariana Islands", 15.2, 145.75)
+
+
 @pytest.mark.parametrize(
     ("iso", "known"),
     [

@@ -175,7 +175,7 @@ COUNTRY_CENTROIDS: dict[str, Centroid] = {
     "MM": Centroid("Myanmar", 21.02, 96.51),
     "MN": Centroid("Mongolia", 46.82, 102.95),
     "MO": Centroid("Macau", 22.16, 113.56),
-    "MP": Centroid("Northern Mariana Islands", 19.44, 144.89),
+    "MP": Centroid("Northern Mariana Islands", 15.2, 145.75),
     "MQ": Centroid("Martinique", 14.67, -61.0),
     "MR": Centroid("Mauritania", 20.21, -10.33),
     "MS": Centroid("Montserrat", 16.75, -62.2),
