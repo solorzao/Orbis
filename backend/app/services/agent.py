@@ -409,8 +409,9 @@ def _get_anthropic_client() -> anthropic.AsyncAnthropic:
 _SOURCES = re.compile(r"\n*\[Sources: [^\]]*\]\s*$")
 
 # A <news> tag inside the reports (scraped page text can hold one) would end the
-# block early or open a fake one.
-_NEWS_TAG = re.compile(r"<\s*/?\s*news\b[^>]*>", re.IGNORECASE)
+# block early or open a fake one. Only its '<' is dropped: that defuses every
+# spacing of the tag without having to find where it ends, and keeps the words.
+_NEWS_TAG = re.compile(r"<(?=\s*/?\s*news\b)", re.IGNORECASE)
 
 
 def _history_for_model(history: list[dict] | None) -> list[dict]:
