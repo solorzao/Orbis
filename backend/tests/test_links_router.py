@@ -136,10 +136,10 @@ class TestGetLinks:
                 )
 
         (key1, value1, ttl1), (key2, _, _) = [c.args for c in mock_set.await_args_list]
-        assert key1 == "db:links:v1:live:24:politics:count:40"
+        assert key1 == "db:links:v2:live:24:politics:count:40"
         assert ttl1 == 600
         assert value1[0]["from"] == "US"
-        assert key2 == "db:links:v1:2026101008-2026101108::lift:12"
+        assert key2 == "db:links:v2:2026101008-2026101108::lift:12"
 
     @pytest.mark.asyncio
     async def test_an_empty_answer_is_cached_for_a_minute(self, monkeypatch, db):
@@ -200,7 +200,7 @@ def _detail(articles: list[dict]) -> dict:
         "topic_mix": {tag: 0 for tag in TOPIC_TAGS} | {"conflict": 9},
         "tone": -0.41,
         "shared": [{"name": "Abbas Araghchi", "type": "person", "n": 4}],
-        "themes": ["Armedconflict", "Sanctions"],
+        "themes": ["Armed conflict", "Sanctions"],
         "articles": articles,
     }
 
@@ -229,7 +229,7 @@ class TestGetLinkDetail:
         assert (body["n"], body["lift"]) == (12, 3.4)
         assert body["topic_mix"]["conflict"] == 9
         assert body["shared"] == [{"name": "Abbas Araghchi", "type": "person", "n": 4}]
-        assert body["themes"] == ["Armedconflict", "Sanctions"]
+        assert body["themes"] == ["Armed conflict", "Sanctions"]
         titles = [a["title"] for a in body["articles"]]
         assert titles[0] == "Iran and US talk - Reuters"  # its syndicated copy is dropped
         assert len(titles) == 10 and "Iran and US talk" not in titles
@@ -267,7 +267,7 @@ class TestGetLinkDetail:
                 )
 
         key, value, ttl = mock_set.await_args.args
-        assert key == "db:links:detail:v1:IR:US:live:24:conflict"
+        assert key == "db:links:detail:v5:IR:US:live:24:conflict"
         assert ttl == 600
         assert len(value["articles"]) == 10
 
@@ -282,7 +282,7 @@ class TestGetLinkDetail:
         assert (resp.json()["a"]["iso"], resp.json()["b"]["iso"]) == ("IR", "US")
         assert detail_db.await_args_list[0].args[:2] == ("IR", "US")
         keys = {c.args[0] for c in mock_set.await_args_list}
-        assert keys == {"db:links:detail:v1:IR:US:live:24:"}
+        assert keys == {"db:links:detail:v5:IR:US:live:24:"}
 
     @pytest.mark.asyncio
     async def test_serves_the_cached_detail(self, monkeypatch, detail_db):

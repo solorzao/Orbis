@@ -11,6 +11,7 @@ import pytest
 
 from app.services import links
 from app.services.links import TOPIC_TAGS, dominant_topic, links_query, rank_links
+from app.services.titles import story_key_sql
 
 START = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
 END = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
@@ -18,6 +19,11 @@ END = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
 
 def _sql(query: str) -> str:
     return " ".join(query.split())
+
+
+# An article's story: its stored key, else (written before ingestion stored
+# one) its lowercased title's hash. The articles table is aliased a.
+STORY = f"{story_key_sql('a')} AS story"
 
 
 def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, **extra) -> dict:
@@ -43,7 +49,7 @@ class TestLinksQuery:
         flat = _sql(sql)
         assert args == [START, END]
         assert "published_at >= $1 AND published_at <= $2" in flat
-        assert "topic_tags &&" not in flat.split("touched AS")[0]
+        assert "topic_tags &&" not in flat.split("stories AS")[0]
         assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
 
     def test_topic_filters_the_window(self):
@@ -57,28 +63,53 @@ class TestLinksQuery:
         assert "array_remove(mentioned_countries, country_code) AS others" in flat
         assert "WHERE cardinality(others) > 0" in flat  # stories naming only themselves
         assert "LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b" in flat
-        assert "FROM linking l, unnest(l.others) AS m GROUP BY 1, 2" in flat
+        assert "FROM linking l, unnest(l.others) AS m GROUP BY 1, 2, 3" in flat
         assert "country_code <> ''" in flat
 
-    def test_from_is_the_most_common_origin(self):
+    def test_a_story_is_its_stored_key(self):
+        """Syndicated copies share story_key (titles.story_key): no title parsing in SQL."""
         flat = _sql(links_query(START, END, None)[0])
-        # A pair's origin is one of its ends: a when the story's country sorts first.
-        assert "count(*) FILTER (WHERE l.country_code < m) AS from_a" in flat
-        # Ties go to a, as mode() would break them.
+        assert flat.startswith(
+            "WITH linking AS ( SELECT country_code, topic_tags, sentiment_score, others, story"
+        )
+        assert (
+            f"array_remove(mentioned_countries, country_code) AS others, {STORY} FROM articles a"
+        ) in flat
+        assert "regexp" not in flat and "OFFSET" not in flat
+
+    def test_pairs_count_stories_not_copies(self):
+        flat = _sql(links_query(START, END, None)[0])
+        # One row per pair and story, then per pair: a story's copies count once.
+        assert "GREATEST(l.country_code, m) AS b, l.story," in flat
+        assert "sum(l.sentiment_score) / count(l.sentiment_score) AS tone" in flat
+        assert "FROM stories GROUP BY a, b" in flat
+        assert "count(*) AS n, avg(tone) AS tone" in flat
+
+    def test_from_is_the_most_common_origin_of_the_stories(self):
+        flat = _sql(links_query(START, END, None)[0])
+        # A story's origin is its copies' commonest; a pair's origin is one of its
+        # ends: a when the story's country sorts first. Ties go to a.
+        assert "2 * count(*) FILTER (WHERE l.country_code < m) >= count(*) AS from_a" in flat
+        assert "count(*) FILTER (WHERE from_a) AS from_a" in flat
         assert "CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso" in flat
 
-    def test_aggregates_hash_rather_than_sort(self):
-        """count(DISTINCT) and mode() sort every pair row: 0.40 s, not 0.15, at 7 days locally."""
+    def test_no_distinct_aggregates_or_mode(self):
+        """count(DISTINCT) and mode() sort each pair's rows again: 0.40 s, not 0.15, locally."""
         flat = _sql(links_query(START, END, None)[0])
         assert "DISTINCT" not in flat and "mode()" not in flat
 
-    def test_counts_each_topic_and_the_totals_for_lift(self):
+    def test_counts_each_topic_and_the_totals_for_lift_in_stories(self):
         flat = _sql(links_query(START, END, None)[0])
         for tag in TOPIC_TAGS:
-            assert f"count(*) FILTER (WHERE l.topic_tags && '{{{tag}}}') AS {tag}" in flat
-        # Every linking story counts once for each country it touches, its own included.
-        assert "unnest(l.others || l.country_code) AS c" in flat
-        assert "(SELECT count(*) FROM linking) AS total" in flat
+            # A story has a topic if any of its copies does.
+            assert f"bool_or(l.topic_tags && '{{{tag}}}') AS {tag}" in flat
+            assert f"count(*) FILTER (WHERE {tag}) AS {tag}" in flat
+        # Every linking story counts once for each country it touches, its own
+        # included: the ends of the pairs it links.
+        assert "SELECT c, s.story FROM stories s, unnest(ARRAY[s.a, s.b]) AS c" in flat
+        assert "GROUP BY 1, 2 ) t GROUP BY c" in flat
+        total = "(SELECT count(*) FROM (SELECT story FROM stories GROUP BY story) s) AS total"
+        assert total in flat
         assert "ta.n AS n_a, tb.n AS n_b" in flat
 
     @pytest.mark.asyncio
@@ -189,42 +220,127 @@ class TestDisplayTheme:
     @pytest.mark.parametrize(
         ("theme", "shown"),
         [
-            ("WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE", "Fragility conflict and violence"),
-            ("TAX_FNCACT_PRESIDENT", "President"),
-            ("TAX_ETHNICITY_AMERICAN", "Ethnicity american"),
-            ("CRISISLEX_T03_DEAD", "Dead"),
-            ("CRISISLEX_C07_SAFETY", "Safety"),
-            ("EPU_POLICY_GOVERNMENT", "Policy government"),
-            ("USPEC_POLITICS_GENERAL1", "Politics general"),
-            ("SOC_POINTSOFINTEREST_SCHOOL", "Pointsofinterest school"),
+            # Words GDELT runs together, and the commonest themes, read as words.
+            ("ARMEDCONFLICT", "Armed conflict"),
+            ("KILL", "Killings"),
+            ("TERROR", "Terrorism"),
+            ("ELECTION", "Elections"),
+            ("PROTEST", "Protests"),
+            ("SOC_GENERALCRIME", "Crime"),
+            ("GENERAL_HEALTH", "Health"),
+            ("MANMADE_DISASTER_IMPLIED", "Man-made disaster"),
+            # Families.
+            ("NATURAL_DISASTER_FLOOD", "Natural disaster"),
+            ("NATURAL_DISASTER_EARTHQUAKE", "Natural disaster"),
+            ("ECON_INFLATION", "Economy: inflation"),
+            ("ECON_STOCKMARKET", "Economy: stock market"),
+            ("ENV_CLIMATECHANGE", "Environment: climate change"),
+            ("TAX_WEAPONS_MISSILE", "Weapons: missile"),
+            # Named-entity families: the bare name, never the family, which GDELT
+            # gives by keyword (the BJP is tagged a terror group as often as a
+            # party). In title case; short one-word names as acronyms.
+            ("TAX_TERROR_GROUP_HAMAS", "Hamas"),
+            ("TAX_TERROR_GROUP_ISLAMIC_STATE", "Islamic State"),
+            ("TAX_TERROR_GROUP_AL_QAEDA", "Al Qaeda"),
+            ("TAX_TERROR_GROUP_ISIS", "ISIS"),
+            ("TAX_TERROR_GROUP_BHARATIYA_JANATA_PARTY", "Bharatiya Janata Party"),
+            ("TAX_POLITICAL_PARTY_BHARATIYA_JANATA_PARTY", "Bharatiya Janata Party"),
+            ("TAX_TERROR_GROUP_SINN_FEIN", "Sinn Féin"),
+            ("TAX_POLITICAL_PARTY_REPUBLICANS", "Republicans"),
+            ("TAX_POLITICAL_PARTY_BJP", "BJP"),
+            ("TAX_AIDGROUPS_RED_CROSS", "Red Cross"),
+            ("TAX_AIDGROUPS_SAVE_THE_CHILDREN", "Save the Children"),
+            ("TAX_AIDGROUPS_DOCTORS_WITHOUT_BORDERS", "Doctors Without Borders"),
+            ("TAX_AIDGROUPS_UN_REFUGEE_AGENCY", "UN Refugee Agency"),
+            (
+                "TAX_AIDGROUPS_ASSOCIATION_OF_SOUTHEAST_ASIAN_NATIONS",
+                "Association of Southeast Asian Nations",
+            ),
+            # Names title case gets wrong.
+            ("TAX_POLITICAL_PARTY_LABOUR_MP", "Labour MP"),
+            ("TAX_AIDGROUPS_UNICEF", "UNICEF"),
+            ("TAX_TERROR_GROUP_ALQAEDA", "Al Qaeda"),
+            ("TAX_TERROR_GROUP_DAASH", "Daesh"),
+            ("TAX_TERROR_GROUP_DAESH", "Daesh"),
+            # A family without a name says nothing (and "Terror group" may be wrong).
+            ("TAX_TERROR_GROUP", ""),
+            ("TAX_POLITICAL_PARTY", ""),
+            ("TAX_AIDGROUPS", ""),
+            # World Bank: the number goes, the topic stays.
+            ("WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE", "Fragility, conflict and violence"),
+            ("WB_2433_CONFLICT_AND_VIOLENCE", "Conflict and violence"),
+            ("WB_696_PUBLIC_SECTOR_MANAGEMENT", "Public sector management"),
+            # The rest: underscores to spaces, in sentence case.
+            ("MEDICAL", "Medical"),
+            ("CYBER_ATTACK", "Cyber attack"),
+            ("LEGISLATION", "Legislation"),
+            ("SECURITY_SERVICES", "Security services"),
             ("UNGP_FORESTS_RIVERS_OCEANS", "Forests rivers oceans"),
-            ("ARMEDCONFLICT", "Armedconflict"),
-            ("MANMADE_DISASTER_IMPLIED", "Manmade disaster implied"),
+            # Generic or administrative: dropped.
+            ("TAX_FNCACT_OFFICIALS", ""),
+            ("TAX_FNCACT_PRESIDENT", ""),
+            ("TAX_WORLDLANGUAGES_ALABAMA", ""),
+            ("TAX_ETHNICITY_AMERICAN", ""),
+            ("TAX_WORLDMAMMALS_LION", ""),
+            ("TAX_WORLDBIRDS_EAGLE", ""),
+            ("TAX_RELIGION_CATHOLIC", ""),
+            ("TAX_MILITARY_TITLE_SOLDIER", ""),
+            ("USPEC_UNCERTAINTY1", ""),
+            ("USPEC_POLITICS_GENERAL1", ""),
+            ("EPU_POLICY", ""),
+            ("EPU_POLICY_GOVERNMENT", ""),
+            ("CRISISLEX_C07_SAFETY", ""),
+            ("CRISISLEX_T03_DEAD", ""),
+            ("CRISISLEX_CRISISLEXREC", ""),
+            ("SOC_POINTSOFINTEREST_SCHOOL", ""),
+            ("GENERAL_GOVERNMENT", ""),
+            ("LEADER", ""),
+            ("MEDIA_MSM", ""),
+            # Not a theme code.
             ("WB_", ""),
             ("", ""),
+            ("ARMED CONFLICT", ""),
+            (None, ""),
         ],
     )
-    def test_prefixes_and_codes_are_stripped(self, theme, shown):
+    def test_readable_labels(self, theme, shown):
         assert links.display_theme(theme) == shown
 
-    def test_top_themes_are_distinct_once_shown_and_capped(self):
-        themes = [
-            "TAX_FNCACT_PRESIDENT",
-            "WB_",
-            "KILL",
-            "USPEC_POLITICS_GENERAL1",
-            "EPU_POLITICS_GENERAL",  # "Politics general" again
-            "ARMEDCONFLICT",
-            "SANCTIONS",
-            "MILITARY",
+    def test_any_case(self):
+        assert links.display_theme("econ_inflation") == "Economy: inflation"
+
+    def test_top_five_distinct_labels_by_stories(self):
+        rows = [  # as detail_themes_query returns them: in most stories first
+            {"theme": "TAX_FNCACT_PRESIDENT", "n": 9},
+            {"theme": "TERROR", "n": 8},
+            {"theme": "KILL", "n": 7},
+            {"theme": "WB_2467_TERRORISM", "n": 6},  # "Terrorism" again
+            {"theme": "NATURAL_DISASTER_FLOOD", "n": 5},
+            {"theme": "NATURAL_DISASTER_EARTHQUAKE", "n": 4},  # "Natural disaster" again
+            {"theme": "EPU_POLICY", "n": 4},
+            {"theme": "ARMEDCONFLICT", "n": 3},
+            {"theme": "SANCTIONS", "n": 2},
+            {"theme": "MILITARY", "n": 1},
         ]
-        assert links.top_themes([{"theme": t} for t in themes]) == [
-            "President",
-            "Kill",
-            "Politics general",
-            "Armedconflict",
+        assert links.top_themes(rows) == [
+            "Terrorism",
+            "Killings",
+            "Natural disaster",
+            "Armed conflict",
             "Sanctions",
         ]
+
+    def test_a_name_in_two_families_is_one_label(self):
+        """GDELT tags the BJP both a party and a terror group: one label, the name."""
+        rows = [
+            {"theme": "TAX_POLITICAL_PARTY_BHARATIYA_JANATA_PARTY", "n": 6},
+            {"theme": "TAX_TERROR_GROUP_BHARATIYA_JANATA_PARTY", "n": 6},
+            {"theme": "TAX_TERROR_GROUP_SINN_FEIN", "n": 2},
+            {"theme": "TAX_POLITICAL_PARTY_SINN_FEIN", "n": 2},
+            {"theme": "TAX_TERROR_GROUP_ALQAEDA", "n": 1},
+            {"theme": "TAX_TERROR_GROUP_AL_QAEDA", "n": 1},
+        ]
+        assert links.top_themes(rows) == ["Bharatiya Janata Party", "Sinn Féin", "Al Qaeda"]
 
 
 class TestCleanEntities:
@@ -258,35 +374,77 @@ class TestDetailQueries:
         assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
 
     def test_articles_have_an_explicit_column_list_without_the_embedding(self):
-        flat = _sql(links.detail_articles_query("IR", "US", START, END, None, 30)[0])
-        assert "SELECT id, title, summary, source_url, source_name" in flat
+        flat = _sql(links.detail_articles_query("IR", "US", START, END, None, 15)[0])
+        assert flat.startswith("SELECT id, title, summary, source_url, source_name")
         assert "embedding" not in flat and "*" not in flat
-        assert "ORDER BY published_at DESC, id LIMIT $5" in flat
+        assert flat.endswith("ORDER BY published_at DESC, id LIMIT $5")
+
+    def test_articles_are_each_storys_newest_copy(self):
+        """So a syndicated story takes one place in the list, not a dozen."""
+        flat = _sql(links.detail_articles_query("IR", "US", START, END, None, 15)[0])
+        assert f"SELECT {STORY}, id, title, summary" in flat
+        assert "FROM articles a WHERE" in flat
+        assert "SELECT DISTINCT ON (story) id, title, summary" in flat
+        assert "ORDER BY story, published_at DESC, id ) newest" in flat
 
     def test_shared_names_need_two_stories(self):
         sql, *args = links.detail_names_query("IR", "US", START, END, None, 16)
         flat = _sql(sql)
         assert "unnest(persons)" in flat and "unnest(orgs)" in flat
-        assert "HAVING count(DISTINCT id) >= 2" in flat
+        # Stories, not syndicated copies.
+        assert f"WITH linked AS ( SELECT {STORY}, persons, orgs FROM articles a WHERE" in flat
+        assert "count(DISTINCT story) AS n" in flat
+        assert "HAVING count(DISTINCT story) >= 2" in flat
         assert "ORDER BY n DESC, name LIMIT $5" in flat
         assert args[-1] == 16
 
     def test_themes_by_stories(self):
         flat = _sql(links.detail_themes_query("IR", "US", START, END, None, 25)[0])
         assert "unnest(themes) AS theme" in flat
-        assert "ORDER BY n DESC, theme LIMIT $5" in flat
+        assert f"FROM ( SELECT {STORY}, themes FROM articles a WHERE" in flat
+        assert "SELECT theme, count(DISTINCT story) AS n" in flat
+        assert "ORDER BY n DESC, theme LIMIT $7" in flat
 
-    def test_stats_count_the_pair_like_the_links_query(self):
+    @pytest.mark.parametrize("topic", [None, "conflict"])
+    def test_themes_shown_as_nothing_are_not_fetched(self, topic):
+        """So the themes fetched for the top five are ones that show; bound, not pasted in."""
+        sql, *args = links.detail_themes_query("IR", "US", START, END, topic, 25)
+        flat = _sql(sql)
+        first = 6 if topic else 5
+        assert (
+            f"WHERE NOT theme ^@ ANY (${first}::text[]) "
+            f"AND theme <> ALL (${first + 1}::text[]) GROUP BY theme"
+        ) in flat
+        assert args[first - 1 :] == [
+            list(links.DROPPED_THEME_PREFIXES),
+            sorted(links.DROPPED_THEMES),
+            25,
+        ]
+        assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
+        assert "TAX_FNCACT_" not in sql and "'{" not in sql
+
+    def test_stats_count_the_pairs_stories_like_the_links_query(self):
         sql, *args = links.detail_stats_query("IR", "US", START, END, None)
         flat = _sql(sql)
         assert args == [START, END, "IR", "US"]
         # The same linking stories as /api/links, so n and lift agree.
         assert "array_remove(mentioned_countries, country_code) AS others" in flat
         assert "WHERE cardinality(others) > 0" in flat
-        assert "count(*) FILTER (WHERE country_code = $3 OR $3 = ANY(others)) AS n_a" in flat
-        assert "count(*) FILTER (WHERE country_code = $4 OR $4 = ANY(others)) AS n_b" in flat
+        assert f"AS others, {STORY} FROM articles a" in flat
+        # One row per story, whatever its copies.
+        assert "FROM linking ) marked GROUP BY story" in flat
+        assert "bool_or(country_code = $3 OR $3 = ANY(others)) AS has_a" in flat
+        assert "bool_or(country_code = $4 OR $4 = ANY(others)) AS has_b" in flat
+        assert "count(*) AS total, count(*) FILTER (WHERE has_a) AS n_a" in flat
+        assert "count(*) FILTER (WHERE has_b) AS n_b, count(*) FILTER (WHERE linked) AS n" in flat
+        tone = "sum(sentiment_score) FILTER (WHERE linked) / count(sentiment_score) FILTER"
+        assert f"{tone} (WHERE linked) AS tone" in flat
+        assert "count(*) FILTER (WHERE linked) AS n, avg(tone) AS tone" in flat
+        # Each story's key once: no pairs to unnest, so no need to materialise.
+        assert flat.startswith("WITH linking AS ( SELECT")
         for tag in TOPIC_TAGS:
-            assert f"count(*) FILTER (WHERE linked AND topic_tags && '{{{tag}}}') AS {tag}" in flat
+            assert f"bool_or(linked AND topic_tags && '{{{tag}}}') AS {tag}" in flat
+            assert f"count(*) FILTER (WHERE {tag}) AS {tag}" in flat
 
 
 def _detail_pool(stats: dict, names: list, themes: list, articles: list) -> AsyncMock:
@@ -313,7 +471,7 @@ class TestGetLinkDetail:
         pool = _detail_pool(
             stats,
             names=[{"name": "Abbas Araghchi", "type": "person", "n": 3}],
-            themes=[{"theme": "TAX_FNCACT_PRESIDENT", "n": 4}],
+            themes=[{"theme": "TAX_FNCACT_PRESIDENT", "n": 5}, {"theme": "KILL", "n": 4}],
             articles=[{"id": "x"}],
         )
         with patch("app.services.links.get_pool", new_callable=AsyncMock, return_value=pool):
@@ -330,7 +488,7 @@ class TestGetLinkDetail:
             "health": 0,
         }
         assert detail["shared"] == [{"name": "Abbas Araghchi", "type": "person", "n": 3}]
-        assert detail["themes"] == ["President"]
+        assert detail["themes"] == ["Killings"]
         assert detail["articles"] == [{"id": "x"}]
 
     @pytest.mark.asyncio

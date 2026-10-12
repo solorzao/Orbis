@@ -5,6 +5,13 @@ placed on the globe) with each other country it mentions
 (``articles.mentioned_countries``). A pair's ``n`` is how many stories link
 it, whichever side they come from.
 
+A story is an article's ``story_key``, its title without the outlet's name
+(``titles.story_key``): a wire story syndicated ten times is ten articles
+but one story, and counts once in every number here. Its copies decide
+its topic (any copy's), tone (their mean) and origin (their commonest).
+Articles written before ingestion stored the key count by their exact
+title (``titles.story_key_sql``).
+
 Hubs (the US, Russia) are in most pairs, so links are ranked by lift by
 default: ``n_ab * N / (n_a * n_b)``, how many times more often the two are
 covered together than if each story's countries were independent. ``N`` is
@@ -25,7 +32,7 @@ from app.services.ai_summary import SummaryUnavailable, _call_claude, _window_ke
 from app.services.cache import get_cached, set_cached
 from app.services.country_centroids import centroid
 from app.services.database import get_pool
-from app.services.titles import dedup_key
+from app.services.titles import dedup_key, story_key_sql
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,9 @@ TOPIC_TAGS = ("politics", "conflict", "technology", "environment", "economy", "h
 
 # Lift is noisy on few stories: a pair needs this many to rank by it.
 MIN_LIFT_STORIES = 5
+
+# An article's story, in queries that alias articles as a.
+_STORY = story_key_sql("a")
 
 # So that the US does not take every slot.
 MAX_ARCS_PER_COUNTRY = 6
@@ -52,17 +62,18 @@ def _window(start: datetime, end: datetime, topic: str | None) -> tuple[list[str
 
 
 def _linking_cte(conditions: list[str]) -> str:
-    """The ``linking`` CTE: the window's stories that mention another country.
+    """The ``linking`` CTE: the window's articles that mention another country.
 
-    ``others`` is the countries a story mentions besides its own. Shared by
-    the links and the detail queries, so a pair's n and lift agree in both.
+    ``others`` is the countries an article mentions besides its own, and
+    ``story`` the story it is a copy of. Shared by the links and the detail
+    queries, so a pair's n and lift agree in both.
     """
     return f"""linking AS (
-            SELECT country_code, topic_tags, sentiment_score, others
+            SELECT country_code, topic_tags, sentiment_score, others, story
             FROM (
                 SELECT country_code, topic_tags, sentiment_score,
-                       array_remove(mentioned_countries, country_code) AS others
-                FROM articles
+                       array_remove(mentioned_countries, country_code) AS others, {_STORY} AS story
+                FROM articles a
                 WHERE {" AND ".join(conditions)}
                   AND country_code <> '' AND cardinality(mentioned_countries) > 0
             ) w
@@ -73,42 +84,59 @@ def _linking_cte(conditions: list[str]) -> str:
 def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any, ...]:
     """SQL and arguments for every country pair in the window, as ``pool.fetch`` takes them.
 
-    Each row is a pair (``a`` < ``b``) with its stories ``n``, mean ``tone``,
-    most common origin ``from_iso``, stories per topic tag, and what lift
-    needs: ``n_a``, ``n_b`` and the window's linking stories, ``total``.
+    Each row is a pair (``a`` < ``b``) with its stories ``n``, their mean
+    ``tone``, most common origin ``from_iso``, stories per topic tag, and
+    what lift needs: ``n_a``, ``n_b`` and the window's linking stories,
+    ``total``. Every count is of stories, not articles.
 
-    Every count is ``count(*)``, which is exact because each story's
-    ``mentioned_countries`` holds distinct codes (ingestion and the backfill
-    see to it): a story gives a pair at most one row. ``count(DISTINCT id)``
-    and ``mode()`` would sort every pair row instead of hashing: 0.40 s rather
-    than 0.15 s at 7 days on 150K synthetic stories with 89K mentions (same
-    rows). A pair's origin is always one of its two ends, so the most common
-    one is a count against half.
+    Articles first collapse to one row per pair and story (``stories``),
+    which is then grouped by pair and, for ``n_a`` and ``n_b``, by country
+    and story (``touched``: the countries a story touches are the ends of
+    the pairs it links). That is two grouping passes over the window's pair
+    rows, each grouped once (no ``count(DISTINCT ...)`` or ``mode()``, which
+    would sort each pair's rows again); the planner picks how. At 7 days on
+    the production server ``stories`` runs as a sort (spilled to disk, about
+    10 MB) feeding a GroupAggregate, and ``touched``'s HashAggregate spills,
+    at the default 4 MB work_mem. A story's tone is ``sum / count``, whose
+    state is a number, where ``avg``'s is an array. A pair's origin is
+    always one of its two ends, so the most common one is a count against
+    half, for a story's copies and then for the pair's stories.
     """
     conditions, args = _window(start, end, topic)
-    topic_counts = ",\n".join(
-        f"count(*) FILTER (WHERE l.topic_tags && '{{{tag}}}') AS {tag}" for tag in TOPIC_TAGS
+    story_topics = ",\n".join(
+        f"bool_or(l.topic_tags && '{{{tag}}}') AS {tag}" for tag in TOPIC_TAGS
     )
+    topic_counts = ",\n".join(f"count(*) FILTER (WHERE {tag}) AS {tag}" for tag in TOPIC_TAGS)
     query = f"""
         WITH {_linking_cte(conditions)},
+        stories AS (
+            SELECT LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b, l.story,
+                   sum(l.sentiment_score) / count(l.sentiment_score) AS tone,
+                   2 * count(*) FILTER (WHERE l.country_code < m) >= count(*) AS from_a,
+                   {story_topics}
+            FROM linking l, unnest(l.others) AS m
+            GROUP BY 1, 2, 3
+        ),
         touched AS (
             SELECT c, count(*) AS n
-            FROM linking l, unnest(l.others || l.country_code) AS c
+            FROM (
+                SELECT c, s.story FROM stories s, unnest(ARRAY[s.a, s.b]) AS c
+                GROUP BY 1, 2
+            ) t
             GROUP BY c
         ),
         grouped AS (
-            SELECT LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b,
-                   count(*) AS n, avg(l.sentiment_score) AS tone,
-                   count(*) FILTER (WHERE l.country_code < m) AS from_a,
+            SELECT a, b, count(*) AS n, avg(tone) AS tone,
+                   count(*) FILTER (WHERE from_a) AS from_a,
                    {topic_counts}
-            FROM linking l, unnest(l.others) AS m
-            GROUP BY 1, 2
+            FROM stories
+            GROUP BY a, b
         )
         SELECT g.a, g.b, g.n, g.tone,
                CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso,
                {", ".join(f"g.{tag}" for tag in TOPIC_TAGS)},
                ta.n AS n_a, tb.n AS n_b,
-               (SELECT count(*) FROM linking) AS total
+               (SELECT count(*) FROM (SELECT story FROM stories GROUP BY story) s) AS total
         FROM grouped g
         JOIN touched ta ON ta.c = g.a
         JOIN touched tb ON tb.c = g.b
@@ -189,18 +217,107 @@ MAX_SHARED = 8
 MAX_THEMES = 5
 _MAX_NAME_CHARS = 80
 
-# Fetched before cleaning drops some: names, themes, and stories (syndicated
-# copies are dropped down to the 10 shown).
+# Fetched before cleaning drops some: names, themes, and stories. Stories
+# come one per story_key; a few more than the 10 shown, for rows written
+# before ingestion stored the key, whose copies only the router's title
+# dedup merges.
 _NAME_FETCH_LIMIT = 16
 _THEME_FETCH_LIMIT = 25
-ARTICLE_FETCH_LIMIT = 30
+ARTICLE_FETCH_LIMIT = 15
 
-# GDELT theme families, longest first; the rest of the code is the theme.
-_THEME_PREFIXES = ("TAX_FNCACT_", "CRISISLEX_", "USPEC_", "UNGP_", "TAX_", "EPU_", "SOC_", "WB_")
-# What some families put before the theme: World Bank numbers (WB_2432_),
-# CrisisLex codes (CRISISLEX_T03_).
-_THEME_CODE = re.compile(r"^[A-Z]?\d+_")
+# GDELT themes that say nothing about a link, so are not shown: who and what
+# a story names in passing (functional actors such as officials, languages,
+# ethnicities, religions, military ranks, animals, places); economic-policy-
+# uncertainty and US-specific indicators; CrisisLex's crisis-message classes,
+# which repeat the core themes (KILL, WOUND) in worse words; and the most
+# generic core themes.
+DROPPED_THEME_PREFIXES = (
+    "TAX_FNCACT_",
+    "TAX_WORLDLANGUAGES_",
+    "TAX_ETHNICITY_",
+    "TAX_RELIGION_",
+    "TAX_MILITARY_TITLE_",
+    "TAX_WORLDMAMMALS_",
+    "TAX_WORLDBIRDS_",
+    "TAX_WORLDFISH_",
+    "TAX_WORLDREPTILES_",
+    "TAX_WORLDARACHNIDS_",
+    "TAX_WORLDINSECTS_",
+    "SOC_POINTSOFINTEREST_",
+    "USPEC_",
+    "EPU_",
+    "CRISISLEX_",
+)
+DROPPED_THEMES = frozenset({"GENERAL_GOVERNMENT", "LEADER", "MEDIA_MSM"})
+
+# Families whose prefix goes: World Bank, UN Guiding Principles, social, taxonomy.
+_THEME_PREFIXES = ("WB_", "UNGP_", "SOC_", "TAX_")
+# The number World Bank themes put before the theme (WB_2432_).
+_THEME_CODE = re.compile(r"^\d+_")
 _THEME_CHARS = re.compile(r"[A-Za-z0-9_]+")
+
+# The commonest themes, by code without the family prefix, as words.
+_THEME_LABELS = {
+    "ARMEDCONFLICT": "Armed conflict",
+    "ARREST": "Arrests",
+    "ELECTION": "Elections",
+    "FRAGILITY_CONFLICT_AND_VIOLENCE": "Fragility, conflict and violence",
+    "GENERALCRIME": "Crime",
+    "GENERAL_HEALTH": "Health",
+    "KILL": "Killings",
+    "PROTEST": "Protests",
+    "TERROR": "Terrorism",
+    "WOUND": "Injuries",
+}
+# Themes shown as one label whatever follows the code's start.
+_THEME_GROUPS = (
+    ("MANMADE_DISASTER", "Man-made disaster"),
+    ("NATURAL_DISASTER", "Natural disaster"),
+)
+# Families of names (taxonomy themes without the TAX_), shown as the bare
+# name: "TERROR_GROUP_HAMAS" -> "Hamas". Never the family, which GDELT
+# gives by keyword: the BJP, Sinn Féin and the Peshmerga are tagged terror
+# groups about as often as parties, and ASEAN and FEMA aid groups. A name
+# in two families is then one label.
+_NAMED_FAMILIES = ("TERROR_GROUP", "POLITICAL_PARTY", "AIDGROUPS")
+# Names that title case gets wrong.
+_NAME_OVERRIDES = {
+    "ALQAEDA": "Al Qaeda",
+    "DAASH": "Daesh",
+    "DAESH": "Daesh",
+    "SINN_FEIN": "Sinn Féin",
+    "UNICEF": "UNICEF",
+}
+# Lower case inside a name ("Save the Children"); acronyms kept in one.
+_NAME_SMALL_WORDS = frozenset(
+    {"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to"}
+)
+_NAME_ACRONYMS = frozenset({"EU", "MP", "UK", "UN", "US"})
+# A one-word name this short is an acronym: ISIS, BJP, ANC, PKK.
+_MAX_ACRONYM_CHARS = 4
+# Families shown as "Family: theme".
+_THEME_FAMILIES = (
+    ("ECON_", "Economy"),
+    ("ENV_", "Environment"),
+    ("HEALTH_", "Health"),
+    ("WEAPONS_", "Weapons"),
+    ("DISEASE_", "Disease"),
+)
+# Words GDELT runs together.
+_THEME_WORDS = {
+    "ARMEDCONFLICT": "armed conflict",
+    "CLIMATECHANGE": "climate change",
+    "EARNINGSREPORT": "earnings report",
+    "FOREIGNINVEST": "foreign investment",
+    "FREESPEECH": "free speech",
+    "FREETRADE": "free trade",
+    "FUELPRICES": "fuel prices",
+    "MASSMIGRATION": "mass migration",
+    "NUCLEARPOWER": "nuclear power",
+    "OILPRICE": "oil prices",
+    "PRICECONTROL": "price controls",
+    "STOCKMARKET": "stock market",
+}
 
 
 def _pair_conditions(
@@ -220,31 +337,75 @@ def _pair_conditions(
 def detail_stats_query(
     a: str, b: str, start: datetime, end: datetime, topic: str | None
 ) -> tuple[Any, ...]:
-    """SQL and arguments for the pair's n, tone, topic counts and what lift needs."""
+    """SQL and arguments for the pair's n, tone, topic counts and what lift needs.
+
+    Stories, as the links query counts them: each story is one row, which
+    links the pair, or touches a country, if any of its copies does. Its
+    tone and topics are those of the copies that link the pair.
+    """
     conditions, args = _window(start, end, topic)
     args += [a, b]
     pa, pb = f"${len(args) - 1}", f"${len(args)}"
-    topic_counts = ",\n".join(
-        f"count(*) FILTER (WHERE linked AND topic_tags && '{{{tag}}}') AS {tag}"
-        for tag in TOPIC_TAGS
+    story_topics = ",\n".join(
+        f"bool_or(linked AND topic_tags && '{{{tag}}}') AS {tag}" for tag in TOPIC_TAGS
     )
+    topic_counts = ",\n".join(f"count(*) FILTER (WHERE {tag}) AS {tag}" for tag in TOPIC_TAGS)
     query = f"""
         WITH {_linking_cte(conditions)},
-        marked AS (
-            SELECT country_code, others, topic_tags, sentiment_score,
-                   (country_code = {pa} AND {pb} = ANY(others))
-                   OR (country_code = {pb} AND {pa} = ANY(others)) AS linked
-            FROM linking
+        stories AS (
+            SELECT story,
+                   bool_or(country_code = {pa} OR {pa} = ANY(others)) AS has_a,
+                   bool_or(country_code = {pb} OR {pb} = ANY(others)) AS has_b,
+                   bool_or(linked) AS linked,
+                   sum(sentiment_score) FILTER (WHERE linked)
+                   / count(sentiment_score) FILTER (WHERE linked) AS tone,
+                   {story_topics}
+            FROM (
+                SELECT story, country_code, others, topic_tags, sentiment_score,
+                       (country_code = {pa} AND {pb} = ANY(others))
+                       OR (country_code = {pb} AND {pa} = ANY(others)) AS linked
+                FROM linking
+            ) marked
+            GROUP BY story
         )
         SELECT count(*) AS total,
-               count(*) FILTER (WHERE country_code = {pa} OR {pa} = ANY(others)) AS n_a,
-               count(*) FILTER (WHERE country_code = {pb} OR {pb} = ANY(others)) AS n_b,
+               count(*) FILTER (WHERE has_a) AS n_a,
+               count(*) FILTER (WHERE has_b) AS n_b,
                count(*) FILTER (WHERE linked) AS n,
-               avg(sentiment_score) FILTER (WHERE linked) AS tone,
+               avg(tone) AS tone,
                {topic_counts}
-        FROM marked
+        FROM stories
     """
     return query, *args
+
+
+# The columns a NewsArticle reads: never the embedding.
+_ARTICLE_COLUMNS = (
+    "id, title, summary, source_url, source_name, source_language, "
+    "published_at, ingested_at, latitude, longitude, country_code, "
+    "region, topic_tags, sentiment_score, entities, image_url"
+)
+
+
+def _newest_copy_per_story(columns: str, conditions: list[str], limit: str) -> str:
+    """SQL for *columns* of each story's newest copy, newest first, at most *limit*.
+
+    A story syndicated a dozen times takes one place, not twelve. *columns*
+    must include published_at and id, which order the copies and stories.
+    """
+    return f"""
+        SELECT {columns}
+        FROM (
+            SELECT DISTINCT ON (story) {columns}
+            FROM (
+                SELECT {_STORY} AS story, {columns} FROM articles a
+                WHERE {" AND ".join(conditions)}
+            ) copies
+            ORDER BY story, published_at DESC, id
+        ) newest
+        ORDER BY published_at DESC, id
+        LIMIT {limit}
+    """
 
 
 def detail_articles_query(
@@ -253,16 +414,7 @@ def detail_articles_query(
     """SQL and arguments for the pair's newest stories: the columns a NewsArticle reads."""
     conditions, args = _pair_conditions(a, b, start, end, topic)
     args.append(limit)
-    query = f"""
-        SELECT id, title, summary, source_url, source_name, source_language,
-               published_at, ingested_at, latitude, longitude, country_code,
-               region, topic_tags, sentiment_score, entities, image_url
-        FROM articles
-        WHERE {" AND ".join(conditions)}
-        ORDER BY published_at DESC, id
-        LIMIT ${len(args)}
-    """
-    return query, *args
+    return _newest_copy_per_story(_ARTICLE_COLUMNS, conditions, f"${len(args)}"), *args
 
 
 def detail_headlines_query(
@@ -271,13 +423,7 @@ def detail_headlines_query(
     """SQL and arguments for the titles of the pair's newest stories."""
     conditions, args = _pair_conditions(a, b, start, end, topic)
     args.append(limit)
-    query = f"""
-        SELECT title FROM articles
-        WHERE {" AND ".join(conditions)}
-        ORDER BY published_at DESC, id
-        LIMIT ${len(args)}
-    """
-    return query, *args
+    return _newest_copy_per_story("title, published_at, id", conditions, f"${len(args)}"), *args
 
 
 def detail_names_query(
@@ -288,17 +434,17 @@ def detail_names_query(
     args.append(limit)
     query = f"""
         WITH linked AS (
-            SELECT id, persons, orgs FROM articles
+            SELECT {_STORY} AS story, persons, orgs FROM articles a
             WHERE {" AND ".join(conditions)}
         )
-        SELECT name, type, count(DISTINCT id) AS n
+        SELECT name, type, count(DISTINCT story) AS n
         FROM (
-            SELECT id, unnest(persons) AS name, 'person' AS type FROM linked
+            SELECT story, unnest(persons) AS name, 'person' AS type FROM linked
             UNION ALL
-            SELECT id, unnest(orgs) AS name, 'org' AS type FROM linked
+            SELECT story, unnest(orgs) AS name, 'org' AS type FROM linked
         ) mentions
         GROUP BY name, type
-        HAVING count(DISTINCT id) >= {MIN_SHARED_STORIES}
+        HAVING count(DISTINCT story) >= {MIN_SHARED_STORIES}
         ORDER BY n DESC, name
         LIMIT ${len(args)}
     """
@@ -308,13 +454,23 @@ def detail_names_query(
 def detail_themes_query(
     a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
 ) -> tuple[Any, ...]:
-    """SQL and arguments for the GDELT themes of the pair's stories, commonest first."""
+    """SQL and arguments for the GDELT themes of the pair's stories, in most stories first.
+
+    Themes display_theme drops are not fetched, so the *limit* goes to ones
+    that show.
+    """
     conditions, args = _pair_conditions(a, b, start, end, topic)
+    args += [list(DROPPED_THEME_PREFIXES), sorted(DROPPED_THEMES)]
+    prefixes, dropped = f"${len(args) - 1}", f"${len(args)}"
     args.append(limit)
     query = f"""
-        SELECT theme, count(*) AS n
-        FROM articles, unnest(themes) AS theme
-        WHERE {" AND ".join(conditions)}
+        SELECT theme, count(DISTINCT story) AS n
+        FROM (
+            SELECT {_STORY} AS story, themes FROM articles a
+            WHERE {" AND ".join(conditions)}
+        ) linked, unnest(themes) AS theme
+        WHERE NOT theme ^@ ANY ({prefixes}::text[])
+          AND theme <> ALL ({dropped}::text[])
         GROUP BY theme
         ORDER BY n DESC, theme
         LIMIT ${len(args)}
@@ -322,21 +478,68 @@ def detail_themes_query(
     return query, *args
 
 
-def display_theme(theme: str) -> str:
-    """A GDELT theme as words: "WB_2432_FRAGILITY_CONFLICT" -> "Fragility conflict".
+def _theme_words(code: str) -> str:
+    """A theme code's words, lower case: "STOCKMARKET_CRASH" -> "stock market crash"."""
+    return " ".join(_THEME_WORDS.get(word, word.lower()) for word in code.split("_") if word)
 
-    The family prefix, any number code after it and trailing digits go.
-    Anything but a plain theme code shows as nothing.
+
+def _name_words(code: str) -> str:
+    """A name's code in title case: "SAVE_THE_CHILDREN" -> "Save the Children".
+
+    A one-word name of up to four letters is an acronym (ISIS, BJP), as are
+    EU, MP, UK, UN and US anywhere; small words after the first are lower
+    case. _NAME_OVERRIDES spells the names this gets wrong.
+    """
+    if code in _NAME_OVERRIDES:
+        return _NAME_OVERRIDES[code]
+    words = [word for word in code.split("_") if word]
+    if len(words) == 1 and len(words[0]) <= _MAX_ACRONYM_CHARS:
+        return words[0]
+    shown = []
+    for i, word in enumerate(words):
+        if word in _NAME_ACRONYMS:
+            shown.append(word)
+        elif i and word.lower() in _NAME_SMALL_WORDS:
+            shown.append(word.lower())
+        else:
+            shown.append(word.capitalize())
+    return " ".join(shown)
+
+
+def display_theme(theme: str) -> str:
+    """A GDELT theme as a label: "ECON_STOCKMARKET" -> "Economy: stock market".
+
+    Themes that say nothing about a link (DROPPED_THEME_PREFIXES,
+    DROPPED_THEMES) show as nothing, as does anything but a plain theme
+    code. Otherwise the family prefix, a World Bank number and trailing
+    digits go; then the theme reads as a known label, a group's, a bare
+    name (a party, armed group or aid group: "Hamas"), a family's, or its
+    own words in sentence case.
     """
     if not isinstance(theme, str) or not _THEME_CHARS.fullmatch(theme):
         return ""
-    text = theme.upper()
+    code = theme.upper()
+    if code in DROPPED_THEMES or code.startswith(DROPPED_THEME_PREFIXES):
+        return ""
     for prefix in _THEME_PREFIXES:
-        if text.startswith(prefix):
-            text = text[len(prefix) :]
+        if code.startswith(prefix):
+            code = code[len(prefix) :]
             break
-    text = _THEME_CODE.sub("", text).rstrip("0123456789")
-    return " ".join(text.replace("_", " ").split()).capitalize()
+    code = _THEME_CODE.sub("", code).rstrip("0123456789_")
+    if code in _THEME_LABELS:
+        return _THEME_LABELS[code]
+    for start, label in _THEME_GROUPS:
+        if code.startswith(start):
+            return label
+    for family in _NAMED_FAMILIES:
+        if code == family or code.startswith(f"{family}_"):
+            return _name_words(code[len(family) + 1 :])
+    for prefix, family in _THEME_FAMILIES:
+        if code.startswith(prefix):
+            words = _theme_words(code[len(prefix) :])
+            return f"{family}: {words}" if words else family
+    words = _theme_words(code)
+    return words[:1].upper() + words[1:]
 
 
 def top_themes(rows: list[dict]) -> list[str]:
@@ -381,8 +584,8 @@ async def get_link_detail(
 ) -> dict:
     """Everything the link inspector shows for the pair a, b in the window.
 
-    ``articles`` are raw rows, newest first (up to ARTICLE_FETCH_LIMIT, with
-    syndicated copies still in); the rest is ready to show.
+    ``articles`` are raw rows, each story's newest copy, newest first (up to
+    ARTICLE_FETCH_LIMIT); the rest is ready to show.
     """
     pool = await get_pool()
     stats, names, themes, articles = await asyncio.gather(
@@ -411,8 +614,9 @@ async def get_link_detail(
 # Shared by everyone who opens the pair, so cached like cluster summaries.
 EXPLAIN_TTL = 3 * 3600
 _EXPLAIN_HEADLINES = 15
-# Fetched before syndicated copies and injection attempts are dropped.
-_HEADLINE_FETCH_LIMIT = 45
+# One per story, fetched before injection attempts (and copies of a story
+# written before ingestion stored its key) are dropped.
+_HEADLINE_FETCH_LIMIT = 25
 # Shown, not cached, when no headline is left to explain the link with.
 NOT_ENOUGH_COVERAGE = "Not enough coverage in this window to explain the link."
 
@@ -471,7 +675,7 @@ async def explain_link(a: str, b: str, start: datetime, end: datetime, topic: st
     """
     a, b = sorted((a, b))
     topic_suffix = f":{topic}" if topic else ""
-    cache_key = f"links:explain:v1:{a}:{b}:{_window_key(start, end)}{topic_suffix}"
+    cache_key = f"links:explain:v2:{a}:{b}:{_window_key(start, end)}{topic_suffix}"
     cached = await get_cached(cache_key)
     if cached is not None:
         return str(cached)

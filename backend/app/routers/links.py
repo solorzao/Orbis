@@ -116,7 +116,7 @@ async def get_links(
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
 
-    cache_k = f"db:links:v1:{window.key}:{tag or ''}:{rank}:{limit}"
+    cache_k = f"db:links:v2:{window.key}:{tag or ''}:{rank}:{limit}"
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
         return [Link.model_validate(link) for link in cached]
@@ -151,12 +151,14 @@ async def get_link(
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
 
-    cache_k = f"db:links:detail:v1:{a}:{b}:{window.key}:{tag or ''}"
+    cache_k = f"db:links:detail:v5:{a}:{b}:{window.key}:{tag or ''}"
     cached = await get_cached(cache_k)
     if cached is not None:
         return LinkDetail.model_validate(cached)
 
     detail = await get_link_detail(a, b, window.start, window.end, tag)
+    # One row per story already; this merges what story_key cannot: copies
+    # written before ingestion stored it, whose outlet suffixes differ.
     stories = _deduplicate_articles([_row_to_article(r) for r in detail["articles"]])
     result = LinkDetail(**{**detail, "articles": stories[:_DETAIL_ARTICLES]})
     await set_cached(cache_k, result.model_dump(mode="json"), _LINKS_TTL)
