@@ -391,13 +391,11 @@ _PUBTIME_MAX_CHARS = 32
 # Earlier page dates are malformed: news sites barely existed.
 _MIN_PAGE_YEAR = 1995
 
-# A date in a URL path: /2005/07/11/, /2020-08-04-slug, story_2020_08_04, /20200804/.
-# One delimiter throughout (none: 8 digits). The date starts a segment or follows
-# "-" or "_", and ends a segment, or is followed by ".", "-" or "_", so digits
-# inside a longer number or word (IDs) never match. No nested repetition: linear.
-_URL_DATE_RE = re.compile(
-    r"(?<=[/_-])((?:19|20)[0-9]{2})([/_-]?)([0-9]{2})\2([0-9]{2})(?=[/._-]|$)"
-)
+# A date starting a URL path segment: /2005/07/11/, /2020-08-04-slug, /20200804/.
+# One delimiter throughout (none: 8 digits), ending a segment or followed by ".",
+# "-" or "_". A date inside a slug ("what-happened-on-2001-09-11") or inside a
+# longer number or word (IDs) never matches. No nested repetition: linear.
+_URL_DATE_RE = re.compile(r"(?<=/)((?:19|20)[0-9]{2})([/_-]?)([0-9]{2})\2([0-9]{2})(?=[/._-]|$)")
 
 
 def _page_published_at(extras_xml: str) -> datetime | None:
@@ -428,10 +426,10 @@ def _page_published_at(extras_xml: str) -> datetime | None:
 def _url_date(url: str) -> date | None:
     """The publication date in a web URL's path, or None if it has no clear one.
 
-    Only the path is read (not the host, query string or fragment), and only
-    valid calendar dates from 1995 to this year count. When the path holds
-    several, the latest wins: a slug about a past event must not make a new
-    page look old.
+    Only the path is read (not the host, query string or fragment), only a
+    date starting a segment counts (a slug about a past event must not make a
+    new page look old), and only valid calendar dates from 1995 to this year.
+    When the path holds several, the latest wins.
     """
     try:
         parts = urlsplit(url)

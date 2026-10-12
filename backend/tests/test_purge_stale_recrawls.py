@@ -54,7 +54,29 @@ async def test_without_yes_it_only_counts(capsys):
     conn.execute.assert_not_awaited()
     out = capsys.readouterr().out
     assert "3 stale re-crawls" in out
-    assert "--yes" in out
+    assert "URL dates only" in out  # the precise timestamp is not stored
+    assert "Read the list" in out and "--yes" in out
+    for url in _STALE_URLS:
+        assert url in out
+
+
+@pytest.mark.asyncio
+async def test_the_dry_run_lists_every_one(capsys):
+    urls = [f"https://example.com/2005/07/{day:02d}/story" for day in range(1, 31)]
+
+    assert await purge(_conn(urls), delete=False) == 30
+
+    out = capsys.readouterr().out
+    assert all(url in out for url in urls)
+
+
+def test_the_docstring_says_it_judges_by_url_dates_only():
+    from scripts import purge_stale_recrawls
+
+    doc = purge_stale_recrawls.__doc__
+    assert "URL dates only" in doc
+    assert "PAGE_PRECISEPUBTIMESTAMP" in doc and "not stored" in doc
+    assert "before --yes" in doc
 
 
 @pytest.mark.asyncio

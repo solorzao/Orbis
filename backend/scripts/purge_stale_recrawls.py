@@ -4,6 +4,10 @@ Ingestion skips these now (app.services.gdelt._is_stale_recrawl); this one-off
 removes the ones stored before it did: articles whose URL date is more than
 RETENTION_DAYS (7) days before their published_at, the date GDELT listed them.
 
+It judges by URL dates only. Ingestion prefers GDELT's PAGE_PRECISEPUBTIMESTAMP,
+which is not stored, so this cannot see a page whose timestamp shows it was
+updated after the date in its URL. Read the dry-run list before --yes.
+
 Run from backend/ with DATABASE_URL set (it also reads backend/.env):
 
     python -m scripts.purge_stale_recrawls          # count and list them
@@ -29,7 +33,6 @@ from app.services.gdelt import _is_stale_recrawl, _url_date
 
 _SELECT = "SELECT id, source_url, published_at FROM articles"
 _DELETE = "DELETE FROM articles WHERE id = ANY($1::uuid[])"
-_LISTED = 20
 
 
 def select_stale(rows: Iterable[Mapping]) -> list[Mapping]:
@@ -38,20 +41,22 @@ def select_stale(rows: Iterable[Mapping]) -> list[Mapping]:
 
 
 async def purge(conn, *, delete: bool) -> int:
-    """Count (and list a few of) the stale re-crawls; delete them if *delete*.
+    """Count and list the stale re-crawls; delete them if *delete*.
 
     Returns how many were found, or deleted.
     """
     stale = select_stale(await conn.fetch(_SELECT))
     print(f"{len(stale)} stale re-crawls (URL date over {settings.retention_days} days old).")
-    for row in stale[:_LISTED]:
-        print(f"  {row['published_at']:%Y-%m-%d}  {row['source_url']}")
-    if len(stale) > _LISTED:
-        print(f"  ... and {len(stale) - _LISTED} more")
+    for row in stale:
+        url = row["source_url"]
+        print(f"  published {row['published_at']:%Y-%m-%d}  URL date {_url_date(url)}  {url}")
     if not stale:
         return 0
     if not delete:
-        print("Nothing deleted. Run again with --yes to delete them.")
+        print(
+            "Nothing deleted. Judged by URL dates only (the precise publication "
+            "timestamp is not stored). Read the list, then run again with --yes."
+        )
         return len(stale)
     status = await conn.execute(_DELETE, [r["id"] for r in stale])
     deleted = int(status.split()[-1])  # "DELETE 64"

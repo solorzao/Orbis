@@ -490,23 +490,22 @@ class TestUrlDate:
             ("https://example.com/news/2020/08/04", date(2020, 8, 4)),
             ("https://example.com/news/2020/08/04/", date(2020, 8, 4)),
             ("https://example.com/archive/2019/12/31.html", date(2019, 12, 31)),
-            # YYYY-MM-DD: a whole segment, or delimited by - or _
+            # YYYY-MM-DD or YYYY_MM_DD starting a segment, alone or before a slug
             ("https://example.com/2020-08-04/storm", date(2020, 8, 4)),
             ("https://example.com/news/2020-08-04-storm-isaias", date(2020, 8, 4)),
-            ("https://example.com/news/storm-isaias-2020-08-04.html", date(2020, 8, 4)),
             ("https://news.sina.com.cn/c/2020-10-12/doc-iiznctkc5363431.shtml", date(2020, 10, 12)),
-            ("https://example.com/news/story_2020_08_04_storm.html", date(2020, 8, 4)),
-            # YYYYMMDD: a whole segment, or delimited
+            ("https://example.com/news/2020_08_04_storm.html", date(2020, 8, 4)),
+            # YYYYMMDD starting a segment
             ("https://www3.nhk.or.jp/news/html/20201012/k10012658331000.html", date(2020, 10, 12)),
             ("https://example.com/archive/20200804.html", date(2020, 8, 4)),
-            ("https://example.com/news/article-20200804-storm", date(2020, 8, 4)),
-            ("https://example.com/news/story_20200804", date(2020, 8, 4)),
+            ("https://example.com/news/20200804-storm", date(2020, 8, 4)),
             # Bounds: 1995 to this year
             ("https://example.com/1995/01/01/oldest", date(1995, 1, 1)),
             ("HTTP://EXAMPLE.COM/2005/07/11/upper-case-scheme", date(2005, 7, 11)),
-            # Two dates: the later one, so a slug about a past event is not stale
+            # A date inside a slug does not count; of two segment dates, the later wins
             ("https://example.com/2020/08/04/looking-back-at-2005-07-07", date(2020, 8, 4)),
             ("https://example.com/remembering-2005-07-07/2020/08/04/", date(2020, 8, 4)),
+            ("https://example.com/2005-07-07/updated/2020/08/04/", date(2020, 8, 4)),
             # The query string and fragment are ignored, not the path
             ("https://example.com/2005/07/11/x?date=2020-08-04#2021-01-01", date(2005, 7, 11)),
         ],
@@ -520,6 +519,13 @@ class TestUrlDate:
             "",
             "https://example.com/",
             "https://example.com/news/article-1",
+            # A date inside a slug, not starting a segment
+            "https://example.com/news/storm-isaias-2020-08-04.html",
+            "https://example.com/news/story_2020_08_04_storm.html",
+            "https://example.com/news/article-20200804-storm",
+            "https://example.com/news/story_20200804",
+            "https://example.com/what-happened-on-2001-09-11",
+            "https://example.com/news/article-19950612",
             # Numeric IDs
             "https://example.com/news/123456789012",
             "https://example.com/story/202008041234",  # 12 digits
