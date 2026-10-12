@@ -801,6 +801,30 @@ class TestKeywordSearch:
         assert "country_code = $1" in query
         assert country == "ES"
 
+    @pytest.mark.asyncio
+    async def test_keyword_search_filters_to_a_window(self):
+        """The co-pilot's screen window: half-open, like the globe's cells."""
+        from datetime import datetime, timezone
+
+        from app.services.retrieval import keyword_search
+
+        start = datetime(2026, 10, 11, 2, tzinfo=timezone.utc)
+        end = datetime(2026, 10, 11, 14, tzinfo=timezone.utc)
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+
+        with patch(
+            "app.services.retrieval.get_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
+            await keyword_search(topic="politics", start_time=start, end_time=end)
+
+        query, *params = mock_pool.fetch.call_args[0]
+        assert "published_at >= $2" in query
+        assert "published_at < $3" in query
+        assert params == ["politics", start, end, 10]
+
 
 class TestTrendingTopics:
     @pytest.mark.asyncio

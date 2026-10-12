@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -347,8 +347,14 @@ async def keyword_search(
     country: str | None = None,
     time_range: str | None = None,
     limit: int = 10,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
 ) -> list[dict]:
-    """Search articles using keyword / metadata filters."""
+    """Search articles using keyword / metadata filters.
+
+    *start_time* and *end_time* bound ``published_at`` half-open, like the
+    globe's windows; the co-pilot sets them from the visitor's screen.
+    """
     try:
         pool = await get_pool()
 
@@ -385,6 +391,16 @@ async def keyword_search(
             td = _INTERVAL_MAP.get(time_range, timedelta(hours=24))
             conditions.append(f"published_at > NOW() - ${idx}::interval")
             params.append(td)
+            idx += 1
+
+        if start_time is not None:
+            conditions.append(f"published_at >= ${idx}")
+            params.append(start_time)
+            idx += 1
+
+        if end_time is not None:
+            conditions.append(f"published_at < ${idx}")
+            params.append(end_time)
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
