@@ -65,10 +65,7 @@ export default function Home() {
   }, []);
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
-    if (action.type === "flyTo" && globeControlsRef.current) {
-      const altitude = action.zoom ? 300 / action.zoom : 2.0;
-      globeControlsRef.current.flyTo(action.lat, action.lng, altitude);
-    }
+    globeControlsRef.current?.flyTo(action.lat, action.lng, 2.0);
   }, []);
 
   const {
