@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.config import settings
 from app.services import surges
 from app.services.titles import dedup_title_sql
 
@@ -94,14 +95,38 @@ class TestSurgesQuery:
         assert "ON FLOOR(a.latitude) = c.lat_cell AND FLOOR(a.longitude) = c.lng_cell" in before
 
     @pytest.mark.asyncio
-    async def test_ratio_against_83_blocks_floored_at_half_a_story(self, pool):
+    async def test_ratio_against_the_blocks_held_floored_at_half_a_story(self, pool):
         await surges.get_surges(NOW)
 
         query, _ = _fetched(pool)
-        assert "COALESCE(b.stories, 0)::float8 / 83 AS baseline" in query
-        assert "c.recent / GREATEST(COALESCE(b.stories, 0)::float8 / 83, 0.5) AS ratio" in query
+        assert "COALESCE(b.stories, 0)::float8 / span.blocks AS baseline" in query
+        assert (
+            "c.recent / GREATEST(COALESCE(b.stories, 0)::float8 / span.blocks, 0.5) AS ratio"
+            in query
+        )
         assert "WHERE ratio >= 3" in query
         assert "ORDER BY ratio DESC, recent DESC, lat_cell, lng_cell LIMIT 8" in query
+
+    @pytest.mark.asyncio
+    async def test_the_blocks_are_those_since_the_oldest_story_at_most_83(self, pool):
+        """Production started 2026-10-10; a gap at the start of the week holds no stories.
+        Materialised, so the oldest story is looked up once, not once per use."""
+        await surges.get_surges(NOW)
+
+        query, args = _fetched(pool)
+        assert (
+            "span AS MATERIALIZED ( SELECT GREATEST(1, LEAST(83, "
+            "EXTRACT(EPOCH FROM $1::timestamptz - "
+            "(SELECT min(published_at) FROM articles WHERE published_at >= $2)"
+            ")::float8 / 7200)) AS blocks )"
+        ) in query
+        assert "CROSS JOIN span" in query
+        assert args[:2] == [NOW - timedelta(hours=2), NOW - timedelta(days=7)]
+
+    def test_the_week_is_the_retention(self):
+        assert surges.RETENTION == timedelta(days=settings.retention_days)
+        assert surges.BASELINE_BLOCKS == (surges.RETENTION - surges.RECENT) // surges.RECENT
+        assert surges.BASELINE_BLOCKS == 83  # 7 days
 
     @pytest.mark.asyncio
     async def test_the_lead_is_the_cells_newest_imaged_recent_story(self, pool):
@@ -275,6 +300,12 @@ def _stories(lat, lng, n, *, sources=4, minutes_ago=30, tags=None, prefix=None, 
     ]
 
 
+def _old(lat, lng, title, *, source, minutes):
+    """A story *minutes* before the last 2 hours: in the baseline."""
+    at = DB_NOW - surges.RECENT - timedelta(minutes=minutes)
+    return {"title": title, "source": source, "at": at, "lat": lat, "lng": lng}
+
+
 async def _db_surges(pg, topic=None, now=DB_NOW):
     with patch.object(surges, "get_pool", AsyncMock(return_value=pg)):
         return await surges.get_surges(now, topic)
@@ -314,8 +345,9 @@ class TestSurgesOnPostgres:
         assert [(s["lat"], s["lng"]) for s in result] == [(-4.5, 15.5)]
         [surge] = result
         assert surge["recent"] == 10
-        assert surge["baseline"] == round(2 / 83, 2)
-        assert surge["ratio"] == 20.0  # 10 / max(0.024, 0.5)
+        # The oldest story is 3 days old: 35 blocks of 2 hours before the last 2.
+        assert surge["baseline"] == round(2 / 35, 2)
+        assert surge["ratio"] == 20.0  # 10 / max(0.057, 0.5)
         assert surge["topic"] == "conflict"
         assert surge["place"] == "Kinshasa, Congo"
         assert surge["lead"]["sensitive"] is True
@@ -355,7 +387,7 @@ class TestSurgesOnPostgres:
 
     @pytest.mark.asyncio
     async def test_steady_coverage_is_not_a_surge(self, pg):
-        """9 stories in 2 hours against 3.6 per 2 hours all week: 2.5×."""
+        """9 stories in 2 hours against 4 per 2 hours since the oldest story: 2.3×."""
         recent = _stories(35.5, 139.5, 9, sources=3)
         week = [
             {
@@ -370,6 +402,70 @@ class TestSurgesOnPostgres:
         await _insert(pg, recent + week)
 
         assert await _db_surges(pg) == []
+
+    @pytest.mark.asyncio
+    async def test_two_days_of_history_are_divided_by_their_24_blocks(self, pg):
+        """A steady place (10 stories every 2 hours) doesn't surge; a quiet one with a
+        burst (1, then 12) does. Divided by 83 blocks, the steady place would be 3.5×."""
+        steady = [
+            _old(-26.2, 28.0, f"steady {k}", source=f"outlet{k % 3}.example", minutes=12 * k)
+            for k in range(1, 241)
+        ]
+        burst = [
+            _old(-1.3, 36.8, f"quiet {k}", source="outlet0.example", minutes=120 * k)
+            for k in range(1, 25)
+        ]
+        await _insert(
+            pg,
+            steady
+            + burst
+            + _stories(-26.2, 28.0, 10, sources=3, prefix="steady now")
+            + _stories(-1.3, 36.8, 12, sources=3, prefix="burst now"),
+        )
+
+        result = await _db_surges(pg)
+
+        assert [(s["lat"], s["recent"], s["baseline"], s["ratio"]) for s in result] == [
+            (-1.5, 12, 1.0, 12.0)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_ratio_of_exactly_3_surges(self, pg):
+        """6 stories over 2 blocks is 3 a block: 9 now is 3.0×; 7 before would be 2.57×."""
+        await _insert(
+            pg,
+            [_old(6.5, 3.4, f"lagos {k}", source="o.example", minutes=40 * k) for k in range(1, 7)]
+            + [
+                _old(9.1, 7.5, f"abuja {k}", source="o.example", minutes=30 * k)
+                for k in range(1, 8)
+            ]
+            + _stories(6.5, 3.4, 9, sources=3, prefix="lagos now")
+            + _stories(9.1, 7.5, 9, sources=3, prefix="abuja now"),
+        )
+
+        [surge] = await _db_surges(pg)
+
+        assert (surge["lat"], surge["baseline"], surge["ratio"]) == (6.5, 3.0, 3.0)
+
+    @pytest.mark.asyncio
+    async def test_equal_ratios_rank_by_recent_then_by_cell(self, pg):
+        """20 now against 1 a block, and 10 now against none, are both 20×."""
+        rows = [
+            _old(9.2, 40.2, f"old {k}", source="o.example", minutes=120 * k) for k in (1, 2, 3, 4)
+        ]
+        rows += _stories(9.2, 40.2, 20, sources=3, prefix="busier")
+        for lat in (7.2, 5.2, 3.2):
+            rows += _stories(lat, 40.2, 10, sources=3, prefix=f"cell {lat}")
+        await _insert(pg, rows)
+
+        result = await _db_surges(pg)
+
+        assert [(s["lat"], s["recent"], s["ratio"]) for s in result] == [
+            (9.5, 20, 20.0),
+            (3.5, 10, 20.0),
+            (5.5, 10, 20.0),
+            (7.5, 10, 20.0),
+        ]
 
     @pytest.mark.asyncio
     async def test_a_cold_start_has_baseline_zero_and_a_finite_ratio(self, pg):

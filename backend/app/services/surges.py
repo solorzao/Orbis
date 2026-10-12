@@ -1,10 +1,12 @@
 """Surges: places whose coverage in the last two hours far outruns their week.
 
 Per 1° cell (the globe's dots), ``recent`` is the distinct stories of the
-last 2 hours and ``baseline`` the distinct stories of the 166 hours before
-(the rest of the 7-day retention) per 2 hours: over 83 blocks. A story is a
-title without its outlet's name (see titles.py), so one wire story run by 40
-outlets is one story, not 40.
+last 2 hours and ``baseline`` the distinct stories of the rest of the
+retention (166 hours at 7 days) per 2-hour block that holds data: from the
+oldest story kept, at most 83 blocks and at least 1. A database a few days
+old (production was recreated 2026-10-10) then isn't measured against a
+week it never had. A story is a title without its outlet's name (see
+titles.py), so one wire story run by 40 outlets is one story, not 40.
 
 A cell surges when ``recent / max(baseline, 0.5)`` is at least 3, it has at
 least 8 recent stories, and they come from at least 3 sources (one outlet's
@@ -19,16 +21,17 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.services.database import GLOBE_TOPIC_TAGS, _dominant_topic, get_pool, globe_lead
+from app.config import settings
+from app.services.database import GLOBE_TOPIC_TAGS, dominant_topic, get_pool, globe_lead
 from app.services.places import display_place
 from app.services.titles import dedup_title_sql
 
 logger = logging.getLogger(__name__)
 
 RECENT = timedelta(hours=2)
-# Articles are kept 7 days, so the baseline is the 166 hours before RECENT.
-RETENTION = timedelta(days=7)
-BASELINE_BLOCKS = 83  # 2-hour blocks in those 166 hours
+# The baseline is the rest of the retention: the 166 hours before RECENT at 7 days.
+RETENTION = timedelta(days=settings.retention_days)
+BASELINE_BLOCKS = (RETENTION - RECENT) // RECENT  # the most it holds: 83 at 7 days
 BASELINE_FLOOR = 0.5  # stories per block a quiet place is assumed to have
 
 MIN_RECENT = 8
@@ -43,9 +46,11 @@ def surges_query(now: datetime, topic: str | None) -> tuple[Any, ...]:
     One pass over the last 2 hours keys each story and counts every cell's
     stories, sources and six topics (distinct stories each). Only the cells
     with enough stories and sources then read their week, joined by cell, so
-    only their older stories are keyed. The ratio, threshold, order and limit
-    follow; the top cells then look up their lead as the globe does: the
-    newest recent story, preferring an https image, by its exact time.
+    only their older stories are keyed. The blocks the week holds (``span``)
+    come from the oldest story in it, of any topic: an index endpoint lookup.
+    The ratio, threshold, order and limit follow; the top cells then look up
+    their lead as the globe does: the newest recent story, preferring an
+    https image, by its exact time.
 
     *topic*, an article tag, keeps its stories only, in both windows and the
     lead. Thresholds are literals; the windows and topic are arguments.
@@ -62,7 +67,8 @@ def surges_query(now: datetime, topic: str | None) -> tuple[Any, ...]:
     )
     tags = ", ".join(GLOBE_TOPIC_TAGS)
     c_tags = ", ".join(f"c.{t}" for t in GLOBE_TOPIC_TAGS)
-    baseline = f"COALESCE(b.stories, 0)::float8 / {BASELINE_BLOCKS}"
+    baseline = "COALESCE(b.stories, 0)::float8 / span.blocks"
+    oldest = "(SELECT min(published_at) FROM articles WHERE published_at >= $2)"
     query = f"""
         WITH recent AS (
             SELECT FLOOR(latitude) AS lat_cell, FLOOR(longitude) AS lng_cell,
@@ -90,11 +96,16 @@ def surges_query(now: datetime, topic: str | None) -> tuple[Any, ...]:
             WHERE a.published_at >= $2 AND a.published_at < $1 {a_tag}
             GROUP BY 1, 2
         ),
+        span AS MATERIALIZED (
+            SELECT GREATEST(1, LEAST({BASELINE_BLOCKS},
+                   EXTRACT(EPOCH FROM $1::timestamptz - {oldest})::float8
+                   / {int(RECENT.total_seconds())})) AS blocks
+        ),
         ranked AS (
             SELECT c.lat_cell, c.lng_cell, c.recent, {c_tags}, c.newest, c.newest_with_image,
                    {baseline} AS baseline,
                    c.recent / GREATEST({baseline}, {BASELINE_FLOOR}) AS ratio
-            FROM candidates c LEFT JOIN before b USING (lat_cell, lng_cell)
+            FROM candidates c LEFT JOIN before b USING (lat_cell, lng_cell) CROSS JOIN span
         ),
         top AS (
             SELECT lat_cell, lng_cell, recent, {tags}, newest, newest_with_image, baseline, ratio
@@ -150,6 +161,6 @@ def _surge(row: Any, topic: str | None) -> dict[str, Any]:
         "recent": row["recent"],
         "baseline": round(row["baseline"], 2),
         "ratio": round(row["ratio"], 2),
-        "topic": topic or _dominant_topic(mix, row["topic_tags"] or []),
+        "topic": topic or dominant_topic(mix, row["topic_tags"] or []),
         "lead": globe_lead(row),
     }

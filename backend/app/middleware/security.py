@@ -69,6 +69,9 @@ _rate_buckets: dict[str, dict[str, _RateBucket]] = defaultdict(lambda: defaultdi
 _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "ai": (60, 10),  # 10 AI summary calls per minute per IP
     "data": (60, 60),  # 60 data calls per minute per IP
+    # A page asks once per visit; each since is its own cache entry, and a
+    # miss can read a week of stories. Its own bucket, so it never spends AI calls.
+    "delta": (60, 10),
 }
 
 # Path prefix → group
@@ -77,6 +80,7 @@ _PATH_GROUPS: dict[str, str] = {
     "/api/news/summarize-selection": "ai",
     "/api/agent/ask": "ai",
     "/api/links/explain": "ai",
+    "/api/news/delta": "delta",
 }
 
 

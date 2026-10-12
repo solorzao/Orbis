@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.config import settings
 from app.routers.news import _row_to_article
 
 
@@ -1322,6 +1323,104 @@ class TestGetSurges:
 
         assert _get_rate_group("/api/news/surges") == "data"
 
+    @pytest.mark.asyncio
+    async def test_a_database_error_is_a_500_and_nothing_is_cached(self, monkeypatch, surges_db):
+        surges_db.side_effect = RuntimeError("connection reset")
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            resp = await _get(monkeypatch, "/api/news/surges")
+
+        assert resp.status_code == 500
+        assert "s-maxage" not in resp.headers.get("cache-control", "")
+        mock_set.assert_not_awaited()
+
+
+class TestSurgesSingleFlight:
+    """Concurrent misses for one key share one query (the delta asks too)."""
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_misses_run_the_query_once(self, monkeypatch, surges_db):
+        import asyncio
+
+        import app.routers.news as news
+
+        release = asyncio.Event()
+
+        async def slow(*_args):
+            await release.wait()
+            return [SURGE]
+
+        surges_db.side_effect = slow
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            first = asyncio.create_task(news._cached_surges(None))
+            second = asyncio.create_task(news._cached_surges(None))
+            await asyncio.sleep(0)
+            other_topic = asyncio.create_task(news._cached_surges("health"))
+            await asyncio.sleep(0)
+            release.set()
+            a, b, c = await asyncio.gather(first, second, other_topic)
+
+        assert a == b == c
+        assert surges_db.await_count == 2  # once for all topics, once for health
+        assert mock_set.await_count == 2
+        assert news._surges_in_flight == {}
+
+    @pytest.mark.asyncio
+    async def test_an_error_reaches_every_waiter_and_nothing_is_cached(
+        self, monkeypatch, surges_db
+    ):
+        import asyncio
+
+        import app.routers.news as news
+
+        release = asyncio.Event()
+
+        async def failing(*_args):
+            await release.wait()
+            raise RuntimeError("connection reset")
+
+        surges_db.side_effect = failing
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            waiters = [asyncio.create_task(news._cached_surges(None)) for _ in range(2)]
+            await asyncio.sleep(0)
+            release.set()
+            results = await asyncio.gather(*waiters, return_exceptions=True)
+
+        assert [type(r) for r in results] == [RuntimeError, RuntimeError]
+        assert surges_db.await_count == 1
+        mock_set.assert_not_awaited()
+        assert news._surges_in_flight == {}
+
+        # The next miss queries again.
+        surges_db.side_effect = None
+        surges_db.return_value = [SURGE]
+        assert len(await news._cached_surges(None)) == 1
+        assert surges_db.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_waiter_cancelled_leaves_the_query_to_the_others(self, monkeypatch, surges_db):
+        """A visitor who leaves doesn't cancel the query the others are waiting on."""
+        import asyncio
+
+        import app.routers.news as news
+
+        release = asyncio.Event()
+
+        async def slow(*_args):
+            await release.wait()
+            return [SURGE]
+
+        surges_db.side_effect = slow
+        first = asyncio.create_task(news._cached_surges(None))
+        second = asyncio.create_task(news._cached_surges(None))
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.sleep(0)
+        release.set()
+
+        assert len(await second) == 1
+        assert first.cancelled()
+        assert surges_db.await_count == 1
+
 
 # ── /api/news/delta: what changed since a visit ─────────────────────────
 
@@ -1371,22 +1470,43 @@ class TestGetDelta:
     @pytest.mark.parametrize(
         ("since", "start"),
         [
-            # Floored to 15 minutes, in UTC.
+            # Up to 24 hours back: floored to the quarter hour, in UTC.
             ("2026-10-12T00:20:00Z", datetime(2026, 10, 12, 0, 15, tzinfo=timezone.utc)),
             ("2026-10-12T05:44:59.999+05:30", datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)),
             ("2026-10-12T14:30:00", datetime(2026, 10, 12, 14, 30, tzinfo=timezone.utc)),
+            ("2026-10-11T14:30:00Z", datetime(2026, 10, 11, 14, 30, tzinfo=timezone.utc)),
+            # Up to 72 hours: to the hour.
+            ("2026-10-11T14:29:59Z", datetime(2026, 10, 11, 14, 0, tzinfo=timezone.utc)),
+            ("2026-10-09T14:30:00Z", datetime(2026, 10, 9, 14, 0, tzinfo=timezone.utc)),
+            # Beyond: to 6 hours (00, 06, 12, 18 UTC).
+            ("2026-10-09T14:29:59Z", datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)),
+            ("2026-10-07T05:59:59Z", datetime(2026, 10, 7, 0, 0, tzinfo=timezone.utc)),
             # Clamped to the last 7 days, then floored.
-            ("2026-09-01T00:00:00Z", datetime(2026, 10, 5, 14, 30, tzinfo=timezone.utc)),
-            ("0001-01-01T00:00:00+01:00", datetime(2026, 10, 5, 14, 30, tzinfo=timezone.utc)),
+            ("2026-09-01T00:00:00Z", datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)),
+            ("0001-01-01T00:00:00+01:00", datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)),
+            # A fast clock, up to 15 minutes ahead: now.
+            ("2026-10-12T14:31:00Z", datetime(2026, 10, 12, 14, 30, tzinfo=timezone.utc)),
+            ("2026-10-12T14:45:00Z", datetime(2026, 10, 12, 14, 30, tzinfo=timezone.utc)),
         ],
     )
-    async def test_since_is_floored_to_15_minutes_and_clamped_to_7_days(
+    async def test_since_is_floored_coarser_the_older_it_is_and_clamped_to_7_days(
         self, monkeypatch, delta_db, since, start
     ):
         resp = await _get(monkeypatch, "/api/news/delta", since=since)
 
         assert resp.status_code == 200
         delta_db.changes.assert_awaited_once_with(start)
+
+    def test_a_week_of_visits_shares_163_starts_not_673(self, monkeypatch):
+        import app.routers.news as news
+
+        starts = {
+            news._delta_start((PREVIEW_NOW - timedelta(minutes=m)).isoformat(), PREVIEW_NOW)
+            for m in range(0, 7 * 24 * 60 + 1)
+        }
+        # 97 quarter hours, 49 hours and 17 six-hour blocks, each tier's ends included.
+        assert len(starts) == 97 + 49 + 17
+        assert news._MAX_DELTA == timedelta(days=settings.retention_days)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1396,7 +1516,7 @@ class TestGetDelta:
             {"since": ""},
             {"since": "yesterday"},
             {"since": "2026-10-12T25:00:00Z"},
-            {"since": "2026-10-12T14:31:00Z"},  # a minute in the future
+            {"since": "2026-10-12T14:45:00.001Z"},  # more than 15 minutes ahead
             {"since": "9999-12-31T00:00:00Z"},
         ],
     )
@@ -1443,7 +1563,41 @@ class TestGetDelta:
 
         assert resp.headers["cache-control"] == EDGE
 
-    def test_is_in_the_data_rate_limit_group(self):
-        from app.middleware.security import _get_rate_group
+    def test_has_its_own_tighter_rate_limit_group(self):
+        from app.middleware.security import _RATE_LIMITS, _get_rate_group
 
-        assert _get_rate_group("/api/news/delta") == "data"
+        assert _get_rate_group("/api/news/delta") == "delta"
+        assert _RATE_LIMITS["delta"] == (60, 10)
+
+    @pytest.mark.asyncio
+    async def test_the_eleventh_delta_in_a_minute_is_429_but_other_reads_go_on(
+        self, monkeypatch, delta_db
+    ):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import app
+        from app.middleware import security
+
+        monkeypatch.setattr(security.settings, "api_key", "")
+        security._rate_buckets.clear()
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        params = {"since": "2026-10-12T00:20:00Z"}
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            codes = [(await client.get("/api/news/delta", params=params)).status_code]
+            codes += [
+                (await client.get("/api/news/delta", params=params)).status_code for _ in range(10)
+            ]
+            surges = await client.get("/api/news/surges")
+
+        assert codes == [200] * 10 + [429]
+        assert surges.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_a_database_error_is_a_500_and_nothing_is_cached(self, monkeypatch, delta_db):
+        delta_db.changes.side_effect = RuntimeError("connection reset")
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
+
+        assert resp.status_code == 500
+        assert "s-maxage" not in resp.headers.get("cache-control", "")
+        assert [c.args[0] for c in mock_set.await_args_list if "delta" in c.args[0]] == []

@@ -32,6 +32,7 @@ __all__ = [
     "get_topic_counts",
     "get_globe_points",
     "globe_lead",
+    "dominant_topic",
     "get_hourly_density",
     "get_hourly_volume",
     "get_cell_spark",
@@ -406,7 +407,7 @@ async def get_globe_points(
                 "weight": min(row["article_count"] * 10, 500),
                 "article_count": row["article_count"],
                 "top_headline": row["title"] or "",
-                "topic": topic or _dominant_topic(mix, row["topic_tags"] or []),
+                "topic": topic or dominant_topic(mix, row["topic_tags"] or []),
                 "location_name": display_place(row["region"], row["country_code"]),
                 "country_code": row["country_code"] or "",
                 "lead": globe_lead(row),
@@ -432,7 +433,7 @@ def globe_lead(row: Any) -> dict[str, Any]:
     }
 
 
-def _dominant_topic(mix: dict[str, int], lead_tags: list[str]) -> str:
+def dominant_topic(mix: dict[str, int], lead_tags: list[str]) -> str:
     """The most common of the six topics in *mix*: ties go to the lead's tags in
     order, then the topic pills' order. ``general`` when *mix* is empty."""
     if not mix:

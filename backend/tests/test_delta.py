@@ -281,6 +281,26 @@ class TestDeltaOnPostgres:
         assert place["place"] == "Gaza, Palestine"
 
     @pytest.mark.asyncio
+    async def test_a_story_published_exactly_at_since_counts(self, pg):
+        await _insert(
+            pg,
+            [
+                {"title": "at the visit", "at": DB_SINCE, "lat": 40.7, "lng": -74.0},
+                {
+                    "title": "just before",
+                    "at": DB_SINCE - timedelta(microseconds=1),
+                    "lat": 40.7,
+                    "lng": -74.0,
+                },
+            ],
+        )
+
+        result = await _db_delta(pg)
+
+        assert (result["new_stories"], result["new_places"]) == (1, 1)
+        assert result["top"][0]["lead"]["title"] == "zzsurge-at the visit"
+
+    @pytest.mark.asyncio
     async def test_nothing_new(self, pg):
         await _insert(pg, _new(40.7, -74.0, 3, hours_ago=20))
 
