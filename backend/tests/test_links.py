@@ -344,10 +344,18 @@ class TestDetailQueries:
         assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
 
     def test_articles_have_an_explicit_column_list_without_the_embedding(self):
-        flat = _sql(links.detail_articles_query("IR", "US", START, END, None, 30)[0])
-        assert "SELECT id, title, summary, source_url, source_name" in flat
+        flat = _sql(links.detail_articles_query("IR", "US", START, END, None, 15)[0])
+        assert flat.startswith("SELECT id, title, summary, source_url, source_name")
         assert "embedding" not in flat and "*" not in flat
-        assert "ORDER BY published_at DESC, id LIMIT $5" in flat
+        assert flat.endswith("ORDER BY published_at DESC, id LIMIT $5")
+
+    def test_articles_are_each_storys_newest_copy(self):
+        """So a syndicated story takes one place in the list, not a dozen."""
+        flat = _sql(links.detail_articles_query("IR", "US", START, END, None, 15)[0])
+        assert f"SELECT {STORY}, id, title, summary" in flat
+        assert "FROM articles a WHERE" in flat
+        assert "SELECT DISTINCT ON (story) id, title, summary" in flat
+        assert "ORDER BY story, published_at DESC, id ) newest" in flat
 
     def test_shared_names_need_two_stories(self):
         sql, *args = links.detail_names_query("IR", "US", START, END, None, 16)

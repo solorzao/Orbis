@@ -157,6 +157,8 @@ async def get_link(
         return LinkDetail.model_validate(cached)
 
     detail = await get_link_detail(a, b, window.start, window.end, tag)
+    # One row per story already; this merges what story_key cannot: copies
+    # written before ingestion stored it, whose outlet suffixes differ.
     stories = _deduplicate_articles([_row_to_article(r) for r in detail["articles"]])
     result = LinkDetail(**{**detail, "articles": stories[:_DETAIL_ARTICLES]})
     await set_cached(cache_k, result.model_dump(mode="json"), _LINKS_TTL)

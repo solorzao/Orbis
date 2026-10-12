@@ -217,11 +217,13 @@ MAX_SHARED = 8
 MAX_THEMES = 5
 _MAX_NAME_CHARS = 80
 
-# Fetched before cleaning drops some: names, themes, and stories (syndicated
-# copies are dropped down to the 10 shown).
+# Fetched before cleaning drops some: names, themes, and stories. Stories
+# come one per story_key; a few more than the 10 shown, for rows written
+# before ingestion stored the key, whose copies only the router's title
+# dedup merges.
 _NAME_FETCH_LIMIT = 16
 _THEME_FETCH_LIMIT = 25
-ARTICLE_FETCH_LIMIT = 30
+ARTICLE_FETCH_LIMIT = 15
 
 # GDELT themes that say nothing about a link, so are not shown: who and what
 # a story names in passing (functional actors such as officials, languages,
@@ -370,22 +372,42 @@ def detail_stats_query(
     return query, *args
 
 
+# The columns a NewsArticle reads: never the embedding.
+_ARTICLE_COLUMNS = (
+    "id, title, summary, source_url, source_name, source_language, "
+    "published_at, ingested_at, latitude, longitude, country_code, "
+    "region, topic_tags, sentiment_score, entities, image_url"
+)
+
+
+def _newest_copy_per_story(columns: str, conditions: list[str], limit: str) -> str:
+    """SQL for *columns* of each story's newest copy, newest first, at most *limit*.
+
+    A story syndicated a dozen times takes one place, not twelve. *columns*
+    must include published_at and id, which order the copies and stories.
+    """
+    return f"""
+        SELECT {columns}
+        FROM (
+            SELECT DISTINCT ON (story) {columns}
+            FROM (
+                SELECT {_STORY} AS story, {columns} FROM articles a
+                WHERE {" AND ".join(conditions)}
+            ) copies
+            ORDER BY story, published_at DESC, id
+        ) newest
+        ORDER BY published_at DESC, id
+        LIMIT {limit}
+    """
+
+
 def detail_articles_query(
     a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
 ) -> tuple[Any, ...]:
     """SQL and arguments for the pair's newest stories: the columns a NewsArticle reads."""
     conditions, args = _pair_conditions(a, b, start, end, topic)
     args.append(limit)
-    query = f"""
-        SELECT id, title, summary, source_url, source_name, source_language,
-               published_at, ingested_at, latitude, longitude, country_code,
-               region, topic_tags, sentiment_score, entities, image_url
-        FROM articles
-        WHERE {" AND ".join(conditions)}
-        ORDER BY published_at DESC, id
-        LIMIT ${len(args)}
-    """
-    return query, *args
+    return _newest_copy_per_story(_ARTICLE_COLUMNS, conditions, f"${len(args)}"), *args
 
 
 def detail_headlines_query(
@@ -394,13 +416,7 @@ def detail_headlines_query(
     """SQL and arguments for the titles of the pair's newest stories."""
     conditions, args = _pair_conditions(a, b, start, end, topic)
     args.append(limit)
-    query = f"""
-        SELECT title FROM articles
-        WHERE {" AND ".join(conditions)}
-        ORDER BY published_at DESC, id
-        LIMIT ${len(args)}
-    """
-    return query, *args
+    return _newest_copy_per_story("title, published_at, id", conditions, f"${len(args)}"), *args
 
 
 def detail_names_query(
@@ -558,8 +574,8 @@ async def get_link_detail(
 ) -> dict:
     """Everything the link inspector shows for the pair a, b in the window.
 
-    ``articles`` are raw rows, newest first (up to ARTICLE_FETCH_LIMIT, with
-    syndicated copies still in); the rest is ready to show.
+    ``articles`` are raw rows, each story's newest copy, newest first (up to
+    ARTICLE_FETCH_LIMIT); the rest is ready to show.
     """
     pool = await get_pool()
     stats, names, themes, articles = await asyncio.gather(
@@ -588,8 +604,9 @@ async def get_link_detail(
 # Shared by everyone who opens the pair, so cached like cluster summaries.
 EXPLAIN_TTL = 3 * 3600
 _EXPLAIN_HEADLINES = 15
-# Fetched before syndicated copies and injection attempts are dropped.
-_HEADLINE_FETCH_LIMIT = 45
+# One per story, fetched before injection attempts (and copies of a story
+# written before ingestion stored its key) are dropped.
+_HEADLINE_FETCH_LIMIT = 25
 # Shown, not cached, when no headline is left to explain the link with.
 NOT_ENOUGH_COVERAGE = "Not enough coverage in this window to explain the link."
 
@@ -648,7 +665,7 @@ async def explain_link(a: str, b: str, start: datetime, end: datetime, topic: st
     """
     a, b = sorted((a, b))
     topic_suffix = f":{topic}" if topic else ""
-    cache_key = f"links:explain:v1:{a}:{b}:{_window_key(start, end)}{topic_suffix}"
+    cache_key = f"links:explain:v2:{a}:{b}:{_window_key(start, end)}{topic_suffix}"
     cached = await get_cached(cache_key)
     if cached is not None:
         return str(cached)

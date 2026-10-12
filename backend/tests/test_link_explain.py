@@ -84,7 +84,7 @@ async def test_prompt_holds_only_server_derived_names_and_headlines(claude, cach
         "- US and Iran trade threats over Strait of Hormuz\n"
         "- Iran says talks with US envoys will resume in Oman"
     )
-    headlines.assert_awaited_once_with("IR", "US", START, END, "conflict", 45)
+    headlines.assert_awaited_once_with("IR", "US", START, END, "conflict", 25)
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_cached_per_pair_window_hour_and_topic_for_three_hours(claude, cac
     await links.explain_link("US", "IR", START, END, "conflict")
 
     key, value, ttl = cache.set.await_args.args
-    assert key == "links:explain:v1:IR:US:2026101115-2026101215:conflict"
+    assert key == "links:explain:v2:IR:US:2026101115-2026101215:conflict"
     assert (value, ttl) == ("Both were covered together.", 3 * 3600)
     cache.get.assert_awaited_once_with(key)
 
@@ -133,7 +133,7 @@ async def test_either_order_shares_one_entry(claude, cache, headlines):
     await links.explain_link("US", "IR", START, END, None)
 
     keys = {c.args[0] for c in cache.set.await_args_list}
-    assert keys == {"links:explain:v1:IR:US:2026101115-2026101215"}
+    assert keys == {"links:explain:v2:IR:US:2026101115-2026101215"}
 
 
 @pytest.mark.asyncio
@@ -206,8 +206,11 @@ async def test_no_usable_stories_get_a_short_uncached_message(claude, cache, hea
 
 
 def test_headline_query_reads_titles_of_the_pairs_stories_newest_first():
-    sql, *args = links.detail_headlines_query("IR", "US", START, END, None, 45)
+    sql, *args = links.detail_headlines_query("IR", "US", START, END, None, 25)
     flat = " ".join(sql.split())
-    assert flat.startswith("SELECT title FROM articles WHERE")
-    assert "ORDER BY published_at DESC, id LIMIT $5" in flat
-    assert args == [START, END, "IR", "US", 45]
+    assert flat.startswith("SELECT title, published_at, id FROM")
+    # Each story's newest copy: a syndicated story is one headline.
+    assert "SELECT DISTINCT ON (story) title, published_at, id" in flat
+    assert "ORDER BY story, published_at DESC, id ) newest" in flat
+    assert flat.endswith("ORDER BY published_at DESC, id LIMIT $5")
+    assert args == [START, END, "IR", "US", 25]

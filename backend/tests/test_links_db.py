@@ -20,7 +20,7 @@ import pytest_asyncio
 
 from app.services import links
 from app.services.links import TOPIC_TAGS, lift, rank_links
-from app.services.titles import story_key
+from app.services.titles import dedup_key, story_key
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -170,11 +170,19 @@ class _OneConnectionPool:
 
 
 @pytest_asyncio.fixture
-async def window(conn):
-    await _insert(conn, _window_stories())
-    pool = _OneConnectionPool(conn)
-    with patch("app.services.links.get_pool", new_callable=AsyncMock, return_value=pool):
+async def pool(conn):
+    """The services' pool, on the test's connection."""
+    with patch(
+        "app.services.links.get_pool",
+        new_callable=AsyncMock,
+        return_value=_OneConnectionPool(conn),
+    ):
         yield
+
+
+@pytest_asyncio.fixture
+async def window(conn, pool):
+    await _insert(conn, _window_stories())
 
 
 def _by_pair(rows: list[dict]) -> dict[tuple[str, str], dict]:
@@ -314,3 +322,28 @@ async def test_unkeyed_articles_count_by_their_exact_title(conn):
     )
     stats = await conn.fetchrow(*links.detail_stats_query("BD", "IN", start, end, None))
     assert (stats["n"], stats["total"]) == (3, 3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_a_syndicated_story_takes_one_place_in_the_inspector(conn):
+    """12 copies of the newest story do not crowd the 10 older stories out."""
+    start = datetime(2001, 3, 10, tzinfo=timezone.utc)
+    others = [f"zzlinks-Nepal and India story {i}" for i in range(10)]
+    quake = "zzlinks-Quake hits Kathmandu"
+    await _insert(
+        conn,
+        [_story(title, "NP", ["NP", "IN"]) for title in others]  # oldest first
+        + [_story(quake + OUTLETS[i % len(OUTLETS)], "IN", ["IN", "NP"]) for i in range(12)],
+        start,
+    )
+    end = start + timedelta(days=1)
+    newest_first = [dedup_key(quake)] + [dedup_key(t) for t in reversed(others)]
+
+    detail = await links.get_link_detail("IN", "NP", start, end, None)
+    assert [dedup_key(r["title"]) for r in detail["articles"]] == newest_first
+    # Each story's newest copy.
+    assert detail["articles"][0]["title"] == quake + OUTLETS[11 % len(OUTLETS)]
+
+    headlines = await links.get_link_headlines("IN", "NP", start, end, None, 25)
+    assert [dedup_key(t) for t in headlines] == newest_first
