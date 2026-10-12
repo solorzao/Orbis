@@ -108,20 +108,41 @@ async def test_upsert_writes_gkg_fields_as_16_to_20():
     flat = _sql(sql)
     insert_columns = re.search(r"INSERT INTO articles \((.*?)\) VALUES", flat).group(1)
     values = re.search(r"VALUES \((.*?)\) ON CONFLICT", flat).group(1)
-    assert [c.strip() for c in insert_columns.split(",")][-5:] == list(GKG_COLUMNS)
-    assert [v.strip() for v in values.split(",")][-5:] == ["$16", "$17", "$18", "$19", "$20"]
+    assert [c.strip() for c in insert_columns.split(",")][-6:-1] == list(GKG_COLUMNS)
+    assert [v.strip() for v in values.split(",")][-6:-1] == ["$16", "$17", "$18", "$19", "$20"]
     for column in GKG_COLUMNS:
         assert f"{column} = EXCLUDED.{column}" in flat
-    assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(rows[0]) == 20
 
-    assert list(rows[0][15:]) == [
+    assert list(rows[0][15:20]) == [
         ["KILL", "TERROR"],
         ["Benjamin Netanyahu"],
         ["United Nations"],
         ["Gaza Strip"],
         json.dumps(counts),
     ]
-    assert list(rows[1][15:]) == [[], [], [], [], "[]"]
+    assert list(rows[1][15:20]) == [[], [], [], [], "[]"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_writes_mentioned_countries_as_21():
+    articles = [
+        {"source_url": "https://example.com/a", "mentioned_countries": ["IR", "US"]},
+        {"source_url": "https://example.com/b"},  # no mentioned_countries key
+    ]
+
+    count, sql, rows, _ = await _upsert(articles)
+
+    assert count == 2
+    flat = _sql(sql)
+    insert_columns = re.search(r"INSERT INTO articles \((.*?)\) VALUES", flat).group(1)
+    values = re.search(r"VALUES \((.*?)\) ON CONFLICT", flat).group(1)
+    assert insert_columns.split(",")[-1].strip() == "mentioned_countries"
+    assert values.split(",")[-1].strip() == "$21"
+    # A re-crawled story takes its new mentions.
+    assert "mentioned_countries = EXCLUDED.mentioned_countries" in flat
+    # Every placeholder has an argument and vice versa.
+    assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(rows[0]) == 21
+    assert [r[20] for r in rows] == [["IR", "US"], []]
 
 
 START = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)

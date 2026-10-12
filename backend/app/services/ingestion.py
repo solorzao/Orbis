@@ -120,6 +120,8 @@ async def _ingest_from_raw_gkg() -> int:
                 "orgs": a.get("organizations", []),
                 "names": a.get("names", []),
                 "counts": a.get("counts", []),
+                # ISO codes of the countries the story mentions, for links
+                "mentioned_countries": a.get("mentioned_countries", []),
                 # Read only by populate_graph (below), not written by upsert_articles:
                 # organizations -> ORG nodes (same list as orgs),
                 # mentioned_locations -> country LOCATION nodes.
