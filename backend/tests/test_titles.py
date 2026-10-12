@@ -6,7 +6,7 @@ import hashlib
 
 import pytest
 
-from app.services.titles import dedup_key, story_key
+from app.services.titles import dedup_key, story_key, story_key_sql
 
 
 class TestDedupKey:
@@ -76,3 +76,21 @@ class TestStoryKey:
         keys = [story_key(f"Story {i}", "") for i in range(64)]
         assert all(-(2**63) <= k < 2**63 for k in keys)
         assert min(keys) < 0 < max(keys)
+
+
+class TestStoryKeySql:
+    """Run on PostgreSQL in test_story_keys_db."""
+
+    def test_the_stored_key_else_a_hash_of_the_lowercased_title(self):
+        assert story_key_sql() == "COALESCE(a.story_key, hashtextextended(lower(a.title), 0))"
+
+    def test_any_alias(self):
+        assert story_key_sql("articles") == (
+            "COALESCE(articles.story_key, hashtextextended(lower(articles.title), 0))"
+        )
+
+    @pytest.mark.parametrize("alias", ["", "a.b", "a; DROP TABLE articles", "1a", "a b", "a--"])
+    def test_an_alias_is_a_plain_identifier(self, alias):
+        """It is written into SQL as it is."""
+        with pytest.raises(ValueError):
+            story_key_sql(alias)

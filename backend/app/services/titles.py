@@ -41,3 +41,16 @@ def story_key(title: str, source_url: str) -> int:
     text = dedup_key(title) or f"url:{source_url}"
     digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "big", signed=True)
+
+
+def story_key_sql(alias: str = "a") -> str:
+    """The story a row belongs to, as a SQL expression: its story_key, or for a row
+    written before ingestion keyed it (migration 012), a hash of its lowercased title,
+    so an unkeyed row still counts, and exact-title copies still collapse.
+
+    *alias* is the articles table's alias in the query, written into the SQL
+    as it is, so it must be a plain identifier (ValueError otherwise).
+    """
+    if not alias.isidentifier():
+        raise ValueError(f"Not a plain SQL alias: {alias!r}")
+    return f"COALESCE({alias}.story_key, hashtextextended(lower({alias}.title), 0))"
