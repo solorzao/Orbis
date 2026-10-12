@@ -5,6 +5,8 @@ import {
   CARD_OFFSET_PX,
   DOT_CLEARANCE_PX,
   cardCountLabel,
+  cardLabel,
+  cardMaxHeight,
   dockHoverCard,
   formatAgo,
   leaderPath,
@@ -276,5 +278,57 @@ describe("sparkPaths", () => {
 
   it("keeps an empty day on the baseline", () => {
     expect(sparkPaths([0, 0, 0], 100, 30).line).toBe("M0.0 28.0 L50.0 28.0 L100.0 28.0");
+  });
+});
+
+describe("cardLabel", () => {
+  const base = {
+    id: "api-0",
+    lat: 48.5,
+    lng: 2.5,
+    size: 1,
+    color: "#72ddb2",
+    articles: [],
+    isCluster: true,
+    count: 5,
+    topic: "Climate" as const,
+    locationName: "Paris, France",
+  };
+  const lead = {
+    title: "France announces new climate policy",
+    sourceName: "Reuters",
+    publishedAt: "2026-10-12T14:18:00Z",
+    imageUrl: null,
+    topic: "Climate" as const,
+    sensitive: false,
+  };
+
+  it("names the place, its stories and its lead headline", () => {
+    expect(cardLabel({ ...base, lead })).toBe(
+      "Paris, France: 5 stories. France announces new climate policy",
+    );
+  });
+
+  it("is shorter without a lead, and counts one story", () => {
+    expect(cardLabel({ ...base, count: 1 })).toBe("Paris, France: 1 story");
+  });
+
+  it("names a place without a name by its coordinates", () => {
+    expect(cardLabel({ ...base, locationName: undefined })).toBe("48.5°, 2.5°: 5 stories");
+  });
+});
+
+// ── 5. The floating card fits between the top bar and the bottom row ──
+describe("cardMaxHeight", () => {
+  it("is the room between the top bar and the bottom row, 12px clear of each", () => {
+    expect(cardMaxHeight({ viewport: VIEWPORT, below: [TOP_BAR], above: [BOTTOM_ROW] })).toBe(
+      BOTTOM_ROW.top - CARD_GAP_PX - (TOP_BAR.bottom + CARD_GAP_PX),
+    );
+  });
+
+  it("keeps 16px from the viewport's edges without chrome", () => {
+    expect(cardMaxHeight({ viewport: VIEWPORT, below: [], above: [] })).toBe(
+      VIEWPORT.height - 2 * CARD_EDGE_PX,
+    );
   });
 });

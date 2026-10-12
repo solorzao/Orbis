@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { DWELL_MS, clearPreviewCache, useHoverPreview } from "./useHoverPreview";
+import { DWELL_MS, clearPreviewCache, rememberBrief, useHoverPreview } from "./useHoverPreview";
 import { fetchPlacePreview, type ApiPlacePreview } from "@/lib/api";
 import type { TimeWindow } from "@/lib/timeWindow";
 import type { GlobePoint, Topic } from "@/types/news";
 
-vi.mock("@/lib/api", () => ({ fetchPlacePreview: vi.fn() }));
+vi.mock("@/lib/api", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/api")>()),
+  fetchPlacePreview: vi.fn(),
+}));
 const mockFetch = vi.mocked(fetchPlacePreview);
 
 const LIVE: TimeWindow = { kind: "live", hours: 24 };
@@ -152,5 +155,49 @@ describe("useHoverPreview", () => {
     await advance(DWELL_MS);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(result.current).toEqual({ preview: preview(3), loading: false });
+  });
+});
+
+describe("rememberBrief", () => {
+  it("adds the panel's summary to the place's cached preview", async () => {
+    mockFetch.mockResolvedValue(preview(1));
+    const { result, rerender } = render({ p: PARIS, w: LIVE, t: "All" });
+    await advance(DWELL_MS);
+    expect(result.current.preview?.brief).toBeNull();
+
+    rememberBrief(PARIS, LIVE, "All", "Paris set new carbon targets.");
+    rerender({ p: null, w: LIVE, t: "All" });
+    rerender({ p: PARIS, w: LIVE, t: "All" });
+    expect(result.current.preview?.brief).toBe("Paris set new carbon targets.");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fills in a preview fetched later without one (the server's copy may be older)", async () => {
+    rememberBrief(PARIS, LIVE, "All", "Paris set new carbon targets.");
+    mockFetch.mockResolvedValue(preview(1));
+    const { result } = render({ p: PARIS, w: LIVE, t: "All" });
+    await advance(DWELL_MS);
+    expect(result.current.preview?.brief).toBe("Paris set new carbon targets.");
+  });
+
+  it("keeps to its own window and topic", async () => {
+    rememberBrief(PARIS, LIVE, "Politics", "Only for politics.");
+    mockFetch.mockResolvedValue(preview(1));
+    const { result } = render({ p: PARIS, w: LIVE, t: "All" });
+    await advance(DWELL_MS);
+    expect(result.current.preview?.brief).toBeNull();
+  });
+
+  it.each([
+    "",
+    "  ",
+    "Summary generation failed.",
+    "AI summary unavailable (API key not configured).",
+  ])("ignores a summary that isn't one: %j", async (text) => {
+    rememberBrief(PARIS, LIVE, "All", text);
+    mockFetch.mockResolvedValue(preview(1));
+    const { result } = render({ p: PARIS, w: LIVE, t: "All" });
+    await advance(DWELL_MS);
+    expect(result.current.preview?.brief).toBeNull();
   });
 });

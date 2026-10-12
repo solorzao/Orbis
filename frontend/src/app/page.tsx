@@ -5,7 +5,8 @@ import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
 import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
-import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { MAX_PANELS, panelQuery, queryWindow, samePanelQuery } from "@/lib/panelQuery";
+import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
@@ -14,7 +15,7 @@ import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
 import { useHoverCard, useTouchOnly } from "@/hooks/useHoverCard";
-import { useHoverPreview } from "@/hooks/useHoverPreview";
+import { rememberBrief, useHoverPreview } from "@/hooks/useHoverPreview";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import BottomBar from "@/components/BottomBar";
 import LayerSwitcher, { type GlobeLayer } from "@/components/LayerSwitcher";
@@ -68,7 +69,7 @@ export default function Home() {
   // screens), with its dwell data (sparkline, names, cached brief) after 400 ms.
   const touch = useTouchOnly();
   const hoverCardRef = useRef<HTMLElement>(null);
-  const hover = useHoverCard(touch, hoverCardRef);
+  const hover = useHoverCard(touch, hoverCardRef, points);
   const { preview, loading: previewLoading } = useHoverPreview(
     hover.focus,
     timeWindow,
@@ -176,6 +177,8 @@ export default function Home() {
           query.endTime,
         );
         updatePanel(panelId, { clusterSummary: result.summary, summaryLoading: false });
+        // The place's hover card shows it as its brief from now on.
+        rememberBrief(point, queryWindow(query), query.topic ?? "All", result.summary);
       } catch {
         updatePanel(panelId, { summaryLoading: false });
       }
@@ -289,11 +292,11 @@ export default function Home() {
     [touch, tapDot, dismissCard, handlePointClick],
   );
 
-  // The card's place as the dots have it now (they refresh with the window and topic).
+  // The card's place as the dots have it now (they refresh with the window and
+  // topic); a place that is no longer a dot shows no card (useHoverCard hides it).
   const shownCard = hover.card;
   const cardPoint = shownCard
-    ? (points.find((p) => p.lat === shownCard.point.lat && p.lng === shownCard.point.lng) ??
-      shownCard.point)
+    ? (points.find((p) => p.lat === shownCard.point.lat && p.lng === shownCard.point.lng) ?? null)
     : null;
   // The preview is the focused dot's: the card's only once the pointer is on its place.
   const previewIsCards =
@@ -470,6 +473,11 @@ export default function Home() {
           reduced={reduced}
         />
       </BottomBar>
+
+      {/* The hover card's label for screen readers: always present, so a new label is read */}
+      <p className="sr-only" aria-live="polite" data-testid="hover-announcer">
+        {cardPoint ? cardLabel(cardPoint) : ""}
+      </p>
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}
       {shownCard && cardPoint && (

@@ -3,7 +3,14 @@
 import { useId, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import type { ApiPlacePreview } from "@/lib/api";
 import { formatScore, sentimentKey } from "@/lib/clustering";
-import { cardCountLabel, formatAgo, sparkPaths, topicMixList } from "@/lib/hoverCard";
+import {
+  cardCountLabel,
+  cardLabel,
+  formatAgo,
+  placeName,
+  sparkPaths,
+  topicMixList,
+} from "@/lib/hoverCard";
 import { looksLikePhoto, safeImageUrl, veilsImage } from "@/lib/imageSafety";
 import type { TimeWindow } from "@/lib/timeWindow";
 import type { GlobeLead, GlobePoint, Topic } from "@/types/news";
@@ -147,6 +154,8 @@ interface HoverCardProps {
  * before the visitor commits to a click. The first glance comes from the
  * globe's own payload; the sparkline, names and AI brief follow after a
  * dwell (useHoverPreview), with a skeleton meanwhile. GlobeHud places it.
+ * It is no live region: it mounts with its content, which screen readers
+ * miss, so the page announces cardLabel from a node that is always there.
  */
 export default function HoverCard({
   point,
@@ -162,10 +171,8 @@ export default function HoverCard({
   onPointerLeave,
   ref,
 }: HoverCardProps) {
-  const place = point.locationName || `${point.lat.toFixed(1)}°, ${point.lng.toFixed(1)}°`;
+  const place = placeName(point);
   const { lead } = point;
-  const stories = `${point.count} ${point.count === 1 ? "story" : "stories"}`;
-  const label = lead ? `${place}: ${stories}. ${lead.title}` : `${place}: ${stories}`;
   const tone = point.tone ?? 0;
   const mix = topicMixList(point.topicMix);
   const topTwo = [...mix].sort((a, b) => b.share - a.share).slice(0, 2);
@@ -176,8 +183,7 @@ export default function HoverCard({
       ref={ref}
       className={docked ? "glass recon docked" : "glass recon"}
       data-testid="hover-card"
-      aria-live="polite"
-      aria-label={label}
+      aria-label={cardLabel(point)}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >

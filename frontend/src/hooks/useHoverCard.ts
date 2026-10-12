@@ -62,9 +62,16 @@ export function useTouchOnly(): boolean {
  * true), and a tap anywhere else hides it: off the dots on the globe
  * (`onEmptyTap`), or on the page outside `cardRef`'s card.
  *
+ * When `points` change (a new window or topic) and the card's place is no
+ * longer among them, the card goes.
+ *
  * `focus` is the dot the preview dwells on: the hovered one, else the card's.
  */
-export function useHoverCard(touch: boolean, cardRef?: RefObject<HTMLElement | null>) {
+export function useHoverCard(
+  touch: boolean,
+  cardRef?: RefObject<HTMLElement | null>,
+  points?: readonly GlobePoint[],
+) {
   const [card, setCard] = useState<ShownCard | null>(null);
   const [hovered, setHovered] = useState<GlobePoint | null>(null);
   const [dismissed, setDismissed] = useState<GlobePoint | null>(null);
@@ -185,6 +192,16 @@ export function useHoverCard(touch: boolean, cardRef?: RefObject<HTMLElement | n
     document.addEventListener("pointerdown", onDown, true);
     return () => document.removeEventListener("pointerdown", onDown, true);
   }, [touch, card, cardRef, hideNow]);
+
+  // New dots without the card's place: its stories aren't on the globe now.
+  // The page already shows no card for a place that isn't a dot; the state
+  // follows on the next tick (a timer, as effects mustn't set state directly).
+  useEffect(() => {
+    const shown = live.current.card;
+    if (!points || !shown || points.some((p) => samePlace(p, shown.point))) return;
+    const timer = setTimeout(hideNow, 0);
+    return () => clearTimeout(timer);
+  }, [points, hideNow]);
 
   useEffect(
     () => () => {

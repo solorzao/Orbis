@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { panelQuery, samePanelQuery } from "./panelQuery";
+import { panelQuery, queryWindow, samePanelQuery } from "./panelQuery";
 import { DEFAULT_WINDOW, type TimeWindow } from "./timeWindow";
 
 const NOW = Date.UTC(2026, 9, 11, 12, 30, 0);
@@ -82,5 +82,22 @@ describe("samePanelQuery", () => {
     expect(
       samePanelQuery(panelQuery("All", DEFAULT_WINDOW, NOW), panelQuery("All", day, NOW)),
     ).toBe(false);
+  });
+});
+
+describe("queryWindow", () => {
+  it("is the window a panel was opened on: a live preset, or the range", () => {
+    const live = panelQuery(
+      "Politics",
+      { kind: "live", hours: 6 },
+      Date.parse("2026-10-12T14:30:00Z"),
+    );
+    expect(queryWindow(live)).toEqual({ kind: "live", hours: 6 });
+    const range = {
+      kind: "range" as const,
+      startTime: "2026-10-06T00:00:00.000Z",
+      endTime: "2026-10-07T00:00:00.000Z",
+    };
+    expect(queryWindow(panelQuery("All", range, 0))).toEqual(range);
   });
 });

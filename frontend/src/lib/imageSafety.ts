@@ -5,8 +5,12 @@
  * to the topic's glyph.
  */
 
-/** Publisher logos and stand-ins, which say nothing about the story. */
-const LOGO_LIKE = /logo|favicon|placeholder|default[-_]?image/i;
+/**
+ * Publisher logos and stand-ins, which say nothing about the story. Matched
+ * as words of the URL's path only: not its host ("logo.example.com" serves
+ * photos too) or query, nor inside a word ("psicologo").
+ */
+const LOGO_LIKE = /(?:^|[^a-z])(?:logos?|favicon|placeholder|default[-_]?image)(?![a-z])/i;
 
 /** Narrower than this, an image is an icon or a tracking pixel, not a photo. */
 export const MIN_PHOTO_WIDTH = 160;
@@ -23,7 +27,7 @@ export function safeImageUrl(url: string | null | undefined): string | null {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" || LOGO_LIKE.test(parsed.href)) return null;
+  if (parsed.protocol !== "https:" || LOGO_LIKE.test(parsed.pathname)) return null;
   return parsed.href;
 }
 

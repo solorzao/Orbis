@@ -231,3 +231,26 @@ describe("useHoverCard on a touch screen", () => {
     tab.remove();
   });
 });
+
+describe("useHoverCard when the dots change", () => {
+  it("hides the card when its place is no longer a dot (a new window or topic)", async () => {
+    const { result, rerender } = renderHook(
+      ({ points }: { points: GlobePoint[] }) => useHoverCard(false, undefined, points),
+      { initialProps: { points: [PARIS, LONDON] } },
+    );
+    act(() => result.current.onPointHover(PARIS));
+    await advance(SHOW_DELAY_MS);
+    act(() => result.current.onCardEnter()); // the pointer rests on the card
+
+    // Refreshed dots that still have Paris: the card stays.
+    rerender({ points: [point(48.5, 2.5, 9), LONDON] });
+    expect(result.current.card?.point.lat).toBe(48.5);
+
+    // Paris has no stories in the new window: the card goes, and stays gone.
+    rerender({ points: [LONDON] });
+    await advance(0);
+    expect(result.current.card).toBeNull();
+    rerender({ points: [PARIS, LONDON] });
+    expect(result.current.card).toBeNull();
+  });
+});

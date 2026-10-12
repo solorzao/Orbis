@@ -112,6 +112,16 @@ describe("GlobeHud", () => {
     expect(Number.parseFloat(el.style.left)).toBe(600 + 48);
   });
 
+  it("caps a floating card's height to the room between the top bar and the bottom row", () => {
+    const topBar: Box = { left: 24, top: 20, right: 1416, bottom: 62 };
+    const bottomRow: Box = { left: 24, top: 776, right: 1416, bottom: 880 };
+    const { el } = renderHud({
+      getChrome: () => ({ top: [topBar], side: [], bottom: [bottomRow] }),
+    });
+    runFrame();
+    expect(el.style.maxHeight).toBe(`${776 - 12 - (62 + 12)}px`);
+  });
+
   it("follows the dot as the globe turns", () => {
     const { container, project } = renderHud();
     runFrame(1000);

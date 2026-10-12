@@ -26,6 +26,11 @@ test.describe("City hover card", () => {
     await expect(card.getByText("France announces new climate policy")).toBeVisible();
     await expect(card.getByText("Reuters")).toBeVisible();
     await expect(card.getByText("Click to open")).toBeVisible();
+    // Screen readers hear its label from a live region that is always there.
+    await expect(page.getByTestId("hover-announcer")).toHaveText(
+      "Paris, France: 5 stories. France announces new climate policy",
+    );
+    await expect(card).not.toHaveAttribute("aria-live");
     // The lead's image, loaded without a referrer.
     const img = card.locator(".thumb img");
     await expect(img).toBeVisible();
@@ -82,6 +87,7 @@ test.describe("City hover card", () => {
     await page.keyboard.press("Escape");
     await expect(card).toHaveCount(0);
     await expect(page.getByTestId("hover-card")).toHaveCount(0);
+    await expect(page.getByTestId("hover-announcer")).toHaveText("");
   });
 
   test("clicking the dot still opens its stories, and the card gives way", async ({ page }) => {

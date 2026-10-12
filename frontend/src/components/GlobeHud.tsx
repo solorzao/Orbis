@@ -3,6 +3,7 @@
 import { useEffect, useState, type RefObject } from "react";
 import type { GlobeGeometry } from "@/lib/globeView";
 import {
+  cardMaxHeight,
   dockHoverCard,
   leaderPath,
   placeHoverCard,
@@ -132,6 +133,13 @@ export default function GlobeHud({
               maxHeight: `${dock.maxHeight}px`,
             });
           } else {
+            // Set the cap before measuring, so a tall card is placed at its capped height.
+            const maxHeight = cardMaxHeight({
+              viewport,
+              below: chrome.top,
+              above: chrome.bottom,
+            });
+            card.style.maxHeight = `${maxHeight}px`;
             const size = { width: card.offsetWidth, height: card.offsetHeight };
             const spot = placeHoverCard({
               dot,
@@ -144,7 +152,6 @@ export default function GlobeHud({
               left: `${spot.left}px`,
               top: `${spot.top}px`,
               bottom: "",
-              maxHeight: "",
             });
             leader = leaderPath(dot, r, {
               ...spot,

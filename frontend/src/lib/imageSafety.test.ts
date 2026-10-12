@@ -24,15 +24,25 @@ describe("safeImageUrl", () => {
   it.each([
     "https://cdn.example.com/static/logo.png",
     "https://cdn.example.com/brand/Site-Logo-2x.png",
-    "https://logo.clearbit.com/example.com",
+    "https://cdn.example.com/img/site_logo.png",
+    "https://cdn.example.com/logos/reuters.png",
+    "https://cdn.example.com/logo2x.png",
     "https://example.com/favicon.ico",
     "https://cdn.example.com/img/placeholder.jpg",
     "https://cdn.example.com/default-image.jpg",
     "https://cdn.example.com/default_image.png",
     "https://cdn.example.com/defaultimage.png",
-    "https://cdn.example.com/resize?src=default-image.jpg",
   ])("drops a URL that looks like a logo or a stand-in: %s", (url) => {
     expect(safeImageUrl(url)).toBeNull();
+  });
+
+  it.each([
+    "https://logo.example.com/2026/10/storm.jpg", // the host isn't the image
+    "https://cdn.example.com/es/psicologo-clinico.jpg", // a word that contains logo
+    "https://cdn.example.com/a.jpg?fallback=default-image.jpg", // the query isn't the image
+    "https://cdn.example.com/catalogue/flood.jpg",
+  ])("keeps a photo whose URL only mentions a logo outside its path's words: %s", (url) => {
+    expect(safeImageUrl(url)).toBe(url);
   });
 });
 

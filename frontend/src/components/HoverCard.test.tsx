@@ -76,9 +76,9 @@ describe("HoverCard", () => {
     expect(within(card).getByText("5 stories, last 24 h")).toBeInTheDocument();
   });
 
-  it("is a polite live region with a short label", () => {
+  it("has a short label, but is no live region (the page announces it)", () => {
     const { card } = renderCard();
-    expect(card).toHaveAttribute("aria-live", "polite");
+    expect(card).not.toHaveAttribute("aria-live");
     expect(card).toHaveAttribute(
       "aria-label",
       "Paris, France: 5 stories. France announces new climate policy",

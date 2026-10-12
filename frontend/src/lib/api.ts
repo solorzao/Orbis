@@ -189,6 +189,22 @@ export function fetchClusterArticles(
   return apiFetch<ApiNewsArticle[]>("/api/news/cluster", params);
 }
 
+/**
+ * What /api/news/summary sends as `summary` when Claude gave none: the
+ * messages ai_summary.py raises SummaryUnavailable with (api.test.ts keeps
+ * the two lists equal). The panel shows them; they are never a place's brief.
+ */
+export const SUMMARY_FALLBACKS: readonly string[] = [
+  "AI summary unavailable (API key not configured).",
+  "AI summaries are paused until 00:00 UTC (daily limit reached).",
+  "Summary temporarily unavailable due to rate limits.",
+  "Summary generation failed.",
+];
+
+export function isSummaryFallback(summary: string): boolean {
+  return SUMMARY_FALLBACKS.includes(summary.trim());
+}
+
 export function fetchClusterSummary(
   lat: number,
   lng: number,

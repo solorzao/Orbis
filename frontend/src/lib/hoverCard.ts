@@ -3,7 +3,7 @@
  * on their own: where the card goes (mockup lines 1366-1373), the reticle
  * and leader that tie it to its dot, and the small labels it prints.
  */
-import type { Topic } from "@/types/news";
+import type { GlobePoint, Topic } from "@/types/news";
 import { windowLabel, type TimeWindow } from "@/lib/timeWindow";
 
 export interface Box {
@@ -145,6 +145,25 @@ export function dockHoverCard({
   };
 }
 
+/**
+ * The floating card's greatest height: the room between the chrome it stays
+ * below (the top bar) and the chrome it stays above (the bottom row), 12px
+ * clear of each and 16px inside the viewport. A taller card scrolls inside.
+ */
+export function cardMaxHeight({
+  viewport,
+  below,
+  above,
+}: {
+  viewport: Size;
+  below: readonly Box[];
+  above: readonly Box[];
+}): number {
+  const floor = Math.min(viewport.height - CARD_EDGE_PX, ...above.map((b) => b.top - CARD_GAP_PX));
+  const ceiling = Math.max(CARD_EDGE_PX, ...below.map((b) => b.bottom + CARD_GAP_PX));
+  return Math.max(0, floor - ceiling);
+}
+
 /** The reticle locks on (mockup `frame`): its ring closes from 22px to 14px. */
 const RETICLE = { from: 22, to: 14, lockMs: 380 } as const;
 
@@ -208,6 +227,21 @@ export function formatAgo(publishedAt: string, nowMs: number): string {
   if (hours >= 24) return `${Math.floor(hours / 24)} d ago`;
   const rest = mins % 60;
   return rest ? `${hours} h ${rest} min ago` : `${hours} h ago`;
+}
+
+/** A place's name, or its coordinates when it has none ("48.5°, 2.5°"). */
+export function placeName(point: Pick<GlobePoint, "lat" | "lng" | "locationName">): string {
+  return point.locationName || `${point.lat.toFixed(1)}°, ${point.lng.toFixed(1)}°`;
+}
+
+/**
+ * The card's short label, which the page announces when it shows: "Paris,
+ * France: 5 stories. France announces new climate policy".
+ */
+export function cardLabel(point: GlobePoint): string {
+  const stories = `${point.count} ${point.count === 1 ? "story" : "stories"}`;
+  const label = `${placeName(point)}: ${stories}`;
+  return point.lead ? `${label}. ${point.lead.title}` : label;
 }
 
 /** "37 stories, last 24 h", "5 stories, last 7 days" or "5 stories, Tue 14:00 – Wed 02:00 UTC". */

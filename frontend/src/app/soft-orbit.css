@@ -1406,10 +1406,6 @@ button.cite:hover {
   font: var(--type-label);
   color: var(--text-muted);
 }
-:is(.recon, .rc) .foot .end {
-  margin-left: auto;
-  color: var(--text-secondary);
-}
 :is(.recon, .rc) .foot .pill {
   cursor: pointer;
 }

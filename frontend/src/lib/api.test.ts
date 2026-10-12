@@ -6,7 +6,11 @@ import {
   fetchTopics,
   fetchVolume,
   fetchPlacePreview,
+  isSummaryFallback,
+  SUMMARY_FALLBACKS,
 } from "./api";
+import { readFileSync } from "fs";
+import path from "path";
 
 const mockFetch = vi.fn();
 
@@ -211,5 +215,24 @@ describe("fetchPlacePreview", () => {
     expect(url.searchParams.get("start_time")).toBe("2026-10-06T00:00:00.000Z");
     expect(url.searchParams.get("end_time")).toBe("2026-10-07T00:00:00.000Z");
     expect(url.searchParams.get("topic")).toBe("Climate");
+  });
+});
+
+describe("isSummaryFallback", () => {
+  it("knows every message the backend sends instead of a summary", () => {
+    // ai_summary.py raises SummaryUnavailable with the text the panel shows.
+    const source = readFileSync(
+      path.resolve(__dirname, "../../../backend/app/services/ai_summary.py"),
+      "utf8",
+    );
+    const messages = [...source.matchAll(/SummaryUnavailable\(\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(messages.length).toBeGreaterThanOrEqual(4);
+    expect([...new Set(messages)].sort()).toEqual([...SUMMARY_FALLBACKS].sort());
+  });
+
+  it("tells a fallback from a summary", () => {
+    expect(isSummaryFallback("Summary generation failed.")).toBe(true);
+    expect(isSummaryFallback(" Summary generation failed. ")).toBe(true);
+    expect(isSummaryFallback("Talks resumed in Cairo.")).toBe(false);
   });
 });
