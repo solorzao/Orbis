@@ -42,6 +42,7 @@ from app.services.database import (
     get_topic_counts,
 )
 from app.services.grid import cell_index
+from app.services.titles import dedup_key
 
 logger = logging.getLogger(__name__)
 
@@ -54,26 +55,12 @@ _TOPIC_ALIASES = {"climate": "environment"}
 _GLOBE_TOPICS = frozenset({"politics", "conflict", "technology", "climate", "economy", "health"})
 
 
-_OUTLET_SEP = re.compile(r"\s+[|:–—-]\s+")
-
-
-def _dedup_key(title: str) -> str:
-    """Normalize a title for dedup by stripping the trailing outlet name."""
-    parts = list(_OUTLET_SEP.finditer(title))
-    if parts:
-        last = parts[-1]
-        suffix = title[last.end() :]
-        if len(suffix) < 40:
-            title = title[: last.start()]
-    return title.strip().lower()
-
-
 def _deduplicate_articles(articles: list) -> list:
     """Remove syndicated duplicates, keeping the first (most recent) per title."""
     seen: set[str] = set()
     result = []
     for a in articles:
-        key = _dedup_key(a.title)
+        key = dedup_key(a.title)
         if key not in seen:
             seen.add(key)
             result.append(a)

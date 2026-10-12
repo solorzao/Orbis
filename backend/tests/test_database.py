@@ -10,6 +10,7 @@ import pytest
 
 from app.services import database
 from app.services.database import upsert_articles
+from app.services.titles import story_key
 
 
 def _mock_pool():
@@ -108,8 +109,8 @@ async def test_upsert_writes_gkg_fields_as_16_to_20():
     flat = _sql(sql)
     insert_columns = re.search(r"INSERT INTO articles \((.*?)\) VALUES", flat).group(1)
     values = re.search(r"VALUES \((.*?)\) ON CONFLICT", flat).group(1)
-    assert [c.strip() for c in insert_columns.split(",")][-6:-1] == list(GKG_COLUMNS)
-    assert [v.strip() for v in values.split(",")][-6:-1] == ["$16", "$17", "$18", "$19", "$20"]
+    assert [c.strip() for c in insert_columns.split(",")][-7:-2] == list(GKG_COLUMNS)
+    assert [v.strip() for v in values.split(",")][-7:-2] == ["$16", "$17", "$18", "$19", "$20"]
     for column in GKG_COLUMNS:
         assert f"{column} = EXCLUDED.{column}" in flat
 
@@ -136,13 +137,40 @@ async def test_upsert_writes_mentioned_countries_as_21():
     flat = _sql(sql)
     insert_columns = re.search(r"INSERT INTO articles \((.*?)\) VALUES", flat).group(1)
     values = re.search(r"VALUES \((.*?)\) ON CONFLICT", flat).group(1)
-    assert insert_columns.split(",")[-1].strip() == "mentioned_countries"
-    assert values.split(",")[-1].strip() == "$21"
+    assert insert_columns.split(",")[-2].strip() == "mentioned_countries"
+    assert values.split(",")[-2].strip() == "$21"
     # A re-crawled story takes its new mentions.
     assert "mentioned_countries = EXCLUDED.mentioned_countries" in flat
-    # Every placeholder has an argument and vice versa.
-    assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(rows[0]) == 21
     assert [r[20] for r in rows] == [["IR", "US"], []]
+
+
+@pytest.mark.asyncio
+async def test_upsert_writes_the_story_key_as_22():
+    articles = [
+        {"source_url": "https://reuters.example/q", "title": "Quake hits Kathmandu - Reuters"},
+        {"source_url": "https://bbc.example/q", "title": "Quake hits Kathmandu | BBC News"},
+        {"source_url": "https://example.com/untitled"},  # no title key
+    ]
+
+    count, sql, rows, _ = await _upsert(articles)
+
+    assert count == 3
+    flat = _sql(sql)
+    insert_columns = re.search(r"INSERT INTO articles \((.*?)\) VALUES", flat).group(1)
+    values = re.search(r"VALUES \((.*?)\) ON CONFLICT", flat).group(1)
+    assert insert_columns.split(",")[-1].strip() == "story_key"
+    assert values.split(",")[-1].strip() == "$22"
+    # A re-crawled story's title may change, and its key with it.
+    assert "story_key = EXCLUDED.story_key" in flat
+    # Every placeholder has an argument and vice versa.
+    assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(rows[0]) == 22
+    # From the title written ($1): syndicated copies share one.
+    assert [r[21] for r in rows] == [
+        story_key("Quake hits Kathmandu - Reuters", "https://reuters.example/q"),
+        story_key("Quake hits Kathmandu", "https://bbc.example/q"),
+        story_key("", "https://example.com/untitled"),
+    ]
+    assert rows[0][21] == rows[1][21] != rows[2][21]
 
 
 START = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)

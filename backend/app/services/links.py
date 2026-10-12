@@ -25,7 +25,7 @@ from app.services.ai_summary import SummaryUnavailable, _call_claude, _window_ke
 from app.services.cache import get_cached, set_cached
 from app.services.country_centroids import centroid
 from app.services.database import get_pool
-from app.services.ingestion import _dedup_key
+from app.services.titles import dedup_key
 
 logger = logging.getLogger(__name__)
 
@@ -447,7 +447,7 @@ def _prompt_headlines(titles: list[str]) -> list[str]:
         if not isinstance(title, str):
             continue
         clean = " ".join(sanitise_text(strip_invisible(title), max_length=200).split())
-        key = _dedup_key(clean)
+        key = dedup_key(clean)
         # Checked once cleaned: sanitise_text deletes control characters, which
         # would otherwise hide an injection phrase from the check ("Ig\x01nore").
         if not clean or has_injection_pattern(clean) or key in seen:
