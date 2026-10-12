@@ -5,6 +5,7 @@ import {
   chartPoints,
   dayTicks,
   linePath,
+  placeDayLabels,
   rangeForDrag,
   smooth,
   timeForX,
@@ -197,5 +198,56 @@ describe("rangeForDrag", () => {
       startTime: new Date(start).toISOString(),
       endTime: new Date(end).toISOString(),
     });
+  });
+});
+
+describe("placeDayLabels", () => {
+  const W = 400;
+  const place = (now: number) => {
+    const { start, end } = chartDomain(now);
+    return placeDayLabels(dayTicks(start, end), (t) => xForTime(t, start, end, W), W);
+  };
+  const halfWidth = (label: string) => (label.length * 6.6) / 2;
+
+  it("labels every day with room for it", () => {
+    expect(place(NOW).map((l) => l.tick.label)).toEqual([
+      "Sun",
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Today",
+    ]);
+  });
+
+  it("never lets two labels overlap: early in the UTC day, the day before Today gives way", () => {
+    // 02:10 UTC: Today shows three hours, squeezed against yesterday's label.
+    const labels = place(Date.UTC(2026, 9, 12, 2, 10));
+    expect(labels.map((l) => l.tick.label)).toEqual([
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Today",
+    ]);
+    for (let i = 1; i < labels.length; i++) {
+      const gap = labels[i].x - labels[i - 1].x;
+      expect(gap).toBeGreaterThanOrEqual(
+        halfWidth(labels[i].tick.label) + halfWidth(labels[i - 1].tick.label),
+      );
+    }
+  });
+
+  it("keeps every label inside the chart", () => {
+    for (const now of [NOW, Date.UTC(2026, 9, 12, 0, 20), Date.UTC(2026, 9, 12, 23, 50)]) {
+      for (const l of place(now)) {
+        expect(l.x - halfWidth(l.tick.label)).toBeGreaterThanOrEqual(0);
+        expect(l.x + halfWidth(l.tick.label)).toBeLessThanOrEqual(W);
+      }
+    }
   });
 });

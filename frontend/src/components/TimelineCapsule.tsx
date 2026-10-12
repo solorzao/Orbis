@@ -27,6 +27,7 @@ import {
   chartPoints,
   dayTicks,
   linePath,
+  placeDayLabels,
   rangeForDrag,
   smooth,
   volumeSeries,
@@ -49,8 +50,6 @@ const LABEL_Y = 59;
 const DEFAULT_WIDTH = 400;
 /** Hours either side averaged into each point, so the area reads as a smooth flow. */
 const SMOOTH_HOURS = 3;
-/** A day shown for fewer hours than this gets no label (it would collide); Today always does. */
-const MIN_LABEL_HOURS = 6;
 
 const MINUTE_MS = 60_000;
 
@@ -325,21 +324,17 @@ export default function TimelineCapsule({
               <circle cx={0} cy={TOP - 2} r={3.5} />
             </g>
           )}
-          {ticks.map((tick) => {
-            const today = tick.label === "Today";
-            if (!today && tick.hours < MIN_LABEL_HOURS) return null;
-            return (
-              <text
-                key={tick.dayStart}
-                x={today ? Math.min(x(tick.t), width - 17) : x(tick.t)}
-                y={LABEL_Y}
-                textAnchor="middle"
-                className={today ? "day today" : "day"}
-              >
-                {tick.label}
-              </text>
-            );
-          })}
+          {placeDayLabels(ticks, x, width).map(({ tick, x: labelX }) => (
+            <text
+              key={tick.dayStart}
+              x={labelX}
+              y={LABEL_Y}
+              textAnchor="middle"
+              className={tick.label === "Today" ? "day today" : "day"}
+            >
+              {tick.label}
+            </text>
+          ))}
         </svg>
         {domain && (
           <>

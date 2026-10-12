@@ -178,3 +178,35 @@ export function dayTicks(start: number, end: number): DayTick[] {
   }
   return ticks;
 }
+
+/** About how wide a day label is, per character (--type-data-sm: 11px mono). */
+const LABEL_CHAR_PX = 6.6;
+/** Space kept between two labels. */
+const LABEL_PAD_PX = 8;
+/** A day shown for fewer hours than this gets no label; Today always does. */
+const MIN_LABEL_HOURS = 6;
+
+/**
+ * Where to draw the day labels: each at the middle of its day, kept inside
+ * the chart, Today first and then right to left, skipping a label that would
+ * touch the one after it (early in the UTC day, Today's sliver squeezes the
+ * day before it out) or a day shown for under six hours.
+ */
+export function placeDayLabels(
+  ticks: readonly DayTick[],
+  xOf: (t: number) => number,
+  width: number,
+): { tick: DayTick; x: number }[] {
+  const half = (label: string) => (label.length * LABEL_CHAR_PX) / 2;
+  const placed: { tick: DayTick; x: number }[] = [];
+  for (let i = ticks.length - 1; i >= 0; i--) {
+    const tick = ticks[i];
+    if (tick.label !== "Today" && tick.hours < MIN_LABEL_HOURS) continue;
+    const h = half(tick.label);
+    const x = Math.min(width - h, Math.max(h, xOf(tick.t)));
+    const next = placed[0];
+    if (next && next.x - x < half(next.tick.label) + h + LABEL_PAD_PX) continue;
+    placed.unshift({ tick, x });
+  }
+  return placed;
+}
