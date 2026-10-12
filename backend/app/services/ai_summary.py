@@ -14,6 +14,7 @@ from app.services import llm_budget
 from app.services.cache import get_cached, set_cached
 from app.services.grid import cell_index
 from app.services.llm import response_text
+from app.services.places import display_place
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def _cell_place(articles: list[NewsArticle]) -> str:
     and shown to every visitor of the cell.
     """
     for article in articles:
-        place = _clean_place(article.region)
+        place = _clean_place(display_place(article.region, article.country_code))
         if place:
             return place
     return ""

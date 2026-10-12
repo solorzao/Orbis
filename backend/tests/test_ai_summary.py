@@ -78,7 +78,7 @@ async def test_usage_is_recorded_even_when_claude_refuses(client, budget):
     budget.record.assert_awaited_once_with(response.usage, response.model)
 
 
-def _article(title: str, region: str = ""):
+def _article(title: str, region: str = "", country_code: str = ""):
     from app.models.news import NewsArticle
 
     now = datetime.now(timezone.utc)
@@ -91,6 +91,7 @@ def _article(title: str, region: str = ""):
         ingested_at=now,
         latitude=38.9,
         longitude=-77.0,
+        country_code=country_code,
         region=region,
     )
 
@@ -306,6 +307,14 @@ async def test_cluster_place_comes_from_the_cells_articles(capture):
     articles = [_article("Shooting in Southeast DC", region="Washington, District Of Columbia")]
     await ai_summary.summarise_cluster(articles, 38.5, -77.5, cell_size=1.0)
     assert capture["msg"].startswith("Location: Washington, District Of Columbia\n\n")
+
+
+@pytest.mark.asyncio
+async def test_cluster_place_is_named_the_way_the_globe_names_it(capture):
+    """GDELT's "(General)" repeat goes and the country follows the article's ISO code."""
+    articles = [_article("Strikes in Khan Younis", "Gaza, Israel (General), Israel", "PS")]
+    await ai_summary.summarise_cluster(articles, 31.4, 34.4, cell_size=1.0)
+    assert capture["msg"].startswith("Location: Gaza, Palestine\n\n")
 
 
 @pytest.mark.asyncio

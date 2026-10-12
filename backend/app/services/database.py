@@ -366,7 +366,8 @@ async def get_globe_points(
     its story count, its six topics' counts (``topic_mix``), its mean
     sentiment (``tone``) and a lead story: the newest with an https image, or
     the newest when none has one, so the headline and the image are one
-    story's. The place name is the lead's region, cleaned by display_place.
+    story's. The place name is the lead's region, cleaned by display_place
+    with the lead's country code.
 
     The dot colour (``topic``) is the cell's most common of the six topics; a
     tie goes to the lead's tags, then the topic pills' order, and a cell
@@ -401,7 +402,7 @@ async def get_globe_points(
                 "article_count": row["article_count"],
                 "top_headline": row["title"] or "",
                 "topic": topic or _dominant_topic(mix, lead_tags),
-                "location_name": display_place(row["region"]),
+                "location_name": display_place(row["region"], row["country_code"]),
                 "country_code": row["country_code"] or "",
                 "lead": {
                     "title": row["title"] or "",
