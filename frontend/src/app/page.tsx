@@ -3,7 +3,6 @@
 import { useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
-import { filterPointsByTopic } from "@/lib/clustering";
 import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
@@ -34,7 +33,8 @@ export default function Home() {
 
   // One time window for the globe, the panels and the timeline (lib/timeWindow).
   const [timeWindow, setTimeWindow] = useState<TimeWindow>(DEFAULT_WINDOW);
-  const { points: allPoints, error: apiError, loading } = useGlobePoints(timeWindow);
+  // The dots for the window, filtered to the topic on the client (same array until either changes)
+  const { points, error: apiError, loading } = useGlobePoints(timeWindow, activeTopic);
   const [layer, setLayer] = useState<GlobeLayer>("dots");
 
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
@@ -86,9 +86,6 @@ export default function Home() {
       window.open(citation.url, "_blank", "noopener,noreferrer");
     }
   }, []);
-
-  // Filter points client-side — instant, no API call
-  const points = filterPointsByTopic(allPoints, activeTopic);
 
   const updatePanel = useCallback((panelId: string, updates: Partial<PanelEntry>) => {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));

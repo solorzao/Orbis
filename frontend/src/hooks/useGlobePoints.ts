@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { GlobePoint } from "@/types/news";
+import { useEffect, useMemo, useState } from "react";
+import type { GlobePoint, Topic } from "@/types/news";
 import { fetchGlobeNews } from "@/lib/api";
-import { apiPointsToGlobePoints } from "@/lib/clustering";
+import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
 import { windowQuery, type TimeWindow } from "@/lib/timeWindow";
 
 /** Quick window changes (keyboard steps, presets) settle before one request goes out. */
@@ -20,11 +20,16 @@ interface Result {
 }
 
 /**
- * The globe's dots for a time window. A new window cancels the request for
- * the last one and ignores its answer if it comes anyway, so a replay's steps
- * can never land out of order. The last dots stay up while the next load.
+ * The globe's dots for a time window and topic. A new window cancels the
+ * request for the last one and ignores its answer if it comes anyway, so a
+ * replay's steps can never land out of order. The last dots stay up while the
+ * next load. The topic filters on the client, into the same array until the
+ * dots or the topic change: a new array would make the globe redraw.
  */
-export function useGlobePoints(timeWindow: TimeWindow): {
+export function useGlobePoints(
+  timeWindow: TimeWindow,
+  topic: Topic = "All",
+): {
   points: GlobePoint[];
   error: boolean;
   /** True until the dots for this window arrive (or fail). */
@@ -56,8 +61,10 @@ export function useGlobePoints(timeWindow: TimeWindow): {
     };
   }, [timeWindow]);
 
+  const all = result?.points ?? NO_POINTS;
+  const points = useMemo(() => filterPointsByTopic(all, topic), [all, topic]);
   return {
-    points: result?.points ?? NO_POINTS,
+    points,
     error: result?.error ?? false,
     loading: result?.window !== timeWindow,
   };

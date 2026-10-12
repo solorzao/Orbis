@@ -3,18 +3,20 @@ import { act, renderHook } from "@testing-library/react";
 import { useGlobePoints, FETCH_DEBOUNCE_MS } from "./useGlobePoints";
 import { fetchGlobeNews, type ApiGlobePoint } from "@/lib/api";
 import type { TimeWindow } from "@/lib/timeWindow";
+import type { Topic } from "@/types/news";
 
 vi.mock("@/lib/api", () => ({ fetchGlobeNews: vi.fn() }));
 const mockFetch = vi.mocked(fetchGlobeNews);
 
-function apiPoint(name: string): ApiGlobePoint {
+function apiPoint(name: string, topic = "politics"): ApiGlobePoint {
   return {
     lat: 10,
     lng: 20,
     weight: 3,
     article_count: 3,
     top_headline: name,
-    topic: "politics",
+    topic,
+    topics: [topic],
     location_name: name,
   };
 }
@@ -156,5 +158,25 @@ describe("useGlobePoints", () => {
     expect(result.current.error).toBe(true);
     expect(result.current.points).toEqual([]);
     expect(result.current.loading).toBe(false);
+  });
+
+  it("filters by topic, keeping the same array while nothing changes", async () => {
+    mockFetch.mockResolvedValue([apiPoint("Paris", "politics"), apiPoint("Lima", "health")]);
+    const { result, rerender } = renderHook(({ topic }) => useGlobePoints(LIVE_6H, topic), {
+      initialProps: { topic: "Health" as Topic },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+    });
+    const health = result.current.points;
+    expect(health.map((p) => p.locationName)).toEqual(["Lima"]);
+
+    // A re-render of the page (a co-pilot chunk, a panel change) must not hand
+    // the globe a new array: that would redraw the dots and recompute Intensity.
+    rerender({ topic: "Health" });
+    expect(result.current.points).toBe(health);
+
+    rerender({ topic: "All" });
+    expect(result.current.points.map((p) => p.locationName)).toEqual(["Paris", "Lima"]);
   });
 });
