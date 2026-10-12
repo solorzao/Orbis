@@ -768,6 +768,15 @@ kbd {
 .insp-list-lbl {
   padding: 10px 12px 2px;
 }
+/* The links on the globe, in the empty Inspect tab: each row opens one. */
+.link-list {
+  margin: 0 8px;
+}
+.link-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
 .insp-note {
   margin: 0 0 10px;
   font: var(--type-body-sm);

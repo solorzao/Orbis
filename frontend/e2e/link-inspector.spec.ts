@@ -126,7 +126,8 @@ test.describe("Inspect tab: a link", () => {
     await page.getByRole("button", { name: "Close United States and Iran" }).click();
     await expect(inspector).toHaveCount(0);
     await expect(page.getByTestId("arc-pill")).toHaveCount(0);
-    await expect(page.getByText("Click a dot on the globe to see its stories here.")).toBeVisible();
+    // Nothing open: with Links on, the tab lists the links drawn.
+    await expect(page.getByRole("list", { name: "Links on the globe" })).toBeVisible();
   });
 
   test("a paused explanation shows as plain text, and can be asked again", async ({ page }) => {
@@ -165,5 +166,61 @@ test.describe("Inspect tab: a link", () => {
     await expect(
       recent.getByRole("button", { name: "United States and Iran, 41 stories" }),
     ).toBeFocused();
+  });
+
+  test("from the keyboard alone: Links on, Tab to the Inspect list, Enter opens a link", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page);
+    const toggle = page.getByRole("button", { name: "Links", exact: true });
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-arcs",
+      String(MOCK_LINKS_LIFT.length),
+    );
+
+    // The Inspect tab, by the tabs' arrow keys.
+    await page.getByTestId("side-tab-copilot").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("side-tab-inspect")).toHaveAttribute("aria-selected", "true");
+
+    // The links drawn, in rank order (most surprising first): Saudi Arabia and Yemen.
+    const list = page.getByRole("list", { name: "Links on the globe" });
+    const rows = list.getByRole("button");
+    await expect(rows).toHaveCount(MOCK_LINKS_LIFT.length);
+    const first = rows.first();
+    for (let i = 0; i < 8; i++) {
+      if (await first.evaluate((el) => el === document.activeElement)) break;
+      await page.keyboard.press("Tab");
+    }
+    await expect(first).toBeFocused();
+    await expect(first).toHaveAccessibleName("Saudi Arabia and Yemen, SA ↔ YE, 46 stories");
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByTestId("link-inspector").getByRole("heading", { name: "Saudi Arabia and Yemen" }),
+    ).toBeVisible();
+  });
+});
+
+test.describe("Inspect tab: links on a phone", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("the list gives a phone something to tap: a link opens in the sheet", async ({ page }) => {
+    // Links on where the layers show, then a phone's width.
+    await page.setViewportSize({ width: 800, height: 844 });
+    await gotoStillGlobe(page);
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByTestId("links-chip")).toBeVisible();
+
+    await page.getByTestId("side-tab-inspect").tap();
+    await page
+      .getByRole("list", { name: "Links on the globe" })
+      .getByRole("button", { name: /^United States and Iran/ })
+      .tap();
+    await expect(
+      page.getByTestId("link-inspector").getByRole("heading", { name: HEADING }),
+    ).toBeVisible();
   });
 });

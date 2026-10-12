@@ -48,6 +48,7 @@ import LayerSwitcher, { type GlobeLayer } from "@/components/LayerSwitcher";
 import TimelineCapsule from "@/components/TimelineCapsule";
 import NewsPanel from "@/components/NewsPanel";
 import LinkInspector from "@/components/LinkInspector";
+import LinkList from "@/components/LinkList";
 import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
 import CoPilot from "@/components/CoPilot";
@@ -514,11 +515,15 @@ export default function Home() {
           }
         />
       ) : (
-        <p className="side-empty">
-          {panelQueue.length + linkQueue.length > 0
-            ? "Pick one above, or click a dot on the globe."
-            : "Click a dot on the globe to see its stories here."}
-        </p>
+        <>
+          <p className="side-empty">
+            {panelQueue.length + linkQueue.length > 0
+              ? "Pick one above, or click a dot on the globe."
+              : "Click a dot on the globe to see its stories here."}
+          </p>
+          {/* With Links on, its links: open one without pointing at its arc. */}
+          {linksOn && <LinkList links={links} rank={linkRank} onOpen={handleLinkOpen} />}
+        </>
       )}
     </>
   );
