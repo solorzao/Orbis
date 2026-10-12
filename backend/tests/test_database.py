@@ -476,6 +476,18 @@ class TestGetGlobePoints:
         assert "topics" not in point
 
     @pytest.mark.asyncio
+    async def test_the_place_name_follows_the_leads_country(self, pool):
+        """GDELT names Gaza "Gaza, Israel"; the lead's ISO code (FIPS GZ) is PS."""
+        pool.fetch.return_value = [
+            _globe_row(region="Gaza, Israel (General), Israel", country_code="PS")
+        ]
+
+        [point] = await database.get_globe_points(cell_size=1.0)
+
+        assert point["location_name"] == "Gaza, Palestine"
+        assert point["country_code"] == "PS"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("tags", "sensitive"),
         [
