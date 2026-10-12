@@ -4,6 +4,7 @@ import {
   MOCK_LINKS_LIFT,
   NEW_YORK,
   PARIS,
+  clickArc,
   gotoStillGlobe,
   hoverArc,
   hoverPlace,
@@ -96,6 +97,19 @@ test.describe("Links layer", () => {
     // Off the arc, the pill goes.
     await page.mouse.move(40, 450);
     await expect(page.getByTestId("arc-pill")).toHaveCount(0);
+  });
+
+  test("the arc pill is opaque, so an arc behind it never crosses its words", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0")); // glass on
+    await gotoStillGlobe(page);
+    await linksToggle(page).click();
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-arcs",
+      String(MOCK_LINKS_LIFT.length),
+    );
+    const { pill } = await hoverArc(page, MOCK_LINKS_LIFT.find((l) => l.a.iso === "RU")!);
+    const background = await pill.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(background).toMatch(/^rgb\(/); // no alpha: opaque
   });
 
   test("with reduced motion the arcs hold still", async ({ page }) => {
@@ -191,5 +205,38 @@ test.describe("Link hints", () => {
     // Links is on now: the pill has done its job.
     await expect(actions.getByRole("button", { name: "Show links" })).toHaveCount(0);
     await expect(page.getByTestId("side-tab-copilot")).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+test.describe("Arc pill below 1180px", () => {
+  test.use({ viewport: { width: 1024, height: 768 } });
+
+  test("a mouse resting on an arc still shows its pill", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await linksToggle(page).click();
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-arcs",
+      String(MOCK_LINKS_LIFT.length),
+    );
+    const { pill } = await hoverArc(page, MOCK_LINKS_LIFT.find((l) => l.a.iso === "RU")!);
+    await expect(pill).toBeVisible();
+  });
+});
+
+test.describe("Arc pill on a touch screen", () => {
+  test.use({ viewport: { width: 1024, height: 768 }, hasTouch: true, isMobile: true });
+
+  test("shows no pill: a touch screen can't hover (as the hover card)", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await linksToggle(page).click();
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-arcs",
+      String(MOCK_LINKS_LIFT.length),
+    );
+    // The inspected link would have its pill at its arc's top.
+    const irUs = MOCK_LINKS_LIFT.find((l) => l.a.iso === "IR" && l.b.iso === "US")!;
+    await clickArc(page, irUs, "United States and Iran");
+    await expect(page.locator('[data-testid="arc-pill"][data-placed="true"]')).toBeAttached();
+    await expect(page.getByTestId("arc-pill")).toBeHidden();
   });
 });

@@ -536,7 +536,7 @@ kbd {
   cursor: pointer;
 }
 
-/* Stories tab: recent places, then a place's stories (mockup .insp, .art, lines 357-372) */
+/* Inspect tab: recent places and links, then a place's stories (mockup .insp, .art, lines 357-372) */
 .places {
   display: flex;
   flex-wrap: wrap;
@@ -1184,7 +1184,11 @@ button.cite:hover {
   white-space: nowrap;
 }
 
-/* The pill that names a link at its arc's top (mockup .arc-pill); ArcPill places it. */
+/*
+ * The pill that names a link at its arc's top (mockup .arc-pill); ArcPill
+ * places it. Opaque (the glass tint over the page colour), so an arc running
+ * behind it can't cross its words.
+ */
 .arc-pill {
   position: fixed;
   z-index: var(--z-reticle);
@@ -1196,10 +1200,8 @@ button.cite:hover {
   height: 28px;
   padding: 0 12px;
   border-radius: var(--radius-pill);
-  background: var(--surface-glass);
+  background: linear-gradient(var(--surface-glass), var(--surface-glass)), var(--bg-page);
   border: 1px solid var(--border-default);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   font: var(--type-label);
   color: var(--text-primary);
   white-space: nowrap;
@@ -1213,6 +1215,12 @@ button.cite:hover {
 }
 .arc-pill:not([data-placed]) {
   visibility: hidden;
+}
+/* A touch screen can't hover an arc (as the hover card, useTouchOnly): no pill. */
+@media (hover: none) {
+  .arc-pill {
+    display: none;
+  }
 }
 
 /*
@@ -1695,10 +1703,6 @@ button.cite:hover {
     left: calc(100% + 12px);
     bottom: 50%;
     transform: translateY(50%);
-  }
-  /* As in the mockup: the sheet takes the bottom of the screen, and touch has no hover. */
-  .arc-pill {
-    display: none;
   }
 }
 @media (max-width: 639px) {
