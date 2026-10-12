@@ -61,12 +61,12 @@ describe("looksLikePhoto", () => {
 });
 
 describe("veilsImage", () => {
-  it("blurs a conflict lead's image until it is revealed", () => {
-    expect(veilsImage("Conflict", false)).toBe(true);
-    expect(veilsImage("Conflict", true)).toBe(false);
+  it("blurs a sensitive lead's image (conflict in any of its tags) until revealed", () => {
+    expect(veilsImage(true, false)).toBe(true);
+    expect(veilsImage(true, true)).toBe(false);
   });
 
-  it.each(["Politics", "Climate", "All"] as const)("shows a %s lead's image", (topic) => {
-    expect(veilsImage(topic, false)).toBe(false);
+  it("shows any other lead's image", () => {
+    expect(veilsImage(false, false)).toBe(false);
   });
 });

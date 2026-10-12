@@ -57,7 +57,7 @@ function Glyph({ topic }: { topic: Topic }) {
 /**
  * The lead's image (lib/imageSafety): https only, no referrer, lazy. A logo,
  * a failed load or an image that isn't photo-shaped gives way to the topic's
- * glyph. A conflict lead's image is blurred behind a veil until Show.
+ * glyph. A sensitive lead's image (a conflict tag) is blurred behind a veil until Show.
  */
 function Thumb({
   lead,
@@ -72,7 +72,7 @@ function Thumb({
   // The URL that failed, so a new lead's image gets its own chance.
   const [failed, setFailed] = useState<string | null>(null);
   if (!url || failed === url) return <Glyph topic={lead.topic} />;
-  const veiled = veilsImage(lead.topic, revealed.has(url));
+  const veiled = veilsImage(lead.sensitive, revealed.has(url));
   return (
     <div className={veiled ? "thumb veiled" : "thumb"}>
       {/* A third-party image of unknown size: next/image would proxy it. */}

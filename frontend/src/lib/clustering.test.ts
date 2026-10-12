@@ -70,6 +70,7 @@ describe("apiPointsToGlobePoints", () => {
           published_at: "2026-10-12T09:45:00Z",
           image_url: "https://cdn.example.com/a.jpg",
           topic: "environment",
+          sensitive: false,
         },
         topic_mix: { politics: 3, environment: 2, climate: 1, sport: 4 },
         tone: -0.25,
@@ -82,10 +83,28 @@ describe("apiPointsToGlobePoints", () => {
       publishedAt: "2026-10-12T09:45:00Z",
       imageUrl: "https://cdn.example.com/a.jpg",
       topic: "Climate",
+      sensitive: false,
     });
     // Tags become topic pills; only the six topics count.
     expect(point.topicMix).toEqual({ Politics: 3, Climate: 3 });
     expect(point.tone).toBe(-0.25);
+  });
+
+  it("marks a lead sensitive as the server says, else by its conflict topic", () => {
+    const lead = {
+      title: "Talks resume",
+      source_name: "Reuters",
+      published_at: "2026-10-12T09:45:00Z",
+      image_url: null,
+    };
+    const [tagged, conflict, other] = apiPointsToGlobePoints([
+      apiPoint({ lead: { ...lead, topic: "politics", sensitive: true } }),
+      apiPoint({ lead: { ...lead, topic: "conflict" } }), // cached before `sensitive`
+      apiPoint({ lead: { ...lead, topic: "politics" } }),
+    ]);
+    expect(tagged.lead?.sensitive).toBe(true);
+    expect(conflict.lead?.sensitive).toBe(true);
+    expect(other.lead?.sensitive).toBe(false);
   });
 
   it("leaves the hover fields empty for a point without them", () => {

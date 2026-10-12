@@ -1,5 +1,3 @@
-import type { Topic } from "@/types/news";
-
 /**
  * Rules for showing a news site's image unprompted (the hover card's lead
  * image). Images are hotlinked from GDELT's sources, so they load with no
@@ -37,10 +35,10 @@ export function looksLikePhoto(naturalWidth: number, naturalHeight: number): boo
 }
 
 /**
- * Whether the image goes behind a veil: a conflict lead's image may be
- * graphic, so it is blurred until the visitor asks to see it (that image
- * then stays revealed for the session).
+ * Whether the image goes behind a veil: a sensitive lead's image (conflict
+ * among any of its tags) may be graphic, so it is blurred until the visitor
+ * asks to see it (that image then stays revealed for the session).
  */
-export function veilsImage(leadTopic: Topic, revealed: boolean): boolean {
-  return leadTopic === "Conflict" && !revealed;
+export function veilsImage(sensitive: boolean, revealed: boolean): boolean {
+  return sensitive && !revealed;
 }

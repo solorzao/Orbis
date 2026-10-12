@@ -32,6 +32,8 @@ export interface GlobeLead {
   imageUrl: string | null;
   /** The story's first topic; "All" when it is none of the six. */
   topic: Topic;
+  /** Conflict is among its tags: its image is veiled until the visitor asks. */
+  sensitive: boolean;
 }
 
 export interface GlobePoint {

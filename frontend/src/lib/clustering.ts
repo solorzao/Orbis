@@ -162,6 +162,8 @@ function mapLead(lead: ApiGlobePoint["lead"]): GlobeLead | undefined {
     publishedAt: lead.published_at,
     imageUrl: lead.image_url ?? null,
     topic: mapApiTopic(lead.topic),
+    // Points cached before the server sent it fall back to the first tag.
+    sensitive: lead.sensitive ?? mapApiTopic(lead.topic) === "Conflict",
   };
 }
 

@@ -14,6 +14,7 @@ const LEAD: GlobeLead = {
   publishedAt: "2026-10-12T14:18:00Z",
   imageUrl: "https://images.example.com/paris-climate.jpg",
   topic: "Climate",
+  sensitive: false,
 };
 
 function point(overrides: Partial<GlobePoint> = {}): GlobePoint {
@@ -219,8 +220,9 @@ describe("HoverCard's image", () => {
     expect(img(card)).not.toBeNull();
   });
 
-  it("veils a conflict lead's image until Show is clicked", () => {
-    const conflict = point({ lead: { ...LEAD, topic: "Conflict" } });
+  it("veils a sensitive lead's image until Show is clicked", () => {
+    // Tagged politics then conflict: its topic is Politics, but it is still veiled.
+    const conflict = point({ lead: { ...LEAD, topic: "Politics", sensitive: true } });
     const { card, onReveal } = renderCard({ point: conflict });
     expect(card.querySelector(".thumb")).toHaveClass("veiled");
     const show = within(card).getByRole("button", { name: "Conflict image hidden · Show" });
@@ -229,10 +231,19 @@ describe("HoverCard's image", () => {
   });
 
   it("shows a revealed conflict image", () => {
-    const conflict = point({ lead: { ...LEAD, topic: "Conflict" } });
+    const conflict = point({ lead: { ...LEAD, topic: "Conflict", sensitive: true } });
     const { card } = renderCard({ point: conflict, revealed: new Set([LEAD.imageUrl!]) });
     expect(card.querySelector(".thumb")).not.toHaveClass("veiled");
     expect(within(card).queryByRole("button", { name: /Conflict image hidden/ })).toBeNull();
+  });
+});
+
+describe("HoverCard's image, not sensitive", () => {
+  it("shows a lead's image when no tag is conflict", () => {
+    const { card } = renderCard({
+      point: point({ lead: { ...LEAD, topic: "Conflict", sensitive: false } }),
+    });
+    expect(card.querySelector(".thumb")).not.toHaveClass("veiled");
   });
 });
 

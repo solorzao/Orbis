@@ -15,6 +15,8 @@ export interface ApiGlobeLead {
   image_url: string | null;
   /** The story's first tag, e.g. "conflict" or "environment". */
   topic: string;
+  /** Conflict is among its tags (not only the first). */
+  sensitive?: boolean;
 }
 
 export interface ApiGlobePoint {
