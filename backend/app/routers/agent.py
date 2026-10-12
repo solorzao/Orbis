@@ -19,7 +19,7 @@ from pydantic import (
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
-from app.middleware.security import has_injection_pattern, sanitise_text
+from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.services.agent import (
     _OFF_TOPIC_ANSWER,
     _PAUSED_ANSWER,
@@ -106,7 +106,8 @@ def _validate_request(body: AskRequest) -> str:
     if body.conversation_id and not _UUID_RE.match(body.conversation_id):
         raise HTTPException(status_code=422, detail="conversation_id must be a valid UUID.")
 
-    question = sanitise_text(body.question, max_length=_MAX_QUESTION_LENGTH)
+    # Hidden characters go first, so they can't split an injection phrase.
+    question = sanitise_text(strip_invisible(body.question), max_length=_MAX_QUESTION_LENGTH)
     if not question:
         raise HTTPException(status_code=422, detail="Question is empty after sanitization.")
 

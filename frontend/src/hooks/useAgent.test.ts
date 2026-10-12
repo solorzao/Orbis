@@ -43,12 +43,24 @@ const ZWSP = ch(0x200b); // zero-width space
 const RLM = ch(0x200f); // right-to-left mark
 const NEL = ch(0x85); // C1 next line
 const BOM = ch(0xfeff);
+const ALM = ch(0x061c); // Arabic letter mark
+const TAG_G = String.fromCodePoint(0xe0067); // Unicode tag "g"
+const CANCEL_TAG = String.fromCodePoint(0xe007f);
 
 describe("cleanLabel", () => {
   it("strips control and bidi characters", () => {
     expect(cleanLabel(`La${ZWSP}gos${RLO}`)).toBe("Lagos");
     expect(cleanLabel(`${LRI}Accra${PDI}${RLM}`)).toBe("Accra");
     expect(cleanLabel(`Kyiv\u0000\u0007\u001b[31m${NEL}${BOM}`)).toBe("Kyiv[31m");
+  });
+
+  it("strips the Arabic letter mark and Unicode tags", () => {
+    expect(cleanLabel(`Ac${ALM}cra${TAG_G}${CANCEL_TAG}`)).toBe("Accra");
+  });
+
+  it("deletes vertical tabs, form feeds and the BOM, as the backend does", () => {
+    expect(cleanLabel(`Lagos\vNigeria\f${BOM}`)).toBe("LagosNigeria");
+    expect(cleanLabel(`Lagos,${BOM} Nigeria`)).toBe("Lagos, Nigeria");
   });
 
   it("collapses whitespace to one line", () => {

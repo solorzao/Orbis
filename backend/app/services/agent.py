@@ -17,6 +17,7 @@ from typing import Any, Literal, get_args
 import anthropic
 
 from app.config import settings
+from app.middleware.security import strip_invisible
 from app.services import llm_budget, retrieval
 from app.services.ai_summary import _clean_place
 from app.services.llm import response_text
@@ -35,11 +36,6 @@ _TOPIC_TAGS = {"climate": "environment"}
 
 # How far back a window may reach: the timeline's 7 days, which is all the globe shows.
 _MAX_WINDOW_AGE = timedelta(days=7)
-
-# Invisible characters that sanitise_text keeps: C1 controls, zero-width and bidi
-# marks, word joiners and the BOM. They could hide an injection phrase from
-# has_injection_pattern ("Ignore\u200b previous instructions").
-_INVISIBLE = re.compile("[\u0080-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
 
 
 def _topic_tag(topic: str) -> str:
@@ -101,7 +97,7 @@ def clean_screen_context(
       them. (The timeline's first and last UTC days straddle those edges.)
     """
     now = _utc(now or datetime.now(timezone.utc))
-    clean_place = _clean_place(_INVISIBLE.sub("", place)) if isinstance(place, str) else ""
+    clean_place = _clean_place(strip_invisible(place)) if isinstance(place, str) else ""
     clean_topic = topic if topic in SCREEN_TOPICS else ""
 
     start = end = None

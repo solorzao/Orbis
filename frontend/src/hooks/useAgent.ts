@@ -38,8 +38,11 @@ const MAX_LABEL = 80;
 const MAX_TITLE = 300;
 const MAX_ACTIONS = 3;
 
-// C0 and C1 controls, zero-width and bidi marks, word joiners, isolates and the BOM
-const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+// Characters that render as nothing, as the backend strips them (security.strip_invisible,
+// and sanitise_text for C0): C0 controls but tab and line breaks, C1, the Arabic letter
+// mark, zero-width and bidi marks, word joiners and isolates, the BOM and Unicode tags.
+const INVISIBLE =
+  /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
 
 /**
  * Model- or source-controlled text made safe to show as one line: control,
@@ -48,13 +51,7 @@ const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\
  */
 export function cleanLabel(s: unknown, max = MAX_LABEL): string {
   if (typeof s !== "string") return "";
-  return s
-    .replace(/\s/g, " ")
-    .replace(INVISIBLE, "")
-    .replace(/ +/g, " ")
-    .trim()
-    .slice(0, max)
-    .trimEnd();
+  return s.replace(INVISIBLE, "").replace(/\s+/g, " ").trim().slice(0, max).trimEnd();
 }
 
 /** Whether `url` is an http(s) link: the only kind a citation may open. */
