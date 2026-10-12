@@ -58,6 +58,8 @@ interface GlobeProps {
   reduced?: boolean;
   /** Low-power mode: the globe holds still. */
   lowPower?: boolean;
+  /** A touch-only screen: the arcs' dashes hold still. */
+  touch?: boolean;
   /** Dots (the default) or Intensity, a heatmap of the same places; dots hide under it. */
   layer?: GlobeLayer;
   /**
@@ -106,6 +108,7 @@ export default function Globe({
   onReady,
   reduced = false,
   lowPower = false,
+  touch = false,
   layer = "dots",
   holdHeatmap = false,
   replaying = false,
@@ -117,6 +120,8 @@ export default function Globe({
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  // The visitor is dragging the globe: the arcs' dashes pause until they let go.
+  const [dragging, setDragging] = useState(false);
 
   const onPointClickRef = useRef(onPointClick);
   onPointClickRef.current = onPointClick;
@@ -326,6 +331,12 @@ export default function Globe({
       driftStoppedRef.current = true;
     };
     container.addEventListener("pointerdown", stopDrift);
+    // A press on the globe may become a drag: the arcs pause until it ends, wherever.
+    const grab = () => setDragging(true);
+    const release = () => setDragging(false);
+    container.addEventListener("pointerdown", grab);
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
     container.addEventListener("wheel", stopDrift, { passive: true });
     let driftFrame = 0;
     const driftStart = performance.now();
@@ -391,6 +402,9 @@ export default function Globe({
       container.removeEventListener("pointerup", checkEmptyClick);
       window.removeEventListener("resize", handleResize);
       container.removeEventListener("pointerdown", stopDrift);
+      container.removeEventListener("pointerdown", grab);
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
       container.removeEventListener("wheel", stopDrift);
     };
   }, []);
@@ -421,7 +435,7 @@ export default function Globe({
     const container = containerRef.current;
     const tokens = tokensRef.current;
     if (!globe || !isLoaded || !tokens) return;
-    const flow = arcFlows({ reduced, lowPower });
+    const flow = arcFlows({ reduced, lowPower, touch, dragging });
     const arcs = linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow });
     globe.arcsData(arcs);
     if (container) {
@@ -429,7 +443,7 @@ export default function Globe({
       container.dataset.arcs = String(arcs.length);
       container.dataset.arcFlow = String(flow && arcs.length > 0);
     }
-  }, [links, inspectedLink, reduced, lowPower, isLoaded]);
+  }, [links, inspectedLink, reduced, lowPower, touch, dragging, isLoaded]);
 
   // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {

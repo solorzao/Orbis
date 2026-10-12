@@ -532,6 +532,7 @@ export default function Home() {
         }}
         reduced={reduced}
         lowPower={lowPower}
+        touch={touch}
         layer={globeLayer}
         holdHeatmap={replaying || loading}
         replaying={replaying}

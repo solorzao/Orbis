@@ -47,9 +47,18 @@ export function arcStroke(n: number, maxN: number): number {
   return 0.16 + (maxN > 0 ? n / maxN : 0) * 0.5;
 }
 
-/** Arcs flow only with full motion: not with reduced motion, nor in low-power mode. */
-export function arcFlows(motion: { reduced: boolean; lowPower: boolean }): boolean {
-  return !motion.reduced && !motion.lowPower;
+/**
+ * Whether the arcs' dashes flow. Ambient motion (tokens.md): never with
+ * reduced motion or in low-power mode, off by default on a touch-only
+ * screen, and paused while the visitor drags the globe.
+ */
+export function arcFlows(motion: {
+  reduced: boolean;
+  lowPower: boolean;
+  touch?: boolean;
+  dragging?: boolean;
+}): boolean {
+  return !motion.reduced && !motion.lowPower && !motion.touch && !motion.dragging;
 }
 
 /** The arc tokens, read from CSS (a canvas can't use variables). */

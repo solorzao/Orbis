@@ -73,6 +73,13 @@ describe("arcStroke", () => {
 });
 
 describe("arcFlows", () => {
+  it("pauses while the visitor drags the globe, and is off on a touch-only screen", () => {
+    const full = { reduced: false, lowPower: false };
+    expect(arcFlows({ ...full, touch: false, dragging: false })).toBe(true);
+    expect(arcFlows({ ...full, touch: false, dragging: true })).toBe(false);
+    expect(arcFlows({ ...full, touch: true, dragging: false })).toBe(false);
+  });
+
   it("flows only with full motion and not in low-power mode", () => {
     expect(arcFlows({ reduced: false, lowPower: false })).toBe(true);
     expect(arcFlows({ reduced: true, lowPower: false })).toBe(false);

@@ -133,6 +133,22 @@ test.describe("Links layer", () => {
     await expect(globe).toHaveAttribute("data-arc-flow", "true");
   });
 
+  test("the dashes pause while the globe is dragged", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0"));
+    await mockAllApiRoutes(page);
+    await page.goto("/");
+    await expect(page.getByTestId("globe").locator("canvas")).toBeVisible({ timeout: 10000 });
+    await linksToggle(page).click();
+    const globe = page.getByTestId("globe");
+    await expect(globe).toHaveAttribute("data-arc-flow", "true");
+    await page.mouse.move(300, 450); // the canvas, off the globe's chrome
+    await page.mouse.down();
+    await page.mouse.move(340, 470, { steps: 4 });
+    await expect(globe).toHaveAttribute("data-arc-flow", "false");
+    await page.mouse.up();
+    await expect(globe).toHaveAttribute("data-arc-flow", "true");
+  });
+
   test("in low-power mode the arcs hold still", async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("orbis-low-power", "1"));
     await mockAllApiRoutes(page);
@@ -238,5 +254,20 @@ test.describe("Arc pill on a touch screen", () => {
     await clickArc(page, irUs, "United States and Iran");
     await expect(page.locator('[data-testid="arc-pill"][data-placed="true"]')).toBeAttached();
     await expect(page.getByTestId("arc-pill")).toBeHidden();
+  });
+});
+
+test.describe("Arc flow on a touch screen", () => {
+  test.use({ viewport: { width: 1024, height: 768 }, hasTouch: true, isMobile: true });
+
+  test("is off by default, even at full power and full motion", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0"));
+    await mockAllApiRoutes(page);
+    await page.goto("/");
+    await expect(page.getByTestId("globe").locator("canvas")).toBeVisible({ timeout: 10000 });
+    await linksToggle(page).click();
+    const globe = page.getByTestId("globe");
+    await expect(globe).toHaveAttribute("data-arcs", String(MOCK_LINKS_LIFT.length));
+    await expect(globe).toHaveAttribute("data-arc-flow", "false");
   });
 });
