@@ -56,6 +56,50 @@ export const HEATMAP = {
 } as const;
 
 /**
+ * The Intensity ramp's colours: --accent-periwinkle, --accent-lavender and
+ * --text-primary (a canvas can't read CSS variables; a test keeps these equal
+ * to tokens.css). Never --signal-warning: that marks surges.
+ */
+export const HEAT_COLORS = {
+  periwinkle: "#8b9cff",
+  lavender: "#c3a6ff",
+  peak: "#eef0ff",
+} as const;
+
+/** Where the ramp passes each colour, and how opaque it is there. */
+const HEAT_STOPS = [
+  { t: 0, color: HEAT_COLORS.periwinkle, alpha: 0 },
+  { t: 0.35, color: HEAT_COLORS.periwinkle, alpha: 0.45 },
+  { t: 0.7, color: HEAT_COLORS.lavender, alpha: 0.75 },
+  { t: 1, color: HEAT_COLORS.peak, alpha: 0.95 },
+] as const;
+
+const rgb = (hex: string) => {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+
+/**
+ * The Intensity heatmap's colour for heat t (0 to 1): clear where there is no
+ * heat, so the land shows through, then periwinkle, lavender and near-white
+ * at the peak, more opaque as it rises. "rgba(r,g,b,a)" with whole-number
+ * channels, as three-globe parses it.
+ */
+export function heatColor(t: number): string {
+  const x = Math.min(1, Math.max(0, t));
+  let i = 0;
+  while (i < HEAT_STOPS.length - 2 && x > HEAT_STOPS[i + 1].t) i++;
+  const a = HEAT_STOPS[i];
+  const b = HEAT_STOPS[i + 1];
+  const f = (x - a.t) / (b.t - a.t);
+  const [r0, g0, b0] = rgb(a.color);
+  const [r1, g1, b1] = rgb(b.color);
+  const mix = (p: number, q: number) => Math.round(p + (q - p) * f);
+  const alpha = Math.round((a.alpha + (b.alpha - a.alpha) * f) * 1000) / 1000;
+  return `rgba(${mix(r0, r1)},${mix(g0, g1)},${mix(b0, b1)},${alpha})`;
+}
+
+/**
  * The places the Intensity heatmap is computed from. three-globe evaluates
  * every place at each of the sphere's ~246,000 vertices: with WebGPU (see
  * webGpuReady) that takes about 0.35 s whatever the count, so every place

@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import path from "path";
 import {
   HEATMAP,
+  HEAT_COLORS,
   driftLng,
   durationMs,
+  heatColor,
   heatmapPoints,
   hexToRgba,
   pointTooltipHtml,
@@ -144,5 +148,57 @@ describe("heatmapPoints", () => {
       baseAltitude: 0.006,
       topAltitude: 0.04,
     });
+  });
+});
+
+describe("heatColor", () => {
+  // three-globe reads "rgba(r, g, b, a)" with whole-number channels.
+  const RGBA = /^rgba\((\d+),(\d+),(\d+),([\d.]+)\)$/;
+  const parse = (c: string) => {
+    const m = RGBA.exec(c);
+    if (!m) throw new Error(`not rgba(): ${c}`);
+    return { rgb: [Number(m[1]), Number(m[2]), Number(m[3])], a: Number(m[4]) };
+  };
+  const rgbOf = (hex: string) => {
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+
+  it("is clear where there is no heat, so the land shows through", () => {
+    expect(parse(heatColor(0)).a).toBe(0);
+  });
+
+  it("grows more opaque with the heat, never less", () => {
+    let last = -1;
+    for (let i = 0; i <= 100; i++) {
+      const { a } = parse(heatColor(i / 100));
+      expect(a).toBeGreaterThanOrEqual(last);
+      last = a;
+    }
+    expect(last).toBeGreaterThan(0.9);
+  });
+
+  it("runs periwinkle, then lavender, to near-white at the peak", () => {
+    expect(parse(heatColor(0.35)).rgb).toEqual(rgbOf(HEAT_COLORS.periwinkle));
+    expect(parse(heatColor(0.7)).rgb).toEqual(rgbOf(HEAT_COLORS.lavender));
+    expect(parse(heatColor(1)).rgb).toEqual(rgbOf(HEAT_COLORS.peak));
+  });
+
+  it("clamps outside 0-1", () => {
+    expect(heatColor(-1)).toBe(heatColor(0));
+    expect(heatColor(2)).toBe(heatColor(1));
+  });
+
+  it("uses the Soft Orbit tokens, not the surge colour", () => {
+    // The canvas can't read CSS variables; this keeps the literals equal to them.
+    const css = readFileSync(path.resolve(__dirname, "../app/tokens.css"), "utf8");
+    const token = (name: string) =>
+      css.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6});`))?.[1].toLowerCase();
+    expect(HEAT_COLORS.periwinkle).toBe(token("accent-periwinkle"));
+    expect(HEAT_COLORS.lavender).toBe(token("accent-lavender"));
+    expect(HEAT_COLORS.peak).toBe(token("text-primary"));
+    const warning = token("signal-warning");
+    expect(warning).toBeTruthy();
+    expect(Object.values(HEAT_COLORS)).not.toContain(warning);
   });
 });

@@ -9,6 +9,7 @@ import {
   HOME_VIEW,
   driftLng,
   durationMs,
+  heatColor,
   heatmapPoints,
   hexToRgba,
   pointTooltipHtml,
@@ -151,6 +152,7 @@ export default function Globe({
       .heatmapPointLat("lat")
       .heatmapPointLng("lng")
       .heatmapPointWeight("count")
+      .heatmapColorFn(() => heatColor) // an accessor: each heatmap gets the Soft Orbit ramp
       .heatmapBandwidth(HEATMAP.bandwidth)
       .heatmapColorSaturation(HEATMAP.colorSaturation)
       .heatmapBaseAltitude(HEATMAP.baseAltitude)
