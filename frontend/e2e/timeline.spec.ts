@@ -123,8 +123,25 @@ test.describe("Timeline capsule", () => {
   });
 });
 
+/** Pin low-power mode ("1" on, "0" off) so a 4-core CI runner can't switch it on by itself. */
+async function setLowPower(page: Page, on: boolean) {
+  await page.addInitScript(
+    (value) => window.localStorage.setItem("orbis-low-power", value),
+    on ? "1" : "0",
+  );
+}
+
 test.describe("Layer switcher", () => {
+  test("Intensity is unavailable in low-power mode and says why", async ({ page }) => {
+    await setLowPower(page, true);
+    await gotoTimeline(page);
+    const intensity = page.getByTestId("layer-switcher").getByRole("button", { name: "Intensity" });
+    await expect(intensity).toHaveAttribute("aria-disabled", "true");
+    await expect(intensity).toHaveAttribute("title", /low-power/);
+  });
+
   test("switches the globe between Dots and Intensity", async ({ page }) => {
+    await setLowPower(page, false);
     await gotoTimeline(page);
     const layers = page.getByTestId("layer-switcher");
     const dots = layers.getByRole("button", { name: "Dots" });
@@ -142,6 +159,7 @@ test.describe("Layer switcher", () => {
   test("during a replay on the main-thread path, each day's dots show over the held heatmap", async ({
     page,
   }) => {
+    await setLowPower(page, false);
     // Force the main-thread path, whatever GPU the runner has.
     await page.addInitScript(() =>
       Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }),
