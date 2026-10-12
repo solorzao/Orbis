@@ -506,14 +506,20 @@ def _build_context(
 
 
 def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[dict]:
-    """Map LLM-generated citations back to full article metadata."""
+    """Map LLM-generated citations back to full article metadata.
+
+    Each keeps its ``index``, the number the answer cites it by ([4]), so the
+    co-pilot can link each marker to its source.
+    """
     enriched = []
     for c in raw_citations:
-        idx = c.get("index", 0)
-        if 1 <= idx <= len(article_index):
-            article = article_index[idx - 1]
+        idx = c.get("index")
+        number = idx if isinstance(idx, int) and not isinstance(idx, bool) and idx >= 1 else None
+        if number is not None and number <= len(article_index):
+            article = article_index[number - 1]
             enriched.append(
                 {
+                    "index": number,
                     "title": article["title"],
                     "url": article["url"],
                     "source_name": article["source_name"],
@@ -525,6 +531,7 @@ def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[di
             # Fallback: use whatever the LLM provided
             enriched.append(
                 {
+                    "index": number,
                     "title": c.get("title", ""),
                     "url": c.get("source_url", c.get("url", "")),
                     "source_name": c.get("source_name", ""),

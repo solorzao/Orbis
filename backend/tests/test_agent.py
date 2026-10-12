@@ -14,6 +14,7 @@ from app.services import llm_budget
 from app.services.agent import (
     _OFF_TOPIC_ANSWER,
     RETRIEVAL_TOOLS,
+    _enrich_citations,
     _normalize_globe_actions,
     ask,
     clean_screen_context,
@@ -597,3 +598,28 @@ async def test_ask_endpoint_scopes_the_planner_with_the_screen_context(history_s
 
     planner_messages = mock_client.messages.create.call_args.kwargs["messages"]
     assert planner_messages[-1]["content"] == "Screen context: topic=Conflict\n\nAnything?"
+
+
+def test_enriched_citations_keep_the_number_the_answer_cites():
+    """The answer cites context entries by number ([4]); the UI maps markers by it."""
+    article_index = [
+        {"title": f"Story {n}", "url": f"https://e.com/{n}", "source_name": "Wire", "lat": None}
+        for n in range(1, 6)
+    ]
+    raw = [
+        {"index": 4, "title": "ignored"},
+        {"index": 1},
+        {"index": 9, "title": "Hallucinated", "source_url": "https://x.com"},
+    ]
+
+    enriched = _enrich_citations(raw, article_index)
+
+    assert [c["index"] for c in enriched] == [4, 1, 9]
+    assert enriched[0]["title"] == "Story 4"
+    assert enriched[2]["url"] == "https://x.com"
+    assert enriched[0]["lat"] == 0 and enriched[0]["lng"] == 0
+
+
+def test_enriched_citations_without_a_number_get_none():
+    enriched = _enrich_citations([{"title": "T", "url": "https://e.com"}], [])
+    assert enriched[0]["index"] is None
