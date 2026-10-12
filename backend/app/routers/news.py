@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
@@ -14,6 +15,7 @@ from app.config import settings
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.models.news import (
     ClusterSummaryResponse,
+    Delta,
     GlobeDataPoint,
     HourlyDensity,
     HourlyVolume,
@@ -22,6 +24,7 @@ from app.models.news import (
     PreviewEntity,
     SelectionSummaryRequest,
     SelectionSummaryResponse,
+    Surge,
     TopicCount,
 )
 from app.routers.http_cache import edge_cached
@@ -41,7 +44,9 @@ from app.services.database import (
     get_hourly_volume,
     get_topic_counts,
 )
+from app.services.delta import get_delta
 from app.services.grid import cell_index
+from app.services.surges import get_surges
 from app.services.titles import dedup_key
 
 logger = logging.getLogger(__name__)
@@ -437,6 +442,135 @@ async def get_place_preview(
     preview = PlacePreview(spark=spark, entities=_clean_entities(names), brief=brief)
     await set_cached(cache_k, preview.model_dump(), _PREVIEW_TTL)
     return preview
+
+
+# How long surges stay cached: stories arrive every 15 minutes, and each
+# ingestion clears db:* keys anyway. No surges is an answer like any other.
+_SURGES_TTL = 300
+
+# The surge query running for each cache key: misses that arrive while it
+# runs (visitors as the entry expires, or a delta) wait for it rather than
+# run their own.
+_surges_in_flight: dict[str, asyncio.Task[list[Surge]]] = {}
+
+# Seconds the shared surge query may take (it measures well under 1 s). The
+# pool sets no command timeout, so without this a hung query (a half-open
+# connection) would hold every later surges miss and delta in the process.
+_SURGES_QUERY_TIMEOUT = 15
+
+
+async def _cached_surges(tag: str | None) -> list[Surge]:
+    """The surging places for a topic tag (None for all), from Redis when there.
+
+    On a miss, one query per key runs at a time and every concurrent caller
+    gets its answer, or its error (nothing is cached then): a TimeoutError
+    after 15 s. A caller that is cancelled leaves the query running for the
+    others.
+    """
+    cache_k = f"db:surges:v1:{tag or ''}"
+    cached = await get_cached(cache_k)
+    if cached is not None:  # [] is a cached answer too
+        return [Surge(**s) for s in cached]
+
+    task = _surges_in_flight.get(cache_k)
+    if task is None:
+        task = asyncio.create_task(_load_surges(cache_k, tag))
+        _surges_in_flight[cache_k] = task
+        task.add_done_callback(functools.partial(_landed, cache_k))
+    return await asyncio.shield(task)
+
+
+async def _load_surges(cache_k: str, tag: str | None) -> list[Surge]:
+    async with asyncio.timeout(_SURGES_QUERY_TIMEOUT):
+        rows = await get_surges(_now(), tag)
+    surges = [Surge(**s) for s in rows]
+    await set_cached(cache_k, [s.model_dump(mode="json") for s in surges], _SURGES_TTL)
+    return surges
+
+
+def _landed(cache_k: str, task: asyncio.Task) -> None:
+    """Forget a finished surge query, so the next miss runs a new one."""
+    if _surges_in_flight.get(cache_k) is task:
+        del _surges_in_flight[cache_k]
+
+
+@router.get("/news/surges", response_model=list[Surge], dependencies=[Depends(edge_cached)])
+async def get_news_surges(
+    topic: str | None = Query(
+        None,
+        description="Topic pill: Politics, Conflict, Technology, Climate, Economy, Health or All",
+    ),
+) -> list[Surge]:
+    """Places whose coverage is surging now, most surging first: at most 8.
+
+    A 1° cell surges when its distinct stories of the last 2 hours are at
+    least 3 times its usual 2 hours before then (over the data held, up to a
+    week; counted as at least half a story), with at least 8 stories from at
+    least 3 sources. A topic
+    counts its stories only. No stories at all in the last 2 hours (a feed
+    outage) is no surges.
+    """
+    return await _cached_surges(_globe_topic_tag(topic))
+
+
+# How long a delta stays cached.
+_DELTA_TTL = 300
+
+# The furthest back a delta reaches: as far as articles are kept.
+_MAX_DELTA = timedelta(days=settings.retention_days)
+
+# The visits that share a delta: its start is floored in UTC, coarser the
+# older it is. Up to a day back, to the quarter hour; up to 3 days, to the
+# hour; beyond, to 6 hours. A week of visits shares about 160 entries rather
+# than 672 quarter hours.
+_DELTA_FLOORS = (
+    (timedelta(hours=24), timedelta(minutes=15)),
+    (timedelta(hours=72), timedelta(hours=1)),
+    (_MAX_DELTA, timedelta(hours=6)),
+)
+
+# A visit this far after now is a fast client clock, and counts as now.
+_DELTA_CLOCK_SKEW = timedelta(minutes=15)
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _delta_start(since: str, now: datetime) -> datetime:
+    """The start a delta counts from: *since* in UTC, between the retention's
+    start and *now*, floored as _DELTA_FLOORS says. Invalid, or more than 15
+    minutes after *now*, is a 422."""
+    start = _parse_iso(since)
+    if start is None:
+        raise HTTPException(status_code=422, detail="since must be an ISO 8601 time.")
+    if start > now + _DELTA_CLOCK_SKEW:
+        raise HTTPException(status_code=422, detail="since is in the future.")
+    start = min(max(start, now - _MAX_DELTA), now).astimezone(timezone.utc)
+    step = next(step for oldest, step in _DELTA_FLOORS if now - start <= oldest)
+    return start - (start - _EPOCH) % step
+
+
+@router.get("/news/delta", response_model=Delta, dependencies=[Depends(edge_cached)])
+async def get_news_delta(
+    since: str = Query(..., description="The last visit, an ISO 8601 time"),
+) -> Delta:
+    """What changed since a visit, for the "since your last visit" strip.
+
+    The distinct stories since then, the places (1° cells) they're in, the
+    places surging now (as /api/news/surges lists them, every topic), and
+    the 5 places with the most new stories, each with its lead. *since* is
+    clamped to the last 7 days and floored: to the quarter hour within a day,
+    the hour within 3 days, else 6 hours. Up to 15 minutes ahead counts as now.
+    """
+    start = _delta_start(since, _now())
+    cache_k = f"db:delta:v1:{start:%Y%m%d%H%M}"
+    cached = await get_cached(cache_k)
+    if cached is not None:
+        return Delta(**cached)
+
+    changes, surges = await asyncio.gather(get_delta(start), _cached_surges(None))
+    delta = Delta(**changes, surging=len(surges))
+    await set_cached(cache_k, delta.model_dump(mode="json"), _DELTA_TTL)
+    return delta
 
 
 @router.get("/news/density", response_model=list[HourlyDensity])
