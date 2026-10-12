@@ -34,7 +34,7 @@ export default function Home() {
 
   // One time window for the globe, the panels and the timeline (lib/timeWindow).
   const [timeWindow, setTimeWindow] = useState<TimeWindow>(DEFAULT_WINDOW);
-  // The dots for the window, filtered to the topic on the client (same array until either changes)
+  // The dots for the window and topic, filtered on the server (same array until new dots land)
   const { points, error: apiError, loading } = useGlobePoints(timeWindow, activeTopic);
   const [layer, setLayer] = useState<GlobeLayer>("dots");
   // The timeline's replay: the status pill says Replay rather than flashing each step's load.

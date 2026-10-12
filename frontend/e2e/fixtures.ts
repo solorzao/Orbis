@@ -39,6 +39,28 @@ export const MOCK_GLOBE_POINTS = [
   },
 ];
 
+/** Each mocked place's stories per topic pill; they add up to its article_count. */
+const MOCK_TOPIC_COUNTS: Record<string, Partial<Record<string, number>>> = {
+  "Paris, France": { Climate: 3, Politics: 1, Technology: 1 },
+  "New York, United States": { Economy: 6, Technology: 2 },
+  "London, United Kingdom": { Politics: 3 },
+};
+
+/**
+ * /api/news as the backend answers it: a topic other than All keeps only the
+ * places with stories on it, each counted by those stories and carrying the
+ * topic's article tag (Climate is tagged "environment") as its colour.
+ */
+export function mockGlobeNews(url: string) {
+  const topic = new URL(url).searchParams.get("topic");
+  if (!topic || topic === "All") return MOCK_GLOBE_POINTS;
+  const tag = topic === "Climate" ? "environment" : topic.toLowerCase();
+  return MOCK_GLOBE_POINTS.flatMap((point) => {
+    const count = MOCK_TOPIC_COUNTS[point.location_name]?.[topic] ?? 0;
+    return count ? [{ ...point, topic: tag, article_count: count, weight: count }] : [];
+  });
+}
+
 export const MOCK_ARTICLES = [
   {
     id: "art-001",
@@ -175,11 +197,13 @@ export function buildAgentSSE(options: {
  * Call this in beforeEach for tests that need the full app.
  */
 export async function mockAllApiRoutes(page: Page) {
-  // Globe points
-  await page.route("**/api/news?*", (route) => route.fulfill({ json: MOCK_GLOBE_POINTS }));
+  // Globe points, filtered by ?topic= as the backend does
+  await page.route("**/api/news?*", (route) =>
+    route.fulfill({ json: mockGlobeNews(route.request().url()) }),
+  );
   await page.route("**/api/news", (route) => {
     if (route.request().url().includes("/api/news/")) return route.fallback();
-    return route.fulfill({ json: MOCK_GLOBE_POINTS });
+    return route.fulfill({ json: mockGlobeNews(route.request().url()) });
   });
 
   // Cluster articles

@@ -129,8 +129,24 @@ describe("fetchGlobeNews with a signal", () => {
   it("passes the abort signal through to fetch", async () => {
     mockFetch.mockReturnValue(jsonResponse([]));
     const controller = new AbortController();
-    await fetchGlobeNews("6h", 500, undefined, undefined, controller.signal);
+    await fetchGlobeNews("6h", 500, undefined, undefined, "All", controller.signal);
     expect(mockFetch.mock.calls[0][1]).toEqual({ signal: controller.signal });
     expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get("timespan")).toBe("6h");
+  });
+});
+
+describe("fetchGlobeNews with a topic", () => {
+  it("asks the server for the topic's places", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    await fetchGlobeNews("24h", 500, undefined, undefined, "Politics");
+    const params = new URL(mockFetch.mock.calls[0][0]).searchParams;
+    expect(params.get("topic")).toBe("Politics");
+    expect(params.get("timespan")).toBe("24h");
+  });
+
+  it("sends no topic for All", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    await fetchGlobeNews("24h", 500, undefined, undefined, "All");
+    expect(new URL(mockFetch.mock.calls[0][0]).searchParams.has("topic")).toBe(false);
   });
 });

@@ -156,12 +156,5 @@ export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[]
     count: p.article_count,
     locationName: p.location_name,
     topic: mapApiTopic(p.topic),
-    topics: [...new Set((p.topics ?? []).map(mapApiTopic))],
   }));
-}
-
-/** Points with any story on *topic*; a point without `topics` matches on `topic`. */
-export function filterPointsByTopic(points: GlobePoint[], topic: Topic): GlobePoint[] {
-  if (topic === "All") return points;
-  return points.filter((p) => (p.topics?.length ? p.topics : [p.topic]).includes(topic));
 }

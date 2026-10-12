@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { GlobePoint, Topic } from "@/types/news";
 import { fetchGlobeNews } from "@/lib/api";
-import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
+import { apiPointsToGlobePoints } from "@/lib/clustering";
 import { windowQuery, type TimeWindow } from "@/lib/timeWindow";
 
 /** Quick window changes (keyboard steps, presets) settle before one request goes out. */
@@ -15,16 +15,18 @@ const NO_POINTS: GlobePoint[] = [];
 
 interface Result {
   window: TimeWindow;
+  topic: Topic;
   points: GlobePoint[];
   error: boolean;
 }
 
 /**
- * The globe's dots for a time window and topic. A new window cancels the
- * request for the last one and ignores its answer if it comes anyway, so a
- * replay's steps can never land out of order. The last dots stay up while the
- * next load. The topic filters on the client, into the same array until the
- * dots or the topic change: a new array would make the globe redraw.
+ * The globe's dots for a time window and topic. The server filters by topic
+ * (so a topic's quieter places make the cut, and each dot's colour and size
+ * are the topic's). A new window or topic cancels the request for the last
+ * one and ignores its answer if it comes anyway, so a replay's steps can
+ * never land out of order. The last dots stay up while the next load. The
+ * array stays the same until new dots land: a new one makes the globe redraw.
  */
 export function useGlobePoints(
   timeWindow: TimeWindow,
@@ -32,7 +34,7 @@ export function useGlobePoints(
 ): {
   points: GlobePoint[];
   error: boolean;
-  /** True until the dots for this window arrive (or fail). */
+  /** True until the dots for this window and topic arrive (or fail). */
   loading: boolean;
 } {
   const [result, setResult] = useState<Result | null>(null);
@@ -41,31 +43,30 @@ export function useGlobePoints(
     const controller = new AbortController();
     const { timespan, startTime, endTime } = windowQuery(timeWindow);
     const timer = setTimeout(() => {
-      fetchGlobeNews(timespan, GLOBE_LIMIT, startTime, endTime, controller.signal)
+      fetchGlobeNews(timespan, GLOBE_LIMIT, startTime, endTime, topic, controller.signal)
         .then((apiPoints) => {
           if (controller.signal.aborted) return;
           setResult({
             window: timeWindow,
+            topic,
             points: apiPointsToGlobePoints(apiPoints),
             error: false,
           });
         })
         .catch(() => {
           if (controller.signal.aborted) return;
-          setResult({ window: timeWindow, points: NO_POINTS, error: true });
+          setResult({ window: timeWindow, topic, points: NO_POINTS, error: true });
         });
     }, FETCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [timeWindow]);
+  }, [timeWindow, topic]);
 
-  const all = result?.points ?? NO_POINTS;
-  const points = useMemo(() => filterPointsByTopic(all, topic), [all, topic]);
   return {
-    points,
+    points: result?.points ?? NO_POINTS,
     error: result?.error ?? false,
-    loading: result?.window !== timeWindow,
+    loading: result?.window !== timeWindow || result.topic !== topic,
   };
 }
