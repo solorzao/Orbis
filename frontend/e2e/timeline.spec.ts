@@ -142,7 +142,10 @@ test.describe("Layer switcher", () => {
   test("during a replay on the main-thread path, each day's dots show over the held heatmap", async ({
     page,
   }) => {
-    // Playwright's Chromium has navigator.gpu but no adapter: webGpuReady says no, CPU path.
+    // Force the main-thread path, whatever GPU the runner has.
+    await page.addInitScript(() =>
+      Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }),
+    );
     const timeline = await gotoTimeline(page);
     const globe = page.getByTestId("globe");
     await expect(globe).toHaveAttribute("data-dots", "3");
