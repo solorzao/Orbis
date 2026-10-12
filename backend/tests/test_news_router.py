@@ -180,6 +180,79 @@ class TestGetGlobeData:
         assert "topics" not in point.model_dump()
 
 
+def _make_hover_row(**overrides):
+    """A get_globe_points() row with the hover card's fields."""
+    return {
+        **_make_globe_row(count=5, topic="politics"),
+        "location_name": "London, United Kingdom",
+        "country_code": "GB",
+        "lead": {
+            "title": "Talks resume",
+            "source_name": "Reuters",
+            "published_at": datetime(2026, 10, 12, 9, 45, tzinfo=timezone.utc),
+            "image_url": "http://cdn.example.com/a.jpg",
+            "topic": "conflict",
+        },
+        "topic_mix": {"politics": 3, "conflict": 2},
+        "tone": -0.25,
+        **overrides,
+    }
+
+
+class TestGetGlobeDataHover:
+    """Each point carries what the hover card shows before any other request."""
+
+    @pytest.mark.asyncio
+    async def test_points_carry_the_lead_topic_mix_and_tone(self, monkeypatch):
+        with patch(
+            "app.routers.news.get_globe_points",
+            new_callable=AsyncMock,
+            return_value=[_make_hover_row()],
+        ):
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get("/api/news")
+
+        assert resp.status_code == 200
+        [point] = resp.json()
+        assert point["lead"] == {
+            "title": "Talks resume",
+            "source_name": "Reuters",
+            "published_at": "2026-10-12T09:45:00Z",
+            "image_url": None,  # http: the card shows https images only
+            "topic": "conflict",
+        }
+        assert point["topic_mix"] == {"politics": 3, "conflict": 2}
+        assert point["tone"] == -0.25
+        assert point["location_name"] == "London, United Kingdom"
+        assert point["country_code"] == "GB"
+
+    @pytest.mark.asyncio
+    async def test_points_are_cached_as_json_and_served_from_it(self):
+        from app.routers.news import get_globe_data
+
+        with (
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+            patch(
+                "app.routers.news.get_globe_points",
+                new_callable=AsyncMock,
+                return_value=[_make_hover_row()],
+            ),
+        ):
+            [fresh] = await get_globe_data(timespan="24h", limit=100)
+
+        key, value, _ = mock_set.await_args.args
+        assert key.startswith("db:globe:v2:")  # entries without a lead are never served
+        assert value[0]["lead"]["published_at"] == "2026-10-12T09:45:00Z"
+
+        with (
+            patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=value),
+            patch("app.routers.news.get_globe_points", new_callable=AsyncMock) as mock_db,
+        ):
+            [cached] = await get_globe_data(timespan="24h", limit=100)
+        mock_db.assert_not_awaited()
+        assert cached == fresh
+
+
 class TestGetGlobeDataCache:
     @pytest.mark.asyncio
     async def test_cells_are_cached_for_the_normal_ttl(self):

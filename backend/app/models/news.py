@@ -72,6 +72,21 @@ def https_image_url(url: str | None) -> str | None:
 HttpsImageUrl = Annotated[str | None, BeforeValidator(https_image_url)]
 
 
+def https_only_image_url(url: str | None) -> str | None:
+    """Like ``https_image_url``, but an http URL is None rather than upgraded.
+
+    For the hover card, which shows an image unprompted: an upgraded http URL
+    often fails, and the globe query already prefers stories with https images.
+    """
+    if not isinstance(url, str) or not url.strip().lower().startswith("https://"):
+        return None
+    return https_image_url(url)
+
+
+# A public https image URL as stored, or None (never an upgraded http one).
+HttpsOnlyImageUrl = Annotated[str | None, BeforeValidator(https_only_image_url)]
+
+
 class NewsArticle(BaseModel):
     """A single geolocated news article."""
 
@@ -103,8 +118,18 @@ class NewsCluster(BaseModel):
     avg_sentiment: float
 
 
+class GlobeLead(BaseModel):
+    """A cell's lead story for the hover card: its newest, preferring one with an image."""
+
+    title: str
+    source_name: str
+    published_at: datetime
+    image_url: HttpsOnlyImageUrl = None
+    topic: str  # the story's first tag, "general" when it has none
+
+
 class GlobeDataPoint(BaseModel):
-    """Lightweight point for rendering on the 3-D globe."""
+    """Lightweight point for rendering on the 3-D globe, with its hover card's data."""
 
     lat: float
     lng: float
@@ -112,9 +137,15 @@ class GlobeDataPoint(BaseModel):
     article_count: int
     top_headline: str
     # Sets the dot colour: the topic filter's tag when the globe is filtered,
-    # otherwise the cell's newest story's first tag.
+    # otherwise the cell's most common of the six topics ("general" if none).
     topic: str
-    location_name: str = ""
+    location_name: str = ""  # display_place of the lead's region
+    country_code: str = ""  # the lead's ISO 3166-1 alpha-2, '' if unknown
+    lead: GlobeLead | None = None
+    # The six topics' tags -> the cell's stories with that tag (a story with
+    # two counts twice); topics without stories are left out.
+    topic_mix: dict[str, int] = Field(default_factory=dict)
+    tone: float = 0.0  # mean sentiment_score of the cell's stories, -1..1
 
 
 class ClusterSummaryResponse(BaseModel):

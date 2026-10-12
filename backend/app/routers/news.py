@@ -163,13 +163,16 @@ async def get_globe_data(
 
     A topic keeps only its stories, before the busiest *limit* cells are
     picked: each cell's count, headline and colour are then the topic's.
+    Each point also carries what the hover card shows first: its lead story,
+    topic mix and tone (see get_globe_points).
     """
     hours = _parse_timespan(timespan)
     start_dt = _parse_iso(start_time)
     end_dt = _parse_iso(end_time)
     tag = _globe_topic_tag(topic)
 
-    cache_k = f"db:globe:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
+    # v2: points carry the hover card's lead, topic mix and tone.
+    cache_k = f"db:globe:v2:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
         return [GlobeDataPoint(**p) for p in cached]
@@ -185,7 +188,7 @@ async def get_globe_data(
     points = [GlobeDataPoint(**r) for r in rows]
 
     ttl = settings.db_cache_ttl if points else _EMPTY_GLOBE_TTL
-    await set_cached(cache_k, [p.model_dump() for p in points], ttl)
+    await set_cached(cache_k, [p.model_dump(mode="json") for p in points], ttl)
 
     return points
 

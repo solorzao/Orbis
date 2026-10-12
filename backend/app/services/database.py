@@ -18,6 +18,7 @@ from typing import Any
 import asyncpg
 
 from app.config import settings
+from app.services.places import display_place
 
 __all__ = [
     "get_pool",
@@ -325,6 +326,11 @@ async def upsert_articles(articles: list[dict[str, Any]]) -> int:
 # ---------------------------------------------------------------------------
 
 
+# The six topic pills' article tags, in the pills' order: the dots' colours
+# and the hover card's topic mix. Climate's tag is "environment".
+GLOBE_TOPIC_TAGS = ("politics", "conflict", "technology", "environment", "economy", "health")
+
+
 async def get_globe_points(
     *,
     timespan_hours: int = 24,
@@ -334,19 +340,26 @@ async def get_globe_points(
     end_time: datetime | None = None,
     topic: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return clustered globe points from the database.
+    """Return clustered globe points from the database, with their hover card's data.
 
     Only stories inside the window count: a window without any gives no
     points, never older stories.
 
-    Groups articles into grid cells of *cell_size* degrees, picking the
-    most recent headline and its first topic per cell (the dot colour).
+    Groups articles into grid cells of *cell_size* degrees. Each cell carries
+    its story count, its six topics' counts (``topic_mix``), its mean
+    sentiment (``tone``) and a lead story: the newest with an https image, or
+    the newest when none has one, so the headline and the image are one
+    story's. The place name is the lead's region, cleaned by display_place.
+
+    The dot colour (``topic``) is the cell's most common of the six topics; a
+    tie goes to the lead's tags, then the topic pills' order, and a cell
+    with none of them is ``general``. Unlike the newest story's tag, it holds
+    still as stories arrive.
 
     *topic*, an article tag such as ``"politics"``, keeps only the stories
     tagged with it, before the cells are counted, ranked and limited: the
-    cells are the busiest for that topic, ``article_count`` and
-    ``top_headline`` are of its stories alone, and ``topic`` is the tag (the
-    dot is the topic's colour).
+    cells are the busiest for that topic, their counts and lead are of its
+    stories alone, and ``topic`` is the tag (the dot is the topic's colour).
     """
     pool = await get_pool()
 
@@ -361,19 +374,40 @@ async def get_globe_points(
     rows = await pool.fetch(*_globe_points_query(window, window_args, topic, cell_size, limit))
     results = []
     for row in rows:
-        tags = row["topic_tags"] or []
+        lead_tags = row["topic_tags"] or []
+        mix = {tag: row[tag] for tag in GLOBE_TOPIC_TAGS if row[tag]}
         results.append(
             {
                 "lat": row["lat"],
                 "lng": row["lng"],
                 "weight": min(row["article_count"] * 10, 500),
                 "article_count": row["article_count"],
-                "top_headline": row["top_headline"] or "",
-                "topic": topic or (tags[0] if tags else "general"),
-                "location_name": row["location_name"] or "",
+                "top_headline": row["title"] or "",
+                "topic": topic or _dominant_topic(mix, lead_tags),
+                "location_name": display_place(row["region"]),
+                "country_code": row["country_code"] or "",
+                "lead": {
+                    "title": row["title"] or "",
+                    "source_name": row["source_name"] or "",
+                    "published_at": row["published_at"],
+                    "image_url": row["image_url"],
+                    "topic": lead_tags[0] if lead_tags else "general",
+                },
+                "topic_mix": mix,
+                "tone": round(row["tone"] or 0.0, 3),
             }
         )
     return results
+
+
+def _dominant_topic(mix: dict[str, int], lead_tags: list[str]) -> str:
+    """The most common of the six topics in *mix*: ties go to the lead's tags in
+    order, then the topic pills' order. ``general`` when *mix* is empty."""
+    if not mix:
+        return "general"
+    most = max(mix.values())
+    tied = [tag for tag in GLOBE_TOPIC_TAGS if mix.get(tag) == most]
+    return next((tag for tag in lead_tags if tag in tied), tied[0])
 
 
 def _globe_points_query(
@@ -389,47 +423,68 @@ def _globe_points_query(
     and the limit are numbered after them. No topic leaves its predicate out
     rather than writing ``$n IS NULL OR ...``, so the plan for every story
     never carries a topic test.
+
+    One pass over the window's stories counts each cell, its six topics, its
+    tone and its newest story's time (with and without an https image); only
+    the busiest *limit* cells then look up their lead, by that exact time
+    (an index lookup on published_at) in the same cell, window and topic.
+    A correlated subquery per topic, or DISTINCT ON over the window, took
+    11-15 s on production; this shape took 0.16-0.24 s.
     """
     conditions = list(conditions)
     args = list(args)
     if topic is not None:
         args.append(topic)
         conditions.append(f"topic_tags && ARRAY[${len(args)}::text]")
-    # The WHERE filters the stories before anything reads them: the per-cell
-    # ranking, the counts and the LIMIT all see matching rows only.
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    # The WHERE filters the stories before anything reads them: the counts,
+    # the ranking, the LIMIT and the lead all see matching rows only.
+    where = " AND ".join(conditions)
     cell = f"${len(args) + 1}"
+    topic_counts = ",\n".join(
+        f"                COUNT(*) FILTER (WHERE topic_tags && '{{{tag}}}') AS {tag}"
+        for tag in GLOBE_TOPIC_TAGS
+    )
     query = f"""
-        WITH clustered AS (
+        WITH cells AS (
             SELECT
-                FLOOR(latitude / {cell}) * {cell} + {cell} / 2  AS lat,
-                FLOOR(longitude / {cell}) * {cell} + {cell} / 2 AS lng,
-                title,
-                topic_tags,
-                region,
-                published_at,
-                ROW_NUMBER() OVER (
-                    PARTITION BY FLOOR(latitude / {cell}), FLOOR(longitude / {cell})
-                    ORDER BY published_at DESC
-                ) AS rn
-            FROM articles
-            {where}
-        ),
-        cells AS (
-            SELECT
-                lat,
-                lng,
+                FLOOR(latitude / {cell}) AS lat_cell,
+                FLOOR(longitude / {cell}) AS lng_cell,
                 COUNT(*) AS article_count,
-                MAX(CASE WHEN rn = 1 THEN title END) AS top_headline,
-                MAX(CASE WHEN rn = 1 THEN topic_tags END) AS topic_tags,
-                MAX(CASE WHEN rn = 1 THEN region END) AS location_name
-            FROM clustered
-            GROUP BY lat, lng
+                AVG(sentiment_score) AS tone,
+{topic_counts},
+                MAX(published_at) AS newest,
+                MAX(published_at) FILTER (WHERE image_url LIKE 'https://%') AS newest_with_image
+            FROM articles
+            {f"WHERE {where}" if where else ""}
+            GROUP BY 1, 2
+            ORDER BY article_count DESC
+            LIMIT ${len(args) + 2}
         )
-        SELECT *
+        SELECT
+            cells.lat_cell * {cell} + {cell} / 2 AS lat,
+            cells.lng_cell * {cell} + {cell} / 2 AS lng,
+            cells.article_count,
+            cells.tone,
+            {", ".join(f"cells.{tag}" for tag in GLOBE_TOPIC_TAGS)},
+            lead.title,
+            lead.source_name,
+            lead.published_at,
+            lead.image_url,
+            lead.region,
+            lead.country_code,
+            lead.topic_tags
         FROM cells
-        ORDER BY article_count DESC
-        LIMIT ${len(args) + 2}
+        CROSS JOIN LATERAL (
+            SELECT title, source_name, published_at, image_url, region, country_code, topic_tags
+            FROM articles
+            WHERE published_at = COALESCE(cells.newest_with_image, cells.newest)
+              AND FLOOR(latitude / {cell}) = cells.lat_cell
+              AND FLOOR(longitude / {cell}) = cells.lng_cell
+              {f"AND {where}" if where else ""}
+            ORDER BY (image_url LIKE 'https://%') DESC, id
+            LIMIT 1
+        ) lead
+        ORDER BY cells.article_count DESC
     """
     return query, *args, cell_size, limit
 
