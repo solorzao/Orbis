@@ -389,8 +389,8 @@ export default function Home() {
         stories={storiesTab}
       />
 
-      {/* Bottom row: layers and the timeline. After the side panel: the CSS
-          keeps it clear of the panel, and above the sheet, by sibling selectors. */}
+      {/* Bottom row: layers and the timeline, centred on the page. After the side
+          panel: below 1180px the CSS lifts it above the sheet by sibling selectors. */}
       <BottomBar>
         <LayerSwitcher
           layer={globeLayer}
