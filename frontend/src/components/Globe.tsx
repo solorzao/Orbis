@@ -12,6 +12,7 @@ import {
   heatColor,
   heatmapPoints,
   hexToRgba,
+  recomputeHeatmap,
   pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
@@ -41,6 +42,11 @@ interface GlobeProps {
   lowPower?: boolean;
   /** Dots (the default) or Intensity, a heatmap of the same places; dots hide under it. */
   layer?: GlobeLayer;
+  /**
+   * Hold Intensity's heatmap while a replay plays or dots load: without WebGPU
+   * each recompute blocks the page, so it recomputes once when released.
+   */
+  holdHeatmap?: boolean;
 }
 
 interface LandFeature {
@@ -67,6 +73,7 @@ export default function Globe({
   reduced = false,
   lowPower = false,
   layer = "dots",
+  holdHeatmap = false,
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -89,6 +96,8 @@ export default function Globe({
   pointsRef.current = points;
   const layerRef = useRef(layer);
   layerRef.current = layer;
+  // The dots the heatmap on screen was computed from, so the same ones never recompute.
+  const heatForRef = useRef<GlobePoint[] | null>(null);
   const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Once the visitor grabs, scrolls or flies the globe, the drift is over for good.
@@ -302,6 +311,7 @@ export default function Globe({
     const globe = globeRef.current;
     if (!globe || !isLoaded) return;
     if (layer === "dots") {
+      heatForRef.current = null;
       globe.heatmapsData([]);
       globe.pointsData(points);
       globe.ringsData(points);
@@ -314,6 +324,10 @@ export default function Globe({
     // Probe WebGPU first: it decides how many places the heatmap can afford.
     webGpuReady().then((gpu) => {
       if (cancelled || !globeRef.current) return;
+      const shown = heatForRef.current !== null;
+      if (shown && (heatForRef.current === points || !recomputeHeatmap({ gpu, hold: holdHeatmap })))
+        return;
+      heatForRef.current = points;
       const heat = heatmapPoints(points, { gpu });
       globeRef.current.heatmapsData(heat.length ? [heat] : []);
       // three-globe builds the heatmap's sphere on its next update (a 1 ms
@@ -330,7 +344,7 @@ export default function Globe({
       cancelled = true;
       clearTimeout(settle);
     };
-  }, [points, layer, isLoaded]);
+  }, [points, layer, holdHeatmap, isLoaded]);
 
   return (
     <div

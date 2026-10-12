@@ -116,6 +116,16 @@ export function heatmapPoints<P extends { count: number }>(
   return [...points].sort((a, b) => b.count - a.count).slice(0, HEATMAP.maxPointsWithoutGpu);
 }
 
+/**
+ * Whether Intensity recomputes its heatmap for new dots. On the main-thread
+ * path (no WebGPU) a recompute blocks for about 0.7 s, so while `hold` is on
+ * (a replay plays, or new dots are loading) it keeps the heatmap it has and
+ * recomputes once when released. With WebGPU it always recomputes.
+ */
+export function recomputeHeatmap({ gpu, hold }: { gpu: boolean; hold: boolean }): boolean {
+  return gpu || !hold;
+}
+
 /** "#rrggbb" to "rgba(r,g,b,a)", for canvas colours built from tokens. */
 export function hexToRgba(hex: string, alpha: number): string {
   const n = parseInt(hex.trim().replace("#", ""), 16);

@@ -9,6 +9,7 @@ import {
   heatColor,
   heatmapPoints,
   hexToRgba,
+  recomputeHeatmap,
   pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
@@ -200,5 +201,17 @@ describe("heatColor", () => {
     const warning = token("signal-warning");
     expect(warning).toBeTruthy();
     expect(Object.values(HEAT_COLORS)).not.toContain(warning);
+  });
+});
+
+describe("recomputeHeatmap", () => {
+  it("always recomputes with WebGPU: a step costs about 0.35 s", () => {
+    expect(recomputeHeatmap({ gpu: true, hold: false })).toBe(true);
+    expect(recomputeHeatmap({ gpu: true, hold: true })).toBe(true);
+  });
+
+  it("keeps the current heatmap on the main-thread path while held (a replay plays, dots load)", () => {
+    expect(recomputeHeatmap({ gpu: false, hold: true })).toBe(false);
+    expect(recomputeHeatmap({ gpu: false, hold: false })).toBe(true);
   });
 });
