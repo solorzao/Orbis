@@ -26,6 +26,7 @@ export function toolLine(tools: readonly string[]): string {
 }
 
 const CITE_HREF = "#cite-";
+const NO_IMAGES = ["img"];
 
 /** "[4]" becomes a link to #cite-4 so the `a` renderer can draw it as a pill (not "[4](url)" or "[4]: url"). */
 function linkCitations(markdown: string): string {
@@ -123,7 +124,10 @@ export default function AgentMessage({
       )}
 
       {message.content && (
-        <ReactMarkdown components={components}>{linkCitations(message.content)}</ReactMarkdown>
+        // No images: a model-written one would load from wherever the answer points.
+        <ReactMarkdown components={components} disallowedElements={NO_IMAGES}>
+          {linkCitations(message.content)}
+        </ReactMarkdown>
       )}
 
       {sources.length > 0 && (

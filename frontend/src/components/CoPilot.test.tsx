@@ -279,6 +279,14 @@ describe("CoPilot", () => {
       expect(screen.getByText("Searching articles, checking trends…")).toBeInTheDocument();
     });
 
+    it("never load an image the answer writes", () => {
+      const { container } = renderCoPilot({
+        messages: answer({ content: "Floods [1]. ![x](https://evil.example/pixel.png)" }),
+      });
+      expect(container.querySelector("img")).toBeNull();
+      expect(container.querySelector(".msg.bot p")).toHaveTextContent(/^Floods/);
+    });
+
     it("open links in the answer in a new tab", () => {
       renderCoPilot({
         messages: answer({ content: "See [the report](https://example.com/report)." }),
