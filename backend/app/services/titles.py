@@ -54,3 +54,36 @@ def story_key_sql(alias: str = "a") -> str:
     if not alias.isidentifier():
         raise ValueError(f"Not a plain SQL alias: {alias!r}")
     return f"COALESCE({alias}.story_key, hashtextextended(lower({alias}.title), 0))"
+
+
+# dedup_key in SQL, for queries that key titles as they read them.
+
+# The characters Python's \s matches (str.isspace), spelled out: PostgreSQL's
+# \s follows the database's locale, which leaves out the no-break spaces.
+_WS = r"[\t\n\v\f\r\u001c-\u001f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+
+# _OUTLET_SEP: whitespace, one of | : – — -, whitespace.
+_SEP = rf"{_WS}+[|:–—-]{_WS}+"
+
+# What may follow the last separator: text with no whitespace-separator-
+# whitespace run in it (so the separator is the last), e.g. "Post-Gazette".
+# Spelled without a lookahead per character, which cost 3 times as much.
+_NOT_WS = rf"[^{_WS[1:-1]}]"
+_PLAIN = rf"[^{_WS[1:-1]}|:–—-]"  # neither whitespace nor a separator
+_NO_SEP = rf"(?:{_NOT_WS}|{_WS}+{_PLAIN}|{_WS}+[|:–—-]{_NOT_WS})*(?:{_WS}+[|:–—-]?)?"
+
+# The outlet: fewer than 40 characters after the last separator, to the end.
+_SUFFIX = rf"(?=.{{0,39}}$){_NO_SEP}$"
+
+
+def dedup_title_sql(column: str = "title") -> str:
+    """``dedup_key(column)`` as a SQL expression; *column* is a text expression.
+
+    The last separator goes, with everything after it, when fewer than 40
+    characters follow it (an outlet's name, not the headline's second half);
+    then whitespace at either end, then the case. A suffix holding a hyphen
+    ("Post-Gazette") still goes, as in Python. The regexes are literals, so
+    the expression adds no bind parameters to the query it sits in.
+    """
+    stripped = f"regexp_replace({column}, '{_SEP}{_SUFFIX}', '')"
+    return f"lower(regexp_replace({stripped}, '^{_WS}+|{_WS}+$', '', 'g'))"

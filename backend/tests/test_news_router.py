@@ -834,6 +834,7 @@ def _api_client(monkeypatch):
     from app.middleware import security
 
     monkeypatch.setattr(security.settings, "api_key", "")
+    security._rate_buckets.clear()  # each test starts under the per-minute limit
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     return AsyncClient(transport=transport, base_url="http://test")
 
@@ -1218,3 +1219,105 @@ class TestEdgeCaching:
 
         assert resp.status_code == 200
         assert "cache-control" not in resp.headers
+
+
+# ── /api/news/surges: places whose coverage is surging ──────────────────
+
+SURGE = {
+    "lat": -4.5,
+    "lng": 15.5,
+    "place": "Kinshasa, Congo",
+    "recent": 21,
+    "baseline": 0.73,
+    "ratio": 28.57,
+    "topic": "conflict",
+    "lead": {
+        "title": "Clashes near Kinshasa",
+        "source_name": "example.com",
+        "published_at": datetime(2026, 10, 12, 14, 15, tzinfo=timezone.utc),
+        "image_url": "https://cdn.example.com/k.jpg",
+        "topic": "conflict",
+        "sensitive": True,
+    },
+}
+SURGE_JSON = {**SURGE, "lead": {**SURGE["lead"], "published_at": "2026-10-12T14:15:00Z"}}
+
+
+@pytest.fixture
+def surges_db(monkeypatch):
+    """The surge query stubbed; the clock frozen."""
+    import app.routers.news as news
+
+    monkeypatch.setattr(news, "_now", lambda: PREVIEW_NOW)
+    with patch("app.routers.news.get_surges", AsyncMock(return_value=[SURGE])) as mock:
+        yield mock
+
+
+async def _get(monkeypatch, path, **params):
+    async with _api_client(monkeypatch) as client:
+        return await client.get(path, params=params)
+
+
+class TestGetSurges:
+    @pytest.mark.asyncio
+    async def test_returns_the_surging_places_as_of_now(self, monkeypatch, surges_db):
+        resp = await _get(monkeypatch, "/api/news/surges")
+
+        assert resp.status_code == 200
+        assert resp.json() == [SURGE_JSON]
+        surges_db.assert_awaited_once_with(PREVIEW_NOW, None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("topic", "tag"),
+        [("Climate", "environment"), ("politics", "politics"), ("All", None)],
+    )
+    async def test_a_topic_reaches_the_query_as_its_tag(self, monkeypatch, surges_db, topic, tag):
+        resp = await _get(monkeypatch, "/api/news/surges", topic=topic)
+
+        assert resp.status_code == 200
+        surges_db.assert_awaited_once_with(PREVIEW_NOW, tag)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("topic", ["sport", "Politics,Health"])
+    async def test_an_unknown_topic_is_422_and_not_edge_cached(self, monkeypatch, surges_db, topic):
+        resp = await _get(monkeypatch, "/api/news/surges", topic=topic)
+
+        assert resp.status_code == 422
+        assert "s-maxage" not in resp.headers.get("cache-control", "")
+        surges_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cached_for_five_minutes_by_topic(self, monkeypatch, surges_db):
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            await _get(monkeypatch, "/api/news/surges", topic="Climate")
+
+        mock_set.assert_awaited_once_with("db:surges:v1:environment", [SURGE_JSON], 300)
+
+    @pytest.mark.asyncio
+    async def test_no_surges_is_cached_too(self, monkeypatch, surges_db):
+        surges_db.return_value = []
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            resp = await _get(monkeypatch, "/api/news/surges")
+
+        assert resp.json() == []
+        mock_set.assert_awaited_once_with("db:surges:v1:", [], 300)
+
+    @pytest.mark.asyncio
+    async def test_cached_surges_are_served_without_the_database(self, monkeypatch, surges_db):
+        with patch("app.routers.news.get_cached", AsyncMock(return_value=[SURGE_JSON])):
+            resp = await _get(monkeypatch, "/api/news/surges")
+
+        assert resp.json() == [SURGE_JSON]
+        surges_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_is_edge_cached(self, monkeypatch, surges_db):
+        resp = await _get(monkeypatch, "/api/news/surges")
+
+        assert resp.headers["cache-control"] == EDGE
+
+    def test_is_in_the_data_rate_limit_group(self):
+        from app.middleware.security import _get_rate_group
+
+        assert _get_rate_group("/api/news/surges") == "data"

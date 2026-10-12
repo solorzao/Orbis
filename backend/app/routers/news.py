@@ -22,6 +22,7 @@ from app.models.news import (
     PreviewEntity,
     SelectionSummaryRequest,
     SelectionSummaryResponse,
+    Surge,
     TopicCount,
 )
 from app.routers.http_cache import edge_cached
@@ -42,6 +43,7 @@ from app.services.database import (
     get_topic_counts,
 )
 from app.services.grid import cell_index
+from app.services.surges import get_surges
 from app.services.titles import dedup_key
 
 logger = logging.getLogger(__name__)
@@ -437,6 +439,41 @@ async def get_place_preview(
     preview = PlacePreview(spark=spark, entities=_clean_entities(names), brief=brief)
     await set_cached(cache_k, preview.model_dump(), _PREVIEW_TTL)
     return preview
+
+
+# How long surges stay cached: stories arrive every 15 minutes, and each
+# ingestion clears db:* keys anyway. No surges is an answer like any other.
+_SURGES_TTL = 300
+
+
+async def _cached_surges(tag: str | None) -> list[Surge]:
+    """The surging places for a topic tag (None for all), from Redis when there."""
+    cache_k = f"db:surges:v1:{tag or ''}"
+    cached = await get_cached(cache_k)
+    if cached is not None:  # [] is a cached answer too
+        return [Surge(**s) for s in cached]
+
+    surges = [Surge(**s) for s in await get_surges(_now(), tag)]
+    await set_cached(cache_k, [s.model_dump(mode="json") for s in surges], _SURGES_TTL)
+    return surges
+
+
+@router.get("/news/surges", response_model=list[Surge], dependencies=[Depends(edge_cached)])
+async def get_news_surges(
+    topic: str | None = Query(
+        None,
+        description="Topic pill: Politics, Conflict, Technology, Climate, Economy, Health or All",
+    ),
+) -> list[Surge]:
+    """Places whose coverage is surging now, most surging first: at most 8.
+
+    A 1° cell surges when its distinct stories of the last 2 hours are at
+    least 3 times its usual 2 hours over the week before (counted as at least
+    half a story), with at least 8 stories from at least 3 sources. A topic
+    counts its stories only. No stories at all in the last 2 hours (a feed
+    outage) is no surges.
+    """
+    return await _cached_surges(_globe_topic_tag(topic))
 
 
 @router.get("/news/density", response_model=list[HourlyDensity])

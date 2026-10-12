@@ -31,6 +31,7 @@ __all__ = [
     "upsert_articles",
     "get_topic_counts",
     "get_globe_points",
+    "globe_lead",
     "get_hourly_density",
     "get_hourly_volume",
     "get_cell_spark",
@@ -397,7 +398,6 @@ async def get_globe_points(
     rows = await pool.fetch(*_globe_points_query(window, window_args, topic, cell_size, limit))
     results = []
     for row in rows:
-        lead_tags = row["topic_tags"] or []
         mix = {tag: row[tag] for tag in GLOBE_TOPIC_TAGS if row[tag]}
         results.append(
             {
@@ -406,23 +406,30 @@ async def get_globe_points(
                 "weight": min(row["article_count"] * 10, 500),
                 "article_count": row["article_count"],
                 "top_headline": row["title"] or "",
-                "topic": topic or _dominant_topic(mix, lead_tags),
+                "topic": topic or _dominant_topic(mix, row["topic_tags"] or []),
                 "location_name": display_place(row["region"], row["country_code"]),
                 "country_code": row["country_code"] or "",
-                "lead": {
-                    "title": row["title"] or "",
-                    "source_name": row["source_name"] or "",
-                    "published_at": row["published_at"],
-                    "image_url": row["image_url"],
-                    "topic": lead_tags[0] if lead_tags else "general",
-                    # The card veils its image: conflict anywhere in its tags.
-                    "sensitive": "conflict" in lead_tags,
-                },
+                "lead": globe_lead(row),
                 "topic_mix": mix,
                 "tone": round(row["tone"] or 0.0, 3),
             }
         )
     return results
+
+
+def globe_lead(row: Any) -> dict[str, Any]:
+    """A cell's lead story (a GlobeLead) from its row's title, source_name,
+    published_at, image_url and topic_tags."""
+    tags = row["topic_tags"] or []
+    return {
+        "title": row["title"] or "",
+        "source_name": row["source_name"] or "",
+        "published_at": row["published_at"],
+        "image_url": row["image_url"],
+        "topic": tags[0] if tags else "general",
+        # The card veils its image: conflict anywhere in its tags.
+        "sensitive": "conflict" in tags,
+    }
 
 
 def _dominant_topic(mix: dict[str, int], lead_tags: list[str]) -> str:

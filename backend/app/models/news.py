@@ -150,6 +150,19 @@ class GlobeDataPoint(BaseModel):
     tone: float = 0.0  # mean sentiment_score of the cell's stories, -1..1
 
 
+class Surge(BaseModel):
+    """A place whose coverage is surging (/api/news/surges): see services/surges.py."""
+
+    lat: float  # the 1° cell's centre, as its globe dot has it
+    lng: float
+    place: str  # display_place of the lead's region
+    recent: int  # distinct stories in the last 2 hours
+    baseline: float  # distinct stories per 2 hours over the 166 hours before
+    ratio: float  # recent / max(baseline, 0.5); the frontend shows "20×+" above 20
+    topic: str  # the topic filter's tag, else the most common of the six ("general" if none)
+    lead: GlobeLead  # the newest recent story, preferring an https image
+
+
 class PreviewEntity(BaseModel):
     """A name a place's stories mention: a person or an organisation."""
 
