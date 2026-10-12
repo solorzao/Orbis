@@ -97,9 +97,11 @@ export function chartPoints(
   values: readonly number[],
   width: number,
   height: number,
+  /** Slots across the width, when the values fill only the first ones. */
+  slots = values.length,
 ): ChartPoint[] {
   const max = Math.max(0, ...values);
-  const step = width / values.length;
+  const step = width / slots;
   return values.map((v, i) => ({
     x: (i + 0.5) * step,
     y: max > 0 ? height - (v / max) * height : height,

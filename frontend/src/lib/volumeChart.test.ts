@@ -89,6 +89,10 @@ describe("areaPath and linePath", () => {
     expect(points[7].x).toBe(150);
   });
 
+  it("can space the points over more slots than they fill (the current hour left out)", () => {
+    expect(chartPoints([4, 2], 100, 10, 4).map((p) => p.x)).toEqual([12.5, 37.5]);
+  });
+
   it("pass through every point", () => {
     const pairs = pathPairs(linePath(points));
     for (const p of points) {

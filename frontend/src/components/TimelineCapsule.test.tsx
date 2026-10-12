@@ -111,6 +111,18 @@ describe("TimelineCapsule", () => {
     ]);
   });
 
+  it("draws only complete hours: the current one would read as a false dip", async () => {
+    // 400px for 169 slots; the current hour (12:00, 31 stories so far) is the last.
+    renderCapsule();
+    await act(async () => {});
+    const stroke = screen.getByRole("img").querySelectorAll("path")[1].getAttribute("d")!;
+    const xs = (stroke.match(/-?\d+(\.\d+)?/g) ?? []).map(Number).filter((_, i) => i % 2 === 0);
+    const slot = 400 / 169;
+    expect(Math.max(...xs)).toBeCloseTo(167.5 * slot, 1); // the last complete hour's centre
+    // The x scale still spans all 169 hours, so the band and playhead line up with it.
+    expect(Math.min(...xs)).toBeCloseTo(0.5 * slot, 1);
+  });
+
   it("shows the current window's label", () => {
     const { rerender } = renderCapsule({ kind: "live", hours: 6 });
     expect(screen.getByTestId("timeline-label")).toHaveTextContent("Last 6 h, live");

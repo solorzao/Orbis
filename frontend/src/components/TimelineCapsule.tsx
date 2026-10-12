@@ -141,8 +141,10 @@ export default function TimelineCapsule({
     () => (domain ? volumeSeries(volume, domain.start, domain.end) : []),
     [volume, domain],
   );
+  // Complete hours only: the current one is still filling (new stories land every
+  // 15 minutes), so it would read as a false dip at Today. The x scale keeps it.
   const points = useMemo(
-    () => chartPoints(smooth(series, SMOOTH_HOURS), width, BASE - TOP),
+    () => chartPoints(smooth(series.slice(0, -1), SMOOTH_HOURS), width, BASE - TOP, series.length),
     [series, width],
   );
   const ticks = useMemo(() => (domain ? dayTicks(domain.start, domain.end) : []), [domain]);
