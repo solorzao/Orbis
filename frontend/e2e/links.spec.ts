@@ -99,6 +99,8 @@ test.describe("Links layer", () => {
   });
 
   test("with reduced motion the arcs hold still", async ({ page }) => {
+    // At full power, so it is reduced motion that stills them (CI's 4 cores are low-power).
+    await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0"));
     await gotoStillGlobe(page);
     await linksToggle(page).click();
     const globe = page.getByTestId("globe");
