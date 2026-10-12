@@ -333,6 +333,9 @@ export default function Globe({
       // three-globe builds the heatmap's sphere on its next update (a 1 ms
       // debounce). Its material is transparent but writes depth, which hides
       // the land dots under it everywhere, even where the heat is clear.
+      // This reaches into three-globe internals (the __globeObjType tag, the
+      // debounce, one mesh per heatmap) as of 2.45.0: package.json pins globe.gl
+      // and the lockfile its three-globe. Re-check Intensity over land on upgrade.
       settle = setTimeout(() => {
         globeRef.current?.scene().traverse((obj: object) => {
           const mesh = obj as { __globeObjType?: string; material?: { depthWrite: boolean } };

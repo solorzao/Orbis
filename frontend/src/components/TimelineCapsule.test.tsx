@@ -30,7 +30,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderCapsule(window: TimeWindow = DEFAULT_WINDOW, onChange = vi.fn(), reduced = false) {
+async function renderCapsule(
+  window: TimeWindow = DEFAULT_WINDOW,
+  onChange = vi.fn(),
+  reduced = false,
+) {
   const utils = render(
     <TimelineCapsule
       timeWindow={window}
@@ -40,6 +44,8 @@ function renderCapsule(window: TimeWindow = DEFAULT_WINDOW, onChange = vi.fn(), 
       reduced={reduced}
     />,
   );
+  // Let the volume fetch land inside act(), as it would before anyone interacts.
+  await act(async () => {});
   return { ...utils, onChange };
 }
 
@@ -62,8 +68,7 @@ function chart() {
 
 describe("TimelineCapsule", () => {
   it("is a labelled capsule with the replay button, chart and meta", async () => {
-    renderCapsule();
-    await act(async () => {});
+    await renderCapsule();
     const capsule = screen.getByTestId("timeline");
     expect(capsule).toHaveClass("pillbar", "timeline");
     expect(capsule).toHaveAccessibleName("Time window and replay");
@@ -78,7 +83,7 @@ describe("TimelineCapsule", () => {
   });
 
   it("fetches the 7-day volume on mount and every 15 minutes, and stops on unmount", async () => {
-    const { unmount } = renderCapsule();
+    const { unmount } = await renderCapsule();
     expect(mockFetchVolume).toHaveBeenCalledTimes(1);
     expect(mockFetchVolume.mock.calls[0][0]).toBe(7);
     const signal = mockFetchVolume.mock.calls[0][1] as AbortSignal;
@@ -95,8 +100,7 @@ describe("TimelineCapsule", () => {
   });
 
   it("draws the area and the day labels, Sun … Today", async () => {
-    renderCapsule();
-    await act(async () => {});
+    await renderCapsule();
     const svg = screen.getByRole("img");
     expect(svg.querySelectorAll("path")).toHaveLength(2); // fill and stroke
     expect(Array.from(svg.querySelectorAll("text")).map((t) => t.textContent)).toEqual([
@@ -113,8 +117,7 @@ describe("TimelineCapsule", () => {
 
   it("draws only complete hours: the current one would read as a false dip", async () => {
     // 400px for 169 slots; the current hour (12:00, 31 stories so far) is the last.
-    renderCapsule();
-    await act(async () => {});
+    await renderCapsule();
     const stroke = screen.getByRole("img").querySelectorAll("path")[1].getAttribute("d")!;
     const xs = (stroke.match(/-?\d+(\.\d+)?/g) ?? []).map(Number).filter((_, i) => i % 2 === 0);
     const slot = 400 / 169;
@@ -123,8 +126,8 @@ describe("TimelineCapsule", () => {
     expect(Math.min(...xs)).toBeCloseTo(0.5 * slot, 1);
   });
 
-  it("shows the current window's label", () => {
-    const { rerender } = renderCapsule({ kind: "live", hours: 6 });
+  it("shows the current window's label", async () => {
+    const { rerender } = await renderCapsule({ kind: "live", hours: 6 });
     expect(screen.getByTestId("timeline-label")).toHaveTextContent("Last 6 h, live");
     rerender(
       <TimelineCapsule
@@ -141,8 +144,8 @@ describe("TimelineCapsule", () => {
     expect(screen.getByTestId("timeline-label")).toHaveTextContent("Tue 14:00 – Wed 02:00 UTC");
   });
 
-  it("presets set a live window and show which is on", () => {
-    const { onChange } = renderCapsule({ kind: "live", hours: 6 });
+  it("presets set a live window and show which is on", async () => {
+    const { onChange } = await renderCapsule({ kind: "live", hours: 6 });
     const presets = screen.getByRole("group", { name: "Time window presets" });
     const buttons = within(presets).getAllByRole("button");
     expect(buttons.map((b) => b.textContent)).toEqual(["1h", "6h", "24h", "7d"]);
@@ -159,8 +162,8 @@ describe("TimelineCapsule", () => {
     expect(onChange).toHaveBeenLastCalledWith({ kind: "live", hours: 1 });
   });
 
-  it("dragging across the chart selects a range snapped to whole hours", () => {
-    const { onChange } = renderCapsule();
+  it("dragging across the chart selects a range snapped to whole hours", async () => {
+    const { onChange } = await renderCapsule();
     const el = chart();
     // 4px an hour: x 41 -> 10.25 h -> 10 h; x 129 -> 32.25 h -> 32 h.
     fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 41 });
@@ -175,13 +178,13 @@ describe("TimelineCapsule", () => {
     });
   });
 
-  it("keyboard users move the window's start and end with two range inputs", () => {
+  it("keyboard users move the window's start and end with two range inputs", async () => {
     const window: TimeWindow = {
       kind: "range",
       startTime: iso(CHART_START + 10 * H),
       endTime: iso(CHART_START + 32 * H),
     };
-    const { onChange } = renderCapsule(window);
+    const { onChange } = await renderCapsule(window);
     const start = screen.getByRole("slider", { name: "Window start" });
     const end = screen.getByRole("slider", { name: "Window end" });
     expect(start).toHaveValue("10");
@@ -223,7 +226,7 @@ describe("TimelineCapsule", () => {
       });
 
     it("steps through the last 7 days, a day every 1.6 s, and announces each", async () => {
-      const { onChange } = renderCapsule();
+      const { onChange } = await renderCapsule();
       const play = screen.getByRole("button", { name: "Replay the last 7 days" });
 
       fireEvent.click(play);
@@ -267,7 +270,7 @@ describe("TimelineCapsule", () => {
     });
 
     it("stops when pressed again, back on the window from before", async () => {
-      const { onChange } = renderCapsule({ kind: "live", hours: 6 });
+      const { onChange } = await renderCapsule({ kind: "live", hours: 6 });
       const play = screen.getByRole("button", { name: "Replay the last 7 days" });
       fireEvent.click(play);
       await advance(1600);
@@ -279,7 +282,7 @@ describe("TimelineCapsule", () => {
     });
 
     it("stops when the visitor picks a preset, keeping their choice", async () => {
-      const { onChange } = renderCapsule();
+      const { onChange } = await renderCapsule();
       fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
 
       fireEvent.click(screen.getByRole("button", { name: "7d" }));
@@ -290,7 +293,7 @@ describe("TimelineCapsule", () => {
     });
 
     it("stops when the visitor drags a range", async () => {
-      const { onChange } = renderCapsule();
+      const { onChange } = await renderCapsule();
       fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
       const el = chart();
       fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 41 });
@@ -306,14 +309,14 @@ describe("TimelineCapsule", () => {
     });
 
     it("sweeps the playhead across each day, unless motion is reduced", async () => {
-      const { unmount } = renderCapsule();
+      const { unmount } = await renderCapsule();
       const playhead = () => screen.getByRole("img").querySelector(".playhead")!;
       expect(playhead()).not.toHaveClass("sweep");
       fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
       expect(playhead()).toHaveClass("sweep");
       unmount();
 
-      renderCapsule(DEFAULT_WINDOW, vi.fn(), true);
+      await renderCapsule(DEFAULT_WINDOW, vi.fn(), true);
       fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
       expect(playhead()).not.toHaveClass("sweep");
     });

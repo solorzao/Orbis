@@ -54,8 +54,9 @@ export default function Home() {
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
-  // Intensity is computed per vertex for every place: too slow for a low-power
-  // device without WebGPU, and three-globe can't tell us cheaply if it has it.
+  // Intensity is off in low-power mode: its heatmap is computed at ~246k vertices,
+  // about 0.75 s on a slow CPU even with WebGPU and seconds without it (see
+  // heatmapPoints and webGpuReady, which probes for a device only once it's shown).
   const globeLayer: GlobeLayer = lowPower ? "dots" : layer;
 
   // The same window again (a preset clicked twice) keeps its dots: no refetch.
