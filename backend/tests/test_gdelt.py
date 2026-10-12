@@ -4,6 +4,7 @@ import io
 import threading
 import time
 import zipfile
+from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,7 +14,10 @@ from app.services.gdelt import (
     _HTML_COMMENT_RE,
     _clean_title,
     _gdelt_https_url,
+    _is_stale_recrawl,
     _is_usable_title,
+    _page_date,
+    _page_published_at,
     _parse_counts,
     _parse_entities,
     _parse_gkg_date,
@@ -21,6 +25,7 @@ from app.services.gdelt import (
     _parse_page_title,
     _parse_themes,
     _parse_tone_detail,
+    _url_date,
     fetch_raw_gkg,
     scrape_titles,
 )
@@ -409,6 +414,191 @@ class TestParseToneDetail:
 
 
 # ---------------------------------------------------------------------------
+# Stale re-crawls: old pages GDELT lists as new
+# ---------------------------------------------------------------------------
+
+_NEXT_YEAR = datetime.now(timezone.utc).year + 1
+
+
+def _pubtime(value: str) -> str:
+    return f"<PAGE_PRECISEPUBTIMESTAMP>{value}</PAGE_PRECISEPUBTIMESTAMP>"
+
+
+class TestPagePublishedAt:
+    def test_reads_the_precise_timestamp_as_utc(self):
+        extras = f"<PAGE_TITLE>Moderate Muslims speak out</PAGE_TITLE>{_pubtime('20050711143005')}"
+        assert _page_published_at(extras) == datetime(2005, 7, 11, 14, 30, 5, tzinfo=timezone.utc)
+
+    def test_surrounding_whitespace_is_ignored(self):
+        assert _page_published_at(_pubtime(" 20200804120000\n")) == datetime(
+            2020, 8, 4, 12, tzinfo=timezone.utc
+        )
+
+    @pytest.mark.parametrize(
+        "extras",
+        [
+            "",
+            "<PAGE_TITLE>No timestamp here</PAGE_TITLE>",
+            _pubtime(""),
+            _pubtime("2005071114300"),  # 13 digits
+            _pubtime("200507111430050"),  # 15 digits
+            _pubtime("20051311143000"),  # month 13
+            _pubtime("20050230120000"),  # 30 February
+            _pubtime("20050711250000"),  # hour 25
+            _pubtime("2005-07-11 14:30"),
+            _pubtime("abcdefghijklmn"),
+            _pubtime("00000000000000"),
+            _pubtime("19000101000000"),  # before news on the web
+            _pubtime("２００５０７１１１４３０００"),  # full-width digits
+            "<PAGE_PRECISEPUBTIMESTAMP>20050711143000",  # never closed
+            "<PAGE_PRECISEPUBTIMESTAMP>20050711143000" + "x" * 500 + "</PAGE_PRECISEPUBTIMESTAMP>",
+        ],
+    )
+    def test_none_when_absent_or_malformed(self, extras):
+        assert _page_published_at(extras) is None
+
+    @pytest.mark.parametrize(
+        "extras",
+        [
+            "<PAGE_PRECISEPUBTIMESTAMP>" * 50_000,
+            "<PAGE_PRECISEPUBTIMESTAMP>" + "1" * 500_000,
+            "</PAGE_PRECISEPUBTIMESTAMP>" * 50_000,
+        ],
+        ids=["open-tags", "one-open-tag", "close-tags"],
+    )
+    def test_hostile_input_is_fast(self, extras):
+        t0 = time.perf_counter()
+        assert _page_published_at(extras) is None
+        assert time.perf_counter() - t0 < 0.5
+
+
+class TestUrlDate:
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            # Real re-crawls seen in production
+            (
+                "https://www.newsbusters.org/blogs/nb/ken-shepherd/2005/07/11/"
+                "moderate-muslims-condemn-london-bombings",
+                date(2005, 7, 11),
+            ),
+            (
+                "https://www.example.com/news/2020/08/04/tropical-storm-isaias-makes-landfall",
+                date(2020, 8, 4),
+            ),
+            # /YYYY/MM/DD at the end of the path, or before an extension
+            ("https://example.com/news/2020/08/04", date(2020, 8, 4)),
+            ("https://example.com/news/2020/08/04/", date(2020, 8, 4)),
+            ("https://example.com/archive/2019/12/31.html", date(2019, 12, 31)),
+            # YYYY-MM-DD: a whole segment, or delimited by - or _
+            ("https://example.com/2020-08-04/storm", date(2020, 8, 4)),
+            ("https://example.com/news/2020-08-04-storm-isaias", date(2020, 8, 4)),
+            ("https://example.com/news/storm-isaias-2020-08-04.html", date(2020, 8, 4)),
+            ("https://news.sina.com.cn/c/2020-10-12/doc-iiznctkc5363431.shtml", date(2020, 10, 12)),
+            ("https://example.com/news/story_2020_08_04_storm.html", date(2020, 8, 4)),
+            # YYYYMMDD: a whole segment, or delimited
+            ("https://www3.nhk.or.jp/news/html/20201012/k10012658331000.html", date(2020, 10, 12)),
+            ("https://example.com/archive/20200804.html", date(2020, 8, 4)),
+            ("https://example.com/news/article-20200804-storm", date(2020, 8, 4)),
+            ("https://example.com/news/story_20200804", date(2020, 8, 4)),
+            # Bounds: 1995 to this year
+            ("https://example.com/1995/01/01/oldest", date(1995, 1, 1)),
+            ("HTTP://EXAMPLE.COM/2005/07/11/upper-case-scheme", date(2005, 7, 11)),
+            # Two dates: the later one, so a slug about a past event is not stale
+            ("https://example.com/2020/08/04/looking-back-at-2005-07-07", date(2020, 8, 4)),
+            ("https://example.com/remembering-2005-07-07/2020/08/04/", date(2020, 8, 4)),
+            # The query string and fragment are ignored, not the path
+            ("https://example.com/2005/07/11/x?date=2020-08-04#2021-01-01", date(2005, 7, 11)),
+        ],
+    )
+    def test_reads_a_date_from_the_path(self, url, expected):
+        assert _url_date(url) == expected
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "",
+            "https://example.com/",
+            "https://example.com/news/article-1",
+            # Numeric IDs
+            "https://example.com/news/123456789012",
+            "https://example.com/story/202008041234",  # 12 digits
+            "https://example.com/story/2020080412",  # 10 digits
+            "https://example.com/id/x20200804",  # a letter before
+            "https://example.com/news/20200804abc",  # a letter after
+            "https://example.com/news/2005-07-110/x",  # a digit after the day
+            "https://example.com/news/12005-07-11/x",  # a digit before the year
+            "https://www.nst.com.my/news/2020/10/631234/flood-warning",
+            "https://example.com/n1/2020/1012/c1002-31889316.html",
+            "https://example.com/product/1234-5678-9012",
+            # Partial or unpadded dates
+            "https://example.com/2020/08/storm",
+            "https://example.com/2020/8/4/storm",
+            "https://example.com/2020-8-4-storm",
+            # Mixed or unsupported delimiters
+            "https://example.com/2020-08/04/storm",
+            "https://example.com/2020/08-04/storm",
+            "https://example.com/news/2020.08.04/storm",
+            # Not a calendar date, or out of range
+            "https://example.com/2020/13/01/storm",
+            "https://example.com/2021/02/29/storm",
+            "https://example.com/2020/00/10/storm",
+            "https://example.com/1994/07/11/storm",
+            "https://example.com/1899/07/11/storm",
+            f"https://example.com/{_NEXT_YEAR}/01/01/storm",
+            # Not in the path
+            "https://example.com/search?date=2005-07-11",
+            "https://example.com/news?d=20050711",
+            "https://example.com/page#2005/07/11/",
+            "https://2005-07-11.example.com/news",
+            "https://example.com:2005/news",
+            # Not a web URL
+            "ftp://example.com/2005/07/11/file",
+            "BBC Monitoring 2005/07/11/ summary",
+            "http://[::1/2005/07/11/",  # unparseable
+        ],
+    )
+    def test_none_when_the_path_has_no_clear_date(self, url):
+        assert _url_date(url) is None
+
+    def test_long_urls_are_fast(self):
+        url = "https://example.com/" + "2020-08-0" * 50_000 + "/-" * 50_000
+        t0 = time.perf_counter()
+        _url_date(url)
+        assert time.perf_counter() - t0 < 0.5
+
+
+class TestStaleRecrawl:
+    SEEN = datetime(2026, 3, 5, 12, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize(
+        ("page_date", "stale"),
+        [
+            (date(2005, 7, 11), True),
+            (date(2026, 2, 25), True),  # 8 days before
+            (date(2026, 2, 26), False),  # 7 days: inside the retention window
+            (date(2026, 3, 5), False),
+            (date(2026, 3, 6), False),  # after: a time-zone difference, not stale
+            (None, False),  # no page date: kept
+        ],
+    )
+    def test_stale_when_more_than_the_retention_window_before_gdelt_saw_it(self, page_date, stale):
+        assert _is_stale_recrawl(page_date, self.SEEN) is stale
+
+    def test_the_window_is_the_retention_setting(self, monkeypatch):
+        monkeypatch.setattr(gdelt.settings, "retention_days", 30)
+        assert _is_stale_recrawl(date(2026, 2, 25), self.SEEN) is False
+        assert _is_stale_recrawl(date(2026, 2, 2), self.SEEN) is True
+
+    def test_page_date_prefers_the_precise_timestamp(self):
+        url = "https://example.com/2005/07/11/story"
+        assert _page_date(_pubtime("20260304120000"), url) == date(2026, 3, 4)
+        assert _page_date("", url) == date(2005, 7, 11)
+        assert _page_date(_pubtime("garbage"), url) == date(2005, 7, 11)
+        assert _page_date("", "https://example.com/story") is None
+
+
+# ---------------------------------------------------------------------------
 # fetch_raw_gkg
 # ---------------------------------------------------------------------------
 
@@ -731,6 +921,60 @@ class TestGkgFields:
         [article] = await _fetch_records([record])
         assert len(article["persons"]) == 30
         assert len(article["organizations"]) == 30
+
+
+class TestStaleRecrawlsSkipped:
+    """Pages published long before GDELT listed them are not today's news."""
+
+    # _make_gkg_record's GKG date is 2026-03-05 12:00 UTC.
+
+    @pytest.mark.asyncio
+    async def test_a_page_dated_years_ago_in_its_url_is_skipped(self):
+        old = _make_gkg_record(url="https://www.newsbusters.org/blogs/nb/2005/07/11/muslims")
+        new = _make_gkg_record(url="https://example.com/news/2026/03/04/storm")
+        articles = await _fetch_records([old, new])
+        assert [a["url"] for a in articles] == ["https://example.com/news/2026/03/04/storm"]
+
+    @pytest.mark.asyncio
+    async def test_a_page_with_an_old_precise_timestamp_is_skipped(self):
+        record = _make_gkg_record(
+            url="https://example.com/news/isaias-makes-landfall",
+            extras=f"<PAGE_TITLE>Isaias makes landfall</PAGE_TITLE>{_pubtime('20200804031500')}",
+        )
+        assert await _fetch_records([record]) == []
+
+    @pytest.mark.asyncio
+    async def test_the_precise_timestamp_wins_over_the_url(self):
+        record = _make_gkg_record(
+            url="https://example.com/2005/07/11/updated-story",
+            extras=_pubtime("20260304120000"),
+        )
+        [article] = await _fetch_records([record])
+        assert article["url"] == "https://example.com/2005/07/11/updated-story"
+
+    @pytest.mark.asyncio
+    async def test_a_recent_page_keeps_the_gkg_date(self):
+        record = _make_gkg_record(
+            url="https://example.com/2026/02/26/story", extras=_pubtime("20260226080000")
+        )
+        [article] = await _fetch_records([record])
+        assert article["published_at"] == datetime(2026, 3, 5, 12, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_the_summary_line_counts_the_skipped_records(self, caplog):
+        records = [
+            _make_gkg_record(url="https://example.com/2005/07/11/a"),
+            _make_gkg_record(url="https://example.com/2010/01/02/b"),
+            _make_gkg_record(url="https://example.com/c"),
+        ]
+        with caplog.at_level("INFO", logger="app.services.gdelt"):
+            articles = await _fetch_records(records)
+
+        assert len(articles) == 1
+        [line] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("GKG raw")]
+        assert line == (
+            "GKG raw file: 3 records, 1 with city-level locations, 2 stale re-crawls skipped."
+        )
 
 
 # ---------------------------------------------------------------------------
