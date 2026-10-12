@@ -17,11 +17,19 @@ async def pg():
     """A connection to the scratch database, inside a transaction rolled back afterwards.
 
     Nothing a test writes is ever committed, and other sessions never see it.
-    Skips the test when ORBIS_TEST_DATABASE_URL is not set.
+    Skips the test when ORBIS_TEST_DATABASE_URL is not set, or the database
+    lacks migration 012's articles.story_key.
     """
     if not _TEST_DATABASE_URL:
         pytest.skip("ORBIS_TEST_DATABASE_URL is not set")
     conn = await asyncpg.connect(_TEST_DATABASE_URL)
+    has_story_key = await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns"
+        " WHERE table_name = 'articles' AND column_name = 'story_key')"
+    )
+    if not has_story_key:
+        await conn.close()
+        pytest.skip("articles.story_key is missing: apply migration 012")
     transaction = conn.transaction()
     await transaction.start()
     try:

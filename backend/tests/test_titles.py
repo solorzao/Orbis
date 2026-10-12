@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import re
 
 import pytest
 
-from app.services import titles
-from app.services.titles import dedup_key, dedup_title_sql, story_key, story_key_sql
+from app.services.titles import dedup_key, story_key, story_key_sql
 
 
 class TestDedupKey:
@@ -96,55 +94,3 @@ class TestStoryKeySql:
         """It is written into SQL as it is."""
         with pytest.raises(ValueError):
             story_key_sql(alias)
-
-
-# Titles where a looser SQL form (`[^|:–—-]{0,40}$`, no trim) disagrees with
-# the Python, and the ordinary cases.
-SQL_TITLES = [
-    "Quake hits Kathmandu - Reuters",
-    "Quake hits Kathmandu | BBC News",
-    "Markets rally : NPR",
-    "Storm nears coast — Pittsburgh Post-Gazette",  # a hyphen inside the outlet's name
-    "Ceasefire talks: what we know so far",  # no space before the colon: no separator
-    "Left - Centre - Right - AP",  # only the last separator goes
-    "Vote count - " + "x" * 39,  # 39 characters after it: an outlet
-    "Vote count - " + "x" * 40,  # 40: part of the headline
-    "  Padded headline  ",
-    "Ölpreis steigt – Süddeutsche Zeitung",
-    "No\u00a0break\u00a0-\u00a0Le Monde",  # no-break spaces, which Python's \s matches
-    "Tabbed\t|\tSite\n",
-    " - Reuters",
-    "A - - B",  # the two share a space, so Python's scan finds the first only
-    "Title - Outlet -",  # a dash with no space after it is no separator
-]
-
-
-class TestDedupTitleSql:
-    """dedup_key as SQL, for queries that key titles as they read them."""
-
-    def test_the_sql_mirrors_the_separator(self):
-        """dedup_title_sql spells the separator out: change both together."""
-        assert titles._OUTLET_SEP.pattern == r"\s+[|:–—-]\s+"
-        assert "[|:–—-]" in dedup_title_sql("title")
-
-    def test_the_sql_reads_the_column_it_is_given(self):
-        sql = dedup_title_sql("a.title")
-        assert sql.startswith("(lower(")
-        assert "regexp_replace(a.title," in sql
-        assert not re.search(r"\$\d", sql)  # no bind parameter, only the regexes' anchors
-
-    @pytest.mark.asyncio
-    async def test_sql_and_python_agree(self, pg):
-        """The SQL form gives exactly dedup_key, title by title (needs the scratch database)."""
-        rows = await pg.fetch(
-            f"SELECT {dedup_title_sql('t')} AS key"
-            " FROM unnest($1::text[]) WITH ORDINALITY AS u(t, n) ORDER BY n",
-            SQL_TITLES,
-        )
-
-        assert [r["key"] for r in rows] == [dedup_key(t) for t in SQL_TITLES]
-
-    def test_the_key_compares_bytewise(self):
-        """Only ever compared for equality: "C" sorts it a third faster than the locale, and
-        a deterministic collation's equality is bytewise anyway."""
-        assert dedup_title_sql("title").endswith(') COLLATE "C")')

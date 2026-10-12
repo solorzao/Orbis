@@ -5,8 +5,9 @@ last 2 hours and ``baseline`` the distinct stories of the rest of the
 retention (166 hours at 7 days) per 2-hour block that holds data: from the
 oldest story kept, at most 83 blocks and at least 1. A database a few days
 old (production was recreated 2026-10-10) then isn't measured against a
-week it never had. A story is a title without its outlet's name (see
-titles.py), so one wire story run by 40 outlets is one story, not 40.
+week it never had. A story is a row's story_key (titles.story_key_sql: its
+title without the outlet's name, hashed at ingestion), so one wire story run
+by 40 outlets is one story, not 40.
 
 A cell surges when ``recent / max(baseline, 0.5)`` is at least 3, it has at
 least 8 recent stories, and they come from at least 3 sources (one outlet's
@@ -24,7 +25,7 @@ from typing import Any
 from app.config import settings
 from app.services.database import GLOBE_TOPIC_TAGS, dominant_topic, get_pool, globe_lead
 from app.services.places import display_place
-from app.services.titles import dedup_title_sql
+from app.services.titles import story_key_sql
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +44,11 @@ MAX_SURGES = 8
 def surges_query(now: datetime, topic: str | None) -> tuple[Any, ...]:
     """SQL and arguments for the surging cells, as ``pool.fetch`` takes them.
 
-    One pass over the last 2 hours keys each story and counts every cell's
-    stories, sources and six topics (distinct stories each). Only the cells
-    with enough stories and sources then read their week, joined by cell, so
-    only their older stories are keyed. The blocks the week holds (``span``)
-    come from the oldest story in it, of any topic: an index endpoint lookup.
+    One pass over the last 2 hours counts every cell's stories, sources and
+    six topics (distinct stories each). Only the cells with enough stories
+    and sources then read their week, joined by cell. The blocks the week
+    holds (``span``) come from the oldest story in it, of any topic: an index
+    endpoint lookup, materialised so it runs once.
     The ratio, threshold, order and limit follow; the top cells then look up
     their lead as the globe does: the newest recent story, preferring an
     https image, by its exact time.
@@ -71,11 +72,11 @@ def surges_query(now: datetime, topic: str | None) -> tuple[Any, ...]:
     oldest = "(SELECT min(published_at) FROM articles WHERE published_at >= $2)"
     query = f"""
         WITH recent AS (
-            SELECT FLOOR(latitude) AS lat_cell, FLOOR(longitude) AS lng_cell,
-                   {dedup_title_sql("title")} AS story,
-                   source_name, topic_tags, published_at, image_url
-            FROM articles
-            WHERE published_at >= $1 {tag}
+            SELECT FLOOR(a.latitude) AS lat_cell, FLOOR(a.longitude) AS lng_cell,
+                   {story_key_sql("a")} AS story,
+                   a.source_name, a.topic_tags, a.published_at, a.image_url
+            FROM articles a
+            WHERE a.published_at >= $1 {a_tag}
         ),
         candidates AS (
             SELECT lat_cell, lng_cell,
@@ -90,7 +91,7 @@ def surges_query(now: datetime, topic: str | None) -> tuple[Any, ...]:
         ),
         before AS (
             SELECT c.lat_cell, c.lng_cell,
-                   count(DISTINCT {dedup_title_sql("a.title")}) AS stories
+                   count(DISTINCT {story_key_sql("a")}) AS stories
             FROM candidates c JOIN articles a
               ON FLOOR(a.latitude) = c.lat_cell AND FLOOR(a.longitude) = c.lng_cell
             WHERE a.published_at >= $2 AND a.published_at < $1 {a_tag}

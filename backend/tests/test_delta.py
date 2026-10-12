@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services import delta
-from app.services.titles import dedup_title_sql
+from app.services.titles import story_key, story_key_sql
 
 SINCE = datetime(2026, 10, 12, 0, 15, tzinfo=timezone.utc)
 
@@ -65,7 +65,7 @@ class TestDeltaQuery:
 
         query, args = _fetched(pool)
         assert args == [SINCE]
-        assert "WHERE published_at >= $1 )" in query
+        assert "WHERE a.published_at >= $1 )" in query
         assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
 
     @pytest.mark.asyncio
@@ -73,7 +73,12 @@ class TestDeltaQuery:
         await delta.get_delta(SINCE)
 
         query, _ = _fetched(pool)
-        assert f"{_sql(dedup_title_sql('title'))} AS story" in query
+        # Read once for the places and the total: inlined twice took 0.28 s, not 0.19 s.
+        assert "WITH fresh AS MATERIALIZED (" in query
+        fresh = query[query.index("WITH fresh AS") : query.index("cells AS (")]
+        assert f"{story_key_sql('a')} AS story" in fresh
+        assert "FROM articles a WHERE a.published_at >= $1" in fresh
+        assert "regexp_replace" not in query  # no title is keyed as it is read
         assert "count(DISTINCT story) AS new" in query  # per place
         assert "(SELECT count(DISTINCT story) FROM fresh) AS new_stories" in query
         assert "(SELECT count(*) FROM cells) AS new_places" in query
@@ -177,33 +182,35 @@ DB_SINCE = DB_NOW - timedelta(hours=14)
 
 _INSERT = """
     INSERT INTO articles (title, source_url, source_name, published_at, latitude, longitude,
-                          location, region, country_code, topic_tags, image_url)
+                          location, region, country_code, topic_tags, image_url, story_key)
     VALUES ($1, $2, $3, $4, $5, $6, ST_SetSRID(ST_MakePoint($6, $5), 4326)::geography,
-            $7, $8, $9, $10)
+            $7, $8, $9, $10, $11)
 """
 
 _URLS = itertools.count()  # source_url is unique, across a test's inserts too
 
 
-async def _insert(pg, rows: list[dict]) -> None:
-    await pg.executemany(
-        _INSERT,
-        [
-            (
-                f"zzsurge-{r['title']}",
-                f"https://zzsurge.example/delta/{next(_URLS)}",
-                r.get("source", "outlet.example"),
-                r["at"],
-                r["lat"],
-                r["lng"],
-                r.get("region", "Testville"),
-                r.get("country", "ZZ"),  # no such code: the region shows as stored
-                r.get("tags", ["general"]),
-                r.get("image"),
-            )
-            for r in rows
-        ],
+def _args(r: dict) -> tuple:
+    title = f"zzsurge-{r['title']}"
+    url = f"https://zzsurge.example/delta/{next(_URLS)}"
+    return (
+        title,
+        url,
+        r.get("source", "outlet.example"),
+        r["at"],
+        r["lat"],
+        r["lng"],
+        r.get("region", "Testville"),
+        r.get("country", "ZZ"),  # no such code: the region shows as stored
+        r.get("tags", ["general"]),
+        r.get("image"),
+        # Keyed as ingestion keys it; keyed=False is a row from before migration 012.
+        story_key(title, url) if r.get("keyed", True) else None,
     )
+
+
+async def _insert(pg, rows: list[dict]) -> None:
+    await pg.executemany(_INSERT, [_args(r) for r in rows])
 
 
 def _new(lat, lng, n, *, hours_ago=1, prefix=None, **extra):
@@ -299,6 +306,23 @@ class TestDeltaOnPostgres:
 
         assert (result["new_stories"], result["new_places"]) == (1, 1)
         assert result["top"][0]["lead"]["title"] == "zzsurge-at the visit"
+
+    @pytest.mark.asyncio
+    async def test_unkeyed_rows_count_once_per_title(self, pg):
+        """Rows from before migration 012 have no story_key: two copies of one title are one
+        story, beside a keyed one."""
+        await _insert(
+            pg,
+            _new(40.7, -74.0, 1)
+            + [
+                {**r, "title": "same headline", "keyed": False}
+                for r in _new(40.7, -74.0, 2, prefix="copy")
+            ],
+        )
+
+        result = await _db_delta(pg)
+
+        assert (result["new_stories"], result["top"][0]["new"]) == (2, 2)
 
     @pytest.mark.asyncio
     async def test_nothing_new(self, pg):

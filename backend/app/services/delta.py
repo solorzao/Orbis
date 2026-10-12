@@ -1,7 +1,8 @@
 """What changed since a visit: the new stories, the places they're in, and the busiest five.
 
-A story is a title without its outlet's name (see titles.py), so syndicated
-copies count once, and a place is a 1° cell, as the globe's dots are.
+A story is a row's story_key (titles.story_key_sql: its title without the
+outlet's name, hashed at ingestion), so syndicated copies count once, and a
+place is a 1° cell, as the globe's dots are.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from typing import Any
 
 from app.services.database import get_pool, globe_lead
 from app.services.places import display_place
-from app.services.titles import dedup_title_sql
+from app.services.titles import story_key_sql
 
 TOP_PLACES = 5
 
@@ -19,20 +20,23 @@ TOP_PLACES = 5
 def delta_query(since: datetime) -> tuple[Any, ...]:
     """SQL and arguments for the stories since *since*, as ``pool.fetch`` takes them.
 
-    The stories since then are keyed once (``fresh``); from them come the
-    distinct stories, the places with any (``cells``) and the 5 places with
-    the most, each with its lead as the globe's: the newest new story,
-    preferring an https image, by its exact time. Each row carries the
-    totals and one top place; with no new stories, a single row of totals
-    and NULLs.
+    From the stories since then (``fresh``) come the distinct stories, the
+    places with any (``cells``) and the 5 places with the most, each with its
+    lead as the globe's: the newest new story, preferring an https image, by
+    its exact time. Each row carries the totals and one top place; with no
+    new stories, a single row of totals and NULLs.
+
+    ``fresh`` is materialised, so the window is read once for the places and
+    the total: inlined into both, a week took 0.28 s rather than 0.19 s on
+    150K synthetic stories.
     """
     query = f"""
         WITH fresh AS MATERIALIZED (
-            SELECT FLOOR(latitude) AS lat_cell, FLOOR(longitude) AS lng_cell,
-                   {dedup_title_sql("title")} AS story,
-                   published_at, image_url
-            FROM articles
-            WHERE published_at >= $1
+            SELECT FLOOR(a.latitude) AS lat_cell, FLOOR(a.longitude) AS lng_cell,
+                   {story_key_sql("a")} AS story,
+                   a.published_at, a.image_url
+            FROM articles a
+            WHERE a.published_at >= $1
         ),
         cells AS (
             SELECT lat_cell, lng_cell,

@@ -9,7 +9,7 @@ import pytest
 
 from app.config import settings
 from app.services import surges
-from app.services.titles import dedup_title_sql
+from app.services.titles import story_key, story_key_sql
 
 NOW = datetime(2026, 10, 12, 14, 30, tzinfo=timezone.utc)
 
@@ -63,19 +63,24 @@ class TestSurgesQuery:
 
         query, args = _fetched(pool)
         assert args == [NOW - timedelta(hours=2), NOW - timedelta(days=7)]
-        assert "WHERE published_at >= $1 " in query  # the recent stories
+        assert "WHERE a.published_at >= $1 " in query  # the recent stories
         assert "a.published_at >= $2 AND a.published_at < $1" in query  # the 83 blocks before
         assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
 
     @pytest.mark.asyncio
     async def test_counts_distinct_stories_not_rows(self, pool):
-        """Syndicated copies, outlet suffix and all, count once."""
+        """Syndicated copies, outlet suffix and all, share a story_key: they count once."""
         await surges.get_surges(NOW)
 
         query, _ = _fetched(pool)
-        assert f"{_sql(dedup_title_sql('title'))} AS story" in query
+        recent = query[query.index("WITH recent AS (") : query.index("candidates AS (")]
+        assert f"{story_key_sql('a')} AS story" in recent
+        assert "FROM articles a WHERE a.published_at >= $1" in recent
         assert "count(DISTINCT story) AS recent" in query
-        assert f"count(DISTINCT {_sql(dedup_title_sql('a.title'))}) AS stories" in query
+        politics = "count(DISTINCT story) FILTER (WHERE topic_tags && '{politics}') AS politics"
+        assert politics in query
+        assert f"count(DISTINCT {story_key_sql('a')}) AS stories" in query
+        assert "regexp_replace" not in query  # no title is keyed as it is read
 
     @pytest.mark.asyncio
     async def test_a_surge_needs_eight_stories_from_three_sources(self, pool):
@@ -253,34 +258,36 @@ DB_NOW = datetime(2031, 3, 1, 12, 0, tzinfo=timezone.utc)
 
 _INSERT = """
     INSERT INTO articles (title, source_url, source_name, published_at, latitude, longitude,
-                          location, region, country_code, topic_tags, image_url)
+                          location, region, country_code, topic_tags, image_url, story_key)
     VALUES ($1, $2, $3, $4, $5, $6, ST_SetSRID(ST_MakePoint($6, $5), 4326)::geography,
-            $7, $8, $9, $10)
+            $7, $8, $9, $10, $11)
 """
 
 
 _URLS = itertools.count()  # source_url is unique, across a test's inserts too
 
 
-async def _insert(pg, rows: list[dict]) -> None:
-    await pg.executemany(
-        _INSERT,
-        [
-            (
-                f"zzsurge-{r['title']}",
-                f"https://zzsurge.example/{next(_URLS)}",
-                r["source"],
-                r["at"],
-                r["lat"],
-                r["lng"],
-                r.get("region", "Testville"),
-                r.get("country", "ZZ"),  # no such code: the region shows as stored
-                r.get("tags", ["general"]),
-                r.get("image"),
-            )
-            for r in rows
-        ],
+def _args(r: dict) -> tuple:
+    title = f"zzsurge-{r['title']}"
+    url = f"https://zzsurge.example/{next(_URLS)}"
+    return (
+        title,
+        url,
+        r["source"],
+        r["at"],
+        r["lat"],
+        r["lng"],
+        r.get("region", "Testville"),
+        r.get("country", "ZZ"),  # no such code: the region shows as stored
+        r.get("tags", ["general"]),
+        r.get("image"),
+        # Keyed as ingestion keys it; keyed=False is a row from before migration 012.
+        story_key(title, url) if r.get("keyed", True) else None,
     )
+
+
+async def _insert(pg, rows: list[dict]) -> None:
+    await pg.executemany(_INSERT, [_args(r) for r in rows])
 
 
 def _stories(lat, lng, n, *, sources=4, minutes_ago=30, tags=None, prefix=None, **extra):
@@ -370,6 +377,31 @@ class TestSurgesOnPostgres:
         await _insert(pg, _stories(-33.9, 18.4, 1, sources=5, prefix="one more"))
         [surge] = await _db_surges(pg)
         assert (surge["recent"], surge["ratio"]) == (8, 16.0)
+
+    @pytest.mark.asyncio
+    async def test_unkeyed_rows_count_once_per_title(self, pg):
+        """Rows from before migration 012 have no story_key: two copies of one title are one
+        story, in the last 2 hours and before. Were they dropped, 7 recent stories wouldn't
+        surge; counted twice, 9 against 3 a block would be 3.0x."""
+        unkeyed = {"keyed": False}
+        rows = _stories(-33.9, 18.4, 7, sources=3)
+        rows += [
+            {**r, **unkeyed}
+            for r in _stories(-33.9, 18.4, 2, sources=2, minutes_ago=5, prefix="same headline")
+        ]
+        for r in rows[-2:]:
+            r["title"] = "same headline"
+        # Before: one keyed story and two unkeyed copies of another, in one block.
+        rows += [
+            _old(-33.9, 18.4, "old keyed", source="o.example", minutes=30),
+            {**_old(-33.9, 18.4, "old same", source="a.example", minutes=60), **unkeyed},
+            {**_old(-33.9, 18.4, "old same", source="b.example", minutes=50), **unkeyed},
+        ]
+        await _insert(pg, rows)
+
+        [surge] = await _db_surges(pg)
+
+        assert (surge["recent"], surge["baseline"], surge["ratio"]) == (8, 2.0, 4.0)
 
     @pytest.mark.asyncio
     async def test_the_place_follows_the_articles_country(self, pg):
