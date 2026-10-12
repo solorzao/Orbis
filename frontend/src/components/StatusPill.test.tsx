@@ -91,4 +91,25 @@ describe("StatusPill state", () => {
     expect(screen.queryByText("Loading…")).toBeNull();
     expect(screen.queryByText("Offline")).toBeNull();
   });
+
+  it("shows Replay while a replay plays, not each step's loading", () => {
+    const { rerender } = render(<StatusPill isLive={false} isLoading isOffline={false} isReplay />);
+    const region = screen.getByRole("status");
+    expect(region).toHaveTextContent(/^Replay$/);
+    expect(screen.getByText("Replay")).toHaveClass("replay");
+
+    // Each step loads and lands; the region's text doesn't change, so nothing is re-announced.
+    const node = region.firstChild;
+    rerender(<StatusPill isLive={false} isLoading={false} isOffline={false} isReplay />);
+    rerender(<StatusPill isLive={false} isLoading isOffline={false} isReplay />);
+    expect(region).toHaveTextContent(/^Replay$/);
+    expect(region.firstChild).toBe(node);
+    expect(screen.queryByText("Loading…")).toBeNull();
+  });
+
+  it("still shows Offline during a replay", () => {
+    render(<StatusPill isLive={false} isLoading={false} isOffline isReplay />);
+    expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.queryByText("Replay")).toBeNull();
+  });
 });

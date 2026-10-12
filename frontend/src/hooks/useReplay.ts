@@ -24,20 +24,25 @@ interface Run<T> {
 /**
  * A time-lapse: `apply` each step in turn, one every `intervalMs` (the first
  * at once), then `apply` the window it started from. The steps are fixed when
- * it starts. Stopping, or unmounting, clears the interval.
+ * it starts. Stopping, or unmounting, clears the interval. `onPlayingChange`
+ * hears true on start and false on stop, just before the step or window it
+ * applies, so both land in the same render.
  */
 export function useReplay<T>(
   steps: readonly T[],
   intervalMs: number,
   apply: (step: T) => void,
+  onPlayingChange?: (playing: boolean) => void,
 ): Replay<T> {
   const [showing, setShowing] = useState<{ index: number; step: T } | null>(null);
   const run = useRef<Run<T> | null>(null);
 
   // The interval calls the latest apply, not the one from when it started.
   const applyRef = useRef(apply);
+  const playingRef = useRef(onPlayingChange);
   useLayoutEffect(() => {
     applyRef.current = apply;
+    playingRef.current = onPlayingChange;
   });
 
   const stop = useCallback((restore = true) => {
@@ -46,6 +51,7 @@ export function useReplay<T>(
     clearInterval(current.timer);
     run.current = null;
     setShowing(null);
+    playingRef.current?.(false);
     if (restore) applyRef.current(current.prior);
   }, []);
 
@@ -66,6 +72,7 @@ export function useReplay<T>(
       }, intervalMs);
       run.current = { steps, prior: current, index: 0, timer };
       setShowing({ index: 0, step: steps[0] });
+      playingRef.current?.(true);
       applyRef.current(steps[0]);
     },
     [steps, intervalMs, stop],

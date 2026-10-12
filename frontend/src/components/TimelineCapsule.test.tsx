@@ -236,6 +236,24 @@ describe("TimelineCapsule", () => {
       expect(screen.getByRole("status")).toBeEmptyDOMElement();
     });
 
+    it("tells the page when a replay starts and ends", async () => {
+      const onReplayChange = vi.fn();
+      render(
+        <TimelineCapsule
+          timeWindow={DEFAULT_WINDOW}
+          onChange={vi.fn()}
+          onReplayChange={onReplayChange}
+          stories={0}
+          places={0}
+        />,
+      );
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
+      expect(onReplayChange.mock.calls).toEqual([[true]]);
+      await advance(8 * 1600);
+      expect(onReplayChange.mock.calls).toEqual([[true], [false]]);
+    });
+
     it("stops when pressed again, back on the window from before", async () => {
       const { onChange } = renderCapsule({ kind: "live", hours: 6 });
       const play = screen.getByRole("button", { name: "Replay the last 7 days" });

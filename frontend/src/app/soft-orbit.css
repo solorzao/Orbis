@@ -416,6 +416,19 @@ kbd {
 .status .lbl {
   color: var(--text-muted);
 }
+.status .replay {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+.status .replay::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: linear-gradient(120deg, var(--aurora-start), var(--aurora-end));
+}
 .status .offline {
   display: inline-flex;
   align-items: center;

@@ -36,6 +36,8 @@ export default function Home() {
   // The dots for the window, filtered to the topic on the client (same array until either changes)
   const { points, error: apiError, loading } = useGlobePoints(timeWindow, activeTopic);
   const [layer, setLayer] = useState<GlobeLayer>("dots");
+  // The timeline's replay: the status pill says Replay rather than flashing each step's load.
+  const [replaying, setReplaying] = useState(false);
 
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
@@ -344,6 +346,7 @@ export default function Home() {
         isLive={!apiError && !loading && timeWindow.kind === "live"}
         isLoading={loading}
         isOffline={apiError}
+        isReplay={replaying}
       />
 
       {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
@@ -380,6 +383,7 @@ export default function Home() {
         <TimelineCapsule
           timeWindow={timeWindow}
           onChange={changeWindow}
+          onReplayChange={setReplaying}
           stories={points.reduce((sum, p) => sum + p.count, 0)}
           places={points.length}
           reduced={reduced}

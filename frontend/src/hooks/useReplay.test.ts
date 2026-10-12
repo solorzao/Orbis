@@ -113,4 +113,24 @@ describe("useReplay", () => {
     act(() => vi.advanceTimersByTime(STEP_MS));
     expect(apply).toHaveBeenLastCalledWith("live");
   });
+
+  it("reports playing and stopped in the same update as the step it applies", () => {
+    const apply = vi.fn();
+    const onPlayingChange = vi.fn();
+    const hook = renderHook(() => useReplay(STEPS, STEP_MS, apply, onPlayingChange));
+
+    act(() => hook.result.current.start("live"));
+    expect(onPlayingChange.mock.calls).toEqual([[true]]);
+    // Called before the first step is applied, so no render sees the step without it.
+    expect(onPlayingChange.mock.invocationCallOrder[0]).toBeLessThan(
+      apply.mock.invocationCallOrder[0],
+    );
+
+    act(() => vi.advanceTimersByTime(STEPS.length * STEP_MS));
+    expect(onPlayingChange.mock.calls).toEqual([[true], [false]]);
+
+    act(() => hook.result.current.start("live"));
+    act(() => hook.result.current.stop(false));
+    expect(onPlayingChange.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
 });

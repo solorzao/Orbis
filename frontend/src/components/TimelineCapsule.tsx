@@ -76,6 +76,8 @@ function windowSpan(w: TimeWindow, now: number): { from: number; to: number } {
 interface TimelineCapsuleProps {
   timeWindow: TimeWindow;
   onChange: (timeWindow: TimeWindow) => void;
+  /** True when a replay starts, false when it ends (for the status pill). */
+  onReplayChange?: (playing: boolean) => void;
   /** Stories and places on the globe for the window. */
   stories: number;
   places: number;
@@ -94,6 +96,7 @@ interface TimelineCapsuleProps {
 export default function TimelineCapsule({
   timeWindow,
   onChange,
+  onReplayChange,
   stories,
   places,
   reduced = false,
@@ -154,7 +157,7 @@ export default function TimelineCapsule({
       })),
     [ticks],
   );
-  const replay = useReplay(replaySteps, REPLAY_STEP_MS, onChange);
+  const replay = useReplay(replaySteps, REPLAY_STEP_MS, onChange, onReplayChange);
   /** The visitor picked a window: it replaces the replay rather than waiting for it. */
   const choose = (next: TimeWindow) => {
     replay.stop(false);

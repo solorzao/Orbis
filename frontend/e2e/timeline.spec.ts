@@ -103,6 +103,8 @@ test.describe("Timeline capsule", () => {
     await expect(stop).toBeVisible();
     await expect(page.getByTestId("timeline-label")).toHaveText(/^Replay · \w{3}$/);
     await expect(timeline.getByRole("status")).toHaveText(/^Showing \w{3}$/);
+    // The status pill says Replay for the whole run, not each step's Loading…
+    await expect(page.getByTestId("status-pill").getByRole("status")).toHaveText("Replay");
 
     // A day every 1.6 s, each a whole UTC day, one after the other.
     await expect.poll(() => days.length, { timeout: 6000 }).toBeGreaterThanOrEqual(2);
