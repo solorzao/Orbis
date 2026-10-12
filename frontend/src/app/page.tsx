@@ -2,15 +2,25 @@
 
 import { useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
+import {
+  Topic,
+  GlobePoint,
+  NewsArticle,
+  PanelEntry,
+  PanelFilters,
+  PanelQuery,
+  type CountryLink,
+} from "@/types/news";
 import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, queryWindow, samePanelQuery } from "@/lib/panelQuery";
 import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
+import { linkKey, type LinkRank } from "@/lib/links";
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
+import { useLinks } from "@/hooks/useLinks";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
@@ -29,6 +39,7 @@ import Sky from "@/components/Sky";
 import OrbitRings from "@/components/OrbitRings";
 import GlobeHud from "@/components/GlobeHud";
 import HoverCard from "@/components/HoverCard";
+import ArcPill from "@/components/ArcPill";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -42,6 +53,12 @@ export default function Home() {
   // The dots for the window and topic, filtered on the server (same array until new dots land)
   const { points, error: apiError, loading } = useGlobePoints(timeWindow, activeTopic);
   const [layer, setLayer] = useState<GlobeLayer>("dots");
+  // The Links overlay: co-coverage arcs over either base layer, ranked by lift or count.
+  const [linksOn, setLinksOn] = useState(false);
+  const [linkRank, setLinkRank] = useState<LinkRank>("lift");
+  const { links } = useLinks(timeWindow, activeTopic, linkRank, linksOn);
+  // The arc under the pointer, named by the arc pill.
+  const [hoveredLink, setHoveredLink] = useState<CountryLink | null>(null);
   // The timeline's replay: the status pill says Replay rather than flashing each step's load.
   const [replaying, setReplaying] = useState(false);
 
@@ -76,7 +93,8 @@ export default function Home() {
     activeTopic,
   );
   const projectPoint = useCallback(
-    (lat: number, lng: number) => globeControlsRef.current?.project(lat, lng) ?? null,
+    (lat: number, lng: number, altitude?: number) =>
+      globeControlsRef.current?.project(lat, lng, altitude) ?? null,
     [],
   );
   // Conflict images the visitor chose to see: kept for the session, never stored.
@@ -306,6 +324,13 @@ export default function Home() {
 
   const handleZoomChange = useCallback(() => {}, []);
 
+  // The arc pill names the hovered arc while it is drawn (Links on, the same links).
+  const pillLink = hoveredLink
+    ? (links.find(
+        (l) => linkKey(l.a.iso, l.b.iso) === linkKey(hoveredLink.a.iso, hoveredLink.b.iso),
+      ) ?? null)
+    : null;
+
   const handleClosePanel = useCallback(
     (panelId: string) => {
       // Focus goes to the open place's pill, or to the tab when it was this one.
@@ -401,6 +426,8 @@ export default function Home() {
         layer={globeLayer}
         holdHeatmap={replaying || loading}
         replaying={replaying}
+        links={links}
+        onArcHover={setHoveredLink}
       />
 
       {/* Orbital rings around the globe */}
@@ -415,6 +442,9 @@ export default function Home() {
         docked={touch}
         reduced={reduced}
       />
+
+      {/* The hovered arc's pill, over the globe and under the chrome */}
+      <ArcPill link={pillLink} project={projectPoint} />
 
       {/* Top bar: brand, topics, status and About in one grid */}
       <TopBar
@@ -463,6 +493,10 @@ export default function Home() {
           layer={globeLayer}
           onChange={setLayer}
           unavailable={lowPower ? { intensity: "Intensity is off in low-power mode" } : undefined}
+          links={linksOn}
+          onLinksChange={setLinksOn}
+          rank={linkRank}
+          onRankChange={setLinkRank}
         />
         <TimelineCapsule
           timeWindow={timeWindow}

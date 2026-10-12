@@ -222,6 +222,30 @@ for (const size of SIZES.filter((s) => s.width === 1440 || s.width === 1280)) {
   }
 }
 
+// While Links is on, its rank switch floats beside the layers (above them in the
+// bottom row, to their right once they stack over the capsule): a region of its
+// own that must not move the capsule or touch anything.
+for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
+  test(`the Links rank switch keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await settle(page, size);
+    const before = (await page.getByTestId("layer-switcher").boundingBox())!;
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await expect(page.getByTestId("link-rank")).toBeVisible();
+    const regions = [...regionsAt(size.width), "link-rank"];
+    const b = await expectApart(page, size.width, "Links on", regions);
+    // The layers keep their box, so the capsule keeps its place.
+    expect(b["layer-switcher"]).toMatchObject({ x: before.x, y: before.y, w: before.width });
+    expectCentred(b["timeline"], size.width, "Links on");
+    if (size.width < SHEET_BELOW) {
+      await page.getByTestId("side-collapse").click();
+      await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+      await expectApart(page, size.width, "Links on, sheet open", regions);
+    }
+  });
+}
+
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {
   const size = { width: 900, height: 300 }; // 100vh - 260px would be 40px
   await settle(page, size);

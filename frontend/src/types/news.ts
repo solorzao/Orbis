@@ -60,6 +60,35 @@ export interface GlobePoint {
   tone?: number;
 }
 
+/** One end of a co-coverage link: a country and its label point. */
+export interface LinkCountry {
+  /** ISO 3166-1 alpha-2. */
+  iso: string;
+  name: string;
+  lat: number;
+  lng: number;
+}
+
+/**
+ * Two countries the window's stories cover together (/api/links): an arc on
+ * the globe. `a` and `b` come in code order; `from` is the end most of the
+ * stories come from, where the arc starts.
+ */
+export interface CountryLink {
+  a: LinkCountry;
+  b: LinkCountry;
+  /** Stories that link the two. */
+  n: number;
+  /** How many times more often than chance they are covered together. */
+  lift: number;
+  /** The stories' main topic pill ("All" when it is none of the six). */
+  topic: Topic;
+  /** Mean sentiment of the stories, -1 to 1. */
+  tone: number;
+  /** ISO code of the end most of the stories come from. */
+  from: string;
+}
+
 export interface PanelFilters {
   topics: string[];
   sentiment: string | null;

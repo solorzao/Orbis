@@ -1,5 +1,6 @@
 import type { Topic } from "@/types/news";
 import { windowQuery, type TimeWindow } from "@/lib/timeWindow";
+import { LINKS_LIMIT, type LinkRank } from "@/lib/links";
 
 // Same-origin /api/* routes are proxied to the backend by
 // src/app/api/[...path]/route.ts, which adds the API key server-side.
@@ -148,16 +149,67 @@ export function fetchPlacePreview({
   topic,
   signal,
 }: PlacePreviewQuery): Promise<ApiPlacePreview> {
-  const { timespan, startTime, endTime } = windowQuery(window);
   const params: Record<string, string> = { lat: String(lat), lng: String(lng) };
-  if (startTime && endTime) {
-    params.start_time = startTime;
-    params.end_time = endTime;
-  } else {
-    params.timespan = timespan;
-  }
+  Object.assign(params, windowParams(window));
   if (topic !== "All") params.topic = topic;
   return apiFetch<ApiPlacePreview>("/api/news/preview", params, signal);
+}
+
+/**
+ * A window as query params: a range's bounds, or a live window's timespan
+ * (which the backend counts back from its own now, so every visitor's
+ * request is the same URL, cached at the edge).
+ */
+function windowParams(window: TimeWindow): Record<string, string> {
+  const { timespan, startTime, endTime } = windowQuery(window);
+  if (startTime && endTime) return { start_time: startTime, end_time: endTime };
+  return { timespan };
+}
+
+/** One end of a link (/api/links): a country and its label point. */
+export interface ApiLinkCountry {
+  iso: string;
+  name: string;
+  lat: number;
+  lng: number;
+}
+
+/** Two countries the window's stories cover together. `a` < `b` by code. */
+export interface ApiLink {
+  a: ApiLinkCountry;
+  b: ApiLinkCountry;
+  n: number;
+  lift: number;
+  /** The stories' most common topic tag, or the filter's. */
+  topic: string;
+  tone: number;
+  /** The end most of the stories come from. */
+  from: string;
+}
+
+export interface LinksQuery {
+  window: TimeWindow;
+  topic: Topic;
+  /** lift: surprisingly often together; count: most stories. */
+  rank: LinkRank;
+  /** Most links returned (1 to 60). */
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+/** The co-coverage links for a window and topic, for the Links layer's arcs. */
+export function fetchLinks({
+  window,
+  topic,
+  rank,
+  limit = LINKS_LIMIT,
+  signal,
+}: LinksQuery): Promise<ApiLink[]> {
+  const params = windowParams(window);
+  if (topic !== "All") params.topic = topic;
+  params.rank = rank;
+  params.limit = String(limit);
+  return apiFetch<ApiLink[]>("/api/links", params, signal);
 }
 
 export function fetchClusterArticles(

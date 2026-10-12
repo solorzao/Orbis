@@ -52,13 +52,14 @@ const boxesOf = (selector: string) =>
 
 /**
  * The chrome on screen now (soft-orbit.css): the top bar, the side panel or
- * its reopen pill (the sheet below 1180px), and the bottom row.
+ * its reopen pill (the sheet below 1180px), and the bottom row with the
+ * Links rank switch.
  */
 export function readChrome(): Chrome {
   return {
     top: boxesOf(".topbar"),
     side: boxesOf('[data-testid="side-panel"], [data-testid="side-open"]'),
-    bottom: boxesOf(".bottombar"),
+    bottom: boxesOf(".bottombar, .link-rank"), // the rank switch floats outside the row
   };
 }
 

@@ -6,6 +6,7 @@ import {
   fetchTopics,
   fetchVolume,
   fetchPlacePreview,
+  fetchLinks,
   isSummaryFallback,
   SUMMARY_FALLBACKS,
 } from "./api";
@@ -215,6 +216,45 @@ describe("fetchPlacePreview", () => {
     expect(url.searchParams.get("start_time")).toBe("2026-10-06T00:00:00.000Z");
     expect(url.searchParams.get("end_time")).toBe("2026-10-07T00:00:00.000Z");
     expect(url.searchParams.get("topic")).toBe("Climate");
+  });
+});
+
+describe("fetchLinks", () => {
+  it("asks for a live window's links by its timespan, rank and limit", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    await fetchLinks({ window: { kind: "live", hours: 6 }, topic: "All", rank: "lift" });
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/api/links");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      timespan: "6h",
+      rank: "lift",
+      limit: "40",
+    });
+  });
+
+  it("sends a range's bounds and the topic pill, and passes the signal on", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    const controller = new AbortController();
+    await fetchLinks({
+      window: {
+        kind: "range",
+        startTime: "2026-10-06T00:00:00.000Z",
+        endTime: "2026-10-07T00:00:00.000Z",
+      },
+      topic: "Climate",
+      rank: "count",
+      limit: 20,
+      signal: controller.signal,
+    });
+    const [called, init] = mockFetch.mock.calls[0];
+    expect(Object.fromEntries(new URL(called).searchParams)).toEqual({
+      start_time: "2026-10-06T00:00:00.000Z",
+      end_time: "2026-10-07T00:00:00.000Z",
+      topic: "Climate",
+      rank: "count",
+      limit: "20",
+    });
+    expect(init.signal).toBe(controller.signal);
   });
 });
 

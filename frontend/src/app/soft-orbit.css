@@ -1045,6 +1045,7 @@ button.cite:hover {
   border-radius: var(--radius-pill);
   font: var(--type-label);
   color: var(--text-muted);
+  cursor: pointer;
 }
 .layers .tg::before {
   content: "";
@@ -1060,6 +1061,79 @@ button.cite:hover {
   border: 0;
   background: linear-gradient(120deg, var(--accent-primary), var(--accent-lavender));
   box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+.layers .tg:hover {
+  color: var(--text-primary);
+}
+/*
+ * From 1180px the layers share the bottom row with the 640px capsule, centred
+ * on the page; just above 1180 the row's side tracks are about 222px, so the
+ * pill tightens there to leave the capsule its width and place.
+ */
+@media (1180px <= width < 1280px) {
+  .layers .seg button,
+  .layers .tg {
+    padding: 0 10px;
+  }
+  .layers .tg {
+    gap: 5px;
+  }
+  .layers .sep {
+    margin: 0;
+  }
+}
+/*
+ * The layers and, while Links is on, its rank switch: a pill of its own that
+ * floats 12px above the layers (beside them once they stack over the
+ * timeline, below 1180px), so the bottom row keeps its size.
+ */
+.layer-dock {
+  position: relative;
+}
+.link-rank {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px);
+}
+.link-rank .seg {
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.link-rank .seg button {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* The pill that names a link at its arc's top (mockup .arc-pill); ArcPill places it. */
+.arc-pill {
+  position: fixed;
+  z-index: var(--z-reticle);
+  transform: translate(-50%, -50%);
+  pointer-events: none; /* the arc beneath stays hoverable and clickable */
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-glass);
+  border: 1px solid var(--border-default);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  font: var(--type-label);
+  color: var(--text-primary);
+  white-space: nowrap;
+  box-shadow:
+    0 0 0 1px rgba(127, 230, 255, 0.15),
+    var(--elev-float);
+}
+.arc-pill .num {
+  font: var(--type-data-sm);
+  color: var(--accent-strong);
+}
+.arc-pill:not([data-placed]) {
+  visibility: hidden;
 }
 
 /*
@@ -1437,7 +1511,7 @@ button.cite:hover {
   pointer-events: auto;
   min-width: 0;
 }
-.bottombar .layers {
+.bottombar .layer-dock {
   grid-column: 1;
   justify-self: start;
   margin-bottom: 4px; /* mockup: 24px from the bottom, the capsule 20px */
@@ -1448,7 +1522,7 @@ button.cite:hover {
 }
 /* Narrow: no chart, story count or layers; the play button, label and presets stay. */
 @media (max-width: 760px) {
-  .bottombar .layers {
+  .bottombar .layer-dock {
     display: none;
   }
   .timeline {
@@ -1525,13 +1599,23 @@ button.cite:hover {
     row-gap: 12px; /* regions keep 12px apart */
     transition: bottom var(--dur-slow) var(--ease-out);
   }
-  .bottombar .layers,
+  .bottombar .layer-dock,
   .bottombar .timeline {
     grid-column: 1;
   }
-  .bottombar .layers {
+  .bottombar .layer-dock {
     justify-self: center;
     margin-bottom: 0;
+  }
+  /* The layers stack centred over the timeline: the rank switch goes beside them. */
+  .link-rank {
+    left: calc(100% + 12px);
+    bottom: 50%;
+    transform: translateY(50%);
+  }
+  /* As in the mockup: the sheet takes the bottom of the screen, and touch has no hover. */
+  .arc-pill {
+    display: none;
   }
 }
 @media (max-width: 639px) {

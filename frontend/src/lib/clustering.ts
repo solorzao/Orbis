@@ -140,7 +140,8 @@ const API_TOPIC_MAP: Record<string, Topic> = {
   health: "Health",
 };
 
-function mapApiTopic(apiTopic: string): Topic {
+/** An article tag's topic pill (Climate is "environment"), or All for any other tag. */
+export function mapApiTopic(apiTopic: string): Topic {
   return API_TOPIC_MAP[apiTopic.toLowerCase()] ?? "All";
 }
 

@@ -9,6 +9,7 @@ import {
   heatColor,
   heatmapPoints,
   hexToRgba,
+  canvasColor,
   recomputeHeatmap,
   showDots,
   projectedRadius,
@@ -63,6 +64,24 @@ describe("hexToRgba", () => {
   it("turns a token hex into an rgba() with the given alpha", () => {
     expect(hexToRgba("#6f78c9", 0.55)).toBe("rgba(111,120,201,0.55)");
     expect(hexToRgba(" #FFFFFF ", 1)).toBe("rgba(255,255,255,1)");
+  });
+});
+
+describe("canvasColor", () => {
+  it("spells a CSS colour token as rgba(), which three-globe's arcs can parse", () => {
+    // The CSS build minifies rgba(180, 190, 255, 0.30) to #b4beff4d, and
+    // three.js reads no alpha (or colour) from an 8-digit hex: arcs went white.
+    expect(canvasColor("#b4beff4d", "#000")).toBe("rgba(180,190,255,0.302)");
+    expect(canvasColor(" #7fe6ff ", "#000")).toBe("rgba(127,230,255,1)");
+    expect(canvasColor("#abc", "#000")).toBe("rgba(170,187,204,1)");
+    expect(canvasColor("#abc8", "#000")).toBe("rgba(170,187,204,0.533)");
+    expect(canvasColor("rgba(180, 190, 255, 0.30)", "#000")).toBe("rgba(180,190,255,0.3)");
+    expect(canvasColor("rgb(1 2 3)", "#000")).toBe("rgba(1,2,3,1)");
+  });
+
+  it("falls back for a value it can't read", () => {
+    expect(canvasColor("", "#7fe6ff")).toBe("rgba(127,230,255,1)");
+    expect(canvasColor("var(--x)", "rgba(180, 190, 255, 0.30)")).toBe("rgba(180,190,255,0.3)");
   });
 });
 
