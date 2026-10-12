@@ -65,13 +65,26 @@ describe("upstreamRequestHeaders", () => {
 });
 
 describe("downstreamResponseHeaders", () => {
-  it("passes through content-type and retry-after only", () => {
+  it("passes through content-type and retry-after, and drops the rest", () => {
     const out = downstreamResponseHeaders(
       new Headers({ "content-type": "application/json", "retry-after": "60", server: "uvicorn" }),
     );
     expect(out.get("content-type")).toBe("application/json");
     expect(out.get("retry-after")).toBe("60");
     expect(out.has("server")).toBe(false);
+  });
+
+  it("keeps the API's edge-cache header, so Vercel can cache public reads", () => {
+    const edge = "public, s-maxage=60, stale-while-revalidate=300";
+    const out = downstreamResponseHeaders(
+      new Headers({ "content-type": "application/json", "cache-control": edge }),
+    );
+    expect(out.get("cache-control")).toBe(edge);
+  });
+
+  it("adds no cache header the API didn't send", () => {
+    const out = downstreamResponseHeaders(new Headers({ "content-type": "application/json" }));
+    expect(out.has("cache-control")).toBe(false);
   });
 
   it("disables buffering for event streams", () => {

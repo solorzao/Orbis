@@ -8,7 +8,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import settings
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
@@ -24,6 +24,7 @@ from app.models.news import (
     SelectionSummaryResponse,
     TopicCount,
 )
+from app.routers.http_cache import edge_cached
 from app.services.ai_summary import (
     _window_key,
     cached_summary,
@@ -159,7 +160,7 @@ def _row_to_article(row: dict) -> NewsArticle:
     )
 
 
-@router.get("/news", response_model=list[GlobeDataPoint])
+@router.get("/news", response_model=list[GlobeDataPoint], dependencies=[Depends(edge_cached)])
 async def get_globe_data(
     timespan: str = Query("24h", description="Timespan, e.g. 24h, 48h"),
     limit: int = Query(500, ge=1, le=500, description="Max data points"),
@@ -405,7 +406,7 @@ def _clean_entities(rows: list[dict]) -> list[PreviewEntity]:
     return entities
 
 
-@router.get("/news/preview", response_model=PlacePreview)
+@router.get("/news/preview", response_model=PlacePreview, dependencies=[Depends(edge_cached)])
 async def get_place_preview(
     lat: float = Query(..., ge=-90, le=90, description="Latitude of the dot"),
     lng: float = Query(..., ge=-180, le=180, description="Longitude of the dot"),
@@ -469,7 +470,7 @@ async def get_article_density(
     return result
 
 
-@router.get("/news/volume", response_model=list[HourlyVolume])
+@router.get("/news/volume", response_model=list[HourlyVolume], dependencies=[Depends(edge_cached)])
 async def get_story_volume(
     days: int = Query(7, ge=1, le=7, description="Days back from now (1-7)"),
 ) -> list[HourlyVolume]:
@@ -487,7 +488,7 @@ async def get_story_volume(
     return result
 
 
-@router.get("/topics", response_model=list[TopicCount])
+@router.get("/topics", response_model=list[TopicCount], dependencies=[Depends(edge_cached)])
 async def get_topics() -> list[TopicCount]:
     """Return available topic categories with article counts from the database."""
     cache_k = "db:topics"

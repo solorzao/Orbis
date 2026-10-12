@@ -1141,3 +1141,78 @@ class TestGetPlacePreview:
         from app.middleware.security import _get_rate_group
 
         assert _get_rate_group("/api/news/preview") == "data"
+
+
+# ── Edge caching: Vercel's CDN may serve public reads for a minute ──────
+
+EDGE = "public, s-maxage=60, stale-while-revalidate=300"
+
+
+class TestEdgeCaching:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/news?timespan=24h&limit=500",
+            "/api/news/volume?days=7",
+            "/api/news/preview?lat=40.7&lng=-74.0",
+            "/api/topics",
+        ],
+    )
+    async def test_public_reads_are_edge_cached_for_a_minute(self, monkeypatch, path):
+        import app.routers.news as news
+
+        monkeypatch.setattr(news, "_now", lambda: datetime(2026, 10, 12, 14, tzinfo=timezone.utc))
+        with (
+            patch("app.routers.news.get_globe_points", AsyncMock(return_value=[])),
+            patch("app.routers.news.get_hourly_volume", AsyncMock(return_value=[])),
+            patch("app.routers.news.get_cell_spark", AsyncMock(return_value=[0] * 24)),
+            patch("app.routers.news.get_cell_entities", AsyncMock(return_value=[])),
+            patch("app.routers.news.cached_summary", AsyncMock(return_value=None)),
+            patch("app.routers.news.get_topic_counts", AsyncMock(return_value={"politics": 3})),
+        ):
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get(path)
+
+        assert resp.status_code == 200
+        assert resp.headers["cache-control"] == EDGE
+
+    @pytest.mark.asyncio
+    async def test_a_cached_answer_is_edge_cached_too(self, monkeypatch):
+        with patch("app.routers.news.get_cached", AsyncMock(return_value=[])):
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get("/api/news")
+
+        assert resp.status_code == 200
+        assert resp.headers["cache-control"] == EDGE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/news?topic=sport",  # the endpoint's own 422
+            "/api/news/volume?days=9",  # FastAPI's validation
+            "/api/news/preview?lat=91&lng=0",
+        ],
+    )
+    async def test_errors_are_never_edge_cached(self, monkeypatch, path):
+        async with _api_client(monkeypatch) as client:
+            resp = await client.get(path)
+
+        assert resp.status_code == 422
+        assert "s-maxage" not in resp.headers.get("cache-control", "")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path", ["/api/news/cluster?lat=40.7&lng=-74.0", "/api/news/summary?lat=40.7&lng=-74.0"]
+    )
+    async def test_a_places_articles_and_summary_are_not(self, monkeypatch, path):
+        with (
+            patch("app.routers.news.get_articles_in_bounds", AsyncMock(return_value=[])),
+            patch("app.routers.news.summarise_cluster", AsyncMock(return_value="")),
+        ):
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get(path)
+
+        assert resp.status_code == 200
+        assert "cache-control" not in resp.headers
