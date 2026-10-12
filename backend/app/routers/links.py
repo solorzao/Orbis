@@ -8,12 +8,13 @@ from typing import Annotated, Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.models.links import Link
+from app.models.links import Link, LinkDetail, LinkExplainRequest, LinkExplanation
 from app.routers.http_cache import edge_cached
-from app.routers.news import _globe_topic_tag, _parse_iso
+from app.routers.news import _deduplicate_articles, _globe_topic_tag, _parse_iso, _row_to_article
 from app.services.ai_summary import _window_key
 from app.services.cache import get_cached, set_cached
-from app.services.links import get_link_pairs, rank_links
+from app.services.country_centroids import centroid
+from app.services.links import explain_link, get_link_detail, get_link_pairs, rank_links
 
 router = APIRouter(prefix="/api", tags=["links"])
 
@@ -27,6 +28,9 @@ _LIVE_HOURS = frozenset({1, 6, 24, 168})
 
 # The longest range: the timeline's 7 days straddle 8 UTC days.
 _MAX_RANGE = timedelta(days=8)
+
+# Stories the link inspector lists.
+_DETAIL_ARTICLES = 10
 
 Timespan = Annotated[str, Query(description="A live window: 1h, 6h, 24h or 168h")]
 StartTime = Annotated[str | None, Query(description="A range's ISO start, with end_time")]
@@ -76,6 +80,22 @@ def _window(timespan: str, start_time: str | None, end_time: str | None) -> Wind
     return Window(now - timedelta(hours=hours), now, f"live:{hours}")
 
 
+def _pair(a: str, b: str) -> tuple[str, str]:
+    """Two different ISO codes (any case) that have label points, uppercased, or a 422."""
+    codes = []
+    for code in (a, b):
+        iso = code.strip().upper()
+        if centroid(iso) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown country {code!r}: an ISO 3166-1 alpha-2 code with a label point.",
+            )
+        codes.append(iso)
+    if codes[0] == codes[1]:
+        raise HTTPException(status_code=422, detail="a and b must be different countries.")
+    return codes[0], codes[1]
+
+
 @router.get("/links", response_model=list[Link], dependencies=[Depends(edge_cached)])
 async def get_links(
     timespan: Timespan = "24h",
@@ -107,3 +127,50 @@ async def get_links(
     ttl = _LINKS_TTL if links else _EMPTY_LINKS_TTL
     await set_cached(cache_k, [link.model_dump(by_alias=True) for link in links], ttl)
     return links
+
+
+Country = Annotated[str, Query(max_length=8, description="ISO 3166-1 alpha-2 code")]
+
+
+@router.get("/links/detail", response_model=LinkDetail, dependencies=[Depends(edge_cached)])
+async def get_link(
+    a: Country,
+    b: Country,
+    timespan: Timespan = "24h",
+    start_time: StartTime = None,
+    end_time: EndTime = None,
+    topic: Topic = None,
+) -> LinkDetail:
+    """One link for the inspector: its numbers, shared names, themes and newest stories.
+
+    The window and topic are validated as for /api/links, so the inspector's
+    n and lift match the arc's.
+    """
+    a, b = _pair(a, b)
+    tag = _globe_topic_tag(topic)
+    window = _window(timespan, start_time, end_time)
+
+    cache_k = f"db:links:detail:v1:{a}:{b}:{window.key}:{tag or ''}"
+    cached = await get_cached(cache_k)
+    if cached is not None:
+        return LinkDetail.model_validate(cached)
+
+    detail = await get_link_detail(a, b, window.start, window.end, tag)
+    stories = _deduplicate_articles([_row_to_article(r) for r in detail["articles"]])
+    result = LinkDetail(**{**detail, "articles": stories[:_DETAIL_ARTICLES]})
+    await set_cached(cache_k, result.model_dump(mode="json"), _LINKS_TTL)
+    return result
+
+
+@router.post("/links/explain", response_model=LinkExplanation)
+async def explain(body: LinkExplainRequest) -> LinkExplanation:
+    """2-3 sentences from Claude on what the stories linking two countries are about.
+
+    The window is a range (both bounds, as for /api/links) or, without one,
+    the last 24 hours. Only the codes, window and topic are read from the
+    request; the prompt is built from server-side data.
+    """
+    a, b = _pair(body.a, body.b)
+    tag = _globe_topic_tag(body.topic)
+    window = _window("24h", body.start_time, body.end_time)
+    return LinkExplanation(text=await explain_link(a, b, window.start, window.end, tag))

@@ -13,13 +13,19 @@ the window's linking stories, ``n_a`` those touching country a.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from collections import Counter
 from datetime import datetime
 from typing import Any, Literal
 
+from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
+from app.services.ai_summary import SummaryUnavailable, _call_claude, _window_key
+from app.services.cache import get_cached, set_cached
 from app.services.country_centroids import centroid
 from app.services.database import get_pool
+from app.services.ingestion import _dedup_key
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +51,25 @@ def _window(start: datetime, end: datetime, topic: str | None) -> tuple[list[str
     return conditions, args
 
 
+def _linking_cte(conditions: list[str]) -> str:
+    """The ``linking`` CTE: the window's stories that mention another country.
+
+    ``others`` is the countries a story mentions besides its own. Shared by
+    the links and the detail queries, so a pair's n and lift agree in both.
+    """
+    return f"""linking AS (
+            SELECT country_code, topic_tags, sentiment_score, others
+            FROM (
+                SELECT country_code, topic_tags, sentiment_score,
+                       array_remove(mentioned_countries, country_code) AS others
+                FROM articles
+                WHERE {" AND ".join(conditions)}
+                  AND country_code <> '' AND cardinality(mentioned_countries) > 0
+            ) w
+            WHERE cardinality(others) > 0
+        )"""
+
+
 def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any, ...]:
     """SQL and arguments for every country pair in the window, as ``pool.fetch`` takes them.
 
@@ -65,17 +90,7 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
         f"count(*) FILTER (WHERE l.topic_tags && '{{{tag}}}') AS {tag}" for tag in TOPIC_TAGS
     )
     query = f"""
-        WITH linking AS (
-            SELECT country_code, topic_tags, sentiment_score, others
-            FROM (
-                SELECT country_code, topic_tags, sentiment_score,
-                       array_remove(mentioned_countries, country_code) AS others
-                FROM articles
-                WHERE {" AND ".join(conditions)}
-                  AND country_code <> '' AND cardinality(mentioned_countries) > 0
-            ) w
-            WHERE cardinality(others) > 0
-        ),
+        WITH {_linking_cte(conditions)},
         touched AS (
             SELECT c, count(*) AS n
             FROM linking l, unnest(l.others || l.country_code) AS c
@@ -162,3 +177,313 @@ def rank_links(rows: list[dict], rank: Rank, limit: int, topic: str | None = Non
             }
         )
     return links
+
+
+# ---------------------------------------------------------------------------
+# One link: its stories, shared names and themes (/api/links/detail)
+# ---------------------------------------------------------------------------
+
+# Names in at least this many of the pair's stories count as shared.
+MIN_SHARED_STORIES = 2
+MAX_SHARED = 8
+MAX_THEMES = 5
+_MAX_NAME_CHARS = 80
+
+# Fetched before cleaning drops some: names, themes, and stories (syndicated
+# copies are dropped down to the 10 shown).
+_NAME_FETCH_LIMIT = 16
+_THEME_FETCH_LIMIT = 25
+ARTICLE_FETCH_LIMIT = 30
+
+# GDELT theme families, longest first; the rest of the code is the theme.
+_THEME_PREFIXES = ("TAX_FNCACT_", "CRISISLEX_", "USPEC_", "UNGP_", "TAX_", "EPU_", "SOC_", "WB_")
+# What some families put before the theme: World Bank numbers (WB_2432_),
+# CrisisLex codes (CRISISLEX_T03_).
+_THEME_CODE = re.compile(r"^[A-Z]?\d+_")
+_THEME_CHARS = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _pair_conditions(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None
+) -> tuple[list[str], list[Any]]:
+    """The window, topic and pair predicates: stories from either country naming the other."""
+    conditions, args = _window(start, end, topic)
+    args += [a, b]
+    pa, pb = f"${len(args) - 1}", f"${len(args)}"
+    conditions.append(
+        f"((country_code = {pa} AND {pb} = ANY(mentioned_countries)) "
+        f"OR (country_code = {pb} AND {pa} = ANY(mentioned_countries)))"
+    )
+    return conditions, args
+
+
+def detail_stats_query(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None
+) -> tuple[Any, ...]:
+    """SQL and arguments for the pair's n, tone, topic counts and what lift needs."""
+    conditions, args = _window(start, end, topic)
+    args += [a, b]
+    pa, pb = f"${len(args) - 1}", f"${len(args)}"
+    topic_counts = ",\n".join(
+        f"count(*) FILTER (WHERE linked AND topic_tags && '{{{tag}}}') AS {tag}"
+        for tag in TOPIC_TAGS
+    )
+    query = f"""
+        WITH {_linking_cte(conditions)},
+        marked AS (
+            SELECT country_code, others, topic_tags, sentiment_score,
+                   (country_code = {pa} AND {pb} = ANY(others))
+                   OR (country_code = {pb} AND {pa} = ANY(others)) AS linked
+            FROM linking
+        )
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE country_code = {pa} OR {pa} = ANY(others)) AS n_a,
+               count(*) FILTER (WHERE country_code = {pb} OR {pb} = ANY(others)) AS n_b,
+               count(*) FILTER (WHERE linked) AS n,
+               avg(sentiment_score) FILTER (WHERE linked) AS tone,
+               {topic_counts}
+        FROM marked
+    """
+    return query, *args
+
+
+def detail_articles_query(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
+) -> tuple[Any, ...]:
+    """SQL and arguments for the pair's newest stories: the columns a NewsArticle reads."""
+    conditions, args = _pair_conditions(a, b, start, end, topic)
+    args.append(limit)
+    query = f"""
+        SELECT id, title, summary, source_url, source_name, source_language,
+               published_at, ingested_at, latitude, longitude, country_code,
+               region, topic_tags, sentiment_score, entities, image_url
+        FROM articles
+        WHERE {" AND ".join(conditions)}
+        ORDER BY published_at DESC, id
+        LIMIT ${len(args)}
+    """
+    return query, *args
+
+
+def detail_headlines_query(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
+) -> tuple[Any, ...]:
+    """SQL and arguments for the titles of the pair's newest stories."""
+    conditions, args = _pair_conditions(a, b, start, end, topic)
+    args.append(limit)
+    query = f"""
+        SELECT title FROM articles
+        WHERE {" AND ".join(conditions)}
+        ORDER BY published_at DESC, id
+        LIMIT ${len(args)}
+    """
+    return query, *args
+
+
+def detail_names_query(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
+) -> tuple[Any, ...]:
+    """SQL and arguments for the people and organisations in several of the pair's stories."""
+    conditions, args = _pair_conditions(a, b, start, end, topic)
+    args.append(limit)
+    query = f"""
+        WITH linked AS (
+            SELECT id, persons, orgs FROM articles
+            WHERE {" AND ".join(conditions)}
+        )
+        SELECT name, type, count(DISTINCT id) AS n
+        FROM (
+            SELECT id, unnest(persons) AS name, 'person' AS type FROM linked
+            UNION ALL
+            SELECT id, unnest(orgs) AS name, 'org' AS type FROM linked
+        ) mentions
+        GROUP BY name, type
+        HAVING count(DISTINCT id) >= {MIN_SHARED_STORIES}
+        ORDER BY n DESC, name
+        LIMIT ${len(args)}
+    """
+    return query, *args
+
+
+def detail_themes_query(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
+) -> tuple[Any, ...]:
+    """SQL and arguments for the GDELT themes of the pair's stories, commonest first."""
+    conditions, args = _pair_conditions(a, b, start, end, topic)
+    args.append(limit)
+    query = f"""
+        SELECT theme, count(*) AS n
+        FROM articles, unnest(themes) AS theme
+        WHERE {" AND ".join(conditions)}
+        GROUP BY theme
+        ORDER BY n DESC, theme
+        LIMIT ${len(args)}
+    """
+    return query, *args
+
+
+def display_theme(theme: str) -> str:
+    """A GDELT theme as words: "WB_2432_FRAGILITY_CONFLICT" -> "Fragility conflict".
+
+    The family prefix, any number code after it and trailing digits go.
+    Anything but a plain theme code shows as nothing.
+    """
+    if not isinstance(theme, str) or not _THEME_CHARS.fullmatch(theme):
+        return ""
+    text = theme.upper()
+    for prefix in _THEME_PREFIXES:
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    text = _THEME_CODE.sub("", text).rstrip("0123456789")
+    return " ".join(text.replace("_", " ").split()).capitalize()
+
+
+def top_themes(rows: list[dict]) -> list[str]:
+    """The first MAX_THEMES themes as shown, without the ones that read the same."""
+    themes: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        shown = display_theme(row.get("theme"))
+        if shown and shown.casefold() not in seen:
+            seen.add(shown.casefold())
+            themes.append(shown)
+            if len(themes) == MAX_THEMES:
+                break
+    return themes
+
+
+def clean_entities(rows: list[dict]) -> list[dict]:
+    """The shared names as text to show: GDELT's raw names, cleaned.
+
+    Hidden and control characters go, then whitespace collapses to one line
+    of at most 80 characters. A name left empty, one that looks like a
+    prompt injection, and a repeat of an earlier name are dropped.
+    """
+    seen: set[str] = set()
+    entities: list[dict] = []
+    for row in rows:
+        raw = row.get("name")
+        if not isinstance(raw, str) or has_injection_pattern(raw):
+            continue
+        name = " ".join(sanitise_text(strip_invisible(raw), max_length=_MAX_NAME_CHARS).split())
+        if not name or has_injection_pattern(name) or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        entities.append({"name": name, "type": row["type"], "n": row["n"]})
+        if len(entities) == MAX_SHARED:
+            break
+    return entities
+
+
+async def get_link_detail(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None
+) -> dict:
+    """Everything the link inspector shows for the pair a, b in the window.
+
+    ``articles`` are raw rows, newest first (up to ARTICLE_FETCH_LIMIT, with
+    syndicated copies still in); the rest is ready to show.
+    """
+    pool = await get_pool()
+    stats, names, themes, articles = await asyncio.gather(
+        pool.fetchrow(*detail_stats_query(a, b, start, end, topic)),
+        pool.fetch(*detail_names_query(a, b, start, end, topic, _NAME_FETCH_LIMIT)),
+        pool.fetch(*detail_themes_query(a, b, start, end, topic, _THEME_FETCH_LIMIT)),
+        pool.fetch(*detail_articles_query(a, b, start, end, topic, ARTICLE_FETCH_LIMIT)),
+    )
+    return {
+        "a": _country(a),
+        "b": _country(b),
+        "n": stats["n"],
+        "lift": round(lift(stats["n"], stats["n_a"], stats["n_b"], stats["total"]), 2),
+        "topic_mix": {tag: stats[tag] for tag in TOPIC_TAGS},
+        "tone": round(stats["tone"] or 0.0, 2),
+        "shared": clean_entities([dict(r) for r in names]),
+        "themes": top_themes([dict(r) for r in themes]),
+        "articles": [dict(r) for r in articles],
+    }
+
+
+# ---------------------------------------------------------------------------
+# A link in words (/api/links/explain)
+# ---------------------------------------------------------------------------
+
+# Shared by everyone who opens the pair, so cached like cluster summaries.
+EXPLAIN_TTL = 3 * 3600
+_EXPLAIN_HEADLINES = 15
+# Fetched before syndicated copies and injection attempts are dropped.
+_HEADLINE_FETCH_LIMIT = 45
+
+_EXPLAIN_SYSTEM_PROMPT = (
+    "You are a concise news analyst. You will receive two countries and the "
+    "headlines of news stories that covered them together. Write a 2-3 sentence "
+    "objective, third-person summary of what that coverage is about: the events, "
+    "people and themes the stories share. Describe the two countries as covered "
+    "together in the news. Never state or imply cause and effect between the "
+    "countries or their events: no 'because', 'led to', 'in response to' or "
+    "'as a result'. Do not address the reader. Do not reference news sources, "
+    "media outlets, or where the information comes from. Output ONLY plain "
+    "sentences — no markdown, no headings, no bold, no bullet points, no labels. "
+    "Never explain your reasoning."
+)
+
+
+async def get_link_headlines(
+    a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
+) -> list[str]:
+    """Titles of the pair's newest stories."""
+    pool = await get_pool()
+    rows = await pool.fetch(*detail_headlines_query(a, b, start, end, topic, limit))
+    return [r["title"] for r in rows]
+
+
+def _prompt_headlines(titles: list[str]) -> list[str]:
+    """Up to 15 headlines fit for a prompt: one clean line each, no injections, no copies."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for title in titles:
+        if not isinstance(title, str) or has_injection_pattern(title):
+            continue
+        clean = " ".join(sanitise_text(strip_invisible(title), max_length=200).split())
+        key = _dedup_key(clean)
+        if not clean or key in seen:
+            continue
+        seen.add(key)
+        lines.append(clean)
+        if len(lines) == _EXPLAIN_HEADLINES:
+            break
+    return lines
+
+
+async def explain_link(a: str, b: str, start: datetime, end: datetime, topic: str | None) -> str:
+    """2-3 sentences from Claude on what the stories linking a and b are about.
+
+    Every prompt input is derived here: the countries' names come from the
+    label-point table and the headlines from the database, so a client
+    cannot steer an answer that is cached and shown to everyone. Cached per
+    pair (either order), window floored to the hour, and topic, for 3 hours.
+    A failure's message is returned but never cached.
+    """
+    a, b = sorted((a, b))
+    topic_suffix = f":{topic}" if topic else ""
+    cache_key = f"links:explain:v1:{a}:{b}:{_window_key(start, end)}{topic_suffix}"
+    cached = await get_cached(cache_key)
+    if cached is not None:
+        return str(cached)
+
+    lines = _prompt_headlines(
+        await get_link_headlines(a, b, start, end, topic, _HEADLINE_FETCH_LIMIT)
+    )
+    if not lines:
+        return ""
+    user_msg = (
+        f"Countries: {centroid(a).name} and {centroid(b).name}\n\n"
+        "Headlines of stories that covered both:\n" + "\n".join(f"- {line}" for line in lines)
+    )
+    try:
+        text = await _call_claude(user_msg, system=_EXPLAIN_SYSTEM_PROMPT)
+    except SummaryUnavailable as exc:
+        return str(exc)
+
+    await set_cached(cache_key, text, EXPLAIN_TTL)
+    return text
