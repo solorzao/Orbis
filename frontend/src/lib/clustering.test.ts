@@ -4,12 +4,12 @@ import path from "path";
 import {
   apiPointsToGlobePoints,
   clusterArticles,
-  filterPointsByTopic,
   getTopicColor,
   getSentimentColor,
   sentimentKey,
   sentimentBucket,
   formatScore,
+  TOPIC_COLORS,
 } from "./clustering";
 import { mockArticles } from "./mockData";
 import type { ApiGlobePoint } from "./api";
@@ -26,35 +26,18 @@ const apiPoint = (overrides: Partial<ApiGlobePoint> = {}): ApiGlobePoint => ({
 });
 
 describe("apiPointsToGlobePoints", () => {
-  it("maps every topic in the cell, keeping the newest story's topic", () => {
-    const [point] = apiPointsToGlobePoints([
-      apiPoint({ topic: "conflict", topics: ["conflict", "environment", "climate", "sport"] }),
+  it("colours and sizes a dot by the server's topic and count", () => {
+    // A topic-filtered cell: the server sends the topic's tag and its stories' count.
+    const [climate, other] = apiPointsToGlobePoints([
+      apiPoint({ topic: "environment", article_count: 2 }),
+      apiPoint({ topic: "sport" }),
     ]);
-    expect(point.topic).toBe("Conflict");
-    expect(point.topics).toEqual(expect.arrayContaining(["Conflict", "Climate"]));
-    expect(point.topics?.filter((t) => t === "Climate")).toHaveLength(1);
-  });
-});
-
-describe("filterPointsByTopic", () => {
-  it("keeps a cell whose newest story is off-topic but which has on-topic stories", () => {
-    const points = apiPointsToGlobePoints([apiPoint({ topics: ["conflict", "sport"] })]);
-    expect(filterPointsByTopic(points, "Conflict")).toHaveLength(1);
-    expect(filterPointsByTopic(points, "Health")).toHaveLength(0);
-  });
-
-  it("falls back to the point's topic when topics are absent or empty", () => {
-    const points = apiPointsToGlobePoints([
-      apiPoint({ topic: "conflict" }),
-      apiPoint({ topic: "conflict", topics: [] }),
-      apiPoint({ topic: "health" }),
-    ]);
-    expect(filterPointsByTopic(points, "Conflict")).toHaveLength(2);
-  });
-
-  it("keeps every point for All", () => {
-    const points = apiPointsToGlobePoints([apiPoint(), apiPoint({ topic: "health" })]);
-    expect(filterPointsByTopic(points, "All")).toHaveLength(2);
+    expect(climate.topic).toBe("Climate");
+    expect(climate.color).toBe(TOPIC_COLORS.Climate);
+    expect(climate.count).toBe(2);
+    expect(climate.size).toBeCloseTo(0.7);
+    expect(other.topic).toBe("All");
+    expect(other.color).toBe(TOPIC_COLORS.All);
   });
 });
 

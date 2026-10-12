@@ -1,5 +1,11 @@
-import { test, expect } from "@playwright/test";
-import { mockAllApiRoutes } from "./fixtures";
+import { test, expect, type Request } from "@playwright/test";
+import { gotoStillGlobe, mockAllApiRoutes, mockGlobeNews } from "./fixtures";
+
+/** A request for the globe's dots (/api/news, not /api/news/...), with its topic. */
+function globeFetchTopic(req: Request): string | null | undefined {
+  const url = new URL(req.url());
+  return url.pathname === "/api/news" ? url.searchParams.get("topic") : undefined;
+}
 
 test.describe("Globe Page", () => {
   test.beforeEach(async ({ page }) => {
@@ -137,5 +143,48 @@ test.describe("News Panel", () => {
     await mockAllApiRoutes(page);
     await page.goto("/");
     await expect(page.getByTestId("news-panel")).not.toBeVisible();
+  });
+});
+
+test.describe("Topic filter", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  test("a topic refetches the globe: only its places, counted by its stories", async ({ page }) => {
+    // The server's Politics answer waits until the test has looked at the globe meanwhile.
+    let answerPolitics!: () => void;
+    const politicsHeld = new Promise<void>((resolve) => (answerPolitics = resolve));
+    await gotoStillGlobe(page, (p) =>
+      p.route("**/api/news?*", async (route) => {
+        const url = route.request().url();
+        if (new URL(url).searchParams.get("topic") === "Politics") await politicsHeld;
+        await route.fulfill({ json: mockGlobeNews(url) });
+      }),
+    );
+    const globe = page.getByTestId("globe");
+    const timeline = page.getByTestId("timeline");
+    const status = page.getByTestId("status-pill").getByRole("status");
+    await expect(globe).toHaveAttribute("data-dots", "3");
+    await expect(timeline.getByText("16 stories · 3 places")).toBeVisible();
+
+    const politics = page.waitForRequest((r) => globeFetchTopic(r) === "Politics");
+    await page.getByTestId("topic-filter").getByRole("button", { name: "Politics" }).click();
+    await politics;
+    // While it loads, the last dots stay up: no flash to an empty globe.
+    await expect(status).toHaveText("Loading…");
+    await expect(globe).toHaveAttribute("data-dots", "3");
+
+    answerPolitics();
+    // Paris (1 politics story) and London (3); New York has none.
+    await expect(status).toHaveText("Live");
+    await expect(globe).toHaveAttribute("data-dots", "2");
+    await expect(timeline.getByText("4 stories · 2 places")).toBeVisible();
+
+    const all = page.waitForRequest((r) => globeFetchTopic(r) === null);
+    await page.getByTestId("topic-filter").getByRole("button", { name: "All" }).click();
+    await all;
+    await expect(globe).toHaveAttribute("data-dots", "3");
+    await expect(timeline.getByText("16 stories · 3 places")).toBeVisible();
   });
 });

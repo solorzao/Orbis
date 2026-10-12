@@ -332,35 +332,33 @@ async def get_globe_points(
     limit: int = 500,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
+    topic: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return clustered globe points from the database.
 
+    Only stories inside the window count: a window without any gives no
+    points, never older stories.
+
     Groups articles into grid cells of *cell_size* degrees, picking the
-    most recent headline and its first topic per cell (the dot colour), and
-    collecting every topic in the cell (for the topic filter).
+    most recent headline and its first topic per cell (the dot colour).
+
+    *topic*, an article tag such as ``"politics"``, keeps only the stories
+    tagged with it, before the cells are counted, ranked and limited: the
+    cells are the busiest for that topic, ``article_count`` and
+    ``top_headline`` are of its stories alone, and ``topic`` is the tag (the
+    dot is the topic's colour).
     """
     pool = await get_pool()
 
     if start_time and end_time:
-        time_filter = "WHERE published_at BETWEEN $1 AND $2"
-        cell_param = "$3"
-        limit_param = "$4"
-        base_params: list[Any] = [start_time, end_time]
+        window = ["published_at BETWEEN $1 AND $2"]
+        window_args: list[Any] = [start_time, end_time]
     else:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
-        time_filter = "WHERE published_at >= $1"
-        cell_param = "$2"
-        limit_param = "$3"
-        base_params = [cutoff]
+        window = ["published_at >= $1"]
+        window_args = [cutoff]
 
-    # Try with time filter first, fall back to all data if empty
-    query = _globe_points_query(time_filter, cell_param, limit_param)
-    rows = await pool.fetch(query, *base_params, cell_size, limit)
-
-    if not rows:
-        logger.warning("No articles in last %dh — falling back to all data.", timespan_hours)
-        # Same query without the time filter, params renumbered ($1=cell, $2=limit)
-        rows = await pool.fetch(_globe_points_query("", "$1", "$2"), cell_size, limit)
+    rows = await pool.fetch(*_globe_points_query(window, window_args, topic, cell_size, limit))
     results = []
     for row in rows:
         tags = row["topic_tags"] or []
@@ -371,17 +369,37 @@ async def get_globe_points(
                 "weight": min(row["article_count"] * 10, 500),
                 "article_count": row["article_count"],
                 "top_headline": row["top_headline"] or "",
-                "topic": tags[0] if tags else "general",
-                "topics": list(row["topics"] or []),
+                "topic": topic or (tags[0] if tags else "general"),
                 "location_name": row["location_name"] or "",
             }
         )
     return results
 
 
-def _globe_points_query(time_filter: str, cell: str, limit: str) -> str:
-    """SQL for get_globe_points; *cell* and *limit* are ``$n`` parameter refs."""
-    return f"""
+def _globe_points_query(
+    conditions: list[str],
+    args: list[Any],
+    topic: str | None,
+    cell_size: float,
+    limit: int,
+) -> tuple[Any, ...]:
+    """SQL and arguments for get_globe_points, as ``pool.fetch`` takes them.
+
+    *conditions* refer to *args* as ``$1``..``$n``; the topic, the cell size
+    and the limit are numbered after them. No topic leaves its predicate out
+    rather than writing ``$n IS NULL OR ...``, so the plan for every story
+    never carries a topic test.
+    """
+    conditions = list(conditions)
+    args = list(args)
+    if topic is not None:
+        args.append(topic)
+        conditions.append(f"topic_tags && ARRAY[${len(args)}::text]")
+    # The WHERE filters the stories before anything reads them: the per-cell
+    # ranking, the counts and the LIMIT all see matching rows only.
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    cell = f"${len(args) + 1}"
+    query = f"""
         WITH clustered AS (
             SELECT
                 FLOOR(latitude / {cell}) * {cell} + {cell} / 2  AS lat,
@@ -395,7 +413,7 @@ def _globe_points_query(time_filter: str, cell: str, limit: str) -> str:
                     ORDER BY published_at DESC
                 ) AS rn
             FROM articles
-            {time_filter}
+            {where}
         ),
         cells AS (
             SELECT
@@ -407,19 +425,13 @@ def _globe_points_query(time_filter: str, cell: str, limit: str) -> str:
                 MAX(CASE WHEN rn = 1 THEN region END) AS location_name
             FROM clustered
             GROUP BY lat, lng
-        ),
-        cell_topics AS (
-            SELECT lat, lng, array_agg(DISTINCT tag) AS topics
-            FROM clustered
-            CROSS JOIN LATERAL unnest(topic_tags) AS tag
-            GROUP BY lat, lng
         )
-        SELECT cells.*, cell_topics.topics
+        SELECT *
         FROM cells
-        LEFT JOIN cell_topics USING (lat, lng)
         ORDER BY article_count DESC
-        LIMIT {limit}
+        LIMIT ${len(args) + 2}
     """
+    return query, *args, cell_size, limit
 
 
 async def get_hourly_density(*, timespan_hours: int = 24, offset_days: int = 0) -> dict[int, int]:

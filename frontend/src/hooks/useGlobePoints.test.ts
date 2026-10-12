@@ -3,10 +3,16 @@ import { act, renderHook } from "@testing-library/react";
 import { useGlobePoints, FETCH_DEBOUNCE_MS } from "./useGlobePoints";
 import { fetchGlobeNews, type ApiGlobePoint } from "@/lib/api";
 import type { TimeWindow } from "@/lib/timeWindow";
+import { TOPIC_COLORS } from "@/lib/clustering";
 import type { Topic } from "@/types/news";
 
 vi.mock("@/lib/api", () => ({ fetchGlobeNews: vi.fn() }));
 const mockFetch = vi.mocked(fetchGlobeNews);
+
+/** What the hook's `n`th fetch asked for. */
+function sent(n: number) {
+  return mockFetch.mock.calls[n][0] ?? {};
+}
 
 function apiPoint(name: string, topic = "politics"): ApiGlobePoint {
   return {
@@ -16,7 +22,6 @@ function apiPoint(name: string, topic = "politics"): ApiGlobePoint {
     article_count: 3,
     top_headline: name,
     topic,
-    topics: [topic],
     location_name: name,
   };
 }
@@ -65,8 +70,8 @@ describe("useGlobePoints", () => {
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [timespan, limit, start, end, signal] = mockFetch.mock.calls[0];
-    expect([timespan, limit, start, end]).toEqual(["6h", 500, undefined, undefined]);
+    const { signal, ...query } = sent(0);
+    expect(query).toEqual({ timespan: "6h", limit: 500, topic: "All" });
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(result.current.loading).toBe(false);
     expect(result.current.error).toBe(false);
@@ -79,12 +84,12 @@ describe("useGlobePoints", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
-    expect(mockFetch.mock.calls[0].slice(0, 4)).toEqual([
-      "24h",
-      500,
-      MONDAY.startTime,
-      MONDAY.endTime,
-    ]);
+    expect(sent(0)).toMatchObject({
+      timespan: "24h",
+      limit: 500,
+      startTime: MONDAY.startTime,
+      endTime: MONDAY.endTime,
+    });
   });
 
   it("keeps the last points while the next window loads", async () => {
@@ -120,7 +125,7 @@ describe("useGlobePoints", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
-    const mondaySignal = mockFetch.mock.calls[0][4] as AbortSignal;
+    const mondaySignal = sent(0).signal!;
 
     rerender({ w: TUESDAY });
     expect(mondaySignal.aborted).toBe(true); // the earlier request is cancelled
@@ -146,7 +151,7 @@ describe("useGlobePoints", () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][2]).toBe(TUESDAY.startTime);
+    expect(sent(0).startTime).toBe(TUESDAY.startTime);
   });
 
   it("reports an error with no points", async () => {
@@ -160,8 +165,79 @@ describe("useGlobePoints", () => {
     expect(result.current.loading).toBe(false);
   });
 
-  it("filters by topic, keeping the same array while nothing changes", async () => {
-    mockFetch.mockResolvedValue([apiPoint("Paris", "politics"), apiPoint("Lima", "health")]);
+  it("asks the server for the topic's places, coloured and sized as it counts them", async () => {
+    mockFetch.mockResolvedValue([{ ...apiPoint("Lima", "health"), article_count: 2 }]);
+    const { result } = renderHook(() => useGlobePoints(LIVE_6H, "Health"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+    });
+
+    expect(sent(0).topic).toBe("Health");
+    // No second filter on the client: what the server sent is what the globe shows.
+    const [lima] = result.current.points;
+    expect(result.current.points).toHaveLength(1);
+    expect(lima.topic).toBe("Health");
+    expect(lima.color).toBe(TOPIC_COLORS.Health);
+    expect(lima.count).toBe(2);
+  });
+
+  it("refetches when the topic changes, keeping the last points until the new ones land", async () => {
+    mockFetch.mockResolvedValueOnce([apiPoint("Paris", "economy"), apiPoint("Lima", "health")]);
+    const { result, rerender } = renderHook(({ topic }) => useGlobePoints(LIVE_6H, topic), {
+      initialProps: { topic: "All" as Topic },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+    });
+
+    const politics = deferred();
+    mockFetch.mockReturnValueOnce(politics.promise);
+    rerender({ topic: "Politics" });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.points.map((p) => p.locationName)).toEqual(["Paris", "Lima"]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(sent(1)).toMatchObject({ timespan: "6h", topic: "Politics" });
+    expect(result.current.points.map((p) => p.locationName)).toEqual(["Paris", "Lima"]);
+
+    await act(async () => {
+      politics.resolve([apiPoint("Quito", "politics")]);
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.points.map((p) => p.locationName)).toEqual(["Quito"]);
+  });
+
+  it("never shows a slower answer for the topic before", async () => {
+    const health = deferred();
+    const politics = deferred();
+    mockFetch.mockReturnValueOnce(health.promise).mockReturnValueOnce(politics.promise);
+    const { result, rerender } = renderHook(({ topic }) => useGlobePoints(LIVE_6H, topic), {
+      initialProps: { topic: "Health" as Topic },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+    });
+    const healthSignal = sent(0).signal!;
+
+    rerender({ topic: "Politics" });
+    expect(healthSignal.aborted).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+      politics.resolve([apiPoint("Quito", "politics")]);
+    });
+    await act(async () => {
+      health.resolve([apiPoint("Lima", "health")]); // arrives late anyway
+    });
+
+    expect(result.current.points.map((p) => p.locationName)).toEqual(["Quito"]);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("keeps the same array, and fetches nothing, while the window and topic stay", async () => {
+    mockFetch.mockResolvedValue([apiPoint("Lima", "health")]);
     const { result, rerender } = renderHook(({ topic }) => useGlobePoints(LIVE_6H, topic), {
       initialProps: { topic: "Health" as Topic },
     });
@@ -169,14 +245,14 @@ describe("useGlobePoints", () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
     const health = result.current.points;
-    expect(health.map((p) => p.locationName)).toEqual(["Lima"]);
 
     // A re-render of the page (a co-pilot chunk, a panel change) must not hand
     // the globe a new array: that would redraw the dots and recompute Intensity.
     rerender({ topic: "Health" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+    });
     expect(result.current.points).toBe(health);
-
-    rerender({ topic: "All" });
-    expect(result.current.points.map((p) => p.locationName)).toEqual(["Paris", "Lima"]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

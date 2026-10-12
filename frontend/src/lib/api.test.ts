@@ -129,8 +129,40 @@ describe("fetchGlobeNews with a signal", () => {
   it("passes the abort signal through to fetch", async () => {
     mockFetch.mockReturnValue(jsonResponse([]));
     const controller = new AbortController();
-    await fetchGlobeNews("6h", 500, undefined, undefined, controller.signal);
+    await fetchGlobeNews({ timespan: "6h", signal: controller.signal });
     expect(mockFetch.mock.calls[0][1]).toEqual({ signal: controller.signal });
     expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get("timespan")).toBe("6h");
+  });
+});
+
+describe("fetchGlobeNews with a topic", () => {
+  it("asks the server for the topic's places", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    await fetchGlobeNews({ timespan: "24h", topic: "Politics" });
+    const params = new URL(mockFetch.mock.calls[0][0]).searchParams;
+    expect(params.get("topic")).toBe("Politics");
+    expect(params.get("timespan")).toBe("24h");
+  });
+
+  it("sends no topic for All", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    await fetchGlobeNews({ timespan: "24h", topic: "All" });
+    expect(new URL(mockFetch.mock.calls[0][0]).searchParams.has("topic")).toBe(false);
+  });
+});
+
+describe("fetchGlobeNews with a range", () => {
+  it("sends the range's bounds and limit", async () => {
+    mockFetch.mockReturnValue(jsonResponse([]));
+    await fetchGlobeNews({
+      limit: 200,
+      startTime: "2026-10-05T00:00:00.000Z",
+      endTime: "2026-10-06T00:00:00.000Z",
+    });
+    const params = new URL(mockFetch.mock.calls[0][0]).searchParams;
+    expect(params.get("start_time")).toBe("2026-10-05T00:00:00.000Z");
+    expect(params.get("end_time")).toBe("2026-10-06T00:00:00.000Z");
+    expect(params.get("limit")).toBe("200");
+    expect(params.get("timespan")).toBe("24h");
   });
 });

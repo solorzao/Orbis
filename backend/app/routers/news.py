@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
 from app.models.news import (
@@ -37,6 +37,9 @@ router = APIRouter(prefix="/api", tags=["news"])
 
 # Frontend sends "Climate" but classifier uses "environment"
 _TOPIC_ALIASES = {"climate": "environment"}
+
+# The globe's topic pills (frontend Topic), lowercased; "All" is no filter.
+_GLOBE_TOPICS = frozenset({"politics", "conflict", "technology", "climate", "economy", "health"})
 
 
 _OUTLET_SEP = re.compile(r"\s+[|:–—-]\s+")
@@ -72,6 +75,23 @@ def _resolve_topic(topic: str | None) -> str | None:
     return _TOPIC_ALIASES.get(lower, lower)
 
 
+def _globe_topic_tag(topic: str | None) -> str | None:
+    """The article tag for a globe topic pill (any case), or None for All or no topic.
+
+    Anything else is a 422: an unknown topic would otherwise come back as an
+    empty globe, or the whole one.
+    """
+    if not isinstance(topic, str) or not topic or topic.lower() == "all":
+        return None
+    if topic.lower() not in _GLOBE_TOPICS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown topic {topic!r}: one of All, Politics, Conflict, Technology, "
+            "Climate, Economy or Health.",
+        )
+    return _resolve_topic(topic)
+
+
 def _parse_iso(value: str | None) -> datetime | None:
     """Parse an ISO 8601 datetime string to a timezone-aware datetime."""
     if not isinstance(value, str):
@@ -82,6 +102,10 @@ def _parse_iso(value: str | None) -> datetime | None:
     except ValueError:
         return None
 
+
+# How long an empty globe window stays cached: long enough to spare the
+# database a request per visitor, short enough that new stories show soon.
+_EMPTY_GLOBE_TTL = 60
 
 # The longest live window: the timeline's 7-day preset.
 _MAX_TIMESPAN_HOURS = 168
@@ -130,15 +154,24 @@ async def get_globe_data(
     limit: int = Query(500, ge=1, le=500, description="Max data points"),
     start_time: str | None = Query(None, description="ISO start time"),
     end_time: str | None = Query(None, description="ISO end time"),
+    topic: str | None = Query(
+        None,
+        description="Topic pill: Politics, Conflict, Technology, Climate, Economy, Health or All",
+    ),
 ) -> list[GlobeDataPoint]:
-    """Return globe data points clustered from articles in the database."""
+    """Return globe data points clustered from articles in the database.
+
+    A topic keeps only its stories, before the busiest *limit* cells are
+    picked: each cell's count, headline and colour are then the topic's.
+    """
     hours = _parse_timespan(timespan)
     start_dt = _parse_iso(start_time)
     end_dt = _parse_iso(end_time)
+    tag = _globe_topic_tag(topic)
 
-    cache_k = f"db:globe:{start_time or hours}:{end_time or ''}:{limit}"
+    cache_k = f"db:globe:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
     cached = await get_cached(cache_k)
-    if cached:
+    if cached is not None:  # [] is a cached empty window
         return [GlobeDataPoint(**p) for p in cached]
 
     rows = await get_globe_points(
@@ -147,11 +180,12 @@ async def get_globe_data(
         limit=limit,
         start_time=start_dt,
         end_time=end_dt,
+        topic=tag,
     )
     points = [GlobeDataPoint(**r) for r in rows]
 
-    if points:
-        await set_cached(cache_k, [p.model_dump() for p in points], settings.db_cache_ttl)
+    ttl = settings.db_cache_ttl if points else _EMPTY_GLOBE_TTL
+    await set_cached(cache_k, [p.model_dump() for p in points], ttl)
 
     return points
 

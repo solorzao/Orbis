@@ -1,3 +1,5 @@
+import type { Topic } from "@/types/news";
+
 // Same-origin /api/* routes are proxied to the backend by
 // src/app/api/[...path]/route.ts, which adds the API key server-side.
 function apiUrl(path: string): URL {
@@ -10,9 +12,8 @@ export interface ApiGlobePoint {
   weight: number;
   article_count: number;
   top_headline: string;
+  /** The newest story's topic, or the topic asked for: it sets the dot colour. */
   topic: string;
-  /** Every topic in the cell; `topic` is only the newest story's. */
-  topics?: string[];
   location_name?: string;
 }
 
@@ -65,16 +66,35 @@ async function apiFetch<T>(
   return res.json() as Promise<T>;
 }
 
-export function fetchGlobeNews(
+export interface GlobeNewsQuery {
+  /** A live window, e.g. "24h"; a range's bounds take its place on the server. */
+  timespan?: string;
+  /** Most places returned (the busiest). */
+  limit?: number;
+  /** A range's ISO bounds. */
+  startTime?: string;
+  endTime?: string;
+  topic?: Topic;
+  signal?: AbortSignal;
+}
+
+/**
+ * The globe's places for a window. A topic other than All is filtered on the
+ * server, before it picks the busiest `limit` places: each place's count,
+ * headline and topic are then that topic's stories alone.
+ */
+export function fetchGlobeNews({
   timespan = "24h",
   limit = 500,
-  startTime?: string,
-  endTime?: string,
-  signal?: AbortSignal,
-): Promise<ApiGlobePoint[]> {
+  startTime,
+  endTime,
+  topic = "All",
+  signal,
+}: GlobeNewsQuery = {}): Promise<ApiGlobePoint[]> {
   const params: Record<string, string> = { timespan, limit: String(limit) };
   if (startTime) params.start_time = startTime;
   if (endTime) params.end_time = endTime;
+  if (topic !== "All") params.topic = topic;
   return apiFetch<ApiGlobePoint[]>("/api/news", params, signal);
 }
 
