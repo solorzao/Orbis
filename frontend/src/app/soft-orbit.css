@@ -788,7 +788,7 @@ kbd {
 .link-explain .aurora-btn .ai {
   margin: 0;
   color: inherit;
-  background: rgba(11, 10, 22, 0.18);
+  background: color-mix(in srgb, var(--accent-on) 18%, transparent);
 }
 .link-explain .aurora-btn {
   cursor: pointer;
@@ -1241,7 +1241,7 @@ button.cite:hover {
   color: var(--text-primary);
   white-space: nowrap;
   box-shadow:
-    0 0 0 1px rgba(127, 230, 255, 0.15),
+    0 0 0 1px color-mix(in srgb, var(--arc-highlight) 15%, transparent),
     var(--elev-float);
 }
 .arc-pill .num {

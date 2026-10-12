@@ -64,7 +64,9 @@ test.describe("Inspect tab: a link", () => {
     ).toBeVisible();
     await expect(inspector.getByText("covered together, last 24 h")).toBeVisible();
     // Asked for the window it was opened on, by its timespan.
-    expect(Object.fromEntries(detailAsked.at(-1)!)).toEqual({ a: "IR", b: "US", timespan: "24h" });
+    await expect
+      .poll(() => detailAsked.at(-1) && Object.fromEntries(detailAsked.at(-1)!))
+      .toEqual({ a: "IR", b: "US", timespan: "24h" });
 
     await expect(inspector).not.toHaveAttribute("aria-busy");
     expect(await readouts(page)).toEqual([
@@ -92,7 +94,7 @@ test.describe("Inspect tab: a link", () => {
 
     // A recent pill for the link, and its arc named at the top while it is inspected.
     const pill = page.getByRole("group", { name: "Recent places and links" }).getByRole("button", {
-      name: "United States and Iran, 41 stories",
+      name: "US ↔ IR: United States and Iran, 41 stories",
     });
     await expect(pill).toHaveAttribute("aria-pressed", "true");
     await expect(pill).toHaveText("US ↔ IR41");
@@ -157,14 +159,16 @@ test.describe("Inspect tab: a link", () => {
     await expect(inspector).toHaveCount(0);
 
     // Back to the link: its explanation is still there.
-    await recent.getByRole("button", { name: "United States and Iran, 41 stories" }).click();
+    await recent
+      .getByRole("button", { name: "US ↔ IR: United States and Iran, 41 stories" })
+      .click();
     await expect(inspector.getByText(MOCK_LINK_EXPLAIN.text)).toBeVisible();
 
     // Minimize keeps it among the pills, with focus on its pill.
     await inspector.getByRole("button", { name: "Minimize panel" }).click();
     await expect(inspector).toHaveCount(0);
     await expect(
-      recent.getByRole("button", { name: "United States and Iran, 41 stories" }),
+      recent.getByRole("button", { name: "US ↔ IR: United States and Iran, 41 stories" }),
     ).toBeFocused();
   });
 

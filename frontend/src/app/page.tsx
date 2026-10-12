@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import type {
   CountryLink,
   GlobePoint,
-  Inspection,
   LinkEntry,
   PanelEntry,
   PanelFilters,
@@ -443,18 +442,7 @@ export default function Home() {
   // Inspect tab: the recent places and links, then the one inspected
   const expandedPanel = panelQueue.find((p) => p.panelId === activeId) ?? null;
   const activeLink = linkQueue.find((l) => l.linkId === activeId) ?? null;
-  const inspection: Inspection | null = expandedPanel
-    ? { kind: "place", panelId: expandedPanel.panelId }
-    : activeLink
-      ? {
-          kind: "link",
-          linkId: activeLink.linkId,
-          a: activeLink.link.a.iso,
-          b: activeLink.link.b.iso,
-          query: activeLink.query,
-        }
-      : null;
-  const inspectedLink = inspection?.kind === "link" ? linkKey(inspection.a, inspection.b) : null;
+  const inspectedLink = activeLink ? linkKey(activeLink.link.a.iso, activeLink.link.b.iso) : null;
 
   // The arc pill names the hovered arc, else the inspected one, while it is drawn.
   const drawn = (key: string | null) =>
@@ -569,7 +557,7 @@ export default function Home() {
       />
 
       {/* The hovered arc's pill, over the globe and under the chrome */}
-      <ArcPill link={pillLink} project={projectPoint} />
+      <ArcPill link={pillLink} project={projectPoint} touch={touch} />
 
       {/* Top bar: brand, topics, status and About in one grid */}
       <TopBar

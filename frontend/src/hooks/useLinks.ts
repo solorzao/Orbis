@@ -57,6 +57,9 @@ export function useLinks(
     };
   }, [enabled, timeWindow, topic, rank]);
 
+  // Off forgets the last answer: turned on again, an old error must not be
+  // shown (and announced) before the new request answers.
+  if (!enabled && result !== null) setResult(null);
   if (!enabled) return { links: NO_LINKS, loading: false, error: false };
   const current =
     result !== null &&

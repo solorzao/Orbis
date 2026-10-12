@@ -69,7 +69,7 @@ function linkPill(entry: LinkEntry): Pill {
     id: entry.linkId,
     createdAt: entry.createdAt,
     title: long,
-    label: `${long}, ${stories(n)}`,
+    label: `${short}: ${long}, ${stories(n)}`, // the visible codes first (label in name)
     closeName: long,
     count: n,
     content: <span className="place-name">{short}</span>,

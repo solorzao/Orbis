@@ -10,6 +10,8 @@ interface ArcPillProps {
   link: CountryLink | null;
   /** Where a point above the globe is on screen, or null on its far side. */
   project: (lat: number, lng: number, altitude?: number) => ScreenPoint | null;
+  /** A touch screen ((hover: none)): CSS hides the pill, so it runs no frame loop either. */
+  touch?: boolean;
 }
 
 /**
@@ -20,9 +22,10 @@ interface ArcPillProps {
  * the far side. It lets the pointer through to the arc beneath, and is
  * hidden from screen readers: the link inspector says the same to everyone.
  */
-export default function ArcPill({ link, project }: ArcPillProps) {
+export default function ArcPill({ link, project, touch = false }: ArcPillProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [start, end] = link ? linkEnds(link) : [null, null];
+  const shown = touch ? null : link;
+  const [start, end] = shown ? linkEnds(shown) : [null, null];
   const startLat = start?.lat;
   const startLng = start?.lng;
   const endLat = end?.lat;
@@ -51,8 +54,8 @@ export default function ArcPill({ link, project }: ArcPillProps) {
     return () => cancelAnimationFrame(frame);
   }, [startLat, startLng, endLat, endLng, project]);
 
-  if (!link) return null;
-  const { n, text } = arcPillText(link);
+  if (!shown) return null;
+  const { n, text } = arcPillText(shown);
   return (
     <div ref={ref} className="arc-pill" data-testid="arc-pill" aria-hidden="true">
       <span className="num">{n}</span> {text}

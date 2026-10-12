@@ -85,4 +85,12 @@ describe("ArcPill", () => {
     expect(frames.size).toBe(0);
     expect(screen.queryByTestId("arc-pill")).toBeNull();
   });
+
+  it("runs no frame loop on a touch screen, where CSS hides it anyway", () => {
+    const project = vi.fn(() => ({ x: 1, y: 2 }));
+    const { container } = render(<ArcPill link={LINK} project={project} touch />);
+    expect(container).toBeEmptyDOMElement();
+    expect(frames.size).toBe(0);
+    expect(project).not.toHaveBeenCalled();
+  });
 });

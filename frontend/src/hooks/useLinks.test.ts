@@ -133,4 +133,24 @@ describe("useLinks", () => {
     rerender({ w: LIVE_24H, topic: "All", rank: "count", on: false });
     expect(result.current).toEqual({ links: [], loading: false, error: false });
   });
+
+  it("forgets a failed load when Links turns off, so turning it on again starts afresh", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("API 500"));
+    const { result, rerender } = render({ w: LIVE_24H, topic: "All", rank: "lift", on: true });
+    await settle();
+    expect(result.current.error).toBe(true);
+
+    rerender({ w: LIVE_24H, topic: "All", rank: "lift", on: false });
+    const next = deferred();
+    mockFetch.mockReturnValueOnce(next.promise);
+    rerender({ w: LIVE_24H, topic: "All", rank: "lift", on: true });
+    // Not the old error (it would be announced): loading, until the refetch lands.
+    expect(result.current).toEqual({ links: [], loading: true, error: false });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+      next.resolve([apiLink(41)]);
+    });
+    expect(result.current).toMatchObject({ loading: false, error: false });
+    expect(result.current.links).toHaveLength(1);
+  });
 });

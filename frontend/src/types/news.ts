@@ -162,8 +162,3 @@ export interface LinkEntry {
   explaining: boolean;
   createdAt: number;
 }
-
-/** What the Inspect tab shows: a place's stories, or a link between two countries. */
-export type Inspection =
-  | { kind: "place"; panelId: string }
-  | { kind: "link"; linkId: string; a: string; b: string; query: PanelQuery };

@@ -121,8 +121,8 @@ describe("RecentPlaces", () => {
     expect(picks.map((b) => b.getAttribute("data-place"))).toEqual(["l0", "a", "l1"]);
     expect(picks[2]).toHaveAttribute("aria-pressed", "true");
     expect(picks[2]).toHaveAttribute("title", "United States and Iran");
-    // Read out in full: the codes and arrow are for the eye.
-    expect(picks[2]).toHaveAccessibleName("United States and Iran, 41 stories");
+    // Its visible codes first (label in name, WCAG 2.5.3), then the names in full.
+    expect(picks[2]).toHaveAccessibleName("US ↔ IR: United States and Iran, 41 stories");
 
     fireEvent.click(picks[2]);
     expect(onSelect).toHaveBeenCalledWith("l1");

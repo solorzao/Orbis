@@ -232,7 +232,6 @@ export interface LinkQuery {
   b: string;
   /** The query the link was opened with (panelQuery). */
   query: PanelQuery;
-  signal?: AbortSignal;
 }
 
 /**
@@ -240,10 +239,10 @@ export interface LinkQuery {
  * and topic it was opened on: a live window by its timespan (as the arc was
  * fetched, and one URL for everyone at the edge), a range by its bounds.
  */
-export function fetchLinkDetail({ a, b, query, signal }: LinkQuery): Promise<ApiLinkDetail> {
+export function fetchLinkDetail({ a, b, query }: LinkQuery): Promise<ApiLinkDetail> {
   const params: Record<string, string> = { a, b, ...windowParams(queryWindow(query)) };
   if (query.topic) params.topic = query.topic;
-  return apiFetch<ApiLinkDetail>("/api/links/detail", params, signal);
+  return apiFetch<ApiLinkDetail>("/api/links/detail", params);
 }
 
 /**

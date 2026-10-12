@@ -287,11 +287,12 @@ test.describe("Arc pill on a touch screen", () => {
       "data-arcs",
       String(MOCK_LINKS_LIFT.length),
     );
-    // The inspected link would have its pill at its arc's top.
+    // The inspected link would have its pill at its arc's top: on a touch
+    // screen there is none, and no frame loop placing it.
     const irUs = MOCK_LINKS_LIFT.find((l) => l.a.iso === "IR" && l.b.iso === "US")!;
     await clickArc(page, irUs, "United States and Iran");
-    await expect(page.locator('[data-testid="arc-pill"][data-placed="true"]')).toBeAttached();
-    await expect(page.getByTestId("arc-pill")).toBeHidden();
+    await expect(page.getByTestId("link-inspector")).toBeVisible();
+    await expect(page.getByTestId("arc-pill")).toHaveCount(0);
   });
 });
 
