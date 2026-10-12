@@ -280,6 +280,15 @@ _THEME_GROUPS = (
 # groups about as often as parties, and ASEAN and FEMA aid groups. A name
 # in two families is then one label.
 _NAMED_FAMILIES = ("TERROR_GROUP", "POLITICAL_PARTY", "AIDGROUPS")
+# Codes shown as nothing, whatever their prefix: DROPPED_THEMES, and the
+# bare family codes GKG lists beside their members ("TAX_FNCACT;
+# TAX_FNCACT_PRESIDENT"), which the prefixes, ending in "_", miss: the
+# dropped families' and the named ones' (no name to show).
+_DROPPED_CODES = (
+    DROPPED_THEMES
+    | {prefix.rstrip("_") for prefix in DROPPED_THEME_PREFIXES}
+    | {f"TAX_{family}" for family in _NAMED_FAMILIES}
+)
 # Names that title case gets wrong.
 _NAME_OVERRIDES = {
     "ALQAEDA": "Al Qaeda",
@@ -460,7 +469,7 @@ def detail_themes_query(
     that show.
     """
     conditions, args = _pair_conditions(a, b, start, end, topic)
-    args += [list(DROPPED_THEME_PREFIXES), sorted(DROPPED_THEMES)]
+    args += [list(DROPPED_THEME_PREFIXES), sorted(_DROPPED_CODES)]
     prefixes, dropped = f"${len(args) - 1}", f"${len(args)}"
     args.append(limit)
     query = f"""
@@ -509,8 +518,9 @@ def _name_words(code: str) -> str:
 def display_theme(theme: str) -> str:
     """A GDELT theme as a label: "ECON_STOCKMARKET" -> "Economy: stock market".
 
-    Themes that say nothing about a link (DROPPED_THEME_PREFIXES,
-    DROPPED_THEMES) show as nothing, as does anything but a plain theme
+    Themes that say nothing about a link (DROPPED_THEME_PREFIXES, and
+    _DROPPED_CODES: DROPPED_THEMES and bare family codes) show as nothing,
+    as does anything but a plain theme
     code. Otherwise the family prefix, a World Bank number and trailing
     digits go; then the theme reads as a known label, a group's, a bare
     name (a party, armed group or aid group: "Hamas"), a family's, or its
@@ -519,7 +529,7 @@ def display_theme(theme: str) -> str:
     if not isinstance(theme, str) or not _THEME_CHARS.fullmatch(theme):
         return ""
     code = theme.upper()
-    if code in DROPPED_THEMES or code.startswith(DROPPED_THEME_PREFIXES):
+    if code in _DROPPED_CODES or code.startswith(DROPPED_THEME_PREFIXES):
         return ""
     for prefix in _THEME_PREFIXES:
         if code.startswith(prefix):

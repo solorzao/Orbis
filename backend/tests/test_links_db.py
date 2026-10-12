@@ -87,7 +87,13 @@ def _window_stories() -> list[dict]:
             topic="environment",
             tone=-0.2,
             persons=["Amelia Earhart"],
-            themes=["MARITIME", "TAX_FNCACT_EXPLORER"],
+            themes=[
+                "MARITIME",
+                "TAX_FNCACT",
+                "TAX_FNCACT_EXPLORER",
+                "TAX_ETHNICITY",
+                "TAX_WORLDLANGUAGES",
+            ],
         )
         for i in range(10)
     ]
@@ -287,8 +293,12 @@ class TestDistinctStories:
         assert (ki_um["n"], ki_um["lift"]) == (1, 15.0)
         # In ten copies of one story: not shared by two stories.
         assert ki_um["shared"] == []
-        # TAX_FNCACT_EXPLORER, a functional actor, is not fetched.
+        # Functional actors, ethnicities and languages, bare family codes included,
+        # are not fetched.
         assert ki_um["themes"] == ["Maritime"]
+        pool = await links.get_pool()  # the test's connection
+        rows = await pool.fetch(*links.detail_themes_query("KI", "UM", START, END, None, 25))
+        assert [r["theme"] for r in rows] == ["MARITIME"]
         ir_us = await links.get_link_detail("IR", "US", START, END, None)
         assert ir_us["shared"] == [{"name": "Abbas Araghchi", "type": "person", "n": 2}]
 
