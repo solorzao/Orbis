@@ -23,10 +23,17 @@ interface StatusPillProps {
   isLive: boolean;
   isLoading: boolean;
   isOffline: boolean;
+  /** A replay is playing: "Replay" for its whole run, not each step's loading. */
+  isReplay?: boolean;
 }
 
 /** UTC clock and the feed's state, top right. */
-export default function StatusPill({ isLive, isLoading, isOffline }: StatusPillProps) {
+export default function StatusPill({
+  isLive,
+  isLoading,
+  isOffline,
+  isReplay = false,
+}: StatusPillProps) {
   const time = useSyncExternalStore(subscribeClock, utcClock, serverClock);
 
   return (
@@ -39,6 +46,8 @@ export default function StatusPill({ isLive, isLoading, isOffline }: StatusPillP
       <span role="status" className="state-region">
         {isOffline ? (
           <span className="state offline">Offline</span>
+        ) : isReplay ? (
+          <span className="state replay">Replay</span>
         ) : isLoading ? (
           <span className="state muted">Loading…</span>
         ) : isLive ? (

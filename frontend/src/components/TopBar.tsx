@@ -11,6 +11,8 @@ interface TopBarProps {
   isLive: boolean;
   isLoading: boolean;
   isOffline: boolean;
+  /** The timeline's replay is playing (see StatusPill). */
+  isReplay?: boolean;
 }
 
 /**
@@ -23,6 +25,7 @@ export default function TopBar({
   isLive,
   isLoading,
   isOffline,
+  isReplay = false,
 }: TopBarProps) {
   return (
     <header className="topbar">
@@ -60,7 +63,12 @@ export default function TopBar({
       </div>
 
       <div className="topbar-right">
-        <StatusPill isLive={isLive} isLoading={isLoading} isOffline={isOffline} />
+        <StatusPill
+          isLive={isLive}
+          isLoading={isLoading}
+          isOffline={isOffline}
+          isReplay={isReplay}
+        />
         <Link href="/about" title="About Orbis" className="pillbar pill lg">
           About
         </Link>

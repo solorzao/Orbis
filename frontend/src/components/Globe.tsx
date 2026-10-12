@@ -5,15 +5,26 @@ import type { GlobeInstance } from "globe.gl";
 import { GlobePoint } from "@/types/news";
 import {
   GLOBE_OVERSCAN_PX,
+  HEATMAP,
   HOME_VIEW,
   driftLng,
   durationMs,
+  heatColor,
+  heatmapPoints,
   hexToRgba,
+  recomputeHeatmap,
+  showDots,
   pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
   type GlobeGeometry,
 } from "@/lib/globeView";
+import { webGpuReady } from "@/lib/webgpu";
+import type { GlobeLayer } from "@/components/LayerSwitcher";
+
+/** How high the dots stand off the globe (in globe radii). */
+const DOT_ALTITUDE = 0.01;
+const NO_DOTS: GlobePoint[] = [];
 
 // Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
 // immutable: a changed file gets a new version (see public/geo/README.md).
@@ -34,6 +45,15 @@ interface GlobeProps {
   reduced?: boolean;
   /** Low-power mode: the globe holds still. */
   lowPower?: boolean;
+  /** Dots (the default) or Intensity, a heatmap of the same places; dots hide under it. */
+  layer?: GlobeLayer;
+  /**
+   * Hold Intensity's heatmap while a replay plays or dots load: without WebGPU
+   * each recompute blocks the page, so it recomputes once when released.
+   */
+  holdHeatmap?: boolean;
+  /** A replay is playing: on the main-thread path the dots show over the held heatmap. */
+  replaying?: boolean;
 }
 
 interface LandFeature {
@@ -59,6 +79,9 @@ export default function Globe({
   onReady,
   reduced = false,
   lowPower = false,
+  layer = "dots",
+  holdHeatmap = false,
+  replaying = false,
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -79,6 +102,10 @@ export default function Globe({
   const altitudeRef = useRef(HOME_VIEW.altitude);
   const pointsRef = useRef(points);
   pointsRef.current = points;
+  // Whether dots are drawn (the Dots layer, or over a held heatmap during a replay).
+  const dotsShownRef = useRef(layer === "dots");
+  // The dots the heatmap on screen was computed from, so the same ones never recompute.
+  const heatForRef = useRef<GlobePoint[] | null>(null);
   const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Once the visitor grabs, scrolls or flies the globe, the drift is over for good.
@@ -119,7 +146,7 @@ export default function Globe({
         return Math.max(0.04, base * scale);
       })
       .pointColor("color")
-      .pointAltitude(0.01)
+      .pointAltitude(DOT_ALTITUDE)
       .pointResolution(12)
       // Pulsing rings under each dot
       .ringsData([])
@@ -138,6 +165,15 @@ export default function Globe({
           return `rgba(${r},${g},${b},${opacity})`;
         };
       })
+      // Intensity (mockup initGlobe): a heatmap weighted by each place's story count
+      .heatmapPointLat("lat")
+      .heatmapPointLng("lng")
+      .heatmapPointWeight("count")
+      .heatmapColorFn(() => heatColor) // an accessor: each heatmap gets the Soft Orbit ramp
+      .heatmapBandwidth(HEATMAP.bandwidth)
+      .heatmapColorSaturation(HEATMAP.colorSaturation)
+      .heatmapBaseAltitude(HEATMAP.baseAltitude)
+      .heatmapTopAltitude(HEATMAP.topAltitude)
       .ringMaxRadius(2)
       .ringPropagationSpeed(1.2)
       .ringRepeatPeriod(ringRepeatMs(motionRef.current))
@@ -154,7 +190,7 @@ export default function Globe({
         // Debounce: re-set pointsData to force pointRadius re-evaluation
         if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
         zoomTimerRef.current = setTimeout(() => {
-          if (globeRef.current) {
+          if (globeRef.current && dotsShownRef.current) {
             const pts = [...pointsRef.current];
             globeRef.current.pointsData(pts);
             globeRef.current.ringsData(pts);
@@ -278,13 +314,63 @@ export default function Globe({
     }
   }, [reduced, lowPower, isLoaded]);
 
-  // Update points and rings when data changes
+  // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {
-    if (globeRef.current && isLoaded) {
-      globeRef.current.pointsData(points);
-      globeRef.current.ringsData(points);
+    const globe = globeRef.current;
+    const container = containerRef.current;
+    if (!globe || !isLoaded) return;
+    const drawDots = (dots: GlobePoint[], overHeatmap = false) => {
+      dotsShownRef.current = dots.length > 0;
+      // Over the heatmap, the dots sit above its highest bump so the heat can't wash them out.
+      globe.pointAltitude(overHeatmap ? HEATMAP.topAltitude + 0.005 : DOT_ALTITUDE);
+      globe.pointsData(dots);
+      globe.ringsData(dots);
+      if (container) container.dataset.dots = String(dots.length); // read by the e2e tests
+    };
+    if (layer === "dots") {
+      heatForRef.current = null;
+      globe.heatmapsData([]);
+      drawDots(points);
+      return;
     }
-  }, [points, isLoaded]);
+    let cancelled = false;
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    // three-globe builds the heatmap's sphere on its next update (a 1 ms debounce).
+    // Its material is transparent but writes depth, which hides the land dots
+    // under it everywhere, even where the heat is clear: turn that off. Under a
+    // replay's dots the frozen heatmap dims to a backdrop so the dots read.
+    // This reaches into three-globe internals (the __globeObjType tag, the
+    // debounce, one mesh per heatmap) as of 2.45.0: package.json pins globe.gl
+    // and the lockfile its three-globe. Re-check Intensity over land on upgrade.
+    const tuneHeatmap = (dim: boolean) =>
+      globeRef.current?.scene().traverse((obj: object) => {
+        const mesh = obj as {
+          __globeObjType?: string;
+          material?: { depthWrite: boolean; opacity: number };
+        };
+        if (mesh.__globeObjType !== "heatmap" || !mesh.material) return;
+        mesh.material.depthWrite = false;
+        mesh.material.opacity = dim ? HEATMAP.dimmedOpacity : 1;
+      });
+    // Probe WebGPU first: it decides how many places the heatmap can afford.
+    webGpuReady().then((gpu) => {
+      if (cancelled || !globeRef.current) return;
+      const overlay = showDots(layer, { replaying, cpuPath: !gpu });
+      drawDots(overlay ? points : NO_DOTS, true);
+      tuneHeatmap(overlay);
+      const shown = heatForRef.current !== null;
+      if (shown && (heatForRef.current === points || !recomputeHeatmap({ gpu, hold: holdHeatmap })))
+        return;
+      heatForRef.current = points;
+      const heat = heatmapPoints(points, { gpu });
+      globeRef.current.heatmapsData(heat.length ? [heat] : []);
+      settle = setTimeout(() => tuneHeatmap(overlay), 50);
+    });
+    return () => {
+      cancelled = true;
+      clearTimeout(settle);
+    };
+  }, [points, layer, holdHeatmap, replaying, isLoaded]);
 
   return (
     <div

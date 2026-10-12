@@ -3,7 +3,8 @@ import type { ApiGlobePoint } from "./api";
 
 // Canvas colours can't be CSS variables, so these copy the Soft Orbit tokens
 // (--topic-*, --sentiment-*); clustering.test.ts fails if they drift.
-const TOPIC_COLORS: Record<Topic, string> = {
+/** Each topic's dot colour; every topic but All also has a --topic-* token. */
+export const TOPIC_COLORS: Record<Topic, string> = {
   All: "#c0c3e0",
   Politics: "#ab9dff",
   Conflict: "#ff8f9c",

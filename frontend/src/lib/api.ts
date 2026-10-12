@@ -47,14 +47,18 @@ export interface ApiTopicCount {
   count: number;
 }
 
-async function apiFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
+async function apiFetch<T>(
+  path: string,
+  params?: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<T> {
   const url = apiUrl(path);
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
     });
   }
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), signal ? { signal } : undefined);
   if (!res.ok) {
     throw new Error(`API ${res.status}: ${res.statusText}`);
   }
@@ -66,11 +70,12 @@ export function fetchGlobeNews(
   limit = 500,
   startTime?: string,
   endTime?: string,
+  signal?: AbortSignal,
 ): Promise<ApiGlobePoint[]> {
   const params: Record<string, string> = { timespan, limit: String(limit) };
   if (startTime) params.start_time = startTime;
   if (endTime) params.end_time = endTime;
-  return apiFetch<ApiGlobePoint[]>("/api/news", params);
+  return apiFetch<ApiGlobePoint[]>("/api/news", params, signal);
 }
 
 export function fetchClusterArticles(
@@ -123,15 +128,15 @@ export function fetchClusterSummary(
   return apiFetch<ApiClusterSummary>("/api/news/summary", params);
 }
 
-export interface ApiHourlyDensity {
-  hour: number;
+/** Stories in one UTC hour; `hour` is its start, e.g. "2026-10-11T14:00:00Z". */
+export interface ApiHourlyVolume {
+  hour: string;
   count: number;
 }
 
-export function fetchDensity(offsetDays = 0): Promise<ApiHourlyDensity[]> {
-  const params: Record<string, string> = {};
-  if (offsetDays > 0) params.offset_days = String(offsetDays);
-  return apiFetch<ApiHourlyDensity[]>("/api/news/density", params);
+/** Stories per hour over the last `days` days (1-7), oldest first, zero hours included. */
+export function fetchVolume(days = 7, signal?: AbortSignal): Promise<ApiHourlyVolume[]> {
+  return apiFetch<ApiHourlyVolume[]>("/api/news/volume", { days: String(days) }, signal);
 }
 
 export function fetchTopics(): Promise<ApiTopicCount[]> {

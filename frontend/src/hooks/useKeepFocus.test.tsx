@@ -85,4 +85,38 @@ describe("useKeepFocus", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close a" })); // clicked without focus
     expect(pill).toHaveFocus();
   });
+
+  it("leaves focus alone when it moved outside the region before the change rendered", () => {
+    // A handler that removes the focused control and sends focus elsewhere itself.
+    function JumpOut() {
+      const regionRef = useRef<HTMLDivElement>(null);
+      const outsideRef = useRef<HTMLButtonElement>(null);
+      const keepFocus = useKeepFocus(regionRef);
+      const [shown, setShown] = useState(true);
+      return (
+        <>
+          <button type="button" ref={outsideRef}>
+            Elsewhere
+          </button>
+          <div ref={regionRef} tabIndex={-1} data-testid="region">
+            {shown && (
+              <button
+                type="button"
+                onClick={() => {
+                  keepFocus(null);
+                  setShown(false);
+                  outsideRef.current?.focus();
+                }}
+              >
+                Go
+              </button>
+            )}
+          </div>
+        </>
+      );
+    }
+    render(<JumpOut />);
+    press("Go");
+    expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+  });
 });

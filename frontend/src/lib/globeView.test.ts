@@ -1,8 +1,16 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import path from "path";
 import {
+  HEATMAP,
+  HEAT_COLORS,
   driftLng,
   durationMs,
+  heatColor,
+  heatmapPoints,
   hexToRgba,
+  recomputeHeatmap,
+  showDots,
   pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
@@ -108,5 +116,124 @@ describe("ringRepeatMs", () => {
     { reduced: true, lowPower: true },
   ])("emits one ring and stops when reduced=$reduced, lowPower=$lowPower", (motion) => {
     expect(ringRepeatMs(motion)).toBe(0);
+  });
+});
+
+describe("heatmapPoints", () => {
+  const places = Array.from({ length: 300 }, (_, i) => ({ id: i, count: (i * 37) % 101 }));
+
+  it("uses every place where WebGPU computes the heatmap", () => {
+    expect(heatmapPoints(places, { gpu: true })).toHaveLength(300);
+  });
+
+  it("keeps the busiest places on the main-thread fallback, busiest first", () => {
+    const heat = heatmapPoints(places, { gpu: false });
+    expect(heat).toHaveLength(HEATMAP.maxPointsWithoutGpu);
+    expect(HEATMAP.maxPointsWithoutGpu).toBe(60);
+    const counts = heat.map((p) => p.count);
+    expect(counts).toEqual([...counts].sort((a, b) => b - a));
+    const quietestKept = Math.min(...counts);
+    const dropped = places.filter((p) => !heat.includes(p));
+    expect(dropped.every((p) => p.count <= quietestKept)).toBe(true);
+  });
+
+  it("leaves the input alone", () => {
+    const copy = [...places];
+    heatmapPoints(places, { gpu: false });
+    expect(places).toEqual(copy);
+  });
+
+  it("matches the mockup's heatmap settings", () => {
+    expect(HEATMAP).toMatchObject({
+      bandwidth: 1.8,
+      colorSaturation: 1.8,
+      baseAltitude: 0.006,
+      topAltitude: 0.04,
+    });
+  });
+});
+
+describe("heatColor", () => {
+  // three-globe reads "rgba(r, g, b, a)" with whole-number channels.
+  const RGBA = /^rgba\((\d+),(\d+),(\d+),([\d.]+)\)$/;
+  const parse = (c: string) => {
+    const m = RGBA.exec(c);
+    if (!m) throw new Error(`not rgba(): ${c}`);
+    return { rgb: [Number(m[1]), Number(m[2]), Number(m[3])], a: Number(m[4]) };
+  };
+  const rgbOf = (hex: string) => {
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+
+  it("is clear where there is no heat, so the land shows through", () => {
+    expect(parse(heatColor(0)).a).toBe(0);
+  });
+
+  it("grows more opaque with the heat, never less", () => {
+    let last = -1;
+    for (let i = 0; i <= 100; i++) {
+      const { a } = parse(heatColor(i / 100));
+      expect(a).toBeGreaterThanOrEqual(last);
+      last = a;
+    }
+    expect(last).toBeGreaterThan(0.9);
+  });
+
+  it("runs periwinkle, then lavender, to near-white at the peak", () => {
+    expect(parse(heatColor(0.35)).rgb).toEqual(rgbOf(HEAT_COLORS.periwinkle));
+    expect(parse(heatColor(0.7)).rgb).toEqual(rgbOf(HEAT_COLORS.lavender));
+    expect(parse(heatColor(1)).rgb).toEqual(rgbOf(HEAT_COLORS.peak));
+  });
+
+  it("clamps outside 0-1", () => {
+    expect(heatColor(-1)).toBe(heatColor(0));
+    expect(heatColor(2)).toBe(heatColor(1));
+  });
+
+  it("uses the Soft Orbit tokens, not the surge colour", () => {
+    // The canvas can't read CSS variables; this keeps the literals equal to them.
+    const css = readFileSync(path.resolve(__dirname, "../app/tokens.css"), "utf8");
+    const token = (name: string) =>
+      css.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6});`))?.[1].toLowerCase();
+    expect(HEAT_COLORS.periwinkle).toBe(token("accent-periwinkle"));
+    expect(HEAT_COLORS.lavender).toBe(token("accent-lavender"));
+    expect(HEAT_COLORS.peak).toBe(token("text-primary"));
+    const warning = token("signal-warning");
+    expect(warning).toBeTruthy();
+    expect(Object.values(HEAT_COLORS)).not.toContain(warning);
+  });
+});
+
+describe("recomputeHeatmap", () => {
+  it("always recomputes with WebGPU: a step costs about 0.35 s", () => {
+    expect(recomputeHeatmap({ gpu: true, hold: false })).toBe(true);
+    expect(recomputeHeatmap({ gpu: true, hold: true })).toBe(true);
+  });
+
+  it("keeps the current heatmap on the main-thread path while held (a replay plays, dots load)", () => {
+    expect(recomputeHeatmap({ gpu: false, hold: true })).toBe(false);
+    expect(recomputeHeatmap({ gpu: false, hold: false })).toBe(true);
+  });
+});
+
+describe("showDots", () => {
+  it("shows the dots on the Dots layer, always", () => {
+    for (const replaying of [false, true])
+      for (const cpuPath of [false, true])
+        expect(showDots("dots", { replaying, cpuPath })).toBe(true);
+  });
+
+  it("hides them under Intensity", () => {
+    expect(showDots("intensity", { replaying: false, cpuPath: false })).toBe(false);
+    expect(showDots("intensity", { replaying: false, cpuPath: true })).toBe(false);
+  });
+
+  it("shows each day's dots over the held heatmap during a replay on the main-thread path", () => {
+    expect(showDots("intensity", { replaying: true, cpuPath: true })).toBe(true);
+  });
+
+  it("leaves WebGPU replays to the heatmap, which recomputes each day", () => {
+    expect(showDots("intensity", { replaying: true, cpuPath: false })).toBe(false);
   });
 });

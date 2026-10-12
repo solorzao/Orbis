@@ -120,6 +120,20 @@ class TestGetGlobeData:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("timespan", "hours"), [("168h", 168), ("169h", 168), ("9999h", 168), ("0h", 1), ("-5h", 1)]
+    )
+    async def test_timespan_is_one_hour_to_seven_days(self, timespan, hours):
+        """The timeline's 7d preset asks for 168h; nothing asks for more."""
+        from app.routers.news import get_globe_data
+
+        with patch(
+            "app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[]
+        ) as mock_db:
+            await get_globe_data(timespan=timespan, limit=100)
+        assert mock_db.call_args.kwargs["timespan_hours"] == hours
+
+    @pytest.mark.asyncio
     async def test_passes_start_end_time_to_db(self):
         from app.routers.news import get_globe_data
 
@@ -606,3 +620,80 @@ async def test_cluster_endpoint_pages_past_50_within_a_window(monkeypatch):
     kwargs = mock_bounds.call_args.kwargs
     assert kwargs["start_time"] == datetime(2026, 3, 7, 10, tzinfo=timezone.utc)
     assert kwargs["end_time"] == datetime(2026, 3, 8, 10, tzinfo=timezone.utc)
+
+
+def _volume_client(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import app
+    from app.middleware import security
+
+    monkeypatch.setattr(security.settings, "api_key", "")
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    return AsyncClient(transport=transport, base_url="http://test")
+
+
+class TestGetVolume:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("days", [0, 8])
+    async def test_days_outside_one_to_seven_is_422(self, monkeypatch, days):
+        with patch("app.routers.news.get_hourly_volume", new_callable=AsyncMock) as mock_db:
+            async with _volume_client(monkeypatch) as client:
+                resp = await client.get("/api/news/volume", params={"days": days})
+
+        assert resp.status_code == 422
+        mock_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_passes_days_and_serialises_hours_as_iso_utc(self, monkeypatch):
+        rows = [
+            {"hour": datetime(2026, 10, 11, 13, tzinfo=timezone.utc), "count": 0},
+            {"hour": datetime(2026, 10, 11, 14, tzinfo=timezone.utc), "count": 31},
+        ]
+        with patch(
+            "app.routers.news.get_hourly_volume", new_callable=AsyncMock, return_value=rows
+        ) as mock_db:
+            async with _volume_client(monkeypatch) as client:
+                resp = await client.get("/api/news/volume", params={"days": 3})
+
+        assert resp.status_code == 200
+        mock_db.assert_awaited_once_with(3)
+        # Zero hours stay in, oldest first.
+        assert resp.json() == [
+            {"hour": "2026-10-11T13:00:00Z", "count": 0},
+            {"hour": "2026-10-11T14:00:00Z", "count": 31},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_seven_days_and_caches_by_days(self, monkeypatch):
+        from app.config import settings
+
+        rows = [{"hour": datetime(2026, 10, 11, 14, tzinfo=timezone.utc), "count": 5}]
+        with (
+            patch(
+                "app.routers.news.get_hourly_volume", new_callable=AsyncMock, return_value=rows
+            ) as mock_db,
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+        ):
+            async with _volume_client(monkeypatch) as client:
+                resp = await client.get("/api/news/volume")
+
+        assert resp.status_code == 200
+        mock_db.assert_awaited_once_with(7)
+        key, value, ttl = mock_set.await_args.args
+        assert key == "db:volume:7"
+        assert value == [{"hour": "2026-10-11T14:00:00Z", "count": 5}]
+        assert ttl == settings.db_cache_ttl
+
+    @pytest.mark.asyncio
+    async def test_serves_the_cached_volume(self, monkeypatch):
+        cached = [{"hour": "2026-10-11T14:00:00Z", "count": 5}]
+        with (
+            patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=cached),
+            patch("app.routers.news.get_hourly_volume", new_callable=AsyncMock) as mock_db,
+        ):
+            async with _volume_client(monkeypatch) as client:
+                resp = await client.get("/api/news/volume", params={"days": 2})
+
+        assert resp.json() == cached
+        mock_db.assert_not_awaited()

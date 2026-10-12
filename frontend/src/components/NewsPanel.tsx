@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { GlobePoint, PanelFilters } from "@/types/news";
-import { formatScore, sentimentBucket, sentimentKey } from "@/lib/clustering";
+import { TOPIC_COLORS, formatScore, sentimentBucket, sentimentKey } from "@/lib/clustering";
 import { fetchSelectionSummary } from "@/lib/api";
 
 interface NewsPanelProps {
@@ -29,14 +29,11 @@ const TONES = [
 const MAX_SUMMARIZE = 10;
 
 /** Topics with a --topic-* token; any other tag gets the neutral "All" colour. */
-const TOPIC_TOKENS = new Set([
-  "politics",
-  "conflict",
-  "technology",
-  "climate",
-  "economy",
-  "health",
-]);
+const TOPIC_TOKENS = new Set(
+  Object.keys(TOPIC_COLORS)
+    .filter((topic) => topic !== "All")
+    .map((topic) => topic.toLowerCase()),
+);
 
 function topicColor(tag: string): string {
   const key = tag.toLowerCase();

@@ -1,18 +1,21 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
-import { apiPointsToGlobePoints, filterPointsByTopic } from "@/lib/clustering";
-import { fetchGlobeNews, fetchClusterArticles, fetchClusterSummary, fetchDensity } from "@/lib/api";
+import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
-import { LIVE_WINDOW_HOURS, MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { useAgent } from "@/hooks/useAgent";
+import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
-import TimeSlider from "@/components/TimeSlider";
+import BottomBar from "@/components/BottomBar";
+import LayerSwitcher, { type GlobeLayer } from "@/components/LayerSwitcher";
+import TimelineCapsule from "@/components/TimelineCapsule";
 import NewsPanel from "@/components/NewsPanel";
 import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
@@ -28,21 +31,16 @@ const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
 export default function Home() {
   const [activeTopic, setActiveTopic] = useState<Topic>("All");
 
-  const [allPoints, setAllPoints] = useState<GlobePoint[]>([]);
-  const [apiError, setApiError] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const [timeRange, setTimeRange] = useState<{ startTime: string; endTime: string } | null>(null);
-  const [density, setDensity] = useState<{ hour: number; count: number }[]>([]);
-  const [dayOffset, setDayOffset] = useState(0);
-  const [hasOlderData, setHasOlderData] = useState(true);
+  // One time window for the globe, the panels and the timeline (lib/timeWindow).
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>(DEFAULT_WINDOW);
+  // The dots for the window, filtered to the topic on the client (same array until either changes)
+  const { points, error: apiError, loading } = useGlobePoints(timeWindow, activeTopic);
+  const [layer, setLayer] = useState<GlobeLayer>("dots");
+  // The timeline's replay: the status pill says Replay rather than flashing each step's load.
+  const [replaying, setReplaying] = useState(false);
 
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
-
-  // Snapshot of "now" captured at mount and when the user changes the day,
-  // so derived date math stays pure during render.
-  const [nowTs, setNowTs] = useState(() => Date.now());
 
   // Side panel (Co-pilot | Stories): open by default on wide screens
   const side = useSidePanel();
@@ -56,26 +54,15 @@ export default function Home() {
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
+  // Intensity is off in low-power mode: its heatmap is computed at ~246k vertices,
+  // about 0.75 s on a slow CPU even with WebGPU and seconds without it (see
+  // heatmapPoints and webGpuReady, which probes for a device only once it's shown).
+  const globeLayer: GlobeLayer = lowPower ? "dots" : layer;
 
-  const handleDayChange = useCallback((newOffset: number) => {
-    const clamped = Math.max(0, Math.min(6, newOffset));
-    setDayOffset(clamped);
-    setTimeRange(null);
-    setNowTs(Date.now());
-    setLoading(true);
+  // The same window again (a preset clicked twice) keeps its dots: no refetch.
+  const changeWindow = useCallback((next: TimeWindow) => {
+    setTimeWindow((prev) => (sameWindow(prev, next) ? prev : next));
   }, []);
-
-  const dayWindow = useMemo(
-    () =>
-      dayOffset === 0
-        ? null
-        : (() => {
-            const windowEnd = new Date(nowTs - dayOffset * 86400000);
-            const windowStart = new Date(windowEnd.getTime() - 86400000);
-            return { startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() };
-          })(),
-    [dayOffset, nowTs],
-  );
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     if (action.type === "flyTo" && globeControlsRef.current) {
@@ -102,71 +89,6 @@ export default function Home() {
       window.open(citation.url, "_blank", "noopener,noreferrer");
     }
   }, []);
-
-  // Fetch density when dayOffset changes (with cancellation to prevent 429s)
-  useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      fetchDensity(dayOffset)
-        .then((d) => {
-          if (cancelled) return;
-          setDensity(d);
-          if (dayOffset < 6) {
-            fetchDensity(dayOffset + 1)
-              .then((older) => {
-                if (cancelled) return;
-                setHasOlderData(older.some((h) => h.count > 0));
-              })
-              .catch(() => {
-                if (!cancelled) setHasOlderData(false);
-              });
-          } else {
-            setHasOlderData(false);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) setDensity([]);
-        });
-    }, 150);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [dayOffset]);
-
-  // Fetch globe data on mount and when timeRange or dayOffset changes
-  useEffect(() => {
-    let cancelled = false;
-    const effectiveRange = timeRange ?? dayWindow;
-    const timer = setTimeout(() => {
-      fetchGlobeNews(
-        `${LIVE_WINDOW_HOURS}h`,
-        500,
-        effectiveRange?.startTime,
-        effectiveRange?.endTime,
-      )
-        .then((apiPoints) => {
-          if (cancelled) return;
-          setAllPoints(apiPointsToGlobePoints(apiPoints));
-          setApiError(false);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setAllPoints([]);
-          setApiError(true);
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-    }, 150);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [timeRange, dayWindow]);
-
-  // Filter points client-side — instant, no API call
-  const points = filterPointsByTopic(allPoints, activeTopic);
 
   const updatePanel = useCallback((panelId: string, updates: Partial<PanelEntry>) => {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
@@ -288,7 +210,7 @@ export default function Home() {
     (point: GlobePoint) => {
       // Reopen a panel only if it shows this cell for the same topic and
       // window; point ids are list positions, so they can name another cell.
-      const query = panelQuery(activeTopic, timeRange ?? dayWindow, Date.now());
+      const query = panelQuery(activeTopic, timeWindow, Date.now());
       const existing = panelQueue.find(
         (p) =>
           p.point.lat === point.lat && p.point.lng === point.lng && samePanelQuery(p.query, query),
@@ -326,7 +248,7 @@ export default function Home() {
       setExpandedPanelId(panelId);
       fetchPanelData(panelId, point, query);
     },
-    [panelQueue, activeTopic, timeRange, dayWindow, fetchPanelData, showStories],
+    [panelQueue, activeTopic, timeWindow, fetchPanelData, showStories],
   );
 
   const handleZoomChange = useCallback(() => {}, []);
@@ -412,6 +334,9 @@ export default function Home() {
         }}
         reduced={reduced}
         lowPower={lowPower}
+        layer={globeLayer}
+        holdHeatmap={replaying || loading}
+        replaying={replaying}
       />
 
       {/* Orbital rings around the globe */}
@@ -421,9 +346,10 @@ export default function Home() {
       <TopBar
         activeTopic={activeTopic}
         onTopicChange={setActiveTopic}
-        isLive={!apiError && !loading && dayOffset === 0}
+        isLive={!apiError && !loading && timeWindow.kind === "live"}
         isLoading={loading}
         isOffline={apiError}
+        isReplay={replaying}
       />
 
       {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
@@ -449,22 +375,23 @@ export default function Home() {
         stories={storiesTab}
       />
 
-      {/* Time Slider + Status */}
-      <TimeSlider
-        density={density}
-        onChange={(range) => {
-          setTimeRange(range);
-          setLoading(true);
-        }}
-        onDayChange={handleDayChange}
-        dayOffset={dayOffset}
-        hasOlderData={hasOlderData}
-        totalStories={points.reduce((sum, p) => sum + p.count, 0)}
-        totalLocations={points.length}
-        isLive={!apiError && !loading && dayOffset === 0}
-        isLoading={loading}
-        isOffline={apiError}
-      />
+      {/* Bottom row: layers and the timeline. After the side panel: the CSS
+          keeps it clear of the panel, and above the sheet, by sibling selectors. */}
+      <BottomBar>
+        <LayerSwitcher
+          layer={globeLayer}
+          onChange={setLayer}
+          unavailable={lowPower ? { intensity: "Intensity is off in low-power mode" } : undefined}
+        />
+        <TimelineCapsule
+          timeWindow={timeWindow}
+          onChange={changeWindow}
+          onReplayChange={setReplaying}
+          stories={points.reduce((sum, p) => sum + p.count, 0)}
+          places={points.length}
+          reduced={reduced}
+        />
+      </BottomBar>
     </main>
   );
 }

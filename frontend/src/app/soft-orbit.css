@@ -416,6 +416,19 @@ kbd {
 .status .lbl {
   color: var(--text-muted);
 }
+.status .replay {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+.status .replay::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: linear-gradient(120deg, var(--aurora-start), var(--aurora-end));
+}
 .status .offline {
   display: inline-flex;
   align-items: center;
@@ -464,8 +477,8 @@ kbd {
 /*
  * Side panel: Co-pilot | Stories (mockup .side, line 330). Its top clears the
  * top bar (whose bottom sits at about 62px) by more than 16px; its bottom
- * leaves room for the timeline row PR 10 adds. Collapsed, it fades out and a
- * pill takes its corner.
+ * (124px) leaves room for the bottom row (84px from 20px up) below it.
+ * Collapsed, it fades out and a pill takes its corner.
  */
 .side {
   position: fixed;
@@ -718,51 +731,245 @@ kbd {
 }
 
 /*
- * The old TimeSlider, until PR 10's bottom row replaces it and these rules.
- * Centred at the bottom; from 1180px it centres in the space left of the side
- * panel, so the two never overlap, and shrinks to fit there. Below 1180px it
- * sits above the bottom sheet.
+ * Layer switcher (mockup .layers, lines 405-410), without its position: the
+ * bottom row places it. The base layers are a segmented control; .sep and
+ * .tg are the overlay toggles (Links, Threads) later PRs add after a divider.
  */
-.time-slider {
-  --ts-left: 24px;
-  --ts-right: 24px;
-  position: fixed;
-  z-index: 30;
-  left: var(--ts-left);
-  right: var(--ts-right);
-  bottom: 24px;
-  width: max-content;
-  max-width: calc(100vw - var(--ts-left) - var(--ts-right));
-  margin-inline: auto;
+.layers {
+  gap: 4px;
 }
-.time-slider > * {
-  max-width: 100%;
+.layers .seg {
+  border: 0;
+  background: none;
+  padding: 0;
 }
-@media (min-width: 1180px) {
-  .time-slider {
-    --ts-right: calc(24px + 380px + 24px); /* the side panel's right, width and a gap */
+.layers .seg button {
+  cursor: pointer;
+}
+.layers .seg button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.layers .seg button[aria-disabled="true"]:hover {
+  color: var(--text-muted);
+}
+.layers .sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border-default);
+  margin: 0 4px;
+}
+.layers .tg {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.layers .tg::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+}
+.layers .tg[aria-pressed="true"] {
+  color: var(--text-primary);
+}
+.layers .tg[aria-pressed="true"]::before {
+  border: 0;
+  background: linear-gradient(120deg, var(--accent-primary), var(--accent-lavender));
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+
+/*
+ * Timeline capsule (mockup .timeline, lines 411-419): replay, the 7-day
+ * volume chart and the window's label and presets. No position or width: the
+ * bottom row's grid places and sizes it.
+ */
+.timeline {
+  height: var(--timeline-height);
+  padding: 0 18px 0 10px;
+  gap: 14px;
+  border-radius: var(--timeline-radius);
+}
+.timeline .play {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  padding: 0;
+  flex: none;
+  cursor: pointer;
+}
+.timeline .chart {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  height: 62px;
+  border-radius: var(--radius-md);
+  cursor: crosshair;
+  touch-action: none; /* a drag picks a range, never scrolls */
+  user-select: none;
+}
+.timeline .chart:has(input:focus-visible) {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: 2px;
+}
+.timeline .chart svg {
+  display: block;
+  overflow: visible;
+}
+.timeline .band {
+  fill: var(--timeline-window);
+}
+.timeline .playhead line {
+  stroke: var(--timeline-playhead);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.timeline .playhead circle {
+  fill: var(--timeline-playhead);
+}
+/* replay: the playhead sweeps across each day as it shows (not with reduced motion) */
+.timeline .playhead.sweep {
+  animation: playhead-sweep var(--step) linear both;
+}
+@keyframes playhead-sweep {
+  from {
+    transform: translateX(var(--from));
+  }
+  to {
+    transform: translateX(var(--to));
   }
 }
-@media (max-width: 639px) {
-  .time-slider {
-    --ts-left: 12px;
-    --ts-right: 12px;
+.timeline .day {
+  font: var(--type-data-sm);
+  fill: var(--text-muted);
+}
+.timeline .day.today {
+  fill: var(--text-primary);
+}
+.timeline .meta {
+  flex: none;
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+}
+.timeline .pos {
+  font: var(--type-data);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.timeline .count {
+  font: var(--type-label);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.timeline .pr {
+  display: flex;
+  gap: 2px;
+}
+.timeline .pr button {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.timeline .pr button:hover {
+  color: var(--text-primary);
+}
+.timeline .pr button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+/*
+ * Bottom row: layers | timeline | (surges, PR 14), one grid so the tracks
+ * can't overlap. The side tracks never shrink below their content (as in the
+ * top bar: a plain 1fr would let the layers, whose min-width is 0, spill into
+ * the capsule); only the middle one does. From 1180px the row ends left
+ * of the open side panel (its right, width and a 24px gap), so it never slides
+ * under it; collapsed (only data-open="false": before hydration the panel shows
+ * open), the row spans the width again. It must come after the side panel in
+ * the DOM for these sibling selectors.
+ */
+.bottombar {
+  position: fixed;
+  left: 24px;
+  right: 24px;
+  bottom: 20px;
+  z-index: var(--z-panel);
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 640px) minmax(max-content, 1fr);
+  align-items: end;
+  gap: 24px;
+  pointer-events: none; /* the globe stays draggable between the tracks */
+}
+.bottombar > * {
+  pointer-events: auto;
+  min-width: 0;
+}
+.bottombar .layers {
+  grid-column: 1;
+  justify-self: start;
+  margin-bottom: 4px; /* mockup: 24px from the bottom, the capsule 20px */
+}
+.bottombar .timeline {
+  grid-column: 2;
+  width: 100%;
+}
+@media (min-width: 1180px) {
+  .bottombar {
+    transition: right var(--dur-slow) var(--ease-out);
+  }
+  .side:not([data-open="false"]) ~ .bottombar {
+    right: calc(24px + 380px + 24px);
+  }
+}
+/* Narrow: no chart, story count or layers; the play button, label and presets stay. */
+@media (max-width: 760px) {
+  .bottombar .layers {
+    display: none;
+  }
+  .timeline {
+    height: 64px;
+  }
+  .timeline .play {
+    width: 44px;
+    height: 44px;
+  }
+  .timeline .chart,
+  .timeline .count {
+    display: none;
+  }
+  .timeline .meta {
+    flex: 1;
+    justify-items: start;
   }
 }
 
 /*
  * Below 1180px the side panel is a bottom sheet (mockup lines 440-454): full
- * width, 46vh open (less on short screens, so the time slider above it stays
+ * width, 46vh open (less on short screens, so the bottom row above it stays
  * clear of the top bar), folded to its 56px tab bar when collapsed, and before
  * hydration (no data-open yet). --sheet-h is set on the sheet and its later
- * siblings: the time slider now, PR 10's timeline row after it, which must
- * also come after the side panel in the DOM.
+ * siblings, the bottom row among them, which stacks the layers over the
+ * timeline 12px above the sheet.
  */
 @media (width < 1180px) {
   .side,
   .side ~ * {
-    /* 260px: the top bar (62px), the slider (152px) and the gaps around them */
-    --sheet-h: min(46vh, 100vh - 260px);
+    /* 260px: the top bar (62px), the bottom row (138px) and the gaps around them;
+       never below the 56px tab bar, however short the screen */
+    --sheet-h: max(56px, min(46vh, 100vh - 260px));
   }
   .side:not([data-open="true"]),
   .side:not([data-open="true"]) ~ * {
@@ -797,16 +1004,29 @@ kbd {
   .side-open {
     display: none; /* the tab bar stays, so no pill */
   }
-  .time-slider {
+  .bottombar {
+    left: 12px;
+    right: 12px;
     bottom: calc(var(--sheet-h, 56px) + 24px);
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    row-gap: 12px; /* regions keep 12px apart */
     transition: bottom var(--dur-slow) var(--ease-out);
+  }
+  .bottombar .layers,
+  .bottombar .timeline {
+    grid-column: 1;
+  }
+  .bottombar .layers {
+    justify-self: center;
+    margin-bottom: 0;
   }
 }
 @media (max-width: 639px) {
   .side,
   .side ~ * {
-    /* the top bar has two rows here (100px) and the slider is taller */
-    --sheet-h: min(46vh, 100vh - 310px);
+    /* the top bar has two rows here (100px) */
+    --sheet-h: max(56px, min(46vh, 100vh - 310px));
   }
 }
 

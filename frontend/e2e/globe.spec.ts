@@ -110,8 +110,9 @@ test.describe("Globe Page", () => {
     await expect(page.getByTestId("side-tab-stories")).toBeVisible();
   });
 
-  test("time slider is present at bottom", async ({ page }) => {
-    await expect(page.getByTestId("time-slider")).toBeVisible();
+  test("the timeline and the layer switcher are at the bottom", async ({ page }) => {
+    await expect(page.getByTestId("timeline")).toBeVisible();
+    await expect(page.getByTestId("layer-switcher")).toBeVisible();
   });
 
   test("has no theme toggle (Soft Orbit is dark only)", async ({ page }) => {
