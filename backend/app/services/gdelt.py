@@ -235,6 +235,7 @@ _MAX_THEMES = 64
 _MAX_ENTITIES = 30  # persons, organizations
 _MAX_NAMES = 15
 _MAX_COUNTS = 10
+_MAX_MENTIONED_COUNTRIES = 20
 # V2.1COUNTS also carries theme names (e.g. SOC_GENERALCRIME); keep the count types.
 _COUNT_TYPES = frozenset({"AFFECT", "ARREST", "KIDNAP", "KILL", "PROTEST", "SEIZE", "WOUND"})
 
@@ -358,6 +359,18 @@ def _parse_counts(v21_counts: str, v1_counts: str) -> list[dict]:
         if len(results) == _MAX_COUNTS:
             break
     return results
+
+
+def _mentioned_countries(mentioned_locations: list[dict]) -> list[str]:
+    """ISO codes of the country-level mentions: distinct, non-empty, in order, capped.
+
+    Two FIPS codes can share an ISO code (GZ and WE are both PS), so the
+    codes are made distinct again after mapping. The article's own country
+    stays in: the links query drops self-pairs.
+    """
+    codes = dict.fromkeys(loc["country_code"] for loc in mentioned_locations)
+    codes.pop("", None)
+    return list(codes)[:_MAX_MENTIONED_COUNTRIES]
 
 
 def _parse_tone_detail(raw: str) -> dict | None:
@@ -486,7 +499,8 @@ async def fetch_raw_gkg() -> list[dict]:
         url, domain, lat, lng, location_name, country_code, country_fips,
         tone, tone_detail (only when V1.5TONE is well formed), page_title
         ('' when GDELT has no usable one), themes, persons, organizations,
-        names, counts, mentioned_locations, image_url, published_at
+        names, counts, mentioned_locations, mentioned_countries (their ISO
+        codes), image_url, published_at
     """
     # 1. Find the latest GKG file URL
     index_bytes = await _download_bytes(_GKG_LASTUPDATE_URL)
@@ -645,6 +659,7 @@ def _parse_gkg(raw: str) -> list[dict]:
             "names": _parse_names(_field(fields, 23)),
             "counts": _parse_counts(_field(fields, 6), _field(fields, 5)),
             "mentioned_locations": mentioned_locations,
+            "mentioned_countries": _mentioned_countries(mentioned_locations),
             "image_url": image_url if image_url.startswith("http") else "",
             "published_at": published_at,
         }

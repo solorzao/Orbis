@@ -243,12 +243,14 @@ _UPSERT_ARTICLE_SQL = """
         published_at, latitude, longitude, location,
         country_code, region, topic_tags, sentiment_score,
         entities, image_url, country_fips,
-        themes, persons, orgs, names, counts
+        themes, persons, orgs, names, counts,
+        mentioned_countries
     ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         ST_SetSRID(ST_MakePoint($8, $7), 4326)::geography,
         $9, $10, $11, $12, $13, $14, $15,
-        $16, $17, $18, $19, $20
+        $16, $17, $18, $19, $20,
+        $21
     )
     ON CONFLICT (source_url) DO UPDATE SET
         title = EXCLUDED.title,
@@ -267,12 +269,13 @@ _UPSERT_ARTICLE_SQL = """
         persons = EXCLUDED.persons,
         orgs = EXCLUDED.orgs,
         names = EXCLUDED.names,
-        counts = EXCLUDED.counts
+        counts = EXCLUDED.counts,
+        mentioned_countries = EXCLUDED.mentioned_countries
     """
 
 
 def _upsert_article_args(article: dict[str, Any]) -> tuple:
-    """Arguments $1-$20 of _UPSERT_ARTICLE_SQL for one article."""
+    """Arguments $1-$21 of _UPSERT_ARTICLE_SQL for one article."""
     return (
         article.get("title", ""),
         article.get("summary"),
@@ -296,6 +299,7 @@ def _upsert_article_args(article: dict[str, Any]) -> tuple:
         article.get("orgs", []),
         article.get("names", []),
         json.dumps(article.get("counts", [])),
+        article.get("mentioned_countries", []),
     )
 
 

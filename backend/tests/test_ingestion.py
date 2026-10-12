@@ -311,6 +311,7 @@ class TestTitlesAndGkgFields:
             names=["Gaza Strip", "Yellow Line"],
             counts=counts,
             tone_detail=tone_detail,
+            mentioned_countries=["IR", "US"],
         )
         patches = _common_patches(articles, ml_enabled=False)
 
@@ -331,6 +332,7 @@ class TestTitlesAndGkgFields:
         assert row["orgs"] == ["United Nations"]
         assert row["names"] == ["Gaza Strip", "Yellow Line"]
         assert row["counts"] == counts
+        assert row["mentioned_countries"] == ["IR", "US"]
         assert row["entities"] == {"tone": tone_detail}
 
     @pytest.mark.asyncio
@@ -354,7 +356,8 @@ class TestTitlesAndGkgFields:
 
         row = mock_upsert.call_args[0][0][0]
         assert row["entities"] == {}
-        assert [row[k] for k in ("themes", "persons", "orgs", "names", "counts")] == [[]] * 5
+        fields = ("themes", "persons", "orgs", "names", "counts", "mentioned_countries")
+        assert [row[k] for k in fields] == [[]] * 6
 
     @pytest.mark.asyncio
     async def test_knowledge_graph_still_gets_people_orgs_and_locations(self):

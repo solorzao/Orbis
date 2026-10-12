@@ -806,6 +806,61 @@ class TestCountryCodes:
         assert articles[0]["country_fips"] == "ZZ"
 
 
+_TEHRAN = "4#Tehran, Tehran, Iran#IR#IR00#35.6944#51.4215#-3039671"
+
+
+def _country(name: str, fips: str) -> str:
+    """A V1LOCATIONS country-level (type 1) block."""
+    return f"1#{name}#{fips}##10.0#20.0#{fips}"
+
+
+class TestMentionedCountries:
+    """mentioned_countries: ISO codes of the countries a story mentions, for links."""
+
+    @pytest.mark.asyncio
+    async def test_distinct_iso_codes_in_first_seen_order(self):
+        locations = [
+            _country("China", "CH"),
+            _country("Spain", "SP"),
+            _country("China", "CH"),  # the same country twice
+            _country("Gaza Strip", "GZ"),
+            _country("West Bank", "WE"),  # another FIPS code for ISO PS
+            _TEHRAN,
+        ]
+        [article] = await _fetch_records([_make_gkg_record(locations=";".join(locations))])
+        assert article["mentioned_countries"] == ["CN", "ES", "PS"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_codes_are_dropped(self):
+        locations = [_country("Nowhere", "ZZ"), _country("Spain", "SP"), _TEHRAN]
+        locations.append("1#Somewhere##10.0#20.0#")  # no code at all
+        [article] = await _fetch_records([_make_gkg_record(locations=";".join(locations))])
+        assert article["mentioned_countries"] == ["ES"]
+
+    @pytest.mark.asyncio
+    async def test_the_articles_own_country_is_kept(self):
+        """The links query drops self-pairs; the column keeps every mention."""
+        locations = [_country("Iran", "IR"), _country("United States", "US"), _TEHRAN]
+        [article] = await _fetch_records([_make_gkg_record(locations=";".join(locations))])
+        assert article["country_code"] == "IR"
+        assert article["mentioned_countries"] == ["IR", "US"]
+
+    @pytest.mark.asyncio
+    async def test_city_level_locations_are_not_country_mentions(self):
+        [article] = await _fetch_records([_make_gkg_record(locations=_TEHRAN)])
+        assert article["mentioned_countries"] == []
+
+    @pytest.mark.asyncio
+    async def test_capped_at_20(self):
+        from app.services.country_codes import FIPS_TO_ISO2
+
+        by_iso = {iso: fips for fips, iso in sorted(FIPS_TO_ISO2.items())}
+        fips_codes = [by_iso[iso] for iso in sorted(by_iso)][:25]
+        locations = [_country(f"Country {f}", f) for f in fips_codes] + [_TEHRAN]
+        [article] = await _fetch_records([_make_gkg_record(locations=";".join(locations))])
+        assert article["mentioned_countries"] == sorted(by_iso)[:20]
+
+
 class TestGkgFields:
     """Fields stored on the article row: title, themes, people, names, counts, tone."""
 
