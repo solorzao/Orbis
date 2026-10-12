@@ -1562,6 +1562,10 @@ button.cite:hover {
 :is(.recon, .rc) .foot .pill {
   cursor: pointer;
 }
+:is(.recon, .rc) .foot .foot-links {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
 
 /*
  * Bottom row: layers | timeline | (surges, PR 14), one grid so the tracks

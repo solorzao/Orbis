@@ -347,6 +347,24 @@ describe("CoPilot", () => {
       expect(showStoriesFor).toHaveBeenCalledTimes(1);
     });
 
+    it("offer Show links when the answer's places span countries and Links is off", () => {
+      const turnOn = vi.fn();
+      const showLinksFor = vi.fn(() => turnOn);
+      renderCoPilot({ messages: answer({ globeActions: actions }), showLinksFor });
+      expect(showLinksFor).toHaveBeenCalledWith(actions);
+      const pills = within(screen.getByRole("group", { name: "Suggested actions" })).getAllByRole(
+        "button",
+      );
+      expect(pills.map((p) => p.textContent)).toEqual(["Fly to Lagos", "Fly there", "Show links"]);
+      fireEvent.click(pills[2]);
+      expect(turnOn).toHaveBeenCalled();
+    });
+
+    it("leave out Show links when it does not apply", () => {
+      renderCoPilot({ messages: answer({ globeActions: actions }), showLinksFor: () => null });
+      expect(screen.queryByRole("button", { name: "Show links" })).toBeNull();
+    });
+
     it("wait for the answer to finish", () => {
       renderCoPilot({ messages: answer({ globeActions: actions, status: "streaming" }) });
       expect(screen.queryByRole("group", { name: "Suggested actions" })).toBeNull();

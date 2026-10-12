@@ -254,6 +254,7 @@ export const MOCK_TOPICS = [
 /** Label points as the backend has them (country_centroids.py). */
 export const COUNTRIES = {
   CA: { iso: "CA", name: "Canada", lat: 57.75, lng: -101.57 },
+  CN: { iso: "CN", name: "China", lat: 36.61, lng: 103.87 },
   EG: { iso: "EG", name: "Egypt", lat: 26.51, lng: 29.84 },
   FR: { iso: "FR", name: "France", lat: 46.61, lng: 2.34 },
   GB: { iso: "GB", name: "United Kingdom", lat: 53.88, lng: -2.66 },
@@ -280,6 +281,7 @@ export const MOCK_LINKS_LIFT = [
   mockLink("EG", "IL", 23, 5.1, "conflict", -0.41, "IL"),
   mockLink("RU", "UA", 64, 3.4, "conflict", -0.55, "UA"),
   mockLink("FR", "GB", 18, 2.6, "economy", 0.06, "GB"),
+  mockLink("FR", "UA", 15, 2.2, "conflict", -0.35, "FR"),
   mockLink("IR", "US", 41, 1.8, "politics", -0.32, "US"),
 ];
 
@@ -291,6 +293,7 @@ export const MOCK_LINKS_COUNT = [
   mockLink("SA", "YE", 46, 6.2, "conflict", -0.52, "SA"),
   mockLink("IR", "US", 41, 1.8, "politics", -0.32, "US"),
   mockLink("CA", "US", 38, 1.3, "economy", -0.12, "CA"),
+  mockLink("CN", "US", 35, 1.1, "economy", -0.1, "US"),
 ];
 
 /** /api/links as the backend answers it, by ?rank= (lift by default). */

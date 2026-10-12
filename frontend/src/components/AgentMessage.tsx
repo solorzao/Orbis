@@ -53,6 +53,8 @@ interface AgentMessageProps {
   onFlyTo?: (action: GlobeAction) => void;
   /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
+  /** Turns the Links layer on for an answer's places, or null when that does not apply. */
+  showLinksFor?: (actions: GlobeAction[]) => (() => void) | null;
 }
 
 /**
@@ -67,6 +69,7 @@ function AgentMessage({
   onCitationClick,
   onFlyTo,
   showStoriesFor,
+  showLinksFor,
 }: AgentMessageProps) {
   if (message.role === "user") return <div className="msg user">{message.content}</div>;
 
@@ -114,6 +117,7 @@ function AgentMessage({
 
   const actions = streaming ? [] : (message.globeActions ?? []).slice(0, 3);
   const openStories = actions.length > 0 ? (showStoriesFor?.(actions[0]) ?? null) : null;
+  const showLinks = actions.length > 0 ? (showLinksFor?.(actions) ?? null) : null;
 
   return (
     <div className="msg bot" aria-busy={streaming}>
@@ -168,6 +172,11 @@ function AgentMessage({
           {openStories && (
             <button type="button" className="pill" onClick={openStories}>
               Show stories here
+            </button>
+          )}
+          {showLinks && (
+            <button type="button" className="pill" onClick={showLinks}>
+              Show links
             </button>
           )}
         </div>

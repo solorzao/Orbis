@@ -26,7 +26,13 @@ import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/pa
 import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
-import { linkKey, toLinkDetail, type LinkRank } from "@/lib/links";
+import {
+  actionCountries,
+  linkKey,
+  linkedCountries,
+  toLinkDetail,
+  type LinkRank,
+} from "@/lib/links";
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
@@ -457,6 +463,14 @@ export default function Home() {
     },
     [points, handlePointClick],
   );
+  // Co-pilot: "Show links" turns the Links layer on when an answer's places
+  // are in two or more countries (by the globe's dots there) and it is off.
+  const showLinksFor = useCallback(
+    (actions: GlobeAction[]) =>
+      !linksOn && actionCountries(actions, points).length >= 2 ? () => setLinksOn(true) : null,
+    [linksOn, points],
+  );
+
   const inspectTab = (
     <>
       <RecentPlaces
@@ -578,6 +592,7 @@ export default function Home() {
             onCitationClick={handleCitationClick}
             onFlyTo={handleGlobeAction}
             showStoriesFor={showStoriesFor}
+            showLinksFor={showLinksFor}
           />
         }
         inspect={inspectTab}
@@ -623,6 +638,7 @@ export default function Home() {
           revealed={revealed}
           onReveal={revealImage}
           docked={touch}
+          linkedCountries={linksOn ? linkedCountries(links, cardPoint.countryCode) : null}
           onOpen={() => {
             dismissCard();
             handlePointClick(cardPoint);

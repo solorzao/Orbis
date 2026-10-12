@@ -70,6 +70,8 @@ interface CoPilotProps {
   onFlyTo: (action: GlobeAction) => void;
   /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
+  /** Turns the Links layer on for an answer's places, or null when that does not apply. */
+  showLinksFor?: (actions: GlobeAction[]) => (() => void) | null;
 }
 
 /**
@@ -89,6 +91,7 @@ export default function CoPilot({
   onCitationClick,
   onFlyTo,
   showStoriesFor,
+  showLinksFor,
 }: CoPilotProps) {
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -210,6 +213,7 @@ export default function CoPilot({
             onCitationClick={onCitationClick}
             onFlyTo={onFlyTo}
             showStoriesFor={showStoriesFor}
+            showLinksFor={showLinksFor}
           />
         ))}
       </div>

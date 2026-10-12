@@ -3,8 +3,9 @@
  * their look on the globe and the pill that names one.
  */
 import type { ApiLink, ApiLinkDetail } from "@/lib/api";
+import { pointAt } from "@/lib/cells";
 import { apiArticlesToNewsArticles, mapApiTopic, mapTopicMix } from "@/lib/clustering";
-import type { CountryLink, LinkCountry, LinkDetail, Topic } from "@/types/news";
+import type { CountryLink, GlobePoint, LinkCountry, LinkDetail, Topic } from "@/types/news";
 
 /** How links are ranked: surprisingly often together (lift), or by stories (count). */
 export type LinkRank = "lift" | "count";
@@ -202,4 +203,33 @@ export function toLinkDetail(api: ApiLinkDetail): LinkDetail {
     themes: api.themes,
     articles: apiArticlesToNewsArticles(api.articles),
   };
+}
+
+/** How many other countries a country's links reach (the hover card's footer). */
+export function linkedCountries(links: readonly CountryLink[], iso: string | undefined): number {
+  if (!iso) return 0;
+  const code = iso.toUpperCase();
+  const others = new Set<string>();
+  for (const l of links) {
+    if (l.a.iso === code) others.add(l.b.iso);
+    else if (l.b.iso === code) others.add(l.a.iso);
+  }
+  return others.size;
+}
+
+/**
+ * The countries of the places an answer names, each once, in order: the
+ * country of the globe's dot at each place (cells pointAt). A place with no
+ * dot, or a dot with no country, counts for none.
+ */
+export function actionCountries(
+  actions: readonly { lat: number; lng: number }[],
+  points: readonly GlobePoint[],
+): string[] {
+  const codes: string[] = [];
+  for (const a of actions) {
+    const code = pointAt(points, a.lat, a.lng)?.countryCode?.toUpperCase();
+    if (code && !codes.includes(code)) codes.push(code);
+  }
+  return codes;
 }

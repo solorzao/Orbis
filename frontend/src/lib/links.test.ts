@@ -7,8 +7,10 @@ import {
   arcStroke,
   linkArcs,
   linkEnds,
+  actionCountries,
   linkKey,
   linkPairLabel,
+  linkedCountries,
   linkTopic,
   toCountryLinks,
   toLinkDetail,
@@ -234,5 +236,48 @@ describe("toLinkDetail", () => {
         },
       ],
     });
+  });
+});
+
+describe("linkedCountries", () => {
+  it("counts the other countries a country's links reach", () => {
+    const links = [link(), link({ a: RU, b: US, from: "US" }), link({ a: RU, b: UA, from: "UA" })];
+    expect(linkedCountries(links, "US")).toBe(2);
+    expect(linkedCountries(links, "ua")).toBe(1);
+    expect(linkedCountries(links, "FR")).toBe(0);
+    expect(linkedCountries(links, undefined)).toBe(0);
+  });
+});
+
+describe("actionCountries", () => {
+  const dot = (lat: number, lng: number, countryCode?: string) => ({
+    id: `${lat}`,
+    lat,
+    lng,
+    size: 1,
+    color: "#fff",
+    articles: [],
+    isCluster: false,
+    count: 1,
+    topic: "All" as const,
+    countryCode,
+  });
+  const points = [
+    dot(48.86, 2.35, "FR"),
+    dot(43.3, 5.37, "FR"),
+    dot(40.71, -74.0, "US"),
+    dot(10, 10),
+  ];
+  const fly = (lat: number, lng: number) => ({ type: "flyTo" as const, lat, lng });
+
+  it("is the countries of the dots at an answer's places, each once", () => {
+    expect(actionCountries([fly(48.86, 2.35), fly(43.3, 5.37)], points)).toEqual(["FR"]);
+    expect(actionCountries([fly(48.86, 2.35), fly(40.71, -74.0)], points)).toEqual(["FR", "US"]);
+  });
+
+  it("skips places with no dot, or a dot with no country", () => {
+    expect(actionCountries([fly(-30, 150), fly(10, 10), fly(40.71, -74.0)], points)).toEqual([
+      "US",
+    ]);
   });
 });

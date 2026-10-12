@@ -2,10 +2,14 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   MOCK_LINKS_COUNT,
   MOCK_LINKS_LIFT,
+  NEW_YORK,
+  PARIS,
   gotoStillGlobe,
   hoverArc,
+  hoverPlace,
   isLinksList,
   mockAllApiRoutes,
+  mockAgentRoute,
   mockLinks,
 } from "./fixtures";
 
@@ -58,9 +62,10 @@ test.describe("Links layer", () => {
       "aria-pressed",
       "true",
     );
+    expect(MOCK_LINKS_COUNT.length).not.toBe(MOCK_LINKS_LIFT.length); // so the redraw shows
     await rank.getByRole("button", { name: "Most covered" }).click();
+    await expect.poll(() => asked.at(-1)!.get("rank")).toBe("count");
     await expect(globe).toHaveAttribute("data-arcs", String(MOCK_LINKS_COUNT.length));
-    expect(asked.at(-1)!.get("rank")).toBe("count");
 
     // A topic refetches the links for it.
     await page.getByTestId("topic-filter").getByRole("button", { name: "Politics" }).click();
@@ -121,5 +126,68 @@ test.describe("Links layer", () => {
     const globe = page.getByTestId("globe");
     await expect(globe).toHaveAttribute("data-arcs", String(MOCK_LINKS_LIFT.length));
     await expect(globe).toHaveAttribute("data-arc-flow", "false");
+  });
+});
+
+test.describe("Link hints", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("while Links is on, the hover card counts the countries a place's country is linked to", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page);
+    let card = await hoverPlace(page, PARIS);
+    await expect(card.getByText("Click to open")).toBeVisible();
+    await expect(card.locator(".foot-links")).toHaveCount(0); // Links is off
+
+    await linksToggle(page).click();
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-arcs",
+      String(MOCK_LINKS_LIFT.length),
+    );
+    // France: linked to the United Kingdom and Ukraine.
+    card = await hoverPlace(page, PARIS);
+    await expect(card.locator(".foot-links")).toHaveText("2 linked countries");
+  });
+
+  test("the co-pilot offers Show links for places in two countries; it turns Links on", async ({
+    page,
+  }) => {
+    let asked = 0;
+    await gotoStillGlobe(page, async (p) => {
+      await mockAgentRoute(p, {
+        answer: "Markets in Paris and New York reacted to the talks.",
+        globe_actions: [
+          { type: "flyTo", lat: PARIS.lat, lng: PARIS.lng, label: "Paris" },
+          { type: "flyTo", lat: NEW_YORK.lat, lng: NEW_YORK.lng, label: "New York" },
+        ],
+      });
+      await p.route(isLinksList, (route) => {
+        asked++;
+        return route.fulfill({ json: mockLinks(route.request().url()) });
+      });
+    });
+    const input = page.getByTestId("agent-input");
+    await input.fill("How did markets react?");
+    await input.press("Enter");
+
+    const actions = page.getByRole("group", { name: "Suggested actions" });
+    await expect(actions.getByRole("button")).toHaveText([
+      "Fly to Paris",
+      "Fly to New York",
+      "Show stories here",
+      "Show links",
+    ]);
+    expect(asked).toBe(0);
+    await actions.getByRole("button", { name: "Show links" }).click();
+    await expect(linksToggle(page)).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-arcs",
+      String(MOCK_LINKS_LIFT.length),
+    );
+    expect(asked).toBe(1);
+    // Links is on now: the pill has done its job.
+    await expect(actions.getByRole("button", { name: "Show links" })).toHaveCount(0);
+    await expect(page.getByTestId("side-tab-copilot")).toHaveAttribute("aria-selected", "true");
   });
 });
