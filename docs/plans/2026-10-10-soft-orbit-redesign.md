@@ -44,7 +44,9 @@
 | 10 | 2 | Timeline capsule and layer switcher | 9b |
 | 11 | 2 | Co-pilot console restyle with action pills | 1, 9 |
 | 12 | 3 Quick wins | City hover card (image, headline, topic mix, tone, sparkline) | 3, 9 |
-| 13 | 3 | Co-coverage arcs layer and link inspector | 7c, 9 |
+| 13a | 3 | Migration: `articles.mentioned_countries` | none |
+| 13b | 3 | Co-coverage links API (country pairs, lift, detail, explain) | 13a deployed |
+| 13c | 3 | Links layer and link inspector | 13b, 9b |
 | 14 | 3 | Surge alerts ticker and "since your last visit" strip | 9 |
 | 15 | 4 Flagships | Story threads backend (embedding clusters, synopses) | 2, 5, 7c |
 | 16 | 4 | Threads panel with spread replay and aurora arcs | 13, 15 |
@@ -53,7 +55,7 @@
 | 19 | 5 Events | GDELT Events ingestion: daily country-pair rollups | 4b |
 | 20 | 5 | Relation arcs layer (cooperation and conflict) | 13, 19 |
 
-Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md`. Phases 3 to 5 are scoped here and get their bite-sized plans when the phase before them is done, so they build on what actually shipped.
+Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), and Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md`. Phases 4 and 5 are scoped here and get their bite-sized plans when the phase before them is done, so they build on what actually shipped.
 
 ---
 
