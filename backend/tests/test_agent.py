@@ -706,6 +706,26 @@ async def test_without_a_screen_an_unknown_time_range_is_still_24_hours():
     search.assert_awaited_once_with(terms="x", time_range="24 hours")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scoped", [True, False], ids=["screen", "no-screen"])
+async def test_a_non_string_time_range_is_treated_as_unknown(scoped):
+    """A list or object from the model must not crash the request (unhashable in the allowlist)."""
+    scope = _scope(start_time=_START, end_time=_END) if scoped else None
+    plan = (
+        '{"tools": [{"name": "keyword_search", "args": {"terms": "x", "time_range": ["7 days"]}}]}'
+    )
+    calls, _ = await _planned("Elections?", scope, plan)
+
+    search = AsyncMock(return_value=[])
+    with patch.dict("app.services.agent._TOOL_DISPATCH", {"keyword_search": search}):
+        await execute_retrieval(calls)
+
+    if scoped:
+        search.assert_awaited_once_with(terms="x", start_time=_START, end_time=_END)
+    else:
+        search.assert_awaited_once_with(terms="x", time_range="24 hours")
+
+
 def test_the_question_loses_hidden_characters_before_the_injection_check():
     from fastapi import HTTPException
 

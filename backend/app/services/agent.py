@@ -122,7 +122,7 @@ def _with_screen_defaults(tool_calls: list[dict], scope: ScreenScope | None) -> 
             args = dict(call["args"]) if isinstance(call.get("args"), dict) else {}
             if scope.topic and not args.get("topic"):
                 args["topic"] = _topic_tag(scope.topic)
-            if scope.window and args.get("time_range") not in _ALLOWED_TIME_RANGES:
+            if scope.window and not _known_time_range(args.get("time_range")):
                 # Omitted or unknown ("30 days", which would become 24 hours): the window applies.
                 args.pop("time_range", None)
                 args["start_time"], args["end_time"] = scope.start_time, scope.end_time
@@ -737,6 +737,11 @@ _ALLOWED_TIME_RANGES = {
 }
 
 
+def _known_time_range(value: object) -> bool:
+    """True for an allowlisted time_range; the model may send any JSON type there."""
+    return isinstance(value, str) and value in _ALLOWED_TIME_RANGES
+
+
 # keyword_search's window comes from the screen context only (_with_screen_defaults):
 # the model never sees these params, and its JSON cannot hold a datetime.
 _WINDOW_ARGS = ("start_time", "end_time")
@@ -763,7 +768,7 @@ def _sanitize_tool_args(name: str, args: dict) -> dict:
         clean["depth"] = max(1, min(int(clean["depth"]), 3))
     if "hours" in clean:
         clean["hours"] = max(1, min(int(clean["hours"]), 168))
-    if "time_range" in clean and clean["time_range"] not in _ALLOWED_TIME_RANGES:
+    if "time_range" in clean and not _known_time_range(clean["time_range"]):
         clean["time_range"] = "24 hours"
     if name == "keyword_search" and isinstance(clean.get("topic"), str):
         # Articles are tagged "politics", "environment"; the model may copy the
