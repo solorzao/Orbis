@@ -99,6 +99,7 @@ class TestGetGlobeData:
                 limit=3,
                 start_time=None,
                 end_time=None,
+                topic=None,
             )
 
     @pytest.mark.asyncio
@@ -117,6 +118,7 @@ class TestGetGlobeData:
                 limit=100,
                 start_time=None,
                 end_time=None,
+                topic=None,
             )
 
     @pytest.mark.asyncio
@@ -174,6 +176,80 @@ class TestGetGlobeData:
         ):
             [point] = await get_globe_data(timespan="24h", limit=100)
         assert point.topics == []
+
+
+class TestGetGlobeDataTopic:
+    """`topic` filters the cells on the server: one of the six topic pills, or All."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("topic", "tag"),
+        [
+            ("Politics", "politics"),
+            ("politics", "politics"),
+            ("CONFLICT", "conflict"),
+            ("Technology", "technology"),
+            ("Climate", "environment"),  # the classifier's tag for the Climate pill
+            ("Economy", "economy"),
+            ("Health", "health"),
+            ("All", None),
+            ("all", None),
+        ],
+    )
+    async def test_topic_reaches_the_database_as_its_article_tag(self, monkeypatch, topic, tag):
+        with patch(
+            "app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[]
+        ) as mock_db:
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get("/api/news", params={"topic": topic})
+
+        assert resp.status_code == 200
+        assert mock_db.call_args.kwargs["topic"] == tag
+
+    @pytest.mark.asyncio
+    async def test_no_topic_means_every_story(self, monkeypatch):
+        with patch(
+            "app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[]
+        ) as mock_db:
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get("/api/news")
+
+        assert resp.status_code == 200
+        assert mock_db.call_args.kwargs["topic"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("topic", ["sport", "environment", "general", "Politics,Health"])
+    async def test_an_unknown_topic_is_422(self, monkeypatch, topic):
+        with patch("app.routers.news.get_globe_points", new_callable=AsyncMock) as mock_db:
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get("/api/news", params={"topic": topic})
+
+        assert resp.status_code == 422
+        mock_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cache_key_includes_the_topic_tag(self, monkeypatch):
+        """A topic's cells never come back from All's cache entry, nor All's from a topic's."""
+        rows = [_make_globe_row(topic="environment")]
+        keys = {}
+        for topic in ("Climate", "All"):
+            with (
+                patch(
+                    "app.routers.news.get_cached", new_callable=AsyncMock, return_value=None
+                ) as mock_get,
+                patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+                patch(
+                    "app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=rows
+                ),
+            ):
+                async with _api_client(monkeypatch) as client:
+                    await client.get("/api/news", params={"topic": topic, "timespan": "6h"})
+            keys[topic] = mock_get.await_args.args[0]
+            assert mock_set.await_args.args[0] == keys[topic]
+
+        assert keys["Climate"].endswith(":environment")
+        assert keys["Climate"] != keys["All"]
+        assert "environment" not in keys["All"]
 
 
 class TestGetClusterArticles:
@@ -622,7 +698,7 @@ async def test_cluster_endpoint_pages_past_50_within_a_window(monkeypatch):
     assert kwargs["end_time"] == datetime(2026, 3, 8, 10, tzinfo=timezone.utc)
 
 
-def _volume_client(monkeypatch):
+def _api_client(monkeypatch):
     from httpx import ASGITransport, AsyncClient
 
     from app.main import app
@@ -638,7 +714,7 @@ class TestGetVolume:
     @pytest.mark.parametrize("days", [0, 8])
     async def test_days_outside_one_to_seven_is_422(self, monkeypatch, days):
         with patch("app.routers.news.get_hourly_volume", new_callable=AsyncMock) as mock_db:
-            async with _volume_client(monkeypatch) as client:
+            async with _api_client(monkeypatch) as client:
                 resp = await client.get("/api/news/volume", params={"days": days})
 
         assert resp.status_code == 422
@@ -653,7 +729,7 @@ class TestGetVolume:
         with patch(
             "app.routers.news.get_hourly_volume", new_callable=AsyncMock, return_value=rows
         ) as mock_db:
-            async with _volume_client(monkeypatch) as client:
+            async with _api_client(monkeypatch) as client:
                 resp = await client.get("/api/news/volume", params={"days": 3})
 
         assert resp.status_code == 200
@@ -675,7 +751,7 @@ class TestGetVolume:
             ) as mock_db,
             patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
         ):
-            async with _volume_client(monkeypatch) as client:
+            async with _api_client(monkeypatch) as client:
                 resp = await client.get("/api/news/volume")
 
         assert resp.status_code == 200
@@ -692,7 +768,7 @@ class TestGetVolume:
             patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=cached),
             patch("app.routers.news.get_hourly_volume", new_callable=AsyncMock) as mock_db,
         ):
-            async with _volume_client(monkeypatch) as client:
+            async with _api_client(monkeypatch) as client:
                 resp = await client.get("/api/news/volume", params={"days": 2})
 
         assert resp.json() == cached

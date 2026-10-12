@@ -332,6 +332,76 @@ class TestGetGlobePoints:
         assert point["topic"] == "general"
         assert point["topics"] == []
 
+    @pytest.mark.asyncio
+    async def test_topic_filters_the_stories_before_cells_are_ranked_and_limited(self, pool):
+        """The cells are the busiest for the topic, counted and headlined by its stories alone."""
+        pool.fetch.return_value = [_globe_row()]
+
+        await database.get_globe_points(
+            cell_size=1.0, limit=500, start_time=START, end_time=END, topic="politics"
+        )
+
+        query, args = _fetched(pool)
+        assert args == [START, END, "politics", 1.0, 500]
+        # In the WHERE of the CTE every count, headline and rank reads: before
+        # ROW_NUMBER picks a cell's newest story, COUNT(*) and the LIMIT.
+        assert (
+            "FROM articles WHERE published_at BETWEEN $1 AND $2 "
+            "AND topic_tags && ARRAY[$3::text] ), cells AS (" in query
+        )
+        assert query.index("topic_tags &&") < query.index("COUNT(*)")
+        assert query.index("topic_tags &&") < query.index("ORDER BY article_count DESC LIMIT $5")
+        assert "FLOOR(latitude / $4)" in query
+        assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
+
+    @pytest.mark.asyncio
+    async def test_topic_with_a_live_window(self, pool):
+        pool.fetch.return_value = [_globe_row()]
+
+        await database.get_globe_points(cell_size=1.0, timespan_hours=6, topic="health")
+
+        query, args = _fetched(pool)
+        assert args[1:] == ["health", 1.0, 500]
+        assert "WHERE published_at >= $1 AND topic_tags && ARRAY[$2::text] )" in query
+        assert "LIMIT $4" in query
+
+    @pytest.mark.asyncio
+    async def test_no_topic_leaves_the_predicate_out(self, pool):
+        """No `$n IS NULL OR ...`: the plan for every story never carries a topic test."""
+        pool.fetch.return_value = [_globe_row()]
+
+        await database.get_globe_points(cell_size=1.0, start_time=START, end_time=END)
+
+        query, args = _fetched(pool)
+        assert args == [START, END, 1.0, 500]
+        assert "topic_tags &&" not in query
+        assert "IS NULL" not in query
+
+    @pytest.mark.asyncio
+    async def test_fallback_keeps_the_topic_filter(self, pool):
+        """An empty window falls back to all time, but never to other topics' stories."""
+        pool.fetch.side_effect = [[], [_globe_row()]]
+
+        await database.get_globe_points(cell_size=1.0, topic="conflict")
+
+        assert pool.fetch.call_count == 2
+        query, args = _fetched(pool)
+        assert args == ["conflict", 1.0, 500]
+        assert "FROM articles WHERE topic_tags && ARRAY[$1::text] ), cells AS (" in query
+        assert "published_at >=" not in query
+
+    @pytest.mark.asyncio
+    async def test_a_filtered_cell_takes_the_topic_as_its_colour(self, pool):
+        """The newest matching story may list another tag first; the dot is still the topic's."""
+        pool.fetch.return_value = [
+            _globe_row(topic_tags=["sport", "politics"], topics=["politics", "sport"])
+        ]
+
+        [point] = await database.get_globe_points(cell_size=1.0, topic="politics")
+
+        assert point["topic"] == "politics"
+        assert point["topics"] == ["politics", "sport"]
+
 
 class TestGetHourlyVolume:
     @pytest.mark.asyncio
