@@ -92,6 +92,9 @@ export default function CoPilot({
 }: CoPilotProps) {
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  // Pills left out of the next question, by field and the label they had: a
+  // new place or window is in again.
+  const [removed, setRemoved] = useState<Partial<Record<Field, string>>>({});
   const logRef = useRef<HTMLDivElement>(null);
   // Whether the log follows the latest message (the visitor has not scrolled
   // back), and where it was when it last had a box.
@@ -127,9 +130,6 @@ export default function CoPilot({
     observer.observe(log);
     return () => observer.disconnect();
   }, [settle]);
-  // Pills left out of the next question, by field and the label they had: a
-  // new place or window is in again.
-  const [removed, setRemoved] = useState<Partial<Record<Field, string>>>({});
 
   const pills = contextPills(context).filter((p) => removed[p.field] !== p.label);
   const sees = (field: Field) => pills.some((p) => p.field === field);
