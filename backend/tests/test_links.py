@@ -11,6 +11,7 @@ import pytest
 
 from app.services import links
 from app.services.links import TOPIC_TAGS, dominant_topic, links_query, rank_links
+from app.services.titles import story_key_sql
 
 START = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
 END = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
@@ -18,6 +19,11 @@ END = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
 
 def _sql(query: str) -> str:
     return " ".join(query.split())
+
+
+# An article's story: its stored key, else (written before ingestion stored
+# one) its lowercased title's hash. The articles table is aliased a.
+STORY = f"{story_key_sql('a')} AS story"
 
 
 def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, **extra) -> dict:
@@ -43,7 +49,7 @@ class TestLinksQuery:
         flat = _sql(sql)
         assert args == [START, END]
         assert "published_at >= $1 AND published_at <= $2" in flat
-        assert "topic_tags &&" not in flat.split("touched AS")[0]
+        assert "topic_tags &&" not in flat.split("stories AS")[0]
         assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
 
     def test_topic_filters_the_window(self):
@@ -57,14 +63,34 @@ class TestLinksQuery:
         assert "array_remove(mentioned_countries, country_code) AS others" in flat
         assert "WHERE cardinality(others) > 0" in flat  # stories naming only themselves
         assert "LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b" in flat
-        assert "FROM linking l, unnest(l.others) AS m GROUP BY 1, 2" in flat
+        assert "FROM linking l, unnest(l.others) AS m GROUP BY 1, 2, 3" in flat
         assert "country_code <> ''" in flat
 
-    def test_from_is_the_most_common_origin(self):
+    def test_a_story_is_its_stored_key(self):
+        """Syndicated copies share story_key (titles.story_key): no title parsing in SQL."""
         flat = _sql(links_query(START, END, None)[0])
-        # A pair's origin is one of its ends: a when the story's country sorts first.
-        assert "count(*) FILTER (WHERE l.country_code < m) AS from_a" in flat
-        # Ties go to a, as mode() would break them.
+        assert flat.startswith(
+            "WITH linking AS ( SELECT country_code, topic_tags, sentiment_score, others, story"
+        )
+        assert (
+            f"array_remove(mentioned_countries, country_code) AS others, {STORY} FROM articles a"
+        ) in flat
+        assert "regexp" not in flat and "OFFSET" not in flat
+
+    def test_pairs_count_stories_not_copies(self):
+        flat = _sql(links_query(START, END, None)[0])
+        # One row per pair and story, then per pair: a story's copies count once.
+        assert "GREATEST(l.country_code, m) AS b, l.story," in flat
+        assert "sum(l.sentiment_score) / count(l.sentiment_score) AS tone" in flat
+        assert "FROM stories GROUP BY a, b" in flat
+        assert "count(*) AS n, avg(tone) AS tone" in flat
+
+    def test_from_is_the_most_common_origin_of_the_stories(self):
+        flat = _sql(links_query(START, END, None)[0])
+        # A story's origin is its copies' commonest; a pair's origin is one of its
+        # ends: a when the story's country sorts first. Ties go to a.
+        assert "2 * count(*) FILTER (WHERE l.country_code < m) >= count(*) AS from_a" in flat
+        assert "count(*) FILTER (WHERE from_a) AS from_a" in flat
         assert "CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso" in flat
 
     def test_aggregates_hash_rather_than_sort(self):
@@ -72,13 +98,18 @@ class TestLinksQuery:
         flat = _sql(links_query(START, END, None)[0])
         assert "DISTINCT" not in flat and "mode()" not in flat
 
-    def test_counts_each_topic_and_the_totals_for_lift(self):
+    def test_counts_each_topic_and_the_totals_for_lift_in_stories(self):
         flat = _sql(links_query(START, END, None)[0])
         for tag in TOPIC_TAGS:
-            assert f"count(*) FILTER (WHERE l.topic_tags && '{{{tag}}}') AS {tag}" in flat
-        # Every linking story counts once for each country it touches, its own included.
-        assert "unnest(l.others || l.country_code) AS c" in flat
-        assert "(SELECT count(*) FROM linking) AS total" in flat
+            # A story has a topic if any of its copies does.
+            assert f"bool_or(l.topic_tags && '{{{tag}}}') AS {tag}" in flat
+            assert f"count(*) FILTER (WHERE {tag}) AS {tag}" in flat
+        # Every linking story counts once for each country it touches, its own
+        # included: the ends of the pairs it links.
+        assert "SELECT c, s.story FROM stories s, unnest(ARRAY[s.a, s.b]) AS c" in flat
+        assert "GROUP BY 1, 2 ) t GROUP BY c" in flat
+        total = "(SELECT count(*) FROM (SELECT story FROM stories GROUP BY story) s) AS total"
+        assert total in flat
         assert "ta.n AS n_a, tb.n AS n_b" in flat
 
     @pytest.mark.asyncio
@@ -267,26 +298,42 @@ class TestDetailQueries:
         sql, *args = links.detail_names_query("IR", "US", START, END, None, 16)
         flat = _sql(sql)
         assert "unnest(persons)" in flat and "unnest(orgs)" in flat
-        assert "HAVING count(DISTINCT id) >= 2" in flat
+        # Stories, not syndicated copies.
+        assert f"WITH linked AS ( SELECT {STORY}, persons, orgs FROM articles a WHERE" in flat
+        assert "count(DISTINCT story) AS n" in flat
+        assert "HAVING count(DISTINCT story) >= 2" in flat
         assert "ORDER BY n DESC, name LIMIT $5" in flat
         assert args[-1] == 16
 
     def test_themes_by_stories(self):
         flat = _sql(links.detail_themes_query("IR", "US", START, END, None, 25)[0])
         assert "unnest(themes) AS theme" in flat
+        assert f"FROM ( SELECT {STORY}, themes FROM articles a WHERE" in flat
+        assert "SELECT theme, count(DISTINCT story) AS n" in flat
         assert "ORDER BY n DESC, theme LIMIT $5" in flat
 
-    def test_stats_count_the_pair_like_the_links_query(self):
+    def test_stats_count_the_pairs_stories_like_the_links_query(self):
         sql, *args = links.detail_stats_query("IR", "US", START, END, None)
         flat = _sql(sql)
         assert args == [START, END, "IR", "US"]
         # The same linking stories as /api/links, so n and lift agree.
         assert "array_remove(mentioned_countries, country_code) AS others" in flat
         assert "WHERE cardinality(others) > 0" in flat
-        assert "count(*) FILTER (WHERE country_code = $3 OR $3 = ANY(others)) AS n_a" in flat
-        assert "count(*) FILTER (WHERE country_code = $4 OR $4 = ANY(others)) AS n_b" in flat
+        assert f"AS others, {STORY} FROM articles a" in flat
+        # One row per story, whatever its copies.
+        assert "FROM linking ) marked GROUP BY story" in flat
+        assert "bool_or(country_code = $3 OR $3 = ANY(others)) AS has_a" in flat
+        assert "bool_or(country_code = $4 OR $4 = ANY(others)) AS has_b" in flat
+        assert "count(*) AS total, count(*) FILTER (WHERE has_a) AS n_a" in flat
+        assert "count(*) FILTER (WHERE has_b) AS n_b, count(*) FILTER (WHERE linked) AS n" in flat
+        tone = "sum(sentiment_score) FILTER (WHERE linked) / count(sentiment_score) FILTER"
+        assert f"{tone} (WHERE linked) AS tone" in flat
+        assert "count(*) FILTER (WHERE linked) AS n, avg(tone) AS tone" in flat
+        # Each story's key once: no pairs to unnest, so no need to materialise.
+        assert flat.startswith("WITH linking AS ( SELECT")
         for tag in TOPIC_TAGS:
-            assert f"count(*) FILTER (WHERE linked AND topic_tags && '{{{tag}}}') AS {tag}" in flat
+            assert f"bool_or(linked AND topic_tags && '{{{tag}}}') AS {tag}" in flat
+            assert f"count(*) FILTER (WHERE {tag}) AS {tag}" in flat
 
 
 def _detail_pool(stats: dict, names: list, themes: list, articles: list) -> AsyncMock:

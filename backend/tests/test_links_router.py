@@ -136,10 +136,10 @@ class TestGetLinks:
                 )
 
         (key1, value1, ttl1), (key2, _, _) = [c.args for c in mock_set.await_args_list]
-        assert key1 == "db:links:v1:live:24:politics:count:40"
+        assert key1 == "db:links:v2:live:24:politics:count:40"
         assert ttl1 == 600
         assert value1[0]["from"] == "US"
-        assert key2 == "db:links:v1:2026101008-2026101108::lift:12"
+        assert key2 == "db:links:v2:2026101008-2026101108::lift:12"
 
     @pytest.mark.asyncio
     async def test_an_empty_answer_is_cached_for_a_minute(self, monkeypatch, db):
@@ -267,7 +267,7 @@ class TestGetLinkDetail:
                 )
 
         key, value, ttl = mock_set.await_args.args
-        assert key == "db:links:detail:v1:IR:US:live:24:conflict"
+        assert key == "db:links:detail:v2:IR:US:live:24:conflict"
         assert ttl == 600
         assert len(value["articles"]) == 10
 
@@ -282,7 +282,7 @@ class TestGetLinkDetail:
         assert (resp.json()["a"]["iso"], resp.json()["b"]["iso"]) == ("IR", "US")
         assert detail_db.await_args_list[0].args[:2] == ("IR", "US")
         keys = {c.args[0] for c in mock_set.await_args_list}
-        assert keys == {"db:links:detail:v1:IR:US:live:24:"}
+        assert keys == {"db:links:detail:v2:IR:US:live:24:"}
 
     @pytest.mark.asyncio
     async def test_serves_the_cached_detail(self, monkeypatch, detail_db):

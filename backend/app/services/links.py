@@ -5,6 +5,13 @@ placed on the globe) with each other country it mentions
 (``articles.mentioned_countries``). A pair's ``n`` is how many stories link
 it, whichever side they come from.
 
+A story is an article's ``story_key``, its title without the outlet's name
+(``titles.story_key``): a wire story syndicated ten times is ten articles
+but one story, and counts once in every number here. Its copies decide
+its topic (any copy's), tone (their mean) and origin (their commonest).
+Articles written before ingestion stored the key count by their exact
+title (``titles.story_key_sql``).
+
 Hubs (the US, Russia) are in most pairs, so links are ranked by lift by
 default: ``n_ab * N / (n_a * n_b)``, how many times more often the two are
 covered together than if each story's countries were independent. ``N`` is
@@ -25,7 +32,7 @@ from app.services.ai_summary import SummaryUnavailable, _call_claude, _window_ke
 from app.services.cache import get_cached, set_cached
 from app.services.country_centroids import centroid
 from app.services.database import get_pool
-from app.services.titles import dedup_key
+from app.services.titles import dedup_key, story_key_sql
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,9 @@ TOPIC_TAGS = ("politics", "conflict", "technology", "environment", "economy", "h
 
 # Lift is noisy on few stories: a pair needs this many to rank by it.
 MIN_LIFT_STORIES = 5
+
+# An article's story, in queries that alias articles as a.
+_STORY = story_key_sql("a")
 
 # So that the US does not take every slot.
 MAX_ARCS_PER_COUNTRY = 6
@@ -52,17 +62,18 @@ def _window(start: datetime, end: datetime, topic: str | None) -> tuple[list[str
 
 
 def _linking_cte(conditions: list[str]) -> str:
-    """The ``linking`` CTE: the window's stories that mention another country.
+    """The ``linking`` CTE: the window's articles that mention another country.
 
-    ``others`` is the countries a story mentions besides its own. Shared by
-    the links and the detail queries, so a pair's n and lift agree in both.
+    ``others`` is the countries an article mentions besides its own, and
+    ``story`` the story it is a copy of. Shared by the links and the detail
+    queries, so a pair's n and lift agree in both.
     """
     return f"""linking AS (
-            SELECT country_code, topic_tags, sentiment_score, others
+            SELECT country_code, topic_tags, sentiment_score, others, story
             FROM (
                 SELECT country_code, topic_tags, sentiment_score,
-                       array_remove(mentioned_countries, country_code) AS others
-                FROM articles
+                       array_remove(mentioned_countries, country_code) AS others, {_STORY} AS story
+                FROM articles a
                 WHERE {" AND ".join(conditions)}
                   AND country_code <> '' AND cardinality(mentioned_countries) > 0
             ) w
@@ -73,42 +84,56 @@ def _linking_cte(conditions: list[str]) -> str:
 def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any, ...]:
     """SQL and arguments for every country pair in the window, as ``pool.fetch`` takes them.
 
-    Each row is a pair (``a`` < ``b``) with its stories ``n``, mean ``tone``,
-    most common origin ``from_iso``, stories per topic tag, and what lift
-    needs: ``n_a``, ``n_b`` and the window's linking stories, ``total``.
+    Each row is a pair (``a`` < ``b``) with its stories ``n``, their mean
+    ``tone``, most common origin ``from_iso``, stories per topic tag, and
+    what lift needs: ``n_a``, ``n_b`` and the window's linking stories,
+    ``total``. Every count is of stories, not articles.
 
-    Every count is ``count(*)``, which is exact because each story's
-    ``mentioned_countries`` holds distinct codes (ingestion and the backfill
-    see to it): a story gives a pair at most one row. ``count(DISTINCT id)``
-    and ``mode()`` would sort every pair row instead of hashing: 0.40 s rather
-    than 0.15 s at 7 days on 150K synthetic stories with 89K mentions (same
-    rows). A pair's origin is always one of its two ends, so the most common
-    one is a count against half.
+    Articles first collapse to one row per pair and story (``stories``),
+    which is then grouped by pair and, for ``n_a`` and ``n_b``, by country
+    and story (``touched``: the countries a story touches are the ends of
+    the pairs it links). Grouped aggregates hash, where ``count(DISTINCT
+    ...)`` and ``mode()`` would sort every pair row; a story's tone is
+    ``sum / count``, whose state is a number, where ``avg``'s is an array.
+    A pair's origin is always one of its two ends, so the most common one
+    is a count against half, for a story's copies and then for the pair's
+    stories.
     """
     conditions, args = _window(start, end, topic)
-    topic_counts = ",\n".join(
-        f"count(*) FILTER (WHERE l.topic_tags && '{{{tag}}}') AS {tag}" for tag in TOPIC_TAGS
+    story_topics = ",\n".join(
+        f"bool_or(l.topic_tags && '{{{tag}}}') AS {tag}" for tag in TOPIC_TAGS
     )
+    topic_counts = ",\n".join(f"count(*) FILTER (WHERE {tag}) AS {tag}" for tag in TOPIC_TAGS)
     query = f"""
         WITH {_linking_cte(conditions)},
+        stories AS (
+            SELECT LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b, l.story,
+                   sum(l.sentiment_score) / count(l.sentiment_score) AS tone,
+                   2 * count(*) FILTER (WHERE l.country_code < m) >= count(*) AS from_a,
+                   {story_topics}
+            FROM linking l, unnest(l.others) AS m
+            GROUP BY 1, 2, 3
+        ),
         touched AS (
             SELECT c, count(*) AS n
-            FROM linking l, unnest(l.others || l.country_code) AS c
+            FROM (
+                SELECT c, s.story FROM stories s, unnest(ARRAY[s.a, s.b]) AS c
+                GROUP BY 1, 2
+            ) t
             GROUP BY c
         ),
         grouped AS (
-            SELECT LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b,
-                   count(*) AS n, avg(l.sentiment_score) AS tone,
-                   count(*) FILTER (WHERE l.country_code < m) AS from_a,
+            SELECT a, b, count(*) AS n, avg(tone) AS tone,
+                   count(*) FILTER (WHERE from_a) AS from_a,
                    {topic_counts}
-            FROM linking l, unnest(l.others) AS m
-            GROUP BY 1, 2
+            FROM stories
+            GROUP BY a, b
         )
         SELECT g.a, g.b, g.n, g.tone,
                CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso,
                {", ".join(f"g.{tag}" for tag in TOPIC_TAGS)},
                ta.n AS n_a, tb.n AS n_b,
-               (SELECT count(*) FROM linking) AS total
+               (SELECT count(*) FROM (SELECT story FROM stories GROUP BY story) s) AS total
         FROM grouped g
         JOIN touched ta ON ta.c = g.a
         JOIN touched tb ON tb.c = g.b
@@ -220,29 +245,44 @@ def _pair_conditions(
 def detail_stats_query(
     a: str, b: str, start: datetime, end: datetime, topic: str | None
 ) -> tuple[Any, ...]:
-    """SQL and arguments for the pair's n, tone, topic counts and what lift needs."""
+    """SQL and arguments for the pair's n, tone, topic counts and what lift needs.
+
+    Stories, as the links query counts them: each story is one row, which
+    links the pair, or touches a country, if any of its copies does. Its
+    tone and topics are those of the copies that link the pair.
+    """
     conditions, args = _window(start, end, topic)
     args += [a, b]
     pa, pb = f"${len(args) - 1}", f"${len(args)}"
-    topic_counts = ",\n".join(
-        f"count(*) FILTER (WHERE linked AND topic_tags && '{{{tag}}}') AS {tag}"
-        for tag in TOPIC_TAGS
+    story_topics = ",\n".join(
+        f"bool_or(linked AND topic_tags && '{{{tag}}}') AS {tag}" for tag in TOPIC_TAGS
     )
+    topic_counts = ",\n".join(f"count(*) FILTER (WHERE {tag}) AS {tag}" for tag in TOPIC_TAGS)
     query = f"""
         WITH {_linking_cte(conditions)},
-        marked AS (
-            SELECT country_code, others, topic_tags, sentiment_score,
-                   (country_code = {pa} AND {pb} = ANY(others))
-                   OR (country_code = {pb} AND {pa} = ANY(others)) AS linked
-            FROM linking
+        stories AS (
+            SELECT story,
+                   bool_or(country_code = {pa} OR {pa} = ANY(others)) AS has_a,
+                   bool_or(country_code = {pb} OR {pb} = ANY(others)) AS has_b,
+                   bool_or(linked) AS linked,
+                   sum(sentiment_score) FILTER (WHERE linked)
+                   / count(sentiment_score) FILTER (WHERE linked) AS tone,
+                   {story_topics}
+            FROM (
+                SELECT story, country_code, others, topic_tags, sentiment_score,
+                       (country_code = {pa} AND {pb} = ANY(others))
+                       OR (country_code = {pb} AND {pa} = ANY(others)) AS linked
+                FROM linking
+            ) marked
+            GROUP BY story
         )
         SELECT count(*) AS total,
-               count(*) FILTER (WHERE country_code = {pa} OR {pa} = ANY(others)) AS n_a,
-               count(*) FILTER (WHERE country_code = {pb} OR {pb} = ANY(others)) AS n_b,
+               count(*) FILTER (WHERE has_a) AS n_a,
+               count(*) FILTER (WHERE has_b) AS n_b,
                count(*) FILTER (WHERE linked) AS n,
-               avg(sentiment_score) FILTER (WHERE linked) AS tone,
+               avg(tone) AS tone,
                {topic_counts}
-        FROM marked
+        FROM stories
     """
     return query, *args
 
@@ -288,17 +328,17 @@ def detail_names_query(
     args.append(limit)
     query = f"""
         WITH linked AS (
-            SELECT id, persons, orgs FROM articles
+            SELECT {_STORY} AS story, persons, orgs FROM articles a
             WHERE {" AND ".join(conditions)}
         )
-        SELECT name, type, count(DISTINCT id) AS n
+        SELECT name, type, count(DISTINCT story) AS n
         FROM (
-            SELECT id, unnest(persons) AS name, 'person' AS type FROM linked
+            SELECT story, unnest(persons) AS name, 'person' AS type FROM linked
             UNION ALL
-            SELECT id, unnest(orgs) AS name, 'org' AS type FROM linked
+            SELECT story, unnest(orgs) AS name, 'org' AS type FROM linked
         ) mentions
         GROUP BY name, type
-        HAVING count(DISTINCT id) >= {MIN_SHARED_STORIES}
+        HAVING count(DISTINCT story) >= {MIN_SHARED_STORIES}
         ORDER BY n DESC, name
         LIMIT ${len(args)}
     """
@@ -308,13 +348,15 @@ def detail_names_query(
 def detail_themes_query(
     a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
 ) -> tuple[Any, ...]:
-    """SQL and arguments for the GDELT themes of the pair's stories, commonest first."""
+    """SQL and arguments for the GDELT themes of the pair's stories, in most stories first."""
     conditions, args = _pair_conditions(a, b, start, end, topic)
     args.append(limit)
     query = f"""
-        SELECT theme, count(*) AS n
-        FROM articles, unnest(themes) AS theme
-        WHERE {" AND ".join(conditions)}
+        SELECT theme, count(DISTINCT story) AS n
+        FROM (
+            SELECT {_STORY} AS story, themes FROM articles a
+            WHERE {" AND ".join(conditions)}
+        ) linked, unnest(themes) AS theme
         GROUP BY theme
         ORDER BY n DESC, theme
         LIMIT ${len(args)}

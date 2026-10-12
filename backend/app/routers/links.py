@@ -116,7 +116,7 @@ async def get_links(
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
 
-    cache_k = f"db:links:v1:{window.key}:{tag or ''}:{rank}:{limit}"
+    cache_k = f"db:links:v2:{window.key}:{tag or ''}:{rank}:{limit}"
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
         return [Link.model_validate(link) for link in cached]
@@ -151,7 +151,7 @@ async def get_link(
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
 
-    cache_k = f"db:links:detail:v1:{a}:{b}:{window.key}:{tag or ''}"
+    cache_k = f"db:links:detail:v2:{a}:{b}:{window.key}:{tag or ''}"
     cached = await get_cached(cache_k)
     if cached is not None:
         return LinkDetail.model_validate(cached)
