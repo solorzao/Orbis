@@ -6,8 +6,9 @@ import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } 
 import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
+import { pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
-import { useAgent } from "@/hooks/useAgent";
+import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
@@ -19,7 +20,7 @@ import TimelineCapsule from "@/components/TimelineCapsule";
 import NewsPanel from "@/components/NewsPanel";
 import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
-import AgentPanel from "@/components/AgentPanel";
+import CoPilot from "@/components/CoPilot";
 import SidePanel from "@/components/SidePanel";
 import Sky from "@/components/Sky";
 import OrbitRings from "@/components/OrbitRings";
@@ -65,10 +66,7 @@ export default function Home() {
   }, []);
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
-    if (action.type === "flyTo" && globeControlsRef.current) {
-      const altitude = action.zoom ? 300 / action.zoom : 2.0;
-      globeControlsRef.current.flyTo(action.lat, action.lng, altitude);
-    }
+    globeControlsRef.current?.flyTo(action.lat, action.lng, 2.0);
   }, []);
 
   const {
@@ -85,7 +83,7 @@ export default function Home() {
     if (globeControlsRef.current && citation.lat && citation.lng) {
       globeControlsRef.current.flyTo(citation.lat, citation.lng, 1.5);
     }
-    if (citation.url) {
+    if (isWebUrl(citation.url)) {
       window.open(citation.url, "_blank", "noopener,noreferrer");
     }
   }, []);
@@ -284,6 +282,15 @@ export default function Home() {
 
   // Stories tab: the open places, then the active place's stories
   const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
+
+  // Co-pilot: "Show stories here" takes the click path for the dot at an action's place.
+  const showStoriesFor = useCallback(
+    (action: GlobeAction) => {
+      const point = pointAt(points, action.lat, action.lng);
+      return point ? () => handlePointClick(point) : null;
+    },
+    [points, handlePointClick],
+  );
   const storiesTab = (
     <>
       <RecentPlaces
@@ -361,22 +368,29 @@ export default function Home() {
         storiesCount={panelQueue.length}
         storiesRef={storiesRef}
         copilot={
-          <AgentPanel
+          <CoPilot
             messages={agentMessages}
             isLoading={agentLoading}
             isDisabled={agentDisabled}
             activeTools={activeTools}
+            context={{
+              place: expandedPanel?.point.locationName,
+              topic: activeTopic,
+              window: timeWindow,
+            }}
             onAsk={agentAsk}
             onStop={agentStop}
             onClear={agentClear}
             onCitationClick={handleCitationClick}
+            onFlyTo={handleGlobeAction}
+            showStoriesFor={showStoriesFor}
           />
         }
         stories={storiesTab}
       />
 
-      {/* Bottom row: layers and the timeline. After the side panel: the CSS
-          keeps it clear of the panel, and above the sheet, by sibling selectors. */}
+      {/* Bottom row: layers and the timeline, centred on the page. After the side
+          panel: below 1180px the CSS lifts it above the sheet by sibling selectors. */}
       <BottomBar>
         <LayerSwitcher
           layer={globeLayer}

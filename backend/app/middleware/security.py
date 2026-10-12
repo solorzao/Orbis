@@ -133,6 +133,20 @@ _INJECTION_PATTERNS = re.compile(
 )
 
 
+# Characters that render as nothing: C1 controls, the Arabic letter mark,
+# zero-width and bidi marks, word joiners and isolates, the BOM, and Unicode
+# tags. They can reorder what a reader sees, or hide an injection phrase from
+# the patterns above ("Ig<tag g>nore previous instructions").
+_INVISIBLE = re.compile(
+    r"[\x80-\x9f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\U000e0000-\U000e007f]"
+)
+
+
+def strip_invisible(text: str) -> str:
+    """Remove the characters that render as nothing (see ``_INVISIBLE``)."""
+    return _INVISIBLE.sub("", text)
+
+
 def sanitise_text(text: str, max_length: int = 200) -> str:
     """Sanitise a user-provided string before it enters an LLM prompt.
 
@@ -148,8 +162,15 @@ def sanitise_text(text: str, max_length: int = 200) -> str:
 
 
 def has_injection_pattern(text: str) -> bool:
-    """Return True if *text* contains a likely prompt-injection phrase."""
-    return bool(_INJECTION_PATTERNS.search(text))
+    """Return True if *text* contains a likely prompt-injection phrase.
+
+    Invisible characters can't hide one: the phrase is looked for with them
+    removed ("Ig<tag>nore") and read as spaces ("Ignore<tag>previous").
+    """
+    return any(
+        _INJECTION_PATTERNS.search(variant)
+        for variant in (text, _INVISIBLE.sub("", text), _INVISIBLE.sub(" ", text))
+    )
 
 
 # ---------------------------------------------------------------------------

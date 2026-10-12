@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import type { Topic } from "@/types/news";
 
 export interface Citation {
+  /** The number the answer cites it by ("[4]"); absent from older answers. */
+  index?: number;
   title: string;
   url: string;
   source_name: string;
@@ -10,11 +13,93 @@ export interface Citation {
   lng: number;
 }
 
+/** A place the answer names; the backend sends only fly-tos (agent._normalize_globe_actions). */
 export interface GlobeAction {
-  type: "flyTo" | "highlight";
+  type: "flyTo";
   lat: number;
   lng: number;
-  zoom?: number;
+  /** The place's name, cleaned on receipt (cleanLabel); may be empty. */
+  label?: string;
+}
+
+/**
+ * What the visitor sees, sent with a question to scope the co-pilot (backend
+ * AskRequest.context). Each field is optional; the window's bounds are ISO
+ * times taken when the question is asked.
+ */
+export interface AskContext {
+  place?: string;
+  topic?: Exclude<Topic, "All">;
+  startTime?: string;
+  endTime?: string;
+}
+
+const MAX_LABEL = 80;
+const MAX_TITLE = 300;
+const MAX_ACTIONS = 3;
+
+// Characters that render as nothing, as the backend strips them (security.strip_invisible,
+// and sanitise_text for C0): C0 controls but tab and line breaks, C1, the Arabic letter
+// mark, zero-width and bidi marks, word joiners and isolates, the BOM and Unicode tags.
+const INVISIBLE =
+  /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
+
+/**
+ * Model- or source-controlled text made safe to show as one line: control,
+ * bidi and zero-width characters go (they could reorder or hide what a pill
+ * says), whitespace collapses, and it is capped at `max` characters.
+ */
+export function cleanLabel(s: unknown, max = MAX_LABEL): string {
+  if (typeof s !== "string") return "";
+  return s.replace(INVISIBLE, "").replace(/\s+/g, " ").trim().slice(0, max).trimEnd();
+}
+
+/** Whether `url` is an http(s) link: the only kind a citation may open. */
+export function isWebUrl(url: unknown): url is string {
+  return typeof url === "string" && /^https?:\/\//i.test(url);
+}
+
+function isCoordinate(v: unknown, limit: number): v is number {
+  return typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= limit;
+}
+
+/** The done event's actions: well-formed fly-tos only, at most three, labels cleaned. */
+function readGlobeActions(raw: unknown): GlobeAction[] {
+  if (!Array.isArray(raw)) return [];
+  const actions: GlobeAction[] = [];
+  for (const a of raw) {
+    if (!a || a.type !== "flyTo" || !isCoordinate(a.lat, 90) || !isCoordinate(a.lng, 180)) continue;
+    actions.push({ type: "flyTo", lat: a.lat, lng: a.lng, label: cleanLabel(a.label) });
+    if (actions.length === MAX_ACTIONS) break;
+  }
+  return actions;
+}
+
+/** The done event's citations, with their titles and sources cleaned for display. */
+function readCitations(raw: unknown): Citation[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((c) => c && typeof c === "object")
+    .map((c) => ({
+      index: Number.isInteger(c.index) && c.index > 0 ? c.index : undefined,
+      title: cleanLabel(c.title, MAX_TITLE),
+      url: isWebUrl(c.url) ? c.url : "", // a model-written link could be javascript:
+      source_name: cleanLabel(c.source_name),
+      lat: typeof c.lat === "number" ? c.lat : 0,
+      lng: typeof c.lng === "number" ? c.lng : 0,
+    }));
+}
+
+/** The request's context in the backend's field names, or undefined when it has none. */
+function contextBody(context?: AskContext) {
+  if (!context) return undefined;
+  const body = {
+    place: context.place || undefined,
+    topic: context.topic || undefined,
+    start_time: context.startTime || undefined,
+    end_time: context.endTime || undefined,
+  };
+  return Object.values(body).some(Boolean) ? body : undefined;
 }
 
 export interface AgentMessage {
@@ -42,7 +127,7 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
   onGlobeActionRef.current = onGlobeAction;
 
   const ask = useCallback(
-    async (question: string) => {
+    async (question: string, context?: AskContext) => {
       if (!question.trim() || isLoading) return;
 
       const userMsg: AgentMessage = {
@@ -74,6 +159,7 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
           body: JSON.stringify({
             question: question.trim(),
             conversation_id: conversationIdRef.current,
+            context: contextBody(context),
           }),
           signal: controller.signal,
         });
@@ -120,8 +206,8 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
                     ),
                   );
                 } else if (currentEvent === "done") {
-                  const citations: Citation[] = data.citations || [];
-                  const globeActions: GlobeAction[] = data.globe_actions || [];
+                  const citations = readCitations(data.citations);
+                  const globeActions = readGlobeActions(data.globe_actions);
                   const toolsUsed: string[] = data.tools_used || [];
 
                   setMessages((prev) =>

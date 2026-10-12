@@ -5,23 +5,33 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import AsyncGenerator
+from datetime import datetime
+from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+)
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
-from app.middleware.security import has_injection_pattern, sanitise_text
+from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.services.agent import (
     _OFF_TOPIC_ANSWER,
     _PAUSED_ANSWER,
+    ScreenScope,
+    ScreenTopic,
     _build_context,
     _collect_urls,
     _collect_urls_from_history,
     _enrich_citations,
     admit_ask,
     ask,
+    clean_screen_context,
     execute_retrieval,
     plan_retrieval,
     synthesize_answer,
@@ -44,9 +54,35 @@ _UUID_RE = __import__("re").compile(
 _MAX_QUESTION_LENGTH = 500
 
 
+def _none_if_invalid(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    """Drop a field that fails validation rather than reject the question."""
+    try:
+        return handler(value)
+    except ValidationError:
+        return None
+
+
+class ScreenContext(BaseModel):
+    """What the visitor sees: the selected place, the topic filter and the time window.
+
+    Each field is optional, and one that fails validation is dropped (None).
+    ``clean_screen_context`` then cleans the place and checks the window.
+    """
+
+    place: str | None = Field(None, max_length=100)  # the cell's place name, "Madrid, Spain"
+    topic: ScreenTopic | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+    _drop_invalid = field_validator("*", mode="wrap")(_none_if_invalid)
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=_MAX_QUESTION_LENGTH)
     conversation_id: str | None = None
+    context: ScreenContext | None = None
+
+    _drop_invalid_context = field_validator("context", mode="wrap")(_none_if_invalid)
 
 
 class AskResponse(BaseModel):
@@ -70,7 +106,8 @@ def _validate_request(body: AskRequest) -> str:
     if body.conversation_id and not _UUID_RE.match(body.conversation_id):
         raise HTTPException(status_code=422, detail="conversation_id must be a valid UUID.")
 
-    question = sanitise_text(body.question, max_length=_MAX_QUESTION_LENGTH)
+    # Hidden characters go first, so they can't split an injection phrase.
+    question = sanitise_text(strip_invisible(body.question), max_length=_MAX_QUESTION_LENGTH)
     if not question:
         raise HTTPException(status_code=422, detail="Question is empty after sanitization.")
 
@@ -79,6 +116,14 @@ def _validate_request(body: AskRequest) -> str:
         raise HTTPException(status_code=400, detail="Your question could not be processed.")
 
     return question
+
+
+def _screen_scope(body: AskRequest) -> ScreenScope | None:
+    """The request's screen context, cleaned for the planner (None if absent or empty)."""
+    c = body.context
+    if c is None:
+        return None
+    return clean_screen_context(c.place, c.topic, c.start_time, c.end_time)
 
 
 # ---------------------------------------------------------------------------
@@ -158,9 +203,10 @@ async def _save_history(
 async def ask_endpoint(body: AskRequest) -> AskResponse:
     """Answer a question using the full agent pipeline."""
     question = _validate_request(body)
+    scope = _screen_scope(body)
     conv_id, history = await _load_history(body.conversation_id)
 
-    result = await ask(question, history)
+    result = await ask(question, history, scope)
 
     await _save_history(conv_id, history, question, result["answer"], result.get("citations"))
 
@@ -182,13 +228,14 @@ async def ask_endpoint(body: AskRequest) -> AskResponse:
 async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
     """Stream the agent pipeline as SSE events."""
     question = _validate_request(body)
+    scope = _screen_scope(body)
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         conv_id, history = await _load_history(body.conversation_id)
 
         # Step 1: Plan, unless the budget is spent (an admitted ask runs to the end)
         if await admit_ask():
-            tool_calls = await plan_retrieval(question, history)
+            tool_calls = await plan_retrieval(question, history, scope)
             fixed_answer = None if tool_calls else _OFF_TOPIC_ANSWER
         else:
             tool_calls, fixed_answer = [], _PAUSED_ANSWER

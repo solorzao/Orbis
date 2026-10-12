@@ -5,6 +5,7 @@ const SIZES = [
   { width: 1920, height: 1080 },
   { width: 1440, height: 900 },
   { width: 1280, height: 800 },
+  { width: 1180, height: 800 }, // the narrowest floating panel
   { width: 1024, height: 768 },
   { width: 768, height: 1024 }, // one-row bar, at its tightest
   { width: 700, height: 800 }, // two-row bar, motto still shown
@@ -48,6 +49,16 @@ async function boxes(page: Page, ids: string[]) {
 }
 
 const GAP = 12;
+/** How far the capsule's centre may sit from the viewport's: it centres on the page. */
+const CENTRED_PX = 2;
+
+function expectCentred(timeline: { x: number; w: number }, width: number, state: string) {
+  expect(
+    Math.abs(timeline.x + timeline.w / 2 - width / 2),
+    `${state}: capsule centred`,
+  ).toBeLessThanOrEqual(CENTRED_PX);
+}
+
 function tooClose(a: Box, b: Box) {
   return !(
     a.x + a.w + GAP <= b.x ||
@@ -110,13 +121,16 @@ for (const size of SIZES) {
     const barBottom = Math.max(...TOP_BAR.map((id) => b[id].y + b[id].h));
     const panel = b["side-panel"];
     expect(panel.y - barBottom, "side panel below the top bar").toBeGreaterThanOrEqual(16);
-    // ...and the bottom row ends 24px left of it: its grid never slides under the panel.
-    for (const id of ["layer-switcher", "timeline"]) {
-      expect(b[id].x + b[id].w, `${id} left of the side panel`).toBeLessThanOrEqual(panel.x - 24);
-    }
+    // The bottom row spans the width, its capsule centred on the page under the globe
+    // and the topics; the panel ends above it (its 124px bottom against the row's height),
+    // so they keep apart vertically.
+    expectCentred(b["timeline"], size.width, state);
+    expect(b["timeline"].w, "capsule at its full width").toBeCloseTo(640, 0);
+    expect(b["timeline"].y - (panel.y + panel.h), "capsule below the panel").toBeGreaterThanOrEqual(
+      GAP,
+    );
 
-    // Collapsed, the panel gives way to its pill and the bottom row spans the width again,
-    // the capsule in the middle.
+    // Collapsed, the panel gives way to its pill; the capsule stays where it was.
     await page.getByTestId("side-collapse").click();
     await expect(side).toHaveAttribute("data-open", "false");
     const collapsed = await expectApart(
@@ -126,9 +140,7 @@ for (const size of SIZES) {
       regionsAt(size.width, "side-open"),
     );
     const timeline = collapsed["timeline"];
-    expect(Math.abs(timeline.x + timeline.w / 2 - size.width / 2), "capsule centred").toBeLessThan(
-      1,
-    );
+    expectCentred(timeline, size.width, "side panel collapsed");
     expect(timeline.w, "capsule at its full width").toBeCloseTo(640, 0);
   });
 }
@@ -146,6 +158,7 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
       const sheetBox = (await side.boundingBox())!;
       const timeline = (await page.getByTestId("timeline").boundingBox())!;
       expect(sheetBox.y - (timeline.y + timeline.height)).toBeCloseTo(12, 0);
+      expectCentred({ x: timeline.x, w: timeline.width }, size.width, "stacked");
       if (size.width > NARROW_MAX) {
         const l = (await layers.boundingBox())!;
         expect(timeline.y - (l.y + l.height)).toBeCloseTo(12, 0);
@@ -204,10 +217,11 @@ test.describe("before hydration (server HTML, no JavaScript)", () => {
     await expect(side).not.toHaveAttribute("data-open");
     await expect(side).toBeVisible();
     await expect(page.getByTestId("side-open")).not.toBeVisible();
-    // The bottom row already ends clear of it.
+    // The capsule is already centred, below it.
     const panel = (await side.boundingBox())!;
     const timeline = (await page.getByTestId("timeline").boundingBox())!;
-    expect(timeline.x + timeline.width).toBeLessThanOrEqual(panel.x - 24);
+    expectCentred({ x: timeline.x, w: timeline.width }, 1440, "before hydration");
+    expect(timeline.y - (panel.y + panel.height)).toBeGreaterThanOrEqual(GAP);
   });
 
   test("below 1180px the sheet shows folded to its tab bar", async ({ page }) => {
