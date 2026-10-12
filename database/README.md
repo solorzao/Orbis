@@ -32,6 +32,7 @@ PostgreSQL schema for the Orbis globe news explorer, powered by **Supabase** wit
 | `orgs`            | TEXT[]                  | GKG organisations; default `'{}'`     |
 | `names`           | TEXT[]                  | Most frequent GKG proper names; default `'{}'` |
 | `counts`          | JSONB                   | GKG typed counts (killed, arrested, ...); default `'[]'` |
+| `mentioned_countries` | TEXT[]              | ISO 3166-1 alpha-2 codes of the countries the article mentions (GDELT country-level locations), filled by ingestion; links between places are computed from it; default `'{}'` (migration 011) |
 
 ### SQL Functions
 
