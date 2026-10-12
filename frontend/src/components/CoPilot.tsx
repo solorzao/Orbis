@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   cleanLabel,
   type AgentMessage as AgentMessageType,
@@ -11,6 +11,9 @@ import {
 import { windowBounds, windowLabel, type TimeWindow } from "@/lib/timeWindow";
 import type { Topic } from "@/types/news";
 import AgentMessage from "./AgentMessage";
+
+/** Within this of the bottom, the log follows new messages. */
+const FOLLOW_SLACK_PX = 24;
 
 /** What the visitor sees, live: the co-pilot's context pills read it. */
 export interface ScreenContext {
@@ -90,12 +93,40 @@ export default function CoPilot({
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  // Whether the log follows the latest message (the visitor has not scrolled
+  // back), and where it was when it last had a box.
+  const following = useRef(true);
+  const lastTop = useRef(0);
 
-  // Follow the conversation as it grows
+  /** Scroll to the latest message, or back to the visitor's place. */
+  const settle = useCallback(() => {
+    const log = logRef.current;
+    if (!log || log.clientHeight === 0) return; // hidden (another tab, a folded sheet): no box
+    log.scrollTop = following.current ? log.scrollHeight : lastTop.current;
+  }, []);
+
+  const onScroll = () => {
+    const log = logRef.current;
+    if (!log || log.clientHeight === 0) return;
+    following.current = log.scrollHeight - log.scrollTop - log.clientHeight <= FOLLOW_SLACK_PX;
+    lastTop.current = log.scrollTop;
+    log.classList.toggle("scrolled", log.scrollTop > 4);
+  };
+
+  // New messages, tokens and tool lines.
+  useEffect(() => {
+    if (following.current) settle();
+  }, [messages, activeTools, settle]);
+
+  // Shown again, or resized: what landed while the tab was hidden comes into
+  // view, and a hidden log's lost offset comes back.
   useEffect(() => {
     const log = logRef.current;
-    if (log) log.scrollTop = log.scrollHeight;
-  }, [messages, activeTools]);
+    if (!log || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(settle);
+    observer.observe(log);
+    return () => observer.disconnect();
+  }, [settle]);
   // Pills left out of the next question, by field and the label they had: a
   // new place or window is in again.
   const [removed, setRemoved] = useState<Partial<Record<Field, string>>>({});
@@ -114,6 +145,7 @@ export default function CoPilot({
   const ask = (question: string) => {
     const q = question.trim();
     if (!q || busy) return;
+    following.current = true; // the answer comes into view
     onAsk(q, askContext(place, topic, sees("window") ? context.window : undefined));
     setRemoved({}); // for the next question only
   };
@@ -163,7 +195,7 @@ export default function CoPilot({
         </p>
       )}
 
-      <div ref={logRef} className="cp-log" data-testid="agent-log">
+      <div ref={logRef} className="cp-log" data-testid="agent-log" onScroll={onScroll}>
         {messages.length === 0 && !isDisabled && (
           <div className="cp-empty">
             <h3>Ask about the news</h3>

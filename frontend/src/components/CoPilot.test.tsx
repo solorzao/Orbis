@@ -324,6 +324,111 @@ describe("CoPilot", () => {
     });
   });
 
+  describe("auto-scroll", () => {
+    /** The log's box, as a browser lays it out; a hidden (display: none) log has none. */
+    function layOut(log: HTMLElement) {
+      const box = { clientHeight: 200, scrollHeight: 1000, top: 0 };
+      Object.defineProperties(log, {
+        clientHeight: { configurable: true, get: () => box.clientHeight },
+        scrollHeight: { configurable: true, get: () => box.scrollHeight },
+        scrollTop: {
+          configurable: true,
+          get: () => box.top,
+          set: (v: number) => {
+            if (box.clientHeight === 0) return;
+            box.top = Math.max(0, Math.min(v, box.scrollHeight - box.clientHeight));
+          },
+        },
+      });
+      return box;
+    }
+
+    let resized = () => {};
+    function stubResizeObserver() {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(callback: () => void) {
+            resized = () => callback();
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+    }
+
+    function longer(by: string): AgentMessage[] {
+      const [q, a] = answer();
+      return [q, { ...a, content: `${a.content} ${by}` }];
+    }
+
+    it("follows the latest message", () => {
+      stubResizeObserver();
+      const { props, rerender } = renderCoPilot({ messages: answer() });
+      const box = layOut(screen.getByTestId("agent-log"));
+      resized();
+      expect(box.top).toBe(800);
+
+      box.scrollHeight = 1300;
+      rerender(<CoPilot {...props} messages={longer("More.")} />);
+      expect(box.top).toBe(1100);
+    });
+
+    it("shows an answer that landed while the tab was hidden when it is shown again", () => {
+      stubResizeObserver();
+      const { props, rerender } = renderCoPilot({ messages: answer() });
+      const box = layOut(screen.getByTestId("agent-log"));
+      resized();
+
+      box.clientHeight = 0; // Stories tab: the log is display: none
+      resized();
+      box.scrollHeight = 1600;
+      rerender(<CoPilot {...props} messages={longer("A long answer.")} />);
+      expect(box.top).toBe(800); // nothing to scroll while hidden
+
+      box.clientHeight = 200; // back on Co-pilot
+      resized();
+      expect(box.top).toBe(1400);
+    });
+
+    it("keeps the reader's place when they had scrolled back", () => {
+      stubResizeObserver();
+      const { props, rerender } = renderCoPilot({ messages: answer() });
+      const log = screen.getByTestId("agent-log");
+      const box = layOut(log);
+      resized();
+
+      box.top = 300;
+      fireEvent.scroll(log);
+      expect(log).toHaveClass("scrolled"); // the top edge fades
+      box.scrollHeight = 1100;
+      rerender(<CoPilot {...props} messages={longer("More.")} />);
+      expect(box.top).toBe(300);
+
+      box.clientHeight = 0;
+      box.top = 0; // some browsers drop the offset with the box
+      resized();
+      box.clientHeight = 200;
+      resized();
+      expect(box.top).toBe(300);
+    });
+
+    it("goes back to the latest message when the visitor asks", () => {
+      stubResizeObserver();
+      const { props, rerender } = renderCoPilot({ messages: answer() });
+      const log = screen.getByTestId("agent-log");
+      const box = layOut(log);
+      resized();
+      box.top = 100;
+      fireEvent.scroll(log);
+
+      ask("And Ghana?");
+      box.scrollHeight = 1200;
+      rerender(<CoPilot {...props} messages={longer("Ghana.")} />);
+      expect(box.top).toBe(1000);
+    });
+  });
+
   describe("composer", () => {
     it("asks the question and empties the input", () => {
       const { onAsk } = renderCoPilot();

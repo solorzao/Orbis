@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
+  buildAgentSSE,
   clickPlace,
   gotoStillGlobe,
   mockAllApiRoutes,
@@ -180,6 +181,53 @@ test.describe("Agent Panel", () => {
 
     expect((await request).postDataJSON().question).toBe("What's the biggest story right now?");
     await expect(page.locator(".msg.user")).toHaveText("What's the biggest story right now?");
+  });
+
+  test("an answer that lands while Stories is open is in view on coming back", async ({ page }) => {
+    let release = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const answer = Array.from({ length: 30 }, (_, i) => `Paragraph ${i + 1} on France.`).join(
+      "\n\n",
+    );
+    await page.route("**/api/agent/ask/stream", async (route) => {
+      await released;
+      await route.fulfill({
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+        body: buildAgentSSE({ answer }),
+      });
+    });
+
+    await openCopilot(page);
+    await askQuestion(page, "Tell me everything about France");
+    await page.getByTestId("side-tab-stories").click();
+    release();
+    await expect(page.getByText("Paragraph 30 on France.")).toBeAttached();
+
+    await page.getByTestId("side-tab-copilot").click();
+    const log = page.getByTestId("agent-log");
+    await expect(page.getByText("Paragraph 30 on France.")).toBeInViewport();
+    expect(
+      await log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
+    ).toBeLessThan(2);
+  });
+
+  test("a conversation scrolled back keeps its place across tabs", async ({ page }) => {
+    const answer = Array.from({ length: 30 }, (_, i) => `Paragraph ${i + 1} on France.`).join(
+      "\n\n",
+    );
+    await mockAgentRoute(page, { answer });
+    await openCopilot(page);
+    await askQuestion(page, "Tell me everything about France");
+    await expect(page.getByText("Paragraph 30 on France.")).toBeInViewport();
+
+    const log = page.getByTestId("agent-log");
+    await log.evaluate((el) => el.scrollTo({ top: 120 }));
+    await expect.poll(() => log.evaluate((el) => el.scrollTop)).toBe(120);
+
+    await page.getByTestId("side-tab-stories").click();
+    await page.getByTestId("side-tab-copilot").click();
+    await expect.poll(() => log.evaluate((el) => el.scrollTop)).toBe(120);
   });
 });
 

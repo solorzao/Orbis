@@ -786,6 +786,10 @@ kbd {
   scrollbar-width: thin;
   scrollbar-color: rgba(214, 218, 255, 0.18) transparent;
 }
+.cp-log.scrolled {
+  -webkit-mask-image: linear-gradient(transparent, #000 28px);
+  mask-image: linear-gradient(transparent, #000 28px);
+}
 .cp-empty {
   padding: 24px 16px;
   text-align: center;
