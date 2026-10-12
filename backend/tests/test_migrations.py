@@ -14,6 +14,7 @@ CONSTANT = r"(?:'[^']*'|-?\d+(?:\.\d+)?|true|false)"
 COLUMN_MIGRATIONS = {
     "009_gkg_fields.sql": ["themes", "persons", "orgs", "names", "counts"],
     "011_mentioned_countries.sql": ["mentioned_countries"],
+    "012_story_key.sql": ["story_key"],
 }
 
 
@@ -34,12 +35,13 @@ def test_column_migration_fails_fast_on_locks(name):
     ("name", "expected"), COLUMN_MIGRATIONS.items(), ids=list(COLUMN_MIGRATIONS)
 )
 def test_column_migration_adds_columns_without_a_table_rewrite(name, expected):
-    """A constant default keeps ADD COLUMN catalog-only; a volatile one rewrites the table."""
+    """A nullable column or a constant default keeps ADD COLUMN catalog-only; a volatile
+    default rewrites the table."""
     sql = _sql_without_comments(name)
     columns = re.findall(
         r"ADD COLUMN (?:IF NOT EXISTS )?(\w+)\s+(.*?)\s*(?=,\s*ADD COLUMN|;)", sql, re.DOTALL
     )
     assert [column for column, _ in columns] == expected
     for column, definition in columns:
-        pattern = rf"[\w\[\]]+\s+NOT NULL\s+DEFAULT\s+{CONSTANT}"
+        pattern = rf"[\w\[\]]+(?:\s+NOT NULL\s+DEFAULT\s+{CONSTANT})?"
         assert re.fullmatch(pattern, definition, re.IGNORECASE), f"{column}: {definition}"
