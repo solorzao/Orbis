@@ -242,3 +242,23 @@ export function actionCountries(
   }
   return codes;
 }
+
+/**
+ * What the Links layer says when it draws nothing: an empty window, or links
+ * that could not load. Nothing while it is off or loading, or has arcs.
+ */
+export function linksStatus({
+  on,
+  links,
+  loading,
+  error,
+}: {
+  on: boolean;
+  links: readonly CountryLink[];
+  loading: boolean;
+  error: boolean;
+}): string | null {
+  if (!on || loading) return null;
+  if (error) return "Links unavailable right now";
+  return links.length === 0 ? "No links in this window" : null;
+}

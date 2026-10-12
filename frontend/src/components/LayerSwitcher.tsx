@@ -31,13 +31,16 @@ interface LayerSwitcherProps {
   onLinksChange: (on: boolean) => void;
   rank: LinkRank;
   onRankChange: (rank: LinkRank) => void;
+  /** While Links is on: why it draws nothing ("No links in this window"), or null. */
+  linksStatus?: string | null;
 }
 
 /**
  * Layer switcher (mockup .layers), bottom left of the bottom row. An
  * unavailable layer stays focusable (aria-disabled) so its reason can be read.
- * While Links is on, its rank switch floats beside the pill (soft-orbit.css),
- * outside it, so the bottom row keeps its size and the timeline its place.
+ * While Links is on, its rank switch (and its status, when it draws nothing)
+ * float beside the pill (soft-orbit.css), outside it, so the bottom row keeps
+ * its size and the timeline its place.
  */
 export default function LayerSwitcher({
   layer,
@@ -47,6 +50,7 @@ export default function LayerSwitcher({
   onLinksChange,
   rank,
   onRankChange,
+  linksStatus = null,
 }: LayerSwitcherProps) {
   const id = useId();
   return (
@@ -116,6 +120,12 @@ export default function LayerSwitcher({
             ))}
           </div>
         </div>
+      )}
+      {links && linksStatus && (
+        // Read out by the page's announcer, so no live region here.
+        <p className="pillbar links-status" data-testid="links-status">
+          {linksStatus}
+        </p>
       )}
     </div>
   );

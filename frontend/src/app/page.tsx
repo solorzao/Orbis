@@ -30,6 +30,7 @@ import {
   actionCountries,
   linkKey,
   linkedCountries,
+  linksStatus,
   toLinkDetail,
   type LinkRank,
 } from "@/lib/links";
@@ -56,6 +57,7 @@ import OrbitRings from "@/components/OrbitRings";
 import GlobeHud from "@/components/GlobeHud";
 import HoverCard from "@/components/HoverCard";
 import ArcPill from "@/components/ArcPill";
+import LinksChip from "@/components/LinksChip";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -72,7 +74,10 @@ export default function Home() {
   // The Links overlay: co-coverage arcs over either base layer, ranked by lift or count.
   const [linksOn, setLinksOn] = useState(false);
   const [linkRank, setLinkRank] = useState<LinkRank>("lift");
-  const { links } = useLinks(timeWindow, activeTopic, linkRank, linksOn);
+  const linksResult = useLinks(timeWindow, activeTopic, linkRank, linksOn);
+  const { links } = linksResult;
+  // Said when Links draws nothing: an empty window, or links that failed to load.
+  const linksNote = linksStatus({ on: linksOn, ...linksResult });
   // The arc under the pointer, named by the arc pill.
   const [hoveredLink, setHoveredLink] = useState<CountryLink | null>(null);
   // The timeline's replay: the status pill says Replay rather than flashing each step's load.
@@ -610,7 +615,10 @@ export default function Home() {
           onLinksChange={setLinksOn}
           rank={linkRank}
           onRankChange={setLinkRank}
+          linksStatus={linksNote}
         />
+        {/* Where the layers are hidden (phones), Links has a chip of its own. */}
+        {linksOn && <LinksChip status={linksNote} onOff={() => setLinksOn(false)} />}
         <TimelineCapsule
           timeWindow={timeWindow}
           onChange={changeWindow}
@@ -621,9 +629,11 @@ export default function Home() {
         />
       </BottomBar>
 
-      {/* The hover card's label for screen readers: always present, so a new label is read */}
+      {/* For screen readers, always present so each new message is read: the hover
+          card's label, and the Links status. Each in its own node, read when it changes. */}
       <p className="sr-only" aria-live="polite" data-testid="hover-announcer">
-        {cardPoint ? cardLabel(cardPoint) : ""}
+        <span>{cardPoint ? cardLabel(cardPoint) : ""}</span>
+        <span>{linksNote ?? ""}</span>
       </p>
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}

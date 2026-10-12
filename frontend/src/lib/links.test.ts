@@ -11,6 +11,7 @@ import {
   linkKey,
   linkPairLabel,
   linkedCountries,
+  linksStatus,
   linkTopic,
   toCountryLinks,
   toLinkDetail,
@@ -286,5 +287,24 @@ describe("actionCountries", () => {
     expect(actionCountries([fly(-30, 150), fly(10, 10), fly(40.71, -74.0)], points)).toEqual([
       "US",
     ]);
+  });
+});
+
+describe("linksStatus", () => {
+  const some = [link()];
+
+  it("says nothing while Links is off or loading, or when there are arcs", () => {
+    expect(linksStatus({ on: false, links: [], loading: false, error: true })).toBeNull();
+    expect(linksStatus({ on: true, links: [], loading: true, error: false })).toBeNull();
+    expect(linksStatus({ on: true, links: some, loading: false, error: false })).toBeNull();
+  });
+
+  it("says when the window has no links, or they could not load", () => {
+    expect(linksStatus({ on: true, links: [], loading: false, error: false })).toBe(
+      "No links in this window",
+    );
+    expect(linksStatus({ on: true, links: [], loading: false, error: true })).toBe(
+      "Links unavailable right now",
+    );
   });
 });

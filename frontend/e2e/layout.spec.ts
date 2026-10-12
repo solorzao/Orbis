@@ -246,6 +246,50 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
   });
 }
 
+// With Links on in an empty window, its status floats with the rank switch (above it
+// from 1180px, left of the layers once they stack): regions that must keep apart too.
+for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
+  test(`the Links status keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await settle(page, size, (p) =>
+      p.route(
+        (url) => url.pathname === "/api/links",
+        (route) => route.fulfill({ json: [] }),
+      ),
+    );
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await expect(page.getByTestId("links-status")).toBeVisible();
+    const regions = [...regionsAt(size.width), "link-rank", "links-status"];
+    const b = await expectApart(page, size.width, "Links status", regions);
+    expectCentred(b["timeline"], size.width, "Links status");
+    if (size.width < SHEET_BELOW) {
+      await page.getByTestId("side-collapse").click();
+      await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+      await expectApart(page, size.width, "Links status, sheet open", regions);
+    }
+  });
+}
+
+// Where the layers are hidden, Links on brings a Links ✕ chip above the capsule.
+for (const size of SIZES.filter((s) => s.width <= NARROW_MAX)) {
+  test(`the Links chip keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({ page }) => {
+    // Turn Links on where the layers show, then narrow the window.
+    await settle(page, { width: 800, height: size.height });
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await page.setViewportSize(size);
+    const chip = page.getByTestId("links-chip");
+    await expect(chip).toBeVisible();
+    const regions = [...regionsAt(size.width), "links-chip"];
+    const b = await expectApart(page, size.width, "Links chip", regions);
+    expect(b["timeline"].y - (b["links-chip"].y + b["links-chip"].h)).toBeCloseTo(GAP, 0);
+    expect(b["links-chip"].x + b["links-chip"].w / 2).toBeCloseTo(size.width / 2, 0);
+    await page.getByTestId("side-collapse").click();
+    await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+    await expectApart(page, size.width, "Links chip, sheet open", regions);
+  });
+}
+
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {
   const size = { width: 900, height: 300 }; // 100vh - 260px would be 40px
   await settle(page, size);

@@ -1183,6 +1183,32 @@ button.cite:hover {
   cursor: pointer;
   white-space: nowrap;
 }
+/*
+ * Links' status when it draws nothing, quiet: above the rank switch (whose
+ * pill is 40px: 26px buttons, 6px padding, 1px border), 12px apart.
+ */
+.links-status {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px + 40px + 12px);
+  margin: 0;
+  height: 32px;
+  padding: 0 14px;
+  font: var(--type-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+/* Links' chip where the layers are hidden (phones): shown from 760px down. */
+.links-chip {
+  display: none;
+  padding: 0 14px;
+  gap: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.links-chip-status {
+  color: var(--text-secondary);
+}
 
 /*
  * The pill that names a link at its arc's top (mockup .arc-pill); ArcPill
@@ -1616,6 +1642,9 @@ button.cite:hover {
   .bottombar .layer-dock {
     display: none;
   }
+  .bottombar .links-chip {
+    display: inline-flex;
+  }
   .timeline {
     height: 64px;
   }
@@ -1698,9 +1727,15 @@ button.cite:hover {
     justify-self: center;
     margin-bottom: 0;
   }
-  /* The layers stack centred over the timeline: the rank switch goes beside them. */
+  /* The layers stack centred over the timeline: the rank switch and status go beside them. */
   .link-rank {
     left: calc(100% + 12px);
+    bottom: 50%;
+    transform: translateY(50%);
+  }
+  .links-status {
+    left: auto;
+    right: calc(100% + 12px);
     bottom: 50%;
     transform: translateY(50%);
   }

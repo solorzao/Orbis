@@ -271,3 +271,74 @@ test.describe("Arc flow on a touch screen", () => {
     await expect(globe).toHaveAttribute("data-arc-flow", "false");
   });
 });
+
+test.describe("Links status", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  for (const [what, answer, status] of [
+    ["an empty window", { json: [] }, "No links in this window"],
+    ["a failed load", { status: 500, json: { detail: "boom" } }, "Links unavailable right now"],
+  ] as const) {
+    test(`${what} says so beside the rank switch, and to screen readers`, async ({ page }) => {
+      await gotoStillGlobe(page, (p) => p.route(isLinksList, (route) => route.fulfill(answer)));
+      await linksToggle(page).click();
+      await expect(linksToggle(page)).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("links-status")).toHaveText(status);
+      await expect(page.getByTestId("hover-announcer")).toContainText(status);
+      await expect(page.getByTestId("globe")).toHaveAttribute("data-arcs", "0");
+
+      // Off: the status goes with it.
+      await linksToggle(page).click();
+      await expect(page.getByTestId("links-status")).toHaveCount(0);
+      await expect(page.getByTestId("hover-announcer")).not.toContainText(status);
+    });
+  }
+});
+
+test.describe("Links on a phone", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  /** The co-pilot answers with places in France and the US, so it offers Show links. */
+  async function showLinks(page: Page, setup?: (page: Page) => Promise<void>) {
+    await gotoStillGlobe(page, async (p) => {
+      await mockAgentRoute(p, {
+        answer: "Markets in Paris and New York reacted to the talks.",
+        globe_actions: [
+          { type: "flyTo", lat: PARIS.lat, lng: PARIS.lng, label: "Paris" },
+          { type: "flyTo", lat: NEW_YORK.lat, lng: NEW_YORK.lng, label: "New York" },
+        ],
+      });
+      await setup?.(p);
+    });
+    // The layers are hidden on a phone: no switch to turn Links off.
+    await expect(page.getByTestId("layer-switcher")).toBeHidden();
+    await expect(page.getByTestId("links-chip")).toHaveCount(0);
+    await page.getByTestId("side-tab-copilot").tap();
+    const input = page.getByTestId("agent-input");
+    await input.fill("How did markets react?");
+    await input.press("Enter");
+    await page.getByRole("button", { name: "Show links" }).tap();
+  }
+
+  test("Show links brings a Links ✕ chip; tapping it turns Links off", async ({ page }) => {
+    await showLinks(page);
+    const globe = page.getByTestId("globe");
+    await expect(globe).toHaveAttribute("data-arcs", String(MOCK_LINKS_LIFT.length));
+    const chip = page.getByTestId("links-chip");
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveText("Links✕");
+    await expect(chip).toHaveAccessibleName("Turn Links off");
+
+    await chip.tap();
+    await expect(globe).toHaveAttribute("data-arcs", "0");
+    await expect(chip).toHaveCount(0);
+    // Links is off again, so the co-pilot offers it again.
+    await expect(page.getByRole("button", { name: "Show links" })).toBeVisible();
+  });
+
+  test("the chip says when the window has no links", async ({ page }) => {
+    await showLinks(page, (p) => p.route(isLinksList, (route) => route.fulfill({ json: [] })));
+    await expect(page.getByTestId("links-chip")).toHaveText("LinksNo links in this window✕");
+    await expect(page.getByTestId("hover-announcer")).toContainText("No links in this window");
+  });
+});

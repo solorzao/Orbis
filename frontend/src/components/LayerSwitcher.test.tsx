@@ -142,4 +142,37 @@ describe("LayerSwitcher", () => {
     fireEvent.click(within(rank).getByRole("button", { name: "Surprising" }));
     expect(onRankChange).toHaveBeenLastCalledWith("lift");
   });
+
+  it("shows the Links status beside its rank switch, only while Links is on", () => {
+    const { rerender } = renderSwitcher({ links: true, linksStatus: "No links in this window" });
+    const status = screen.getByTestId("links-status");
+    expect(status).toHaveTextContent("No links in this window");
+    expect(screen.getByTestId("layer-switcher")).not.toContainElement(status);
+
+    rerender(
+      <LayerSwitcher
+        layer="dots"
+        onChange={() => {}}
+        links
+        onLinksChange={() => {}}
+        rank="lift"
+        onRankChange={() => {}}
+        linksStatus={null}
+      />,
+    );
+    expect(screen.queryByTestId("links-status")).toBeNull();
+
+    rerender(
+      <LayerSwitcher
+        layer="dots"
+        onChange={() => {}}
+        links={false}
+        onLinksChange={() => {}}
+        rank="lift"
+        onRankChange={() => {}}
+        linksStatus="Links unavailable right now"
+      />,
+    );
+    expect(screen.queryByTestId("links-status")).toBeNull();
+  });
 });
