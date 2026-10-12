@@ -413,6 +413,8 @@ EXPLAIN_TTL = 3 * 3600
 _EXPLAIN_HEADLINES = 15
 # Fetched before syndicated copies and injection attempts are dropped.
 _HEADLINE_FETCH_LIMIT = 45
+# Shown, not cached, when no headline is left to explain the link with.
+NOT_ENOUGH_COVERAGE = "Not enough coverage in this window to explain the link."
 
 _EXPLAIN_SYSTEM_PROMPT = (
     "You are a concise news analyst. You will receive two countries and the "
@@ -442,11 +444,13 @@ def _prompt_headlines(titles: list[str]) -> list[str]:
     lines: list[str] = []
     seen: set[str] = set()
     for title in titles:
-        if not isinstance(title, str) or has_injection_pattern(title):
+        if not isinstance(title, str):
             continue
         clean = " ".join(sanitise_text(strip_invisible(title), max_length=200).split())
         key = _dedup_key(clean)
-        if not clean or key in seen:
+        # Checked once cleaned: sanitise_text deletes control characters, which
+        # would otherwise hide an injection phrase from the check ("Ig\x01nore").
+        if not clean or has_injection_pattern(clean) or key in seen:
             continue
         seen.add(key)
         lines.append(clean)
@@ -462,7 +466,8 @@ async def explain_link(a: str, b: str, start: datetime, end: datetime, topic: st
     label-point table and the headlines from the database, so a client
     cannot steer an answer that is cached and shown to everyone. Cached per
     pair (either order), window floored to the hour, and topic, for 3 hours.
-    A failure's message is returned but never cached.
+    A failure's message, or NOT_ENOUGH_COVERAGE when no usable headline is
+    left, is returned but never cached.
     """
     a, b = sorted((a, b))
     topic_suffix = f":{topic}" if topic else ""
@@ -475,7 +480,7 @@ async def explain_link(a: str, b: str, start: datetime, end: datetime, topic: st
         await get_link_headlines(a, b, start, end, topic, _HEADLINE_FETCH_LIMIT)
     )
     if not lines:
-        return ""
+        return NOT_ENOUGH_COVERAGE
     user_msg = (
         f"Countries: {centroid(a).name} and {centroid(b).name}\n\n"
         "Headlines of stories that covered both:\n" + "\n".join(f"- {line}" for line in lines)

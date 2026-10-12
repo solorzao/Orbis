@@ -272,6 +272,19 @@ class TestGetLinkDetail:
         assert len(value["articles"]) == 10
 
     @pytest.mark.asyncio
+    async def test_either_order_is_one_pair_in_code_order(self, monkeypatch, detail_db):
+        """US/IR and IR/US share one cache entry, and come back as /api/links has them."""
+        with patch("app.routers.links.set_cached", new_callable=AsyncMock) as mock_set:
+            async with _client(monkeypatch) as client:
+                resp = await client.get("/api/links/detail", params={"a": "US", "b": "ir"})
+                await client.get("/api/links/detail", params={"a": "IR", "b": "US"})
+
+        assert (resp.json()["a"]["iso"], resp.json()["b"]["iso"]) == ("IR", "US")
+        assert detail_db.await_args_list[0].args[:2] == ("IR", "US")
+        keys = {c.args[0] for c in mock_set.await_args_list}
+        assert keys == {"db:links:detail:v1:IR:US:live:24:"}
+
+    @pytest.mark.asyncio
     async def test_serves_the_cached_detail(self, monkeypatch, detail_db):
         cached = _detail([])
         with patch("app.routers.links.get_cached", new_callable=AsyncMock, return_value=cached):
@@ -322,6 +335,18 @@ class TestExplainLink:
         explain.assert_awaited_once_with("IR", "US", NOW - timedelta(hours=24), NOW, None)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("hours", [1, 6, 168])
+    async def test_a_live_window_explains_that_window(self, monkeypatch, explain, hours):
+        """An arc drawn from the last 7 days is explained over the last 7 days."""
+        async with _client(monkeypatch) as client:
+            resp = await client.post(
+                "/api/links/explain", json={"a": "IR", "b": "US", "timespan": f"{hours}h"}
+            )
+
+        assert resp.status_code == 200
+        explain.assert_awaited_once_with("IR", "US", NOW - timedelta(hours=hours), NOW, None)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "body",
         [
@@ -330,6 +355,8 @@ class TestExplainLink:
             {"a": "US", "b": "US"},
             {"a": "US"},
             {"a": "US", "b": "IR", "topic": "Sports"},
+            {"a": "US", "b": "IR", "timespan": "2h"},
+            {"a": "US", "b": "IR", "timespan": "168000h"},  # longer than the field allows
             {"a": "US", "b": "IR", "end_time": "2026-10-12T15:37:00Z"},
             {"a": "US", "b": "IR", "start_time": "2026-10-01T00:00:00Z", "end_time": "2026-10-12"},
         ],

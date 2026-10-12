@@ -59,6 +59,7 @@ class LinkExplainRequest(BaseModel):
 
     a: str = Field(..., max_length=8)
     b: str = Field(..., max_length=8)
+    timespan: str = Field("24h", max_length=8, description="A live window: 1h, 6h, 24h or 168h")
     start_time: str | None = Field(None, max_length=40)
     end_time: str | None = Field(None, max_length=40)
     topic: str | None = Field(None, max_length=20)

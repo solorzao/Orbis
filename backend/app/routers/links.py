@@ -144,9 +144,10 @@ async def get_link(
     """One link for the inspector: its numbers, shared names, themes and newest stories.
 
     The window and topic are validated as for /api/links, so the inspector's
-    n and lift match the arc's.
+    n and lift match the arc's. The pair comes back in code order, as
+    /api/links has it, so either order shares one cache entry.
     """
-    a, b = _pair(a, b)
+    a, b = sorted(_pair(a, b))
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
 
@@ -166,11 +167,12 @@ async def get_link(
 async def explain(body: LinkExplainRequest) -> LinkExplanation:
     """2-3 sentences from Claude on what the stories linking two countries are about.
 
-    The window is a range (both bounds, as for /api/links) or, without one,
-    the last 24 hours. Only the codes, window and topic are read from the
-    request; the prompt is built from server-side data.
+    The window is validated as for /api/links: a range (both bounds), else
+    the live timespan (24h by default), so an arc explains its own window.
+    Only the codes, window and topic are read from the request; the prompt
+    is built from server-side data.
     """
     a, b = _pair(body.a, body.b)
     tag = _globe_topic_tag(body.topic)
-    window = _window("24h", body.start_time, body.end_time)
+    window = _window(body.timespan, body.start_time, body.end_time)
     return LinkExplanation(text=await explain_link(a, b, window.start, window.end, tag))
