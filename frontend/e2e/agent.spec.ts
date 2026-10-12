@@ -307,6 +307,24 @@ test.describe("Co-pilot console", () => {
     expect((await popup).url()).toBe(CLIMATE.source_url);
   });
 
+  test("a source whose link is not http(s) opens nothing", async ({ page }) => {
+    const opened: string[] = [];
+    page.on("popup", (p) => opened.push(p.url()));
+    const [first] = PARIS_ANSWER.citations;
+    await gotoStillGlobe(page, (p) =>
+      mockAgentRoute(p, {
+        ...PARIS_ANSWER,
+        citations: [{ ...first, url: "javascript:alert(document.domain)" }],
+      }),
+    );
+    await askQuestion(page, "What is happening in France?");
+
+    await page.locator(".msg.bot").getByRole("button", { name: "Source 1" }).click();
+    await page.getByRole("group", { name: "Sources" }).getByRole("button").click();
+    await page.waitForTimeout(300);
+    expect(opened).toEqual([]);
+  });
+
   test("action pills fly to the place and show its stories", async ({ page }) => {
     const errors: Error[] = [];
     page.on("pageerror", (e) => errors.push(e));

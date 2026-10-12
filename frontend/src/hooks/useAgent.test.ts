@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { cleanLabel, useAgent } from "./useAgent";
+import { cleanLabel, isWebUrl, useAgent } from "./useAgent";
 
 const mockFetch = vi.fn();
 
@@ -66,6 +66,16 @@ describe("cleanLabel", () => {
   it("is empty for a missing label", () => {
     expect(cleanLabel(undefined)).toBe("");
     expect(cleanLabel(42)).toBe("");
+  });
+});
+
+describe("isWebUrl", () => {
+  it("is true for http(s) links only", () => {
+    expect(isWebUrl("https://example.com")).toBe(true);
+    expect(isWebUrl("http://example.com")).toBe(true);
+    expect(isWebUrl("javascript:alert(1)")).toBe(false);
+    expect(isWebUrl("")).toBe(false);
+    expect(isWebUrl(undefined)).toBe(false);
   });
 });
 
@@ -156,6 +166,35 @@ describe("useAgent", () => {
     expect(citation.title).toBe("Floods in Lagos");
     expect(citation.source_name).toBe("Reuters");
     expect(citation.url).toBe("https://example.com/a");
+  });
+
+  it("keeps only http(s) citation links", async () => {
+    const cite = { title: "T", source_name: "Wire", lat: 0, lng: 0 };
+    const urls = [
+      "https://example.com/a",
+      "HTTP://example.com/b",
+      "javascript:alert(1)",
+      " javascript:alert(1)",
+      "data:text/html,hi",
+      "//evil.com",
+      42,
+    ];
+    mockFetch.mockResolvedValue(doneResponse({ citations: urls.map((url) => ({ ...cite, url })) }));
+    const { result } = renderHook(() => useAgent());
+
+    await act(async () => {
+      await result.current.ask("Lagos?");
+    });
+
+    expect(result.current.messages[1].citations!.map((c) => c.url)).toEqual([
+      "https://example.com/a",
+      "HTTP://example.com/b",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]);
   });
 
   it("keeps the number each citation is cited by", async () => {

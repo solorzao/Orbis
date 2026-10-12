@@ -505,11 +505,20 @@ def _build_context(
     return context, article_index
 
 
+_WEB_URL = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def _web_url(url: object) -> str:
+    """*url* if it is an http(s) link, else "": the UI opens citation links as given."""
+    return url if isinstance(url, str) and _WEB_URL.match(url) else ""
+
+
 def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[dict]:
     """Map LLM-generated citations back to full article metadata.
 
     Each keeps its ``index``, the number the answer cites it by ([4]), so the
-    co-pilot can link each marker to its source.
+    co-pilot can link each marker to its source. Links are http(s) only: a
+    fallback's link is model-written, and retrieved pages could steer it.
     """
     enriched = []
     for c in raw_citations:
@@ -521,7 +530,7 @@ def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[di
                 {
                     "index": number,
                     "title": article["title"],
-                    "url": article["url"],
+                    "url": _web_url(article["url"]),
                     "source_name": article["source_name"],
                     "lat": article.get("lat") or 0,
                     "lng": article.get("lng") or 0,
@@ -533,7 +542,7 @@ def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[di
                 {
                     "index": number,
                     "title": c.get("title", ""),
-                    "url": c.get("source_url", c.get("url", "")),
+                    "url": _web_url(c.get("source_url", c.get("url", ""))),
                     "source_name": c.get("source_name", ""),
                     "lat": c.get("lat", 0),
                     "lng": c.get("lng", 0),

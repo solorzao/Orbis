@@ -57,6 +57,11 @@ export function cleanLabel(s: unknown, max = MAX_LABEL): string {
     .trimEnd();
 }
 
+/** Whether `url` is an http(s) link: the only kind a citation may open. */
+export function isWebUrl(url: unknown): url is string {
+  return typeof url === "string" && /^https?:\/\//i.test(url);
+}
+
 function isCoordinate(v: unknown, limit: number): v is number {
   return typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= limit;
 }
@@ -81,7 +86,7 @@ function readCitations(raw: unknown): Citation[] {
     .map((c) => ({
       index: Number.isInteger(c.index) && c.index > 0 ? c.index : undefined,
       title: cleanLabel(c.title, MAX_TITLE),
-      url: typeof c.url === "string" ? c.url : "",
+      url: isWebUrl(c.url) ? c.url : "", // a model-written link could be javascript:
       source_name: cleanLabel(c.source_name),
       lat: typeof c.lat === "number" ? c.lat : 0,
       lng: typeof c.lng === "number" ? c.lng : 0,

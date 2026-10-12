@@ -623,3 +623,26 @@ def test_enriched_citations_keep_the_number_the_answer_cites():
 def test_enriched_citations_without_a_number_get_none():
     enriched = _enrich_citations([{"title": "T", "url": "https://e.com"}], [])
     assert enriched[0]["index"] is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["javascript:alert(1)", " JavaScript:alert(1)", "data:text/html,hi", "//evil.com/x", 42, None],
+)
+def test_enriched_citations_drop_a_non_web_link(url):
+    """A model-written source_url (the fallback) must be http(s) to reach the UI."""
+    [citation] = _enrich_citations([{"index": 7, "title": "T", "source_url": url}], [])
+    assert citation["url"] == ""
+
+
+def test_enriched_citations_keep_web_links():
+    raw = [
+        {"index": 1},
+        {"index": 9, "title": "T", "source_url": "HTTPS://example.com/a"},
+        {"index": 8, "title": "T", "url": "http://example.com/b"},
+    ]
+    article_index = [{"title": "S", "url": "javascript:x", "source_name": "W"}]
+
+    enriched = _enrich_citations(raw, article_index)
+
+    assert [c["url"] for c in enriched] == ["", "HTTPS://example.com/a", "http://example.com/b"]

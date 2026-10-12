@@ -8,7 +8,7 @@ import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
 import { pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
-import { useAgent } from "@/hooks/useAgent";
+import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
@@ -83,7 +83,7 @@ export default function Home() {
     if (globeControlsRef.current && citation.lat && citation.lng) {
       globeControlsRef.current.flyTo(citation.lat, citation.lng, 1.5);
     }
-    if (citation.url) {
+    if (isWebUrl(citation.url)) {
       window.open(citation.url, "_blank", "noopener,noreferrer");
     }
   }, []);
