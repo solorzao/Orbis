@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ARC_ALTITUDE_SCALE,
   arcApex,
+  arcDashTime,
   arcFlows,
   arcPillText,
   arcStroke,
@@ -127,6 +128,18 @@ describe("linkArcs", () => {
     expect(flowing).toMatchObject({ dashLength: 0.9, dashGap: 0.1, dashAnimateTime: 6000 });
     const still = linkArcs(links, { inspected: null, colors: COLORS, flow: false })[0];
     expect(still).toMatchObject({ dashLength: 1, dashGap: 0, dashAnimateTime: 0 });
+  });
+});
+
+describe("arcDashTime", () => {
+  it("pauses a flowing arc's dashes while the globe is dragged, keeping the arc as it is", () => {
+    const [arc] = linkArcs([link()], { inspected: null, colors: COLORS, flow: true });
+    const before = { ...arc };
+    expect(arcDashTime(false)(arc)).toBe(6000);
+    expect(arcDashTime(true)(arc)).toBe(0);
+    expect(arc).toEqual(before); // same dash pattern: no redraw, no solid flash
+    const [still] = linkArcs([link()], { inspected: null, colors: COLORS, flow: false });
+    expect(arcDashTime(false)(still)).toBe(0);
   });
 });
 

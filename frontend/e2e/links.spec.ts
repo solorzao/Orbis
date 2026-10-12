@@ -133,7 +133,9 @@ test.describe("Links layer", () => {
     await expect(globe).toHaveAttribute("data-arc-flow", "true");
   });
 
-  test("the dashes pause while the globe is dragged", async ({ page }) => {
+  test("the dashes pause while the globe is dragged, without redrawing the arcs", async ({
+    page,
+  }) => {
     await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0"));
     await mockAllApiRoutes(page);
     await page.goto("/");
@@ -141,12 +143,44 @@ test.describe("Links layer", () => {
     await linksToggle(page).click();
     const globe = page.getByTestId("globe");
     await expect(globe).toHaveAttribute("data-arc-flow", "true");
+    await expect(globe).toHaveAttribute("data-arc-dashed", "true");
+    // How many times the arcs were drawn (data set on the globe): a pause redraws none.
+    const drawn = await globe.getAttribute("data-arcs-drawn");
+    expect(Number(drawn)).toBeGreaterThan(0);
+
     await page.mouse.move(300, 450); // the canvas, off the globe's chrome
     await page.mouse.down();
     await page.mouse.move(340, 470, { steps: 4 });
     await expect(globe).toHaveAttribute("data-arc-flow", "false");
+    // Paused, not redrawn: still dashed (no solid flash), the same arcs.
+    await expect(globe).toHaveAttribute("data-arc-dashed", "true");
+    await expect(globe).toHaveAttribute("data-arcs-drawn", drawn!);
+
     await page.mouse.up();
     await expect(globe).toHaveAttribute("data-arc-flow", "true");
+    await expect(globe).toHaveAttribute("data-arcs-drawn", drawn!);
+
+    // A click (press and release) redraws nothing either.
+    await page.mouse.click(300, 450);
+    await expect(globe).toHaveAttribute("data-arc-flow", "true");
+    await expect(globe).toHaveAttribute("data-arcs-drawn", drawn!);
+  });
+
+  test("a drag ends when the window loses focus mid-press", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0"));
+    await mockAllApiRoutes(page);
+    await page.goto("/");
+    await expect(page.getByTestId("globe").locator("canvas")).toBeVisible({ timeout: 10000 });
+    await linksToggle(page).click();
+    const globe = page.getByTestId("globe");
+    await expect(globe).toHaveAttribute("data-arc-flow", "true");
+    await page.mouse.move(300, 450);
+    await page.mouse.down();
+    await expect(globe).toHaveAttribute("data-arc-flow", "false");
+    // The release never comes (an alt-tab mid-drag): blur ends the drag.
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await expect(globe).toHaveAttribute("data-arc-flow", "true");
+    await page.mouse.up();
   });
 
   test("in low-power mode the arcs hold still", async ({ page }) => {

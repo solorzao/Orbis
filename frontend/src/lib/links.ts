@@ -124,6 +124,15 @@ export function linkArcs(
   });
 }
 
+/**
+ * The arcs' dash speed while the globe is dragged or not: dragging pauses
+ * the flow (tokens.md). As an accessor on the arcs already drawn, so their
+ * meshes and dash pattern stay and only the animation stops.
+ */
+export function arcDashTime(dragging: boolean): (arc: GlobeArc) => number {
+  return (arc) => (dragging ? 0 : arc.dashAnimateTime);
+}
+
 type Vec = [number, number, number];
 const RAD = Math.PI / 180;
 

@@ -20,7 +20,7 @@ import {
   type GlobeGeometry,
 } from "@/lib/globeView";
 import type { ScreenPoint } from "@/lib/hoverCard";
-import { ARC_ALTITUDE_SCALE, arcFlows, linkArcs, type GlobeArc } from "@/lib/links";
+import { ARC_ALTITUDE_SCALE, arcDashTime, arcFlows, linkArcs, type GlobeArc } from "@/lib/links";
 import { webGpuReady } from "@/lib/webgpu";
 import type { GlobeLayer } from "@/components/LayerSwitcher";
 
@@ -332,11 +332,15 @@ export default function Globe({
     };
     container.addEventListener("pointerdown", stopDrift);
     // A press on the globe may become a drag: the arcs pause until it ends, wherever.
+    // A release can also be lost: the window loses focus mid-drag, or the
+    // canvas loses its pointer capture.
     const grab = () => setDragging(true);
     const release = () => setDragging(false);
     container.addEventListener("pointerdown", grab);
+    container.addEventListener("lostpointercapture", release);
     window.addEventListener("pointerup", release);
     window.addEventListener("pointercancel", release);
+    window.addEventListener("blur", release);
     container.addEventListener("wheel", stopDrift, { passive: true });
     let driftFrame = 0;
     const driftStart = performance.now();
@@ -403,8 +407,10 @@ export default function Globe({
       window.removeEventListener("resize", handleResize);
       container.removeEventListener("pointerdown", stopDrift);
       container.removeEventListener("pointerdown", grab);
+      container.removeEventListener("lostpointercapture", release);
       window.removeEventListener("pointerup", release);
       window.removeEventListener("pointercancel", release);
+      window.removeEventListener("blur", release);
       container.removeEventListener("wheel", stopDrift);
     };
   }, []);
@@ -429,21 +435,38 @@ export default function Globe({
     }
   }, [reduced, lowPower, isLoaded]);
 
-  // The Links layer's arcs: the inspected one highlighted, flowing when motion allows
+  // The Links layer's arcs: the inspected one highlighted, flowing when motion
+  // allows. New arc objects make three-globe build new meshes, so a drag
+  // doesn't come through here (see the next effect).
   useEffect(() => {
     const globe = globeRef.current;
     const container = containerRef.current;
     const tokens = tokensRef.current;
     if (!globe || !isLoaded || !tokens) return;
-    const flow = arcFlows({ reduced, lowPower, touch, dragging });
+    const flow = arcFlows({ reduced, lowPower, touch });
     const arcs = linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow });
     globe.arcsData(arcs);
     if (container) {
       // read by the e2e tests: WebGL arcs can't be found in the DOM
       container.dataset.arcs = String(arcs.length);
-      container.dataset.arcFlow = String(flow && arcs.length > 0);
+      container.dataset.arcDashed = String(arcs.some((a) => a.dashGap > 0));
+      // how many times arcs were drawn: pausing them must not redraw any
+      container.dataset.arcsDrawn = String(Number(container.dataset.arcsDrawn ?? 0) + 1);
     }
-  }, [links, inspectedLink, reduced, lowPower, touch, dragging, isLoaded]);
+  }, [links, inspectedLink, reduced, lowPower, touch, isLoaded]);
+
+  // A drag pauses the arcs' dashes in place: only the accessor changes, so
+  // three-globe keeps each mesh, its dash pattern and where its dashes are.
+  useEffect(() => {
+    const globe = globeRef.current;
+    const container = containerRef.current;
+    if (!globe || !isLoaded) return;
+    globe.arcDashAnimateTime(arcDashTime(dragging) as (arc: object) => number);
+    if (container) {
+      const flowing = arcFlows({ reduced, lowPower, touch, dragging }) && links.length > 0;
+      container.dataset.arcFlow = String(flowing);
+    }
+  }, [dragging, links, reduced, lowPower, touch, isLoaded]);
 
   // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {
