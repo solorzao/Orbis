@@ -1169,6 +1169,252 @@ button.cite:hover {
 }
 
 /*
+ * City hover card (mockup .recon and .rc, lines 375-402) and its HUD (#hud,
+ * line 209): a reticle on the dot and a leader to the card, over the globe
+ * and under the chrome. GlobeHud places the card beside its dot (docked on
+ * touch screens); it stays hidden until placed, then fades in over
+ * --preview-enter (at once with reduced motion, below).
+ */
+.hud {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: var(--z-reticle);
+  pointer-events: none;
+  overflow: visible;
+}
+.recon {
+  position: fixed;
+  z-index: var(--z-preview);
+  width: var(--preview-width);
+  max-width: calc(100vw - 32px);
+  border-radius: var(--preview-radius);
+  box-shadow: var(--preview-shadow);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  transition: opacity var(--preview-enter) var(--preview-easing);
+}
+.recon:not([data-placed="true"]) {
+  opacity: 0;
+  pointer-events: none;
+}
+/* Touch screens: docked above the bottom row, full width less 12px a side. */
+.recon.docked {
+  left: 12px;
+  right: 12px;
+  width: auto;
+  max-width: none;
+}
+:is(.recon, .rc) .top {
+  display: grid;
+  grid-template-columns: 40% 1fr;
+  gap: 14px;
+  padding: 14px 14px 10px;
+}
+:is(.recon, .rc) .top.solo {
+  grid-template-columns: 1fr;
+}
+.thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+.thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.85);
+}
+/* Not .blur: Tailwind would read that as its blur utility and blur the veil's text too. */
+.thumb.veiled img {
+  filter: blur(8px) saturate(0.6);
+  transform: scale(1.1);
+}
+.thumb .veil {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  font: var(--type-label);
+  color: #fff;
+  background: rgba(13, 12, 23, 0.35);
+  cursor: pointer;
+}
+.thumb .veil span {
+  display: block;
+  color: var(--accent-strong);
+}
+.thumb .veil:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -2px;
+  border-radius: inherit;
+}
+.thumb.glyph {
+  display: grid;
+  place-items: center;
+  color: var(--c);
+  background:
+    radial-gradient(
+      circle at 30% 20%,
+      color-mix(in srgb, var(--c) 30%, transparent),
+      transparent 70%
+    ),
+    rgba(255, 255, 255, 0.04);
+}
+:is(.recon, .rc) .place {
+  margin: 0;
+  font: var(--type-title);
+  letter-spacing: var(--tracking-title);
+  color: var(--text-primary);
+}
+:is(.recon, .rc) .place small {
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+:is(.recon, .rc) .count {
+  font: var(--type-label);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+:is(.recon, .rc) .spark {
+  display: block;
+  margin-top: 8px;
+}
+:is(.recon, .rc) .spark.skel {
+  width: 150px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+}
+:is(.recon, .rc) .body {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 10px;
+}
+:is(.recon, .rc) .hl {
+  margin: 0;
+  font: var(--type-body);
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+:is(.recon, .rc) .src {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+:is(.recon, .rc) .src span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.recon, .rc) .src span:last-child {
+  flex: none;
+}
+.kv {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.mix {
+  display: flex;
+  gap: 3px;
+  height: 6px;
+}
+.mix span {
+  border-radius: 3px;
+  background: var(--c);
+}
+.mixl {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 12px;
+  margin-top: -4px;
+  font: var(--type-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.mixl i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c);
+  margin-right: 5px;
+}
+.tone {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--sentiment-n3),
+    var(--sentiment-n2),
+    var(--sentiment-n1),
+    var(--sentiment-neutral),
+    var(--sentiment-p1),
+    var(--sentiment-p2),
+    var(--sentiment-p3)
+  );
+}
+.tone i {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  box-shadow: 0 0 0 3px rgba(13, 12, 23, 0.6);
+}
+:is(.recon, .rc) .chips .pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+:is(.recon, .rc) .brief {
+  margin: 0;
+  padding: 9px 12px;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+:is(.recon, .rc) .brief .clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+:is(.recon, .rc) .foot {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 6px 14px 12px;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+:is(.recon, .rc) .foot .end {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+:is(.recon, .rc) .foot .pill {
+  cursor: pointer;
+}
+
+/*
  * Bottom row: layers | timeline | (surges, PR 14), one grid so the tracks
  * can't overlap. The side tracks never shrink below their content (as in the
  * top bar: a plain 1fr would let the layers, whose min-width is 0, spill into

@@ -18,6 +18,11 @@ function arcDegrees(aLat: number, aLng: number, bLat: number, bLng: number): num
 
 const cell = (deg: number) => Math.floor(deg / CELL_DEG);
 
+/** The 1° cell holding a point, e.g. "48:2": one key per dot, however its points refresh. */
+export function cellKey(lat: number, lng: number): string {
+  return `${cell(lat)}:${cell(lng)}`;
+}
+
 /**
  * The dot for a place the co-pilot names: the one in the same 1° cell (FLOOR,
  * as the backend groups them), else the nearest within NEAR_DEG, else null.

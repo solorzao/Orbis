@@ -39,6 +39,62 @@ describe("apiPointsToGlobePoints", () => {
     expect(other.topic).toBe("All");
     expect(other.color).toBe(TOPIC_COLORS.All);
   });
+
+  it("colours a dot by the server's topic, the cell's most common (not its newest story's)", () => {
+    const [point] = apiPointsToGlobePoints([
+      apiPoint({
+        topic: "politics",
+        topic_mix: { politics: 3, conflict: 2 },
+        lead: {
+          title: "Talks resume",
+          source_name: "Reuters",
+          published_at: "2026-10-12T09:45:00Z",
+          image_url: null,
+          topic: "conflict",
+        },
+      }),
+    ]);
+    expect(point.topic).toBe("Politics");
+    expect(point.color).toBe(TOPIC_COLORS.Politics);
+    expect(point.lead?.topic).toBe("Conflict");
+  });
+
+  it("maps the hover card's lead, topic mix, tone and country", () => {
+    const [point] = apiPointsToGlobePoints([
+      apiPoint({
+        location_name: "Wellington, New Zealand",
+        country_code: "NZ",
+        lead: {
+          title: "Talks resume",
+          source_name: "Reuters",
+          published_at: "2026-10-12T09:45:00Z",
+          image_url: "https://cdn.example.com/a.jpg",
+          topic: "environment",
+        },
+        topic_mix: { politics: 3, environment: 2, climate: 1, sport: 4 },
+        tone: -0.25,
+      }),
+    ]);
+    expect(point.countryCode).toBe("NZ");
+    expect(point.lead).toEqual({
+      title: "Talks resume",
+      sourceName: "Reuters",
+      publishedAt: "2026-10-12T09:45:00Z",
+      imageUrl: "https://cdn.example.com/a.jpg",
+      topic: "Climate",
+    });
+    // Tags become topic pills; only the six topics count.
+    expect(point.topicMix).toEqual({ Politics: 3, Climate: 3 });
+    expect(point.tone).toBe(-0.25);
+  });
+
+  it("leaves the hover fields empty for a point without them", () => {
+    const [point] = apiPointsToGlobePoints([apiPoint()]);
+    expect(point.lead).toBeUndefined();
+    expect(point.topicMix).toEqual({});
+    expect(point.tone).toBe(0);
+    expect(point.countryCode).toBeUndefined();
+  });
 });
 
 // The globe paints on a canvas, so it can't read CSS variables per frame;

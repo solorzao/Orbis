@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mockAllApiRoutes } from "./fixtures";
+import { CAIRO, PARIS, hoverPlace, mockAllApiRoutes, withCairo } from "./fixtures";
 
 const SIZES = [
   { width: 1920, height: 1080 },
@@ -68,11 +68,17 @@ function tooClose(a: Box, b: Box) {
   );
 }
 
-async function settle(page: Page, size: { width: number; height: number }) {
+async function settle(
+  page: Page,
+  size: { width: number; height: number },
+  setup?: (page: Page) => Promise<void>,
+) {
   await page.setViewportSize(size);
   // No transitions, so the panel, sheet and bottom row measure at their final place.
+  // (Reduced motion also holds the globe still, so a dot can be hovered.)
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAllApiRoutes(page);
+  await setup?.(page); // routes added later win over the defaults
   await page.goto("/");
   await page.getByTestId("topic-filter").waitFor();
   // Measure the settled bar: self-hosted fonts in, status at its final width.
@@ -193,6 +199,27 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     await expect(page.getByTestId("side-tab-stories")).toBeVisible();
     await expect(page.getByTestId("side-collapse")).toBeFocused();
   });
+}
+
+// The city hover card floats over the globe: it keeps clear of the top bar, the
+// side panel and the bottom row like any region. Cairo sits right of the
+// globe's centre, beside the panel, so its card must take the other side.
+for (const size of SIZES.filter((s) => s.width === 1440 || s.width === 1280)) {
+  for (const place of [PARIS, CAIRO]) {
+    test(`the hover card for ${place.location_name} keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({
+      page,
+    }) => {
+      await settle(page, size, withCairo);
+      await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+      await hoverPlace(page, place);
+      await expectApart(page, size.width, `hover card for ${place.location_name}`, [
+        ...regionsAt(size.width),
+        "hover-card",
+      ]);
+      const card = (await page.getByTestId("hover-card").boundingBox())!;
+      expect(card.y + card.height, "hover card bottom edge").toBeLessThanOrEqual(size.height);
+    });
+  }
 }
 
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {

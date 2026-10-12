@@ -11,11 +11,9 @@ import {
   hexToRgba,
   recomputeHeatmap,
   showDots,
-  pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
 } from "./globeView";
-import type { GlobePoint } from "@/types/news";
 
 describe("projectedRadius", () => {
   it("is the on-screen radius of the globe's silhouette (mockup globeGeom)", () => {
@@ -65,43 +63,6 @@ describe("hexToRgba", () => {
   it("turns a token hex into an rgba() with the given alpha", () => {
     expect(hexToRgba("#6f78c9", 0.55)).toBe("rgba(111,120,201,0.55)");
     expect(hexToRgba(" #FFFFFF ", 1)).toBe("rgba(255,255,255,1)");
-  });
-});
-
-describe("pointTooltipHtml", () => {
-  const point = (overrides: Partial<GlobePoint> = {}): GlobePoint => ({
-    id: "api-0",
-    lat: 48.86,
-    lng: 2.35,
-    size: 1,
-    color: "#72ddb2",
-    articles: [],
-    isCluster: true,
-    count: 5,
-    topic: "Climate",
-    ...overrides,
-  });
-
-  it("shows the story count and the place", () => {
-    const html = pointTooltipHtml(point({ locationName: "Paris, France" }));
-    expect(html).toContain("5 stories");
-    expect(html).toContain("Paris, France");
-  });
-
-  it("escapes the place name, which comes from news data", () => {
-    const html = pointTooltipHtml(point({ locationName: "<img src=x onerror=alert(1)>" }));
-    expect(html).not.toContain("<img");
-    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
-  });
-
-  it("prints the count as a number, whatever arrives", () => {
-    const html = pointTooltipHtml(point({ count: "<b>9</b>" as unknown as number }));
-    expect(html).not.toContain("<b>");
-    expect(html).toContain("0 stories");
-  });
-
-  it("leaves out the place when there is none", () => {
-    expect(pointTooltipHtml(point())).not.toContain("•");
   });
 });
 

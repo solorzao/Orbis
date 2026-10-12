@@ -9,6 +9,12 @@ import { GLOBE_OVERSCAN_PX, HOME_VIEW } from "../src/lib/globeView";
 
 // ── Mock data ───────────────────────────────────────────────────────
 
+/** How long ago, as the API's ISO time. */
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+/** Lead images: served by mockAllApiRoutes as photo-sized SVGs (see mockImage). */
+export const IMAGE_HOST = "https://images.orbis.test";
+
 export const MOCK_GLOBE_POINTS = [
   {
     lat: 48.8566,
@@ -18,6 +24,16 @@ export const MOCK_GLOBE_POINTS = [
     top_headline: "France announces new climate policy",
     topic: "Climate",
     location_name: "Paris, France",
+    country_code: "FR",
+    lead: {
+      title: "France announces new climate policy",
+      source_name: "Reuters",
+      published_at: ago(12),
+      image_url: `${IMAGE_HOST}/paris-climate.jpg`,
+      topic: "environment",
+    },
+    topic_mix: { environment: 3, politics: 1, technology: 1 },
+    tone: 0.42,
   },
   {
     lat: 40.7128,
@@ -27,6 +43,16 @@ export const MOCK_GLOBE_POINTS = [
     top_headline: "Tech stocks surge on Wall Street",
     topic: "Economy",
     location_name: "New York, United States",
+    country_code: "US",
+    lead: {
+      title: "Tech stocks surge on Wall Street",
+      source_name: "Bloomberg",
+      published_at: ago(35),
+      image_url: `${IMAGE_HOST}/wall-street.jpg`,
+      topic: "economy",
+    },
+    topic_mix: { economy: 6, technology: 2 },
+    tone: 0.18,
   },
   {
     lat: 51.5074,
@@ -36,8 +62,76 @@ export const MOCK_GLOBE_POINTS = [
     top_headline: "UK parliament debates trade deal",
     topic: "Politics",
     location_name: "London, United Kingdom",
+    country_code: "GB",
+    lead: {
+      title: "UK parliament debates trade deal",
+      source_name: "BBC News",
+      published_at: ago(80),
+      image_url: null,
+      topic: "politics",
+    },
+    topic_mix: { politics: 3 },
+    tone: -0.05,
   },
 ];
+
+/**
+ * A place with a conflict lead, right of the globe's centre and near the
+ * side panel at 1280 and 1440 wide. Not in MOCK_GLOBE_POINTS (whose counts
+ * the globe tests read): add it with withCairo.
+ */
+export const CAIRO = {
+  lat: 30.0444,
+  lng: 31.2357,
+  weight: 4,
+  article_count: 4,
+  top_headline: "Ceasefire talks resume in Cairo as shelling continues",
+  topic: "conflict",
+  location_name: "Cairo, Egypt",
+  country_code: "EG",
+  lead: {
+    title: "Ceasefire talks resume in Cairo as shelling continues",
+    source_name: "Al Jazeera",
+    published_at: ago(25),
+    image_url: `${IMAGE_HOST}/cairo-talks.jpg`,
+    topic: "conflict",
+  },
+  topic_mix: { conflict: 3, politics: 2 },
+  tone: -0.46,
+};
+
+/** gotoStillGlobe/settle setup: the globe also shows CAIRO. */
+export async function withCairo(page: Page) {
+  await page.route("**/api/news?*", (route) =>
+    route.fulfill({ json: [...mockGlobeNews(route.request().url()), CAIRO] }),
+  );
+}
+
+/** /api/news/preview's dwell data: a sparkline, three names and a cached brief. */
+export const MOCK_PREVIEW = {
+  spark: [2, 1, 0, 0, 1, 0, 0, 1, 3, 4, 2, 3, 5, 4, 6, 3, 2, 4, 5, 7, 6, 4, 5, 8],
+  entities: [
+    { name: "Emmanuel Macron", type: "person", n: 4 },
+    { name: "European Union", type: "org", n: 3 },
+    { name: "Anne Hidalgo", type: "person", n: 2 },
+  ],
+  brief:
+    "France set tougher carbon targets for 2035 as EU leaders met in Paris to discuss trade and security.",
+};
+
+/** A 640x360 "photo" for a lead image URL: an SVG landscape, tinted by its name. */
+export function mockImage(url: string): string {
+  const hue = [...new URL(url).pathname].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="hsl(${hue} 70% 72%)"/><stop offset="1" stop-color="hsl(${(hue + 40) % 360} 35% 28%)"/>
+</linearGradient></defs>
+<rect width="640" height="360" fill="url(#sky)"/>
+<circle cx="500" cy="96" r="38" fill="hsl(${(hue + 20) % 360} 90% 88%)" opacity=".85"/>
+<path d="M0 262 L70 214 L140 246 L220 176 L300 236 L380 168 L460 226 L540 186 L640 236 V360 H0 Z" fill="hsl(${(hue + 200) % 360} 30% 16%)" opacity=".9"/>
+<path d="M0 310 L120 282 L260 300 L400 276 L520 296 L640 280 V360 H0 Z" fill="hsl(${(hue + 210) % 360} 25% 10%)"/>
+</svg>`;
+}
 
 /** Each mocked place's stories per topic pill; they add up to its article_count. */
 const MOCK_TOPIC_COUNTS: Record<string, Partial<Record<string, number>>> = {
@@ -212,6 +306,12 @@ export async function mockAllApiRoutes(page: Page) {
   // Cluster summary
   await page.route("**/api/news/summary*", (route) => route.fulfill({ json: MOCK_SUMMARY }));
 
+  // The hover card's dwell data, and its lead images
+  await page.route("**/api/news/preview*", (route) => route.fulfill({ json: MOCK_PREVIEW }));
+  await page.route(`${IMAGE_HOST}/**`, (route) =>
+    route.fulfill({ contentType: "image/svg+xml", body: mockImage(route.request().url()) }),
+  );
+
   // Story volume for the timeline
   await page.route("**/api/news/volume*", (route) => route.fulfill({ json: mockVolume() }));
 
@@ -310,7 +410,7 @@ export async function gotoStillGlobe(page: Page, setup?: (page: Page) => Promise
   await expect(page.getByTestId("status-pill").getByText("Live")).toBeVisible({ timeout: 10000 });
 }
 
-/** A dot from MOCK_GLOBE_POINTS. */
+/** A dot from MOCK_GLOBE_POINTS (or CAIRO). */
 export type MockPlace = { lat: number; lng: number; location_name: string };
 export const [PARIS, NEW_YORK, LONDON] = MOCK_GLOBE_POINTS;
 
@@ -347,5 +447,76 @@ export async function clickPlace(page: Page, place: MockPlace) {
   }
   throw new Error(
     `No dot for ${place.location_name} (tried around ${Math.round(x)}, ${Math.round(y)})`,
+  );
+}
+
+// ── Hovering and tapping a dot ──────────────────────────────────────
+
+/** Pixels around a dot's projected centre to try, nearest first: a dot is a few pixels wide. */
+const NEARBY = [
+  [0, 0],
+  [0, -1],
+  [0, 1],
+  [-1, 0],
+  [1, 0],
+  [0, -2],
+  [0, 2],
+];
+
+/** The hover card for a place, once GlobeHud has placed it. */
+function placedCard(page: Page, place: MockPlace) {
+  return page.locator(
+    `[data-testid="hover-card"][data-placed="true"][aria-label^="${place.location_name}:"]`,
+  );
+}
+
+/**
+ * Rest the pointer on a dot, as a visitor would, until its hover card shows
+ * (globe.gl finds the hovered dot on its next frame; the card follows 150 ms
+ * later). Returns the card.
+ */
+export async function hoverPlace(page: Page, place: MockPlace) {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("hoverPlace needs a fixed viewport");
+  const { x, y } = homeViewScreenPoint(place.lat, place.lng, viewport);
+  const card = placedCard(page, place);
+  for (const [dx, dy] of NEARBY) {
+    await page.mouse.move(x + dx, y + dy);
+    const shown = await card
+      .waitFor({ state: "visible", timeout: 1000 })
+      .then(() => true)
+      .catch(() => false);
+    if (shown) return card;
+  }
+  throw new Error(
+    `No hover card for ${place.location_name} (around ${Math.round(x)}, ${Math.round(y)})`,
+  );
+}
+
+/**
+ * Tap a dot on a touch screen until its card shows. The finger rests a
+ * moment, as a real tap does, so globe.gl finds the dot before it lifts.
+ */
+export async function tapPlace(page: Page, place: MockPlace) {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("tapPlace needs a fixed viewport");
+  const { x, y } = homeViewScreenPoint(place.lat, place.lng, viewport);
+  const card = placedCard(page, place);
+  const cdp = await page.context().newCDPSession(page);
+  for (const [dx, dy] of NEARBY) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: x + dx, y: y + dy }],
+    });
+    await page.waitForTimeout(120);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const shown = await card
+      .waitFor({ state: "visible", timeout: 1000 })
+      .then(() => true)
+      .catch(() => false);
+    if (shown) return card;
+  }
+  throw new Error(
+    `No tap card for ${place.location_name} (around ${Math.round(x)}, ${Math.round(y)})`,
   );
 }

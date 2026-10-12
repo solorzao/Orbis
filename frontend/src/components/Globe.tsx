@@ -14,11 +14,11 @@ import {
   hexToRgba,
   recomputeHeatmap,
   showDots,
-  pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
   type GlobeGeometry,
 } from "@/lib/globeView";
+import type { ScreenPoint } from "@/lib/hoverCard";
 import { webGpuReady } from "@/lib/webgpu";
 import type { GlobeLayer } from "@/components/LayerSwitcher";
 
@@ -34,11 +34,17 @@ export interface GlobeControls {
   flyTo: (lat: number, lng: number, altitude: number) => void;
   /** Where the globe sits on screen (for the orbital rings), or null once torn down. */
   getGeometry: () => GlobeGeometry | null;
+  /** Where a place's dot is on screen, or null on the globe's far side (the hover card's HUD). */
+  project: (lat: number, lng: number) => ScreenPoint | null;
 }
 
 interface GlobeProps {
   points: GlobePoint[];
   onPointClick: (point: GlobePoint) => void;
+  /** The dot under the pointer, or null when it leaves the dots. */
+  onPointHover?: (point: GlobePoint | null) => void;
+  /** A click or tap on the globe that hit no dot (or ended a drag). */
+  onEmptyClick?: () => void;
   onZoomChange: (altitude: number) => void;
   onReady?: (controls: GlobeControls) => void;
   /** prefers-reduced-motion: the globe holds still. */
@@ -75,6 +81,8 @@ function readGlobeTokens() {
 export default function Globe({
   points,
   onPointClick,
+  onPointHover,
+  onEmptyClick,
   onZoomChange,
   onReady,
   reduced = false,
@@ -89,6 +97,12 @@ export default function Globe({
 
   const onPointClickRef = useRef(onPointClick);
   onPointClickRef.current = onPointClick;
+
+  const onPointHoverRef = useRef(onPointHover);
+  onPointHoverRef.current = onPointHover;
+
+  const onEmptyClickRef = useRef(onEmptyClick);
+  onEmptyClickRef.current = onEmptyClick;
 
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
@@ -120,6 +134,8 @@ export default function Globe({
     if (!containerRef.current || globeRef.current) return;
     const container = containerRef.current;
     const tokens = readGlobeTokens();
+    // Set when globe.gl reports a dot click, for the empty-click check below.
+    let pointClicked = false;
 
     const globe = new GlobeGL(container, { animateIn: false })
       .backgroundColor("rgba(0,0,0,0)")
@@ -177,8 +193,12 @@ export default function Globe({
       .ringMaxRadius(2)
       .ringPropagationSpeed(1.2)
       .ringRepeatPeriod(ringRepeatMs(motionRef.current))
-      .pointLabel((d: object) => pointTooltipHtml(d as GlobePoint))
+      // No pointLabel: the hover card (HoverCard, GlobeHud) replaces the tooltip.
+      .onPointHover((point: object | null) => {
+        onPointHoverRef.current?.((point as GlobePoint | null) ?? null);
+      })
       .onPointClick((point: object) => {
+        pointClicked = true;
         onPointClickRef.current(point as GlobePoint);
       })
       .onZoom((pov: { lat: number; lng: number; altitude: number }) => {
@@ -233,6 +253,19 @@ export default function Globe({
         console.warn("Globe: land outlines unavailable, showing the plain ocean.", err);
       });
 
+    // A click that hit no dot. globe.gl reports dot clicks on the frame after
+    // pointerup (and ignores clicks on empty space), so look one frame later,
+    // after it has: its pointerup listener runs first (capture, on an inner element).
+    let emptyFrame = 0;
+    const checkEmptyClick = () => {
+      pointClicked = false;
+      cancelAnimationFrame(emptyFrame);
+      emptyFrame = requestAnimationFrame(() => {
+        if (!pointClicked) onEmptyClickRef.current?.();
+      });
+    };
+    container.addEventListener("pointerup", checkEmptyClick);
+
     // Calm drift: +-5 degrees of longitude and back over --dur-drift, until the
     // visitor touches the globe. Never with reduced motion or in low-power mode.
     const stopDrift = () => {
@@ -274,6 +307,18 @@ export default function Globe({
           R: projectedRadius(r.height, g.camera().fov, g.pointOfView().altitude),
         };
       },
+      project: (lat: number, lng: number) => {
+        const g = globeRef.current;
+        if (!g) return null;
+        // Facing the camera (mockup `facing`): a little past the limb counts as hidden.
+        const p = g.getCoords(lat, lng, 0);
+        const c = g.camera().position;
+        if (p.x * c.x + p.y * c.y + p.z * c.z <= g.getGlobeRadius() ** 2 * 1.02) return null;
+        const s = g.getScreenCoords(lat, lng, DOT_ALTITUDE);
+        if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) return null;
+        const r = container.getBoundingClientRect();
+        return { x: r.left + s.x, y: r.top + s.y };
+      },
     });
 
     // Handle resize
@@ -288,6 +333,8 @@ export default function Globe({
 
     teardownRef.current = () => {
       cancelAnimationFrame(driftFrame);
+      cancelAnimationFrame(emptyFrame);
+      container.removeEventListener("pointerup", checkEmptyClick);
       window.removeEventListener("resize", handleResize);
       container.removeEventListener("pointerdown", stopDrift);
       container.removeEventListener("wheel", stopDrift);

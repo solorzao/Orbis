@@ -23,6 +23,17 @@ export type Topic =
   | "Economy"
   | "Health";
 
+/** A place's lead story, for the hover card: its newest, preferring one with an image. */
+export interface GlobeLead {
+  title: string;
+  sourceName: string;
+  publishedAt: string;
+  /** A public https image, or null. */
+  imageUrl: string | null;
+  /** The story's first topic; "All" when it is none of the six. */
+  topic: Topic;
+}
+
 export interface GlobePoint {
   id: string;
   lat: number;
@@ -33,8 +44,18 @@ export interface GlobePoint {
   isCluster: boolean;
   count: number;
   locationName?: string;
-  /** Sets the colour: the newest story's topic, or the topic the globe is filtered to. */
+  /**
+   * Sets the colour: the place's most common topic (so it holds still as
+   * stories arrive), or the topic the globe is filtered to.
+   */
   topic: Topic;
+  /** ISO 3166-1 alpha-2 of the lead story's place. */
+  countryCode?: string;
+  lead?: GlobeLead;
+  /** Stories per topic (a story with two topics counts for both). */
+  topicMix?: Partial<Record<Topic, number>>;
+  /** Mean sentiment of the place's stories, -1 to 1. */
+  tone?: number;
 }
 
 export interface PanelFilters {

@@ -6,13 +6,15 @@ import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } 
 import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { MAX_PANELS, panelQuery, samePanelQuery } from "@/lib/panelQuery";
-import { pointAt } from "@/lib/cells";
+import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
+import { useHoverCard, useTouchOnly } from "@/hooks/useHoverCard";
+import { useHoverPreview } from "@/hooks/useHoverPreview";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import BottomBar from "@/components/BottomBar";
 import LayerSwitcher, { type GlobeLayer } from "@/components/LayerSwitcher";
@@ -24,6 +26,8 @@ import CoPilot from "@/components/CoPilot";
 import SidePanel from "@/components/SidePanel";
 import Sky from "@/components/Sky";
 import OrbitRings from "@/components/OrbitRings";
+import GlobeHud from "@/components/GlobeHud";
+import HoverCard from "@/components/HoverCard";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -59,6 +63,27 @@ export default function Home() {
   // about 0.75 s on a slow CPU even with WebGPU and seconds without it (see
   // heatmapPoints and webGpuReady, which probes for a device only once it's shown).
   const globeLayer: GlobeLayer = lowPower ? "dots" : layer;
+
+  // City hover card: shown for the dot under the pointer (or tapped, on touch
+  // screens), with its dwell data (sparkline, names, cached brief) after 400 ms.
+  const touch = useTouchOnly();
+  const hoverCardRef = useRef<HTMLElement>(null);
+  const hover = useHoverCard(touch, hoverCardRef);
+  const { preview, loading: previewLoading } = useHoverPreview(
+    hover.focus,
+    timeWindow,
+    activeTopic,
+  );
+  const projectPoint = useCallback(
+    (lat: number, lng: number) => globeControlsRef.current?.project(lat, lng) ?? null,
+    [],
+  );
+  // Conflict images the visitor chose to see: kept for the session, never stored.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  const revealImage = useCallback(
+    (url: string) => setRevealed((prev) => new Set(prev).add(url)),
+    [],
+  );
 
   // The same window again (a preset clicked twice) keeps its dots: no refetch.
   const changeWindow = useCallback((next: TimeWindow) => {
@@ -249,6 +274,33 @@ export default function Home() {
     [panelQueue, activeTopic, timeWindow, fetchPanelData, showStories],
   );
 
+  // A dot's click opens its panel. On a touch screen the first tap shows its
+  // hover card instead, and a second tap (or the card's Open stories) opens it.
+  const { tap: tapDot, dismiss: dismissCard } = hover;
+  const handleDotClick = useCallback(
+    (point: GlobePoint) => {
+      if (touch) {
+        if (tapDot(point)) handlePointClick(point);
+        return;
+      }
+      dismissCard();
+      handlePointClick(point);
+    },
+    [touch, tapDot, dismissCard, handlePointClick],
+  );
+
+  // The card's place as the dots have it now (they refresh with the window and topic).
+  const shownCard = hover.card;
+  const cardPoint = shownCard
+    ? (points.find((p) => p.lat === shownCard.point.lat && p.lng === shownCard.point.lng) ??
+      shownCard.point)
+    : null;
+  // The preview is the focused dot's: the card's only once the pointer is on its place.
+  const previewIsCards =
+    !!cardPoint &&
+    !!hover.focus &&
+    cellKey(hover.focus.lat, hover.focus.lng) === cellKey(cardPoint.lat, cardPoint.lng);
+
   const handleZoomChange = useCallback(() => {}, []);
 
   const handleClosePanel = useCallback(
@@ -334,7 +386,9 @@ export default function Home() {
       {/* Globe */}
       <Globe
         points={points}
-        onPointClick={handlePointClick}
+        onPointClick={handleDotClick}
+        onPointHover={hover.onPointHover}
+        onEmptyClick={hover.onEmptyTap}
         onZoomChange={handleZoomChange}
         onReady={(controls) => {
           globeControlsRef.current = controls;
@@ -348,6 +402,16 @@ export default function Home() {
 
       {/* Orbital rings around the globe */}
       <OrbitRings getGeometry={getGlobeGeometry} reduced={reduced} lowPower={lowPower} />
+
+      {/* The hover card's reticle and leader, over the globe and under the chrome */}
+      <GlobeHud
+        point={cardPoint}
+        project={projectPoint}
+        getGeometry={getGlobeGeometry}
+        cardRef={hoverCardRef}
+        docked={touch}
+        reduced={reduced}
+      />
 
       {/* Top bar: brand, topics, status and About in one grid */}
       <TopBar
@@ -406,6 +470,28 @@ export default function Home() {
           reduced={reduced}
         />
       </BottomBar>
+
+      {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}
+      {shownCard && cardPoint && (
+        <HoverCard
+          key={cellKey(cardPoint.lat, cardPoint.lng)}
+          ref={hoverCardRef}
+          point={cardPoint}
+          timeWindow={timeWindow}
+          now={shownCard.shownAt}
+          preview={previewIsCards ? preview : null}
+          previewLoading={previewIsCards && previewLoading}
+          revealed={revealed}
+          onReveal={revealImage}
+          docked={touch}
+          onOpen={() => {
+            dismissCard();
+            handlePointClick(cardPoint);
+          }}
+          onPointerEnter={hover.onCardEnter}
+          onPointerLeave={hover.onCardLeave}
+        />
+      )}
     </main>
   );
 }
