@@ -43,7 +43,14 @@ export function useGlobePoints(
     const controller = new AbortController();
     const { timespan, startTime, endTime } = windowQuery(timeWindow);
     const timer = setTimeout(() => {
-      fetchGlobeNews(timespan, GLOBE_LIMIT, startTime, endTime, topic, controller.signal)
+      fetchGlobeNews({
+        timespan,
+        limit: GLOBE_LIMIT,
+        startTime,
+        endTime,
+        topic,
+        signal: controller.signal,
+      })
         .then((apiPoints) => {
           if (controller.signal.aborted) return;
           setResult({

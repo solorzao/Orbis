@@ -66,19 +66,31 @@ async function apiFetch<T>(
   return res.json() as Promise<T>;
 }
 
+export interface GlobeNewsQuery {
+  /** A live window, e.g. "24h"; a range's bounds take its place on the server. */
+  timespan?: string;
+  /** Most places returned (the busiest). */
+  limit?: number;
+  /** A range's ISO bounds. */
+  startTime?: string;
+  endTime?: string;
+  topic?: Topic;
+  signal?: AbortSignal;
+}
+
 /**
  * The globe's places for a window. A topic other than All is filtered on the
  * server, before it picks the busiest `limit` places: each place's count,
  * headline and topic are then that topic's stories alone.
  */
-export function fetchGlobeNews(
+export function fetchGlobeNews({
   timespan = "24h",
   limit = 500,
-  startTime?: string,
-  endTime?: string,
-  topic: Topic = "All",
-  signal?: AbortSignal,
-): Promise<ApiGlobePoint[]> {
+  startTime,
+  endTime,
+  topic = "All",
+  signal,
+}: GlobeNewsQuery = {}): Promise<ApiGlobePoint[]> {
   const params: Record<string, string> = { timespan, limit: String(limit) };
   if (startTime) params.start_time = startTime;
   if (endTime) params.end_time = endTime;

@@ -9,6 +9,11 @@ import type { Topic } from "@/types/news";
 vi.mock("@/lib/api", () => ({ fetchGlobeNews: vi.fn() }));
 const mockFetch = vi.mocked(fetchGlobeNews);
 
+/** What the hook's `n`th fetch asked for. */
+function sent(n: number) {
+  return mockFetch.mock.calls[n][0] ?? {};
+}
+
 function apiPoint(name: string, topic = "politics"): ApiGlobePoint {
   return {
     lat: 10,
@@ -65,8 +70,8 @@ describe("useGlobePoints", () => {
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [timespan, limit, start, end, topic, signal] = mockFetch.mock.calls[0];
-    expect([timespan, limit, start, end, topic]).toEqual(["6h", 500, undefined, undefined, "All"]);
+    const { signal, ...query } = sent(0);
+    expect(query).toEqual({ timespan: "6h", limit: 500, topic: "All" });
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(result.current.loading).toBe(false);
     expect(result.current.error).toBe(false);
@@ -79,12 +84,12 @@ describe("useGlobePoints", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
-    expect(mockFetch.mock.calls[0].slice(0, 4)).toEqual([
-      "24h",
-      500,
-      MONDAY.startTime,
-      MONDAY.endTime,
-    ]);
+    expect(sent(0)).toMatchObject({
+      timespan: "24h",
+      limit: 500,
+      startTime: MONDAY.startTime,
+      endTime: MONDAY.endTime,
+    });
   });
 
   it("keeps the last points while the next window loads", async () => {
@@ -120,7 +125,7 @@ describe("useGlobePoints", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
-    const mondaySignal = mockFetch.mock.calls[0][5] as AbortSignal;
+    const mondaySignal = sent(0).signal!;
 
     rerender({ w: TUESDAY });
     expect(mondaySignal.aborted).toBe(true); // the earlier request is cancelled
@@ -146,7 +151,7 @@ describe("useGlobePoints", () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][2]).toBe(TUESDAY.startTime);
+    expect(sent(0).startTime).toBe(TUESDAY.startTime);
   });
 
   it("reports an error with no points", async () => {
@@ -167,7 +172,7 @@ describe("useGlobePoints", () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
 
-    expect(mockFetch.mock.calls[0][4]).toBe("Health");
+    expect(sent(0).topic).toBe("Health");
     // No second filter on the client: what the server sent is what the globe shows.
     const [lima] = result.current.points;
     expect(result.current.points).toHaveLength(1);
@@ -195,13 +200,7 @@ describe("useGlobePoints", () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls[1].slice(0, 5)).toEqual([
-      "6h",
-      500,
-      undefined,
-      undefined,
-      "Politics",
-    ]);
+    expect(sent(1)).toMatchObject({ timespan: "6h", topic: "Politics" });
     expect(result.current.points.map((p) => p.locationName)).toEqual(["Paris", "Lima"]);
 
     await act(async () => {
@@ -221,7 +220,7 @@ describe("useGlobePoints", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
     });
-    const healthSignal = mockFetch.mock.calls[0][5] as AbortSignal;
+    const healthSignal = sent(0).signal!;
 
     rerender({ topic: "Politics" });
     expect(healthSignal.aborted).toBe(true);
