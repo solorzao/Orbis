@@ -103,6 +103,10 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
+# How long an empty globe window stays cached: long enough to spare the
+# database a request per visitor, short enough that new stories show soon.
+_EMPTY_GLOBE_TTL = 60
+
 # The longest live window: the timeline's 7-day preset.
 _MAX_TIMESPAN_HOURS = 168
 
@@ -167,7 +171,7 @@ async def get_globe_data(
 
     cache_k = f"db:globe:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
     cached = await get_cached(cache_k)
-    if cached:
+    if cached is not None:  # [] is a cached empty window
         return [GlobeDataPoint(**p) for p in cached]
 
     rows = await get_globe_points(
@@ -180,8 +184,8 @@ async def get_globe_data(
     )
     points = [GlobeDataPoint(**r) for r in rows]
 
-    if points:
-        await set_cached(cache_k, [p.model_dump() for p in points], settings.db_cache_ttl)
+    ttl = settings.db_cache_ttl if points else _EMPTY_GLOBE_TTL
+    await set_cached(cache_k, [p.model_dump() for p in points], ttl)
 
     return points
 

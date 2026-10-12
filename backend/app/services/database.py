@@ -336,6 +336,9 @@ async def get_globe_points(
 ) -> list[dict[str, Any]]:
     """Return clustered globe points from the database.
 
+    Only stories inside the window count: a window without any gives no
+    points, never older stories.
+
     Groups articles into grid cells of *cell_size* degrees, picking the
     most recent headline and its first topic per cell (the dot colour), and
     collecting every topic in the cell.
@@ -356,17 +359,7 @@ async def get_globe_points(
         window = ["published_at >= $1"]
         window_args = [cutoff]
 
-    # Try with time filter first, fall back to all data if empty
     rows = await pool.fetch(*_globe_points_query(window, window_args, topic, cell_size, limit))
-
-    if not rows:
-        logger.warning(
-            "No %sarticles in last %dh — falling back to all data.",
-            f"{topic} " if topic else "",
-            timespan_hours,
-        )
-        # Same query without the time filter; the topic filter stays.
-        rows = await pool.fetch(*_globe_points_query([], [], topic, cell_size, limit))
     results = []
     for row in rows:
         tags = row["topic_tags"] or []

@@ -178,6 +178,57 @@ class TestGetGlobeData:
         assert point.topics == []
 
 
+class TestGetGlobeDataCache:
+    @pytest.mark.asyncio
+    async def test_cells_are_cached_for_the_normal_ttl(self):
+        from app.config import settings
+        from app.routers.news import get_globe_data
+
+        with (
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+            patch(
+                "app.routers.news.get_globe_points",
+                new_callable=AsyncMock,
+                return_value=[_make_globe_row()],
+            ),
+        ):
+            await get_globe_data(timespan="24h", limit=100)
+
+        _, value, ttl = mock_set.await_args.args
+        assert len(value) == 1
+        assert ttl == settings.db_cache_ttl
+
+    @pytest.mark.asyncio
+    async def test_an_empty_window_is_cached_briefly(self):
+        """An empty window (a quiet hour, a replay step) mustn't hit the database every request,
+        nor stay empty for long once stories land."""
+        from app.config import settings
+        from app.routers.news import _EMPTY_GLOBE_TTL, get_globe_data
+
+        with (
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+            patch("app.routers.news.get_globe_points", new_callable=AsyncMock, return_value=[]),
+        ):
+            assert await get_globe_data(timespan="1h", limit=100) == []
+
+        _, value, ttl = mock_set.await_args.args
+        assert value == []
+        assert ttl == _EMPTY_GLOBE_TTL == 60
+        assert _EMPTY_GLOBE_TTL < settings.db_cache_ttl
+
+    @pytest.mark.asyncio
+    async def test_a_cached_empty_window_is_served_without_the_database(self):
+        from app.routers.news import get_globe_data
+
+        with (
+            patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=[]),
+            patch("app.routers.news.get_globe_points", new_callable=AsyncMock) as mock_db,
+        ):
+            assert await get_globe_data(timespan="1h", limit=100) == []
+
+        mock_db.assert_not_awaited()
+
+
 class TestGetGlobeDataTopic:
     """`topic` filters the cells on the server: one of the six topic pills, or All."""
 

@@ -304,17 +304,6 @@ class TestGetGlobePoints:
         assert "array_agg(DISTINCT tag)" in query
 
     @pytest.mark.asyncio
-    async def test_fallback_query_aggregates_cell_topics(self, pool):
-        pool.fetch.side_effect = [[], [_globe_row()]]
-
-        await database.get_globe_points(cell_size=1.0)
-
-        assert pool.fetch.call_count == 2
-        fallback = _sql(pool.fetch.call_args_list[1].args[0])
-        assert "unnest(topic_tags)" in fallback
-        assert "array_agg(DISTINCT tag)" in fallback
-
-    @pytest.mark.asyncio
     async def test_rows_carry_all_cell_topics_and_newest_topic(self, pool):
         pool.fetch.return_value = [_globe_row()]
 
@@ -378,17 +367,21 @@ class TestGetGlobePoints:
         assert "IS NULL" not in query
 
     @pytest.mark.asyncio
-    async def test_fallback_keeps_the_topic_filter(self, pool):
-        """An empty window falls back to all time, but never to other topics' stories."""
-        pool.fetch.side_effect = [[], [_globe_row()]]
+    @pytest.mark.parametrize("topic", [None, "conflict"])
+    @pytest.mark.parametrize(
+        "window",
+        [{"timespan_hours": 1}, {"start_time": START, "end_time": END}],
+        ids=["live", "range"],
+    )
+    async def test_an_empty_window_returns_no_cells(self, pool, window, topic):
+        """No fallback to older stories: "Last 1 h" with nothing in it is an empty globe."""
+        pool.fetch.return_value = []
 
-        await database.get_globe_points(cell_size=1.0, topic="conflict")
+        assert await database.get_globe_points(cell_size=1.0, topic=topic, **window) == []
 
-        assert pool.fetch.call_count == 2
-        query, args = _fetched(pool)
-        assert args == ["conflict", 1.0, 500]
-        assert "FROM articles WHERE topic_tags && ARRAY[$1::text] ), cells AS (" in query
-        assert "published_at >=" not in query
+        assert pool.fetch.call_count == 1
+        query, _ = _fetched(pool)
+        assert "published_at" in query  # the window's query, never one without it
 
     @pytest.mark.asyncio
     async def test_a_filtered_cell_takes_the_topic_as_its_colour(self, pool):
