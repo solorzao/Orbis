@@ -1,6 +1,3 @@
-import { escapeHtml } from "@/lib/html";
-import type { GlobePoint } from "@/types/news";
-
 /** Where the camera rests, and the centre of the calm drift. */
 export const HOME_VIEW = { lat: 20, lng: 0, altitude: 2.5 };
 
@@ -145,15 +142,4 @@ export function showDots(
 export function hexToRgba(hex: string, alpha: number): string {
   const n = parseInt(hex.trim().replace("#", ""), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
-}
-
-/**
- * The hover tooltip for a point. globe.gl renders it as HTML, and the place
- * name comes from news data, so it is escaped and the count forced to a number.
- */
-export function pointTooltipHtml(p: GlobePoint): string {
-  const count = `<span style="color:${p.color};font-weight:600">${Number(p.count) || 0} stories</span>`;
-  const place = escapeHtml(p.locationName ?? "");
-  const label = place ? `${count} <span style="color:var(--text-muted)">•</span> ${place}` : count;
-  return `<div style="background:var(--surface-panel);backdrop-filter:blur(12px);border:1px solid var(--border-accent);border-radius:8px;padding:8px 12px;font-family:system-ui;color:var(--text-primary);font-size:12px;max-width:300px;pointer-events:none">${label}</div>`;
 }

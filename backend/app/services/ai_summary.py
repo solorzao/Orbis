@@ -78,6 +78,45 @@ def _window_key(start_time: datetime | None, end_time: datetime | None) -> str:
     return f"{hour(start_time)}-{hour(end_time)}"
 
 
+def summary_cache_key(
+    lat: float,
+    lng: float,
+    cell_size: float,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    topic: str | None = None,
+) -> str:
+    """The cache key of a cell's summary: its grid cell, window and topic.
+
+    The one key builder: summarise_cluster writes under it and the hover
+    card's preview reads under it, so the two can never drift apart.
+    """
+    # Snap to the dots' grid: one stable key per dot.
+    cell_lat = cell_index(lat, cell_size)
+    cell_lng = cell_index(lng, cell_size)
+    window = _window_key(start_time, end_time)
+    topic_suffix = f":{topic}" if topic else ""
+    # v3: 1° cells and a time window (v2 keys were 2° cells over all time)
+    return f"summary:v3:{cell_lat}:{cell_lng}:{window}{topic_suffix}"
+
+
+async def cached_summary(
+    lat: float,
+    lng: float,
+    cell_size: float,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    topic: str | None = None,
+) -> str | None:
+    """The cell's cached summary, or None. Read-only: never calls Claude.
+
+    For the hover card, which shows a summary only once a click has paid for
+    it. An empty summary (Claude found nothing to say) is None too.
+    """
+    cached = await get_cached(summary_cache_key(lat, lng, cell_size, start_time, end_time, topic))
+    return cached if isinstance(cached, str) and cached else None
+
+
 async def summarise_cluster(
     articles: list[NewsArticle],
     lat: float,
@@ -99,13 +138,7 @@ async def summarise_cluster(
     if not articles:
         return ""
 
-    # Snap to the dots' grid → one stable cache key per dot.
-    cell_lat = cell_index(lat, cell_size)
-    cell_lng = cell_index(lng, cell_size)
-    window = _window_key(start_time, end_time)
-    topic_suffix = f":{topic}" if topic else ""
-    # v3: 1° cells and a time window (v2 keys were 2° cells over all time)
-    cache_key = f"summary:v3:{cell_lat}:{cell_lng}:{window}{topic_suffix}"
+    cache_key = summary_cache_key(lat, lng, cell_size, start_time, end_time, topic)
 
     cached = await get_cached(cache_key)
     if cached is not None:

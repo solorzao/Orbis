@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pointAt } from "./cells";
+import { cellKey, pointAt } from "./cells";
 import type { GlobePoint } from "@/types/news";
 
 /** A dot at a 1° cell's centre, as /api/news returns them. */
@@ -42,5 +42,13 @@ describe("pointAt", () => {
 
   it("measures across the antimeridian", () => {
     expect(pointAt([fiji], -17.6, -179.6)).toBe(fiji);
+  });
+});
+
+describe("cellKey", () => {
+  it("names a point's 1° cell, floored as the backend groups them", () => {
+    expect(cellKey(48.5, 2.5)).toBe("48:2");
+    expect(cellKey(48.99, 2.01)).toBe("48:2");
+    expect(cellKey(-0.5, -74.5)).toBe("-1:-75");
   });
 });

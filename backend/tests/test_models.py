@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.models.news import GlobeDataPoint, NewsArticle, NewsCluster, https_image_url
+from app.models.news import (
+    GlobeDataPoint,
+    GlobeLead,
+    NewsArticle,
+    NewsCluster,
+    https_image_url,
+)
 
 
 def _make_article(**overrides) -> NewsArticle:
@@ -75,6 +81,97 @@ def test_globe_data_point():
     )
     assert point.article_count == 7
     assert point.topic == "politics"
+    # Points cached before the hover card still load.
+    assert point.lead is None
+    assert point.topic_mix == {}
+    assert point.tone == 0.0
+    assert point.country_code == ""
+
+
+def _hover_point(**lead_overrides) -> GlobeDataPoint:
+    lead = {
+        "title": "Talks resume",
+        "source_name": "Reuters",
+        "published_at": datetime(2026, 10, 12, 9, 45, tzinfo=timezone.utc),
+        "image_url": "https://cdn.example.com/a.jpg",
+        "topic": "conflict",
+        "sensitive": True,
+        **lead_overrides,
+    }
+    return GlobeDataPoint(
+        lat=51.5,
+        lng=-0.5,
+        weight=50,
+        article_count=5,
+        top_headline="Talks resume",
+        topic="politics",
+        location_name="London, United Kingdom",
+        country_code="GB",
+        lead=lead,
+        topic_mix={"politics": 3, "conflict": 2},
+        tone=-0.25,
+    )
+
+
+def test_globe_data_point_carries_the_hover_card_data():
+    point = _hover_point()
+
+    assert isinstance(point.lead, GlobeLead)
+    assert point.model_dump(mode="json") == {
+        "lat": 51.5,
+        "lng": -0.5,
+        "weight": 50,
+        "article_count": 5,
+        "top_headline": "Talks resume",
+        "topic": "politics",
+        "location_name": "London, United Kingdom",
+        "country_code": "GB",
+        "lead": {
+            "title": "Talks resume",
+            "source_name": "Reuters",
+            "published_at": "2026-10-12T09:45:00Z",
+            "image_url": "https://cdn.example.com/a.jpg",
+            "topic": "conflict",
+            "sensitive": True,
+        },
+        "topic_mix": {"politics": 3, "conflict": 2},
+        "tone": -0.25,
+    }
+
+
+def test_globe_data_point_round_trips_through_json():
+    """The router caches points as JSON and rebuilds them from it."""
+    point = _hover_point()
+    assert GlobeDataPoint(**point.model_dump(mode="json")) == point
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "http://cdn.example.com/a.jpg",  # https only: no upgrade for the card
+        "javascript:alert(1)",
+        "https://127.0.0.1/a.jpg",
+        "",
+        None,
+    ],
+)
+def test_globe_lead_image_is_https_only(image_url):
+    assert _hover_point(image_url=image_url).lead.image_url is None
+
+
+def test_globe_lead_is_not_sensitive_unless_told():
+    lead = GlobeLead(
+        title="Rates held",
+        source_name="Reuters",
+        published_at=datetime(2026, 10, 12, 9, 45, tzinfo=timezone.utc),
+        topic="economy",
+    )
+    assert lead.sensitive is False
+
+
+def test_globe_lead_keeps_a_public_https_image():
+    point = _hover_point(image_url="  https://cdn.example.com/my image.jpg ")
+    assert point.lead.image_url == "https://cdn.example.com/my%20image.jpg"
 
 
 @pytest.mark.parametrize(

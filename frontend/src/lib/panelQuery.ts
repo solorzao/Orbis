@@ -18,6 +18,13 @@ export function panelQuery(activeTopic: Topic, window: TimeWindow, nowMs: number
   return { topic, ...bounds, live: true, hours: window.hours };
 }
 
+/** The window a panel was opened on: its live preset, or its range. */
+export function queryWindow(query: PanelQuery): TimeWindow {
+  return query.live && query.hours
+    ? { kind: "live", hours: query.hours }
+    : { kind: "range", startTime: query.startTime, endTime: query.endTime };
+}
+
 /**
  * Whether a panel opened with query `a` shows what a click making `b` asks
  * for: the same topic, and both live over the same hours (their bounds differ

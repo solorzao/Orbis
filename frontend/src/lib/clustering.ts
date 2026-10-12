@@ -1,4 +1,4 @@
-import { NewsArticle, GlobePoint, Topic } from "@/types/news";
+import { NewsArticle, GlobeLead, GlobePoint, Topic } from "@/types/news";
 import type { ApiGlobePoint } from "./api";
 
 // Canvas colours can't be CSS variables, so these copy the Soft Orbit tokens
@@ -144,6 +144,29 @@ function mapApiTopic(apiTopic: string): Topic {
   return API_TOPIC_MAP[apiTopic.toLowerCase()] ?? "All";
 }
 
+/** A place's topic mix by topic pill: tags outside the six are left out. */
+function mapTopicMix(mix: Record<string, number> | undefined): Partial<Record<Topic, number>> {
+  const out: Partial<Record<Topic, number>> = {};
+  for (const [tag, count] of Object.entries(mix ?? {})) {
+    const topic = API_TOPIC_MAP[tag.toLowerCase()];
+    if (topic && count > 0) out[topic] = (out[topic] ?? 0) + count;
+  }
+  return out;
+}
+
+function mapLead(lead: ApiGlobePoint["lead"]): GlobeLead | undefined {
+  if (!lead) return undefined;
+  return {
+    title: lead.title,
+    sourceName: lead.source_name,
+    publishedAt: lead.published_at,
+    imageUrl: lead.image_url ?? null,
+    topic: mapApiTopic(lead.topic),
+    // Points cached before the server sent it fall back to the first tag.
+    sensitive: lead.sensitive ?? mapApiTopic(lead.topic) === "Conflict",
+  };
+}
+
 export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[] {
   return apiPoints.map((p, i) => ({
     id: `api-${i}`,
@@ -156,5 +179,9 @@ export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[]
     count: p.article_count,
     locationName: p.location_name,
     topic: mapApiTopic(p.topic),
+    countryCode: p.country_code || undefined,
+    lead: mapLead(p.lead),
+    topicMix: mapTopicMix(p.topic_mix),
+    tone: p.tone ?? 0,
   }));
 }

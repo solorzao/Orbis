@@ -1,9 +1,22 @@
 import type { Topic } from "@/types/news";
+import { windowQuery, type TimeWindow } from "@/lib/timeWindow";
 
 // Same-origin /api/* routes are proxied to the backend by
 // src/app/api/[...path]/route.ts, which adds the API key server-side.
 function apiUrl(path: string): URL {
   return new URL(path, window.location.origin);
+}
+
+/** A place's lead story: its newest, preferring one with an https image. */
+export interface ApiGlobeLead {
+  title: string;
+  source_name: string;
+  published_at: string;
+  image_url: string | null;
+  /** The story's first tag, e.g. "conflict" or "environment". */
+  topic: string;
+  /** Conflict is among its tags (not only the first). */
+  sensitive?: boolean;
 }
 
 export interface ApiGlobePoint {
@@ -12,9 +25,25 @@ export interface ApiGlobePoint {
   weight: number;
   article_count: number;
   top_headline: string;
-  /** The newest story's topic, or the topic asked for: it sets the dot colour. */
+  /** The place's most common topic, or the topic asked for: it sets the dot colour. */
   topic: string;
   location_name?: string;
+  country_code?: string;
+  lead?: ApiGlobeLead | null;
+  /** Tag -> stories with it, for the six topics' tags. */
+  topic_mix?: Record<string, number>;
+  /** Mean sentiment, -1 to 1. */
+  tone?: number;
+}
+
+/** What the hover card adds after a dwell (/api/news/preview). */
+export interface ApiPlacePreview {
+  /** Stories per UTC hour over the 24 hours up to the window's end, oldest first. */
+  spark: number[];
+  /** Up to 3 names the place's stories mention most. */
+  entities: { name: string; type: "person" | "org"; n: number }[];
+  /** The AI summary a click on the place has cached, or null. */
+  brief: string | null;
 }
 
 export interface ApiNewsArticle {
@@ -98,6 +127,39 @@ export function fetchGlobeNews({
   return apiFetch<ApiGlobePoint[]>("/api/news", params, signal);
 }
 
+export interface PlacePreviewQuery {
+  lat: number;
+  lng: number;
+  window: TimeWindow;
+  topic: Topic;
+  signal?: AbortSignal;
+}
+
+/**
+ * The hover card's dwell data for a dot's place: sparkline, names and the
+ * cached AI brief, for the globe's window and topic. Live windows ask by
+ * timespan, so every visitor's request for a place is the same URL (cached
+ * at the edge).
+ */
+export function fetchPlacePreview({
+  lat,
+  lng,
+  window,
+  topic,
+  signal,
+}: PlacePreviewQuery): Promise<ApiPlacePreview> {
+  const { timespan, startTime, endTime } = windowQuery(window);
+  const params: Record<string, string> = { lat: String(lat), lng: String(lng) };
+  if (startTime && endTime) {
+    params.start_time = startTime;
+    params.end_time = endTime;
+  } else {
+    params.timespan = timespan;
+  }
+  if (topic !== "All") params.topic = topic;
+  return apiFetch<ApiPlacePreview>("/api/news/preview", params, signal);
+}
+
 export function fetchClusterArticles(
   lat: number,
   lng: number,
@@ -125,6 +187,22 @@ export function fetchClusterArticles(
   if (sentiment) params.sentiment = sentiment;
   if (search) params.search = search;
   return apiFetch<ApiNewsArticle[]>("/api/news/cluster", params);
+}
+
+/**
+ * What /api/news/summary sends as `summary` when Claude gave none: the
+ * messages ai_summary.py raises SummaryUnavailable with (api.test.ts keeps
+ * the two lists equal). The panel shows them; they are never a place's brief.
+ */
+export const SUMMARY_FALLBACKS: readonly string[] = [
+  "AI summary unavailable (API key not configured).",
+  "AI summaries are paused until 00:00 UTC (daily limit reached).",
+  "Summary temporarily unavailable due to rate limits.",
+  "Summary generation failed.",
+];
+
+export function isSummaryFallback(summary: string): boolean {
+  return SUMMARY_FALLBACKS.includes(summary.trim());
 }
 
 export function fetchClusterSummary(

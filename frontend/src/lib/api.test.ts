@@ -5,7 +5,12 @@ import {
   fetchClusterSummary,
   fetchTopics,
   fetchVolume,
+  fetchPlacePreview,
+  isSummaryFallback,
+  SUMMARY_FALLBACKS,
 } from "./api";
+import { readFileSync } from "fs";
+import path from "path";
 
 const mockFetch = vi.fn();
 
@@ -164,5 +169,70 @@ describe("fetchGlobeNews with a range", () => {
     expect(params.get("end_time")).toBe("2026-10-06T00:00:00.000Z");
     expect(params.get("limit")).toBe("200");
     expect(params.get("timespan")).toBe("24h");
+  });
+});
+
+describe("fetchPlacePreview", () => {
+  it("asks for a live window's preview by its timespan", async () => {
+    const preview = { spark: Array(24).fill(0), entities: [], brief: null };
+    mockFetch.mockReturnValue(jsonResponse(preview));
+    const controller = new AbortController();
+
+    await expect(
+      fetchPlacePreview({
+        lat: 48.5,
+        lng: 2.5,
+        window: { kind: "live", hours: 24 },
+        topic: "All",
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual(preview);
+
+    const [calledUrl, init] = mockFetch.mock.calls[0];
+    const url = new URL(calledUrl);
+    expect(url.pathname).toBe("/api/news/preview");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      lat: "48.5",
+      lng: "2.5",
+      timespan: "24h",
+    });
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("sends a range's bounds and the topic", async () => {
+    mockFetch.mockReturnValue(jsonResponse({ spark: [], entities: [], brief: null }));
+    await fetchPlacePreview({
+      lat: 48.5,
+      lng: 2.5,
+      window: {
+        kind: "range",
+        startTime: "2026-10-06T00:00:00.000Z",
+        endTime: "2026-10-07T00:00:00.000Z",
+      },
+      topic: "Climate",
+    });
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.searchParams.get("start_time")).toBe("2026-10-06T00:00:00.000Z");
+    expect(url.searchParams.get("end_time")).toBe("2026-10-07T00:00:00.000Z");
+    expect(url.searchParams.get("topic")).toBe("Climate");
+  });
+});
+
+describe("isSummaryFallback", () => {
+  it("knows every message the backend sends instead of a summary", () => {
+    // ai_summary.py raises SummaryUnavailable with the text the panel shows.
+    const source = readFileSync(
+      path.resolve(__dirname, "../../../backend/app/services/ai_summary.py"),
+      "utf8",
+    );
+    const messages = [...source.matchAll(/SummaryUnavailable\(\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(messages.length).toBeGreaterThanOrEqual(4);
+    expect([...new Set(messages)].sort()).toEqual([...SUMMARY_FALLBACKS].sort());
+  });
+
+  it("tells a fallback from a summary", () => {
+    expect(isSummaryFallback("Summary generation failed.")).toBe(true);
+    expect(isSummaryFallback(" Summary generation failed. ")).toBe(true);
+    expect(isSummaryFallback("Talks resumed in Cairo.")).toBe(false);
   });
 });

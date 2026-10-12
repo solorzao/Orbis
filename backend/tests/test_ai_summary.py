@@ -351,3 +351,62 @@ async def test_selection_location_is_one_line_and_injection_free(capture):
 
     await ai_summary.summarise_selection(["Floods in Valencia"], location_name="Valencia,\n Spain")
     assert capture["msg"].startswith("Location: Valencia, Spain\n\n")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "key"),
+    [
+        ({}, "summary:v3:38:-78:live"),
+        ({"topic": "conflict"}, "summary:v3:38:-78:live:conflict"),
+        (
+            {
+                "start_time": datetime(2026, 3, 7, 10, 15, tzinfo=timezone.utc),
+                "end_time": datetime(2026, 3, 8, 10, 59, tzinfo=timezone.utc),
+                "topic": "environment",
+            },
+            "summary:v3:38:-78:2026030710-2026030810:environment",
+        ),
+    ],
+)
+def test_summary_cache_key(kwargs, key):
+    assert ai_summary.summary_cache_key(38.5, -77.5, 1.0, **kwargs) == key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"topic": "conflict"},
+        {
+            "start_time": datetime(2026, 3, 7, 10, 15, tzinfo=timezone.utc),
+            "end_time": datetime(2026, 3, 8, 10, 15, tzinfo=timezone.utc),
+        },
+    ],
+)
+async def test_summarise_cluster_writes_under_summary_cache_key(monkeypatch, kwargs):
+    """The one key builder: the hover card's brief reads what the panel's summary wrote."""
+    key = await _cache_key(monkeypatch, cell_size=1.0, **kwargs)
+    assert key == ai_summary.summary_cache_key(38.5, -77.5, 1.0, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("stored", "brief"), [("Talks resumed.", "Talks resumed."), ("", None)])
+async def test_cached_summary_reads_the_writers_key(monkeypatch, stored, brief):
+    lookup = AsyncMock(return_value=stored)
+    monkeypatch.setattr(ai_summary, "get_cached", lookup)
+
+    assert await ai_summary.cached_summary(38.5, -77.5, 1.0, topic="conflict") == brief
+    lookup.assert_awaited_once_with("summary:v3:38:-78:live:conflict")
+
+
+@pytest.mark.asyncio
+async def test_cached_summary_never_calls_claude(monkeypatch):
+    """A miss is None: the hover card never generates a summary."""
+    monkeypatch.setattr(ai_summary.settings, "anthropic_api_key", "test-key")
+    monkeypatch.setattr(ai_summary, "get_cached", AsyncMock(return_value=None))
+    with patch(
+        "app.services.ai_summary.anthropic.AsyncAnthropic",
+        side_effect=AssertionError("Claude called on hover"),
+    ):
+        assert await ai_summary.cached_summary(38.5, -77.5, 1.0) is None
