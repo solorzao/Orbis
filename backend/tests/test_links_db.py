@@ -242,6 +242,8 @@ class TestDistinctStories:
         assert (ki_um["n"], ki_um["lift"]) == (1, 14.0)
         # In ten copies of one story: not shared by two stories.
         assert ki_um["shared"] == []
+        # TAX_FNCACT_EXPLORER, a functional actor, is not fetched.
+        assert ki_um["themes"] == ["Maritime"]
         ir_us = await links.get_link_detail("IR", "US", START, END, None)
         assert ir_us["shared"] == [{"name": "Abbas Araghchi", "type": "person", "n": 2}]
 

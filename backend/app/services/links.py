@@ -220,12 +220,78 @@ _NAME_FETCH_LIMIT = 16
 _THEME_FETCH_LIMIT = 25
 ARTICLE_FETCH_LIMIT = 30
 
-# GDELT theme families, longest first; the rest of the code is the theme.
-_THEME_PREFIXES = ("TAX_FNCACT_", "CRISISLEX_", "USPEC_", "UNGP_", "TAX_", "EPU_", "SOC_", "WB_")
-# What some families put before the theme: World Bank numbers (WB_2432_),
-# CrisisLex codes (CRISISLEX_T03_).
-_THEME_CODE = re.compile(r"^[A-Z]?\d+_")
+# GDELT themes that say nothing about a link, so are not shown: who and what
+# a story names in passing (functional actors such as officials, languages,
+# ethnicities, religions, military ranks, animals, places); economic-policy-
+# uncertainty and US-specific indicators; CrisisLex's crisis-message classes,
+# which repeat the core themes (KILL, WOUND) in worse words; and the most
+# generic core themes.
+DROPPED_THEME_PREFIXES = (
+    "TAX_FNCACT_",
+    "TAX_WORLDLANGUAGES_",
+    "TAX_ETHNICITY_",
+    "TAX_RELIGION_",
+    "TAX_MILITARY_TITLE_",
+    "TAX_WORLDMAMMALS_",
+    "TAX_WORLDBIRDS_",
+    "TAX_WORLDFISH_",
+    "TAX_WORLDREPTILES_",
+    "TAX_WORLDARACHNIDS_",
+    "TAX_WORLDINSECTS_",
+    "SOC_POINTSOFINTEREST_",
+    "USPEC_",
+    "EPU_",
+    "CRISISLEX_",
+)
+DROPPED_THEMES = frozenset({"GENERAL_GOVERNMENT", "LEADER", "MEDIA_MSM"})
+
+# Families whose prefix goes: World Bank, UN Guiding Principles, social, taxonomy.
+_THEME_PREFIXES = ("WB_", "UNGP_", "SOC_", "TAX_")
+# The number World Bank themes put before the theme (WB_2432_).
+_THEME_CODE = re.compile(r"^\d+_")
 _THEME_CHARS = re.compile(r"[A-Za-z0-9_]+")
+
+# The commonest themes, by code without the family prefix, as words.
+_THEME_LABELS = {
+    "ARMEDCONFLICT": "Armed conflict",
+    "ARREST": "Arrests",
+    "ELECTION": "Elections",
+    "FRAGILITY_CONFLICT_AND_VIOLENCE": "Fragility, conflict and violence",
+    "GENERALCRIME": "Crime",
+    "GENERAL_HEALTH": "Health",
+    "KILL": "Killings",
+    "PROTEST": "Protests",
+    "TERROR": "Terrorism",
+    "WOUND": "Injuries",
+}
+# Themes shown as one label whatever follows the code's start.
+_THEME_GROUPS = (
+    ("MANMADE_DISASTER", "Man-made disaster"),
+    ("NATURAL_DISASTER", "Natural disaster"),
+)
+# Families shown as "Family: theme".
+_THEME_FAMILIES = (
+    ("ECON_", "Economy"),
+    ("ENV_", "Environment"),
+    ("HEALTH_", "Health"),
+    ("WEAPONS_", "Weapons"),
+    ("DISEASE_", "Disease"),
+)
+# Words GDELT runs together.
+_THEME_WORDS = {
+    "ARMEDCONFLICT": "armed conflict",
+    "CLIMATECHANGE": "climate change",
+    "EARNINGSREPORT": "earnings report",
+    "FOREIGNINVEST": "foreign investment",
+    "FREESPEECH": "free speech",
+    "FREETRADE": "free trade",
+    "FUELPRICES": "fuel prices",
+    "MASSMIGRATION": "mass migration",
+    "NUCLEARPOWER": "nuclear power",
+    "OILPRICE": "oil prices",
+    "PRICECONTROL": "price controls",
+    "STOCKMARKET": "stock market",
+}
 
 
 def _pair_conditions(
@@ -348,7 +414,11 @@ def detail_names_query(
 def detail_themes_query(
     a: str, b: str, start: datetime, end: datetime, topic: str | None, limit: int
 ) -> tuple[Any, ...]:
-    """SQL and arguments for the GDELT themes of the pair's stories, in most stories first."""
+    """SQL and arguments for the GDELT themes of the pair's stories, in most stories first.
+
+    Themes display_theme drops are not fetched, so the *limit* goes to ones
+    that show.
+    """
     conditions, args = _pair_conditions(a, b, start, end, topic)
     args.append(limit)
     query = f"""
@@ -357,6 +427,8 @@ def detail_themes_query(
             SELECT {_STORY} AS story, themes FROM articles a
             WHERE {" AND ".join(conditions)}
         ) linked, unnest(themes) AS theme
+        WHERE NOT theme ^@ ANY ('{{{",".join(DROPPED_THEME_PREFIXES)}}}'::text[])
+          AND theme <> ALL ('{{{",".join(sorted(DROPPED_THEMES))}}}'::text[])
         GROUP BY theme
         ORDER BY n DESC, theme
         LIMIT ${len(args)}
@@ -364,21 +436,41 @@ def detail_themes_query(
     return query, *args
 
 
-def display_theme(theme: str) -> str:
-    """A GDELT theme as words: "WB_2432_FRAGILITY_CONFLICT" -> "Fragility conflict".
+def _theme_words(code: str) -> str:
+    """A theme code's words, lower case: "STOCKMARKET_CRASH" -> "stock market crash"."""
+    return " ".join(_THEME_WORDS.get(word, word.lower()) for word in code.split("_") if word)
 
-    The family prefix, any number code after it and trailing digits go.
-    Anything but a plain theme code shows as nothing.
+
+def display_theme(theme: str) -> str:
+    """A GDELT theme as a label: "ECON_STOCKMARKET" -> "Economy: stock market".
+
+    Themes that say nothing about a link (DROPPED_THEME_PREFIXES,
+    DROPPED_THEMES) show as nothing, as does anything but a plain theme
+    code. Otherwise the family prefix, a World Bank number and trailing
+    digits go; then the theme reads as a known label, a group's or a
+    family's, or its own words in sentence case.
     """
     if not isinstance(theme, str) or not _THEME_CHARS.fullmatch(theme):
         return ""
-    text = theme.upper()
+    code = theme.upper()
+    if code in DROPPED_THEMES or code.startswith(DROPPED_THEME_PREFIXES):
+        return ""
     for prefix in _THEME_PREFIXES:
-        if text.startswith(prefix):
-            text = text[len(prefix) :]
+        if code.startswith(prefix):
+            code = code[len(prefix) :]
             break
-    text = _THEME_CODE.sub("", text).rstrip("0123456789")
-    return " ".join(text.replace("_", " ").split()).capitalize()
+    code = _THEME_CODE.sub("", code).rstrip("0123456789_")
+    if code in _THEME_LABELS:
+        return _THEME_LABELS[code]
+    for start, label in _THEME_GROUPS:
+        if code.startswith(start):
+            return label
+    for prefix, family in _THEME_FAMILIES:
+        if code.startswith(prefix):
+            words = _theme_words(code[len(prefix) :])
+            return f"{family}: {words}" if words else family
+    words = _theme_words(code)
+    return words[:1].upper() + words[1:]
 
 
 def top_themes(rows: list[dict]) -> list[str]:

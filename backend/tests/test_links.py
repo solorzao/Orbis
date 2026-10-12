@@ -220,40 +220,83 @@ class TestDisplayTheme:
     @pytest.mark.parametrize(
         ("theme", "shown"),
         [
-            ("WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE", "Fragility conflict and violence"),
-            ("TAX_FNCACT_PRESIDENT", "President"),
-            ("TAX_ETHNICITY_AMERICAN", "Ethnicity american"),
-            ("CRISISLEX_T03_DEAD", "Dead"),
-            ("CRISISLEX_C07_SAFETY", "Safety"),
-            ("EPU_POLICY_GOVERNMENT", "Policy government"),
-            ("USPEC_POLITICS_GENERAL1", "Politics general"),
-            ("SOC_POINTSOFINTEREST_SCHOOL", "Pointsofinterest school"),
+            # Words GDELT runs together, and the commonest themes, read as words.
+            ("ARMEDCONFLICT", "Armed conflict"),
+            ("KILL", "Killings"),
+            ("TERROR", "Terrorism"),
+            ("ELECTION", "Elections"),
+            ("PROTEST", "Protests"),
+            ("SOC_GENERALCRIME", "Crime"),
+            ("GENERAL_HEALTH", "Health"),
+            ("MANMADE_DISASTER_IMPLIED", "Man-made disaster"),
+            # Families.
+            ("NATURAL_DISASTER_FLOOD", "Natural disaster"),
+            ("NATURAL_DISASTER_EARTHQUAKE", "Natural disaster"),
+            ("ECON_INFLATION", "Economy: inflation"),
+            ("ECON_STOCKMARKET", "Economy: stock market"),
+            ("ENV_CLIMATECHANGE", "Environment: climate change"),
+            ("TAX_WEAPONS_MISSILE", "Weapons: missile"),
+            # World Bank: the number goes, the topic stays.
+            ("WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE", "Fragility, conflict and violence"),
+            ("WB_2433_CONFLICT_AND_VIOLENCE", "Conflict and violence"),
+            ("WB_696_PUBLIC_SECTOR_MANAGEMENT", "Public sector management"),
+            # The rest: underscores to spaces, in sentence case.
+            ("MEDICAL", "Medical"),
+            ("CYBER_ATTACK", "Cyber attack"),
+            ("LEGISLATION", "Legislation"),
+            ("SECURITY_SERVICES", "Security services"),
             ("UNGP_FORESTS_RIVERS_OCEANS", "Forests rivers oceans"),
-            ("ARMEDCONFLICT", "Armedconflict"),
-            ("MANMADE_DISASTER_IMPLIED", "Manmade disaster implied"),
+            # Generic or administrative: dropped.
+            ("TAX_FNCACT_OFFICIALS", ""),
+            ("TAX_FNCACT_PRESIDENT", ""),
+            ("TAX_WORLDLANGUAGES_ALABAMA", ""),
+            ("TAX_ETHNICITY_AMERICAN", ""),
+            ("TAX_WORLDMAMMALS_LION", ""),
+            ("TAX_WORLDBIRDS_EAGLE", ""),
+            ("TAX_RELIGION_CATHOLIC", ""),
+            ("TAX_MILITARY_TITLE_SOLDIER", ""),
+            ("USPEC_UNCERTAINTY1", ""),
+            ("USPEC_POLITICS_GENERAL1", ""),
+            ("EPU_POLICY", ""),
+            ("EPU_POLICY_GOVERNMENT", ""),
+            ("CRISISLEX_C07_SAFETY", ""),
+            ("CRISISLEX_T03_DEAD", ""),
+            ("CRISISLEX_CRISISLEXREC", ""),
+            ("SOC_POINTSOFINTEREST_SCHOOL", ""),
+            ("GENERAL_GOVERNMENT", ""),
+            ("LEADER", ""),
+            ("MEDIA_MSM", ""),
+            # Not a theme code.
             ("WB_", ""),
             ("", ""),
+            ("ARMED CONFLICT", ""),
+            (None, ""),
         ],
     )
-    def test_prefixes_and_codes_are_stripped(self, theme, shown):
+    def test_readable_labels(self, theme, shown):
         assert links.display_theme(theme) == shown
 
-    def test_top_themes_are_distinct_once_shown_and_capped(self):
-        themes = [
-            "TAX_FNCACT_PRESIDENT",
-            "WB_",
-            "KILL",
-            "USPEC_POLITICS_GENERAL1",
-            "EPU_POLITICS_GENERAL",  # "Politics general" again
-            "ARMEDCONFLICT",
-            "SANCTIONS",
-            "MILITARY",
+    def test_any_case(self):
+        assert links.display_theme("econ_inflation") == "Economy: inflation"
+
+    def test_top_five_distinct_labels_by_stories(self):
+        rows = [  # as detail_themes_query returns them: in most stories first
+            {"theme": "TAX_FNCACT_PRESIDENT", "n": 9},
+            {"theme": "TERROR", "n": 8},
+            {"theme": "KILL", "n": 7},
+            {"theme": "WB_2467_TERRORISM", "n": 6},  # "Terrorism" again
+            {"theme": "NATURAL_DISASTER_FLOOD", "n": 5},
+            {"theme": "NATURAL_DISASTER_EARTHQUAKE", "n": 4},  # "Natural disaster" again
+            {"theme": "EPU_POLICY", "n": 4},
+            {"theme": "ARMEDCONFLICT", "n": 3},
+            {"theme": "SANCTIONS", "n": 2},
+            {"theme": "MILITARY", "n": 1},
         ]
-        assert links.top_themes([{"theme": t} for t in themes]) == [
-            "President",
-            "Kill",
-            "Politics general",
-            "Armedconflict",
+        assert links.top_themes(rows) == [
+            "Terrorism",
+            "Killings",
+            "Natural disaster",
+            "Armed conflict",
             "Sanctions",
         ]
 
@@ -312,6 +355,15 @@ class TestDetailQueries:
         assert "SELECT theme, count(DISTINCT story) AS n" in flat
         assert "ORDER BY n DESC, theme LIMIT $5" in flat
 
+    def test_themes_shown_as_nothing_are_not_fetched(self):
+        """So the themes fetched for the top five are ones that show."""
+        flat = _sql(links.detail_themes_query("IR", "US", START, END, None, 25)[0])
+        prefixes = ",".join(links.DROPPED_THEME_PREFIXES)
+        themes = ",".join(sorted(links.DROPPED_THEMES))
+        assert f"WHERE NOT theme ^@ ANY ('{{{prefixes}}}'::text[])" in flat
+        assert f"AND theme <> ALL ('{{{themes}}}'::text[]) GROUP BY theme" in flat
+        assert "TAX_FNCACT_" in prefixes and "CRISISLEX_" in prefixes
+
     def test_stats_count_the_pairs_stories_like_the_links_query(self):
         sql, *args = links.detail_stats_query("IR", "US", START, END, None)
         flat = _sql(sql)
@@ -360,7 +412,7 @@ class TestGetLinkDetail:
         pool = _detail_pool(
             stats,
             names=[{"name": "Abbas Araghchi", "type": "person", "n": 3}],
-            themes=[{"theme": "TAX_FNCACT_PRESIDENT", "n": 4}],
+            themes=[{"theme": "TAX_FNCACT_PRESIDENT", "n": 5}, {"theme": "KILL", "n": 4}],
             articles=[{"id": "x"}],
         )
         with patch("app.services.links.get_pool", new_callable=AsyncMock, return_value=pool):
@@ -377,7 +429,7 @@ class TestGetLinkDetail:
             "health": 0,
         }
         assert detail["shared"] == [{"name": "Abbas Araghchi", "type": "person", "n": 3}]
-        assert detail["themes"] == ["President"]
+        assert detail["themes"] == ["Killings"]
         assert detail["articles"] == [{"id": "x"}]
 
     @pytest.mark.asyncio
