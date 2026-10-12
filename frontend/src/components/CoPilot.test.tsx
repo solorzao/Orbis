@@ -326,6 +326,27 @@ describe("CoPilot", () => {
       expect(screen.queryByRole("button", { name: "Show stories here" })).toBeNull();
     });
 
+    it("are not looked up again while the next answer streams", () => {
+      const showStoriesFor = vi.fn(() => null);
+      const done = answer({ globeActions: actions });
+      const asking = (content: string): AgentMessage[] => [
+        ...done,
+        { id: "q2", role: "user", content: "And Ghana?" },
+        { id: "a2", role: "assistant", content, status: "streaming" },
+      ];
+      const { props, rerender } = renderCoPilot({
+        messages: asking(""),
+        showStoriesFor,
+        isLoading: true,
+      });
+      expect(showStoriesFor).toHaveBeenCalledTimes(1);
+
+      rerender(<CoPilot {...props} messages={asking("Gh")} />);
+      rerender(<CoPilot {...props} messages={asking("Ghana's")} />);
+      expect(screen.getByText("Ghana's")).toBeInTheDocument();
+      expect(showStoriesFor).toHaveBeenCalledTimes(1);
+    });
+
     it("wait for the answer to finish", () => {
       renderCoPilot({ messages: answer({ globeActions: actions, status: "streaming" }) });
       expect(screen.queryByRole("group", { name: "Suggested actions" })).toBeNull();

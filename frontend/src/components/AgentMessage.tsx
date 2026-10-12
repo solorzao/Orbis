@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
   cleanLabel,
@@ -58,9 +58,10 @@ interface AgentMessageProps {
 /**
  * One message in the co-pilot console (mockup .msg, lines 336-350): the
  * question as a bubble; the answer as prose with numbered citation pills,
- * then its sources and the actions it suggests.
+ * then its sources and the actions it suggests. Memoised (see the export):
+ * while an answer streams, only it re-renders, not the ones before it.
  */
-export default function AgentMessage({
+function AgentMessage({
   message,
   activeTools = [],
   onCitationClick,
@@ -174,3 +175,7 @@ export default function AgentMessage({
     </div>
   );
 }
+
+// useAgent keeps each finished message's object, and the page's handlers are
+// stable, so a token re-renders the streaming answer only.
+export default memo(AgentMessage);
