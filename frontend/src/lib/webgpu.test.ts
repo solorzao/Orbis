@@ -65,4 +65,31 @@ describe("webGpuReady", () => {
     await webGpuReady();
     expect(requestAdapter).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["the adapter", () => ({ requestAdapter: vi.fn(() => new Promise(() => {})) })],
+    [
+      "the device",
+      () => ({
+        requestAdapter: vi.fn().mockResolvedValue({
+          requestDevice: vi.fn(() => new Promise(() => {})),
+        }),
+      }),
+    ],
+  ])("gives up after 2 s when %s never comes", async (_, gpu) => {
+    vi.useFakeTimers();
+    try {
+      stubGpu(gpu());
+      const webGpuReady = await freshProbe();
+      let settled: boolean | undefined;
+      webGpuReady().then((ok) => (settled = ok));
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(false);
+      expect((navigator as { gpu?: unknown }).gpu).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
