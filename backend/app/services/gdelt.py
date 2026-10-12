@@ -9,11 +9,12 @@ import logging
 import math
 import re
 import zipfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from app.config import settings
 from app.services.country_codes import fips_to_iso2
 
 logger = logging.getLogger(__name__)
@@ -379,6 +380,95 @@ def _parse_tone_detail(raw: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Stale re-crawls: GKG sometimes lists pages published years ago, and the
+# record's date (which becomes published_at) is when GDELT saw them.
+# ---------------------------------------------------------------------------
+
+_PUBTIME_OPEN = "<PAGE_PRECISEPUBTIMESTAMP>"
+_PUBTIME_CLOSE = "</PAGE_PRECISEPUBTIMESTAMP>"
+# The value is 14 digits: the closing tag is looked for only just past the opener.
+_PUBTIME_MAX_CHARS = 32
+# Earlier page dates are malformed: news sites barely existed.
+_MIN_PAGE_YEAR = 1995
+
+# A date starting a URL path segment: /2005/07/11/, /2020-08-04-slug, /20200804/.
+# One delimiter throughout (none: 8 digits), ending a segment or followed by ".",
+# "-" or "_". A date inside a slug ("what-happened-on-2001-09-11") or inside a
+# longer number or word (IDs) never matches. No nested repetition: linear.
+_URL_DATE_RE = re.compile(r"(?<=/)((?:19|20)[0-9]{2})([/_-]?)([0-9]{2})\2([0-9]{2})(?=[/._-]|$)")
+
+
+def _page_published_at(extras_xml: str) -> datetime | None:
+    """V2EXTRASXML's ``<PAGE_PRECISEPUBTIMESTAMP>`` (YYYYMMDDHHMMSS, UTC).
+
+    None when absent or malformed. Uses str.find, bounded to just past the
+    opening tag, rather than a regex over the whole field.
+    """
+    start = extras_xml.find(_PUBTIME_OPEN)
+    if start < 0:
+        return None
+    start += len(_PUBTIME_OPEN)
+    end = extras_xml.find(_PUBTIME_CLOSE, start, start + _PUBTIME_MAX_CHARS + len(_PUBTIME_CLOSE))
+    if end < 0:
+        return None
+    value = extras_xml[start:end].strip()
+    if len(value) != 14 or not (value.isascii() and value.isdigit()):
+        return None
+    try:
+        published = datetime.strptime(value, "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    if published.year < _MIN_PAGE_YEAR:
+        return None
+    return published.replace(tzinfo=timezone.utc)
+
+
+def _url_date(url: str) -> date | None:
+    """The publication date in a web URL's path, or None if it has no clear one.
+
+    Only the path is read (not the host, query string or fragment), only a
+    date starting a segment counts (a slug about a past event must not make a
+    new page look old), and only valid calendar dates from 1995 to this year.
+    When the path holds several, the latest wins.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https"):
+        return None
+    this_year = datetime.now(timezone.utc).year
+    latest = None
+    for match in _URL_DATE_RE.finditer(parts.path):
+        year, _, month, day = match.groups()
+        if not _MIN_PAGE_YEAR <= int(year) <= this_year:
+            continue
+        try:
+            found = date(int(year), int(month), int(day))
+        except ValueError:
+            continue
+        if latest is None or found > latest:
+            latest = found
+    return latest
+
+
+def _page_date(extras_xml: str, url: str) -> date | None:
+    """When the page itself was published: GDELT's precise timestamp, else its URL's date."""
+    published = _page_published_at(extras_xml)
+    return published.date() if published else _url_date(url)
+
+
+def _is_stale_recrawl(page_date: date | None, seen_at: datetime) -> bool:
+    """Whether a page dated *page_date* is older than the retention window at *seen_at*.
+
+    *seen_at* is the GKG record's date. Pages without a date are kept.
+    """
+    if page_date is None:
+        return False
+    return (seen_at.date() - page_date).days > settings.retention_days
+
+
+# ---------------------------------------------------------------------------
 # Public API — raw GKG data files
 # ---------------------------------------------------------------------------
 
@@ -387,8 +477,10 @@ async def fetch_raw_gkg() -> list[dict]:
     """Download the latest GDELT GKG data file and extract city-level articles.
 
     Each 15-minute GKG file contains ~1000+ records.  We filter to records
-    with city-level locations (type 3=USCITY or 4=WORLDCITY) and deduplicate
-    by URL, returning a few hundred unique articles with city-level coordinates.
+    with city-level locations (type 3=USCITY or 4=WORLDCITY), skip stale
+    re-crawls (pages published over ``retention_days`` before GDELT listed
+    them) and deduplicate by URL, returning a few hundred unique articles with
+    city-level coordinates.
 
     Returns a list of dicts with keys:
         url, domain, lat, lng, location_name, country_code, country_fips,
@@ -457,8 +549,9 @@ def _parse_gkg(raw: str) -> list[dict]:
     # 15: V1.5TONE (comma-separated: tone, pos, neg, polarity, act, self, words)
     # 18: V2.1SHARINGIMAGE (URL)
     # 23: V2.1ALLNAMES (semicolon-delimited Name,offset)
-    # 26: V2EXTRASXML (<PAGE_TITLE>...</PAGE_TITLE> among other tags)
+    # 26: V2EXTRASXML (<PAGE_TITLE>, <PAGE_PRECISEPUBTIMESTAMP> among other tags)
     articles: dict[str, dict] = {}  # keyed by URL for dedup
+    stale = 0
 
     lines = raw.strip().split("\n")
     for line in lines:
@@ -518,6 +611,13 @@ def _parse_gkg(raw: str) -> list[dict]:
         if not city_loc:
             continue
 
+        # Old pages GDELT re-crawled are not news, whatever the record's date.
+        extras = _field(fields, 26)
+        published_at = _parse_gkg_date(_field(fields, 1))
+        if _is_stale_recrawl(_page_date(extras, url), published_at):
+            stale += 1
+            continue
+
         # Extract tone (first value in comma-separated V1.5TONE)
         tone_raw = fields[15] if len(fields) > 15 else ""
         tone = 0.0
@@ -538,7 +638,7 @@ def _parse_gkg(raw: str) -> list[dict]:
             "country_code": city_loc["country_code"],
             "country_fips": city_loc["country_fips"],
             "tone": tone,
-            "page_title": _parse_page_title(_field(fields, 26)),
+            "page_title": _parse_page_title(extras),
             "themes": _parse_themes(_field(fields, 7)),
             "persons": _parse_entities(_field(fields, 11)),
             "organizations": _parse_entities(_field(fields, 13)),
@@ -546,7 +646,7 @@ def _parse_gkg(raw: str) -> list[dict]:
             "counts": _parse_counts(_field(fields, 6), _field(fields, 5)),
             "mentioned_locations": mentioned_locations,
             "image_url": image_url if image_url.startswith("http") else "",
-            "published_at": _parse_gkg_date(_field(fields, 1)),
+            "published_at": published_at,
         }
         tone_detail = _parse_tone_detail(tone_raw)
         if tone_detail is not None:
@@ -554,9 +654,10 @@ def _parse_gkg(raw: str) -> list[dict]:
         articles[url] = article
 
     logger.info(
-        "GKG raw file: %d records, %d with city-level locations.",
+        "GKG raw file: %d records, %d with city-level locations, %d stale re-crawls skipped.",
         len(lines),
         len(articles),
+        stale,
     )
     return list(articles.values())
 

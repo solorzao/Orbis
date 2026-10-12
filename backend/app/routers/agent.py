@@ -119,7 +119,7 @@ def _validate_request(body: AskRequest) -> str:
 
 
 def _screen_scope(body: AskRequest) -> ScreenScope | None:
-    """The request's screen context, cleaned for the planner (None if absent or empty)."""
+    """The request's screen context, cleaned for the prompts (None if absent or empty)."""
     c = body.context
     if c is None:
         return None
@@ -290,7 +290,7 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
 
         # Step 3: Build context and synthesize
         context, article_index = _build_context(retrieval_results)
-        result = await synthesize_answer(question, context, history)
+        result = await synthesize_answer(question, context, history, scope)
         result["citations"] = _enrich_citations(result.get("citations", []), article_index)
         result["tools_used"] = [tc["name"] for tc in tool_calls]
 

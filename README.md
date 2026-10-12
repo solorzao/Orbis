@@ -23,7 +23,7 @@ Orbis plots real-time news from the [GDELT](https://www.gdeltproject.org/) API o
 
 | Layer          | Technology                                      |
 | -------------- | ----------------------------------------------- |
-| Frontend       | Next.js, React, TypeScript, Tailwind, Framer Motion |
+| Frontend       | Next.js, React, TypeScript, Tailwind            |
 | 3D Globe       | globe.gl (Three.js)                             |
 | Backend        | Python, FastAPI, Uvicorn                         |
 | Database       | Azure PostgreSQL (asyncpg)                       |

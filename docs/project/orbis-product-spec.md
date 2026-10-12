@@ -107,7 +107,7 @@ Goes beyond single-query RAG to automatically generate "story arcs" for a region
 
 - **React / Next.js** for the app shell
 - **Tailwind CSS** for styling
-- **Framer Motion** for animations and transitions
+- **CSS transitions and keyframes** for animations (no animation library)
 
 ### News Data Sources
 
