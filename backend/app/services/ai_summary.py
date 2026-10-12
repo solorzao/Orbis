@@ -114,12 +114,14 @@ async def summarise_cluster(
     # Name the place when we know it. Never send raw coordinates: Haiku 5.5
     # narrates working out where they are instead of summarising.
     location = _cell_place(articles)
-    lines = [
-        f"- {sanitise_text(a.title, max_length=200)}"
-        f" ({sanitise_text(a.source_name, max_length=50)})"
-        for a in articles[:30]
-        if not has_injection_pattern(a.title)
-    ]
+    lines = []
+    for a in articles[:30]:
+        title = sanitise_text(a.title, max_length=200)
+        line = f"- {title} ({sanitise_text(a.source_name, max_length=50)})"
+        # Checked once cleaned: sanitise_text deletes control characters, which
+        # would otherwise hide an injection phrase from the check ("Ig\x01nore").
+        if not has_injection_pattern(line):
+            lines.append(line)
     if not lines:
         return ""
     header = f"Location: {location}\n\n" if location else ""
@@ -160,9 +162,9 @@ async def summarise_selection(
 
     place = _clean_place(location_name)
     location = f"Location: {place}\n\n" if place else ""
-    clean = [
-        sanitise_text(h, max_length=200) for h in headlines[:10] if not has_injection_pattern(h)
-    ]
+    # Checked once cleaned, as in summarise_cluster.
+    cleaned = [sanitise_text(h, max_length=200) for h in headlines[:10]]
+    clean = [h for h in cleaned if not has_injection_pattern(h)]
     if not clean:
         return ""
     lines = [f"- {h}" for h in clean]
