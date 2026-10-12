@@ -138,4 +138,22 @@ test.describe("Layer switcher", () => {
     await dots.click();
     await expect(dots).toHaveAttribute("aria-pressed", "true");
   });
+
+  test("during a replay on the main-thread path, each day's dots show over the held heatmap", async ({
+    page,
+  }) => {
+    // Playwright's Chromium has navigator.gpu but no adapter: webGpuReady says no, CPU path.
+    const timeline = await gotoTimeline(page);
+    const globe = page.getByTestId("globe");
+    await expect(globe).toHaveAttribute("data-dots", "3");
+
+    await page.getByTestId("layer-switcher").getByRole("button", { name: "Intensity" }).click();
+    await expect(globe).toHaveAttribute("data-dots", "0"); // the heatmap alone
+
+    await timeline.getByRole("button", { name: "Replay the last 7 days" }).click();
+    await expect(globe).toHaveAttribute("data-dots", "3"); // the day's places, over it
+
+    await timeline.getByRole("button", { name: "Stop replay" }).click();
+    await expect(globe).toHaveAttribute("data-dots", "0");
+  });
 });

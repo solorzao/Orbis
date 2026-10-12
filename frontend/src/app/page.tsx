@@ -336,6 +336,7 @@ export default function Home() {
         lowPower={lowPower}
         layer={globeLayer}
         holdHeatmap={replaying || loading}
+        replaying={replaying}
       />
 
       {/* Orbital rings around the globe */}

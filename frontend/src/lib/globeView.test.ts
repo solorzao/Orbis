@@ -10,6 +10,7 @@ import {
   heatmapPoints,
   hexToRgba,
   recomputeHeatmap,
+  showDots,
   pointTooltipHtml,
   projectedRadius,
   ringRepeatMs,
@@ -213,5 +214,26 @@ describe("recomputeHeatmap", () => {
   it("keeps the current heatmap on the main-thread path while held (a replay plays, dots load)", () => {
     expect(recomputeHeatmap({ gpu: false, hold: true })).toBe(false);
     expect(recomputeHeatmap({ gpu: false, hold: false })).toBe(true);
+  });
+});
+
+describe("showDots", () => {
+  it("shows the dots on the Dots layer, always", () => {
+    for (const replaying of [false, true])
+      for (const cpuPath of [false, true])
+        expect(showDots("dots", { replaying, cpuPath })).toBe(true);
+  });
+
+  it("hides them under Intensity", () => {
+    expect(showDots("intensity", { replaying: false, cpuPath: false })).toBe(false);
+    expect(showDots("intensity", { replaying: false, cpuPath: true })).toBe(false);
+  });
+
+  it("shows each day's dots over the held heatmap during a replay on the main-thread path", () => {
+    expect(showDots("intensity", { replaying: true, cpuPath: true })).toBe(true);
+  });
+
+  it("leaves WebGPU replays to the heatmap, which recomputes each day", () => {
+    expect(showDots("intensity", { replaying: true, cpuPath: false })).toBe(false);
   });
 });

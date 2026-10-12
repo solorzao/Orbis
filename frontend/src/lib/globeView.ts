@@ -53,6 +53,8 @@ export const HEATMAP = {
   topAltitude: 0.04,
   /** Places the main-thread fallback computes from (see heatmapPoints). */
   maxPointsWithoutGpu: 60,
+  /** The held heatmap's opacity under a replay's dots (see showDots). */
+  dimmedOpacity: 0.35,
 } as const;
 
 /**
@@ -124,6 +126,19 @@ export function heatmapPoints<P extends { count: number }>(
  */
 export function recomputeHeatmap({ gpu, hold }: { gpu: boolean; hold: boolean }): boolean {
   return gpu || !hold;
+}
+
+/**
+ * Whether the globe draws its dots. Always on the Dots layer, never under
+ * Intensity, except during a replay on the main-thread path: there the
+ * heatmap is held (see recomputeHeatmap), so each day's dots show over it.
+ * With WebGPU the heatmap itself changes each day.
+ */
+export function showDots(
+  layer: "dots" | "intensity",
+  { replaying, cpuPath }: { replaying: boolean; cpuPath: boolean },
+): boolean {
+  return layer === "dots" || (replaying && cpuPath);
 }
 
 /** "#rrggbb" to "rgba(r,g,b,a)", for canvas colours built from tokens. */
