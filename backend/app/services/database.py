@@ -32,6 +32,8 @@ __all__ = [
     "get_globe_points",
     "get_hourly_density",
     "get_hourly_volume",
+    "get_cell_spark",
+    "get_cell_entities",
 ]
 
 logger = logging.getLogger("orbis.database")
@@ -156,6 +158,33 @@ async def get_articles_by_country(
 _BOX_PAD_DEGREES = 0.01
 
 
+def _cell_box(
+    min_lat: float, min_lng: float, max_lat: float, max_lng: float
+) -> tuple[list[str], list[Any]]:
+    """WHERE conditions and their arguments ($1-$8) for a cell-sized lat/lng box.
+
+    Index prefilter: the box as geography for idx_articles_location, padded
+    (and kept on the globe) so its geodesic edges never cut off a point of
+    the exact box; the half-open lat/lng range then decides, as the globe
+    dots' FLOOR grid does.
+    """
+    params: list[Any] = [
+        min_lat,
+        min_lng,
+        max_lat,
+        max_lng,
+        max(min_lng - _BOX_PAD_DEGREES, -180.0),
+        max(min_lat - _BOX_PAD_DEGREES, -90.0),
+        min(max_lng + _BOX_PAD_DEGREES, 180.0),
+        min(max_lat + _BOX_PAD_DEGREES, 90.0),
+    ]
+    conditions = [
+        "location && ST_MakeEnvelope($5, $6, $7, $8, 4326)::geography",
+        "latitude >= $1 AND latitude < $3 AND longitude >= $2 AND longitude < $4",
+    ]
+    return conditions, params
+
+
 async def get_articles_in_bounds(
     min_lat: float,
     min_lng: float,
@@ -185,24 +214,8 @@ async def get_articles_in_bounds(
     in the dedup and the final order, so offset paging over repeated calls
     neither repeats nor skips articles.
     """
-    # Index prefilter: the box as geography for idx_articles_location, padded
-    # (and kept on the globe) so its geodesic edges never cut off a point of
-    # the exact box; the half-open lat/lng range then decides.
-    params: list[Any] = [
-        min_lat,
-        min_lng,
-        max_lat,
-        max_lng,
-        max(min_lng - _BOX_PAD_DEGREES, -180.0),
-        max(min_lat - _BOX_PAD_DEGREES, -90.0),
-        min(max_lng + _BOX_PAD_DEGREES, 180.0),
-        min(max_lat + _BOX_PAD_DEGREES, 90.0),
-        limit,
-    ]
-    conditions = [
-        "location && ST_MakeEnvelope($5, $6, $7, $8, 4326)::geography",
-        "latitude >= $1 AND latitude < $3 AND longitude >= $2 AND longitude < $4",
-    ]
+    conditions, params = _cell_box(min_lat, min_lng, max_lat, max_lng)
+    params.append(limit)
     if start_time is not None:
         params.append(start_time)
         conditions.append(f"published_at >= ${len(params)}")
@@ -538,6 +551,102 @@ async def get_hourly_volume(days: int) -> list[dict[str, Any]]:
         days,
     )
     return [{"hour": r["hour"], "count": r["count"]} for r in rows]
+
+
+async def get_cell_spark(
+    min_lat: float,
+    min_lng: float,
+    max_lat: float,
+    max_lng: float,
+    *,
+    end_time: datetime,
+    topic: str | None = None,
+) -> list[int]:
+    """Stories per UTC hour in a cell over the 24 hours up to *end_time*.
+
+    24 counts, oldest first: the hour 23 before *end_time*'s, through
+    *end_time*'s own (up to *end_time*). Hours without stories count 0.
+    *topic*, an article tag, counts its stories only. The box is cell-sized
+    and half-open, as in get_articles_in_bounds.
+    """
+    conditions, params = _cell_box(min_lat, min_lng, max_lat, max_lng)
+    params.append(end_time)
+    end = f"${len(params)}::timestamptz"
+    first_hour = f"date_trunc('hour', {end}, 'UTC') - interval '23 hours'"
+    conditions.append(f"published_at >= {first_hour} AND published_at <= ${len(params)}")
+    if topic is not None:
+        params.append(topic)
+        conditions.append(f"topic_tags && ARRAY[${len(params)}::text]")
+
+    pool = await get_pool()
+    rows = await pool.fetch(
+        f"""
+        SELECT h.hour, COALESCE(c.count, 0)::int AS count
+        FROM generate_series(
+               {first_hour},
+               date_trunc('hour', {end}, 'UTC'),
+               interval '1 hour') AS h(hour)
+        LEFT JOIN (
+          SELECT date_trunc('hour', published_at, 'UTC') AS hour, count(*) AS count
+          FROM articles
+          WHERE {" AND ".join(conditions)}
+          GROUP BY 1
+        ) c USING (hour)
+        ORDER BY h.hour
+        """,
+        *params,
+    )
+    return [r["count"] for r in rows]
+
+
+async def get_cell_entities(
+    min_lat: float,
+    min_lng: float,
+    max_lat: float,
+    max_lng: float,
+    *,
+    start_time: datetime,
+    end_time: datetime,
+    topic: str | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """The names a cell's stories mention most in a window: persons and orgs.
+
+    Rows of ``name``, ``type`` ("person" or "org") and ``n``, the stories
+    naming it, most first. A story is a title, so syndicated copies count
+    once, and a name needs two stories. Names are GDELT's, uncleaned.
+    *topic*, an article tag, keeps its stories only.
+    """
+    conditions, params = _cell_box(min_lat, min_lng, max_lat, max_lng)
+    params.extend([start_time, end_time])
+    conditions.append(f"published_at >= ${len(params) - 1} AND published_at <= ${len(params)}")
+    if topic is not None:
+        params.append(topic)
+        conditions.append(f"topic_tags && ARRAY[${len(params)}::text]")
+    params.append(limit)
+
+    pool = await get_pool()
+    rows = await pool.fetch(
+        f"""
+        WITH cell AS (
+          SELECT lower(title) AS story, persons, orgs
+          FROM articles
+          WHERE {" AND ".join(conditions)}
+        )
+        SELECT name, type, count(DISTINCT story) AS n
+        FROM (
+          SELECT story, unnest(persons) AS name, 'person' AS type FROM cell
+          UNION ALL
+          SELECT story, unnest(orgs) AS name, 'org' AS type FROM cell
+        ) mentions
+        GROUP BY name, type
+        HAVING count(DISTINCT story) >= 2
+        ORDER BY n DESC, name
+        LIMIT ${len(params)}
+        """,
+        *params,
+    )
+    return [{"name": r["name"], "type": r["type"], "n": r["n"]} for r in rows]
 
 
 async def get_topic_counts() -> dict[str, int]:

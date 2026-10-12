@@ -1,6 +1,7 @@
 """Tests for the news router endpoints (database-backed)."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -899,3 +900,244 @@ class TestGetVolume:
 
         assert resp.json() == cached
         mock_db.assert_not_awaited()
+
+
+# ── /api/news/preview: the hover card's dwell data ──────────────────────
+
+PREVIEW_NOW = datetime(2026, 10, 12, 14, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def preview_db(monkeypatch):
+    """The preview's two queries and its brief lookup, stubbed; the clock frozen."""
+    import app.routers.news as news
+
+    monkeypatch.setattr(news, "_now", lambda: PREVIEW_NOW)
+    spark = AsyncMock(return_value=[0] * 23 + [4])
+    entities = AsyncMock(return_value=[])
+    with (
+        patch("app.routers.news.get_cell_spark", spark),
+        patch("app.routers.news.get_cell_entities", entities),
+        patch("app.routers.news.cached_summary", AsyncMock(return_value=None)) as brief,
+    ):
+        yield SimpleNamespace(spark=spark, entities=entities, brief=brief)
+
+
+async def _preview(monkeypatch, **params):
+    async with _api_client(monkeypatch) as client:
+        return await client.get("/api/news/preview", params={"lat": 40.7, "lng": -74.0, **params})
+
+
+class TestGetPlacePreview:
+    @pytest.mark.asyncio
+    async def test_live_window_reads_the_cell_over_the_last_hours(self, monkeypatch, preview_db):
+        resp = await _preview(monkeypatch, timespan="6h")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"spark": [0] * 23 + [4], "entities": [], "brief": None}
+        cell = (40.0, -74.0, 41.0, -73.0)  # the dot's 1° cell, floored
+        preview_db.spark.assert_awaited_once_with(*cell, end_time=PREVIEW_NOW, topic=None)
+        preview_db.entities.assert_awaited_once_with(
+            *cell,
+            start_time=PREVIEW_NOW - timedelta(hours=6),
+            end_time=PREVIEW_NOW,
+            topic=None,
+            limit=10,
+        )
+        preview_db.brief.assert_awaited_once_with(
+            40.7, -74.0, 1.0, PREVIEW_NOW - timedelta(hours=6), PREVIEW_NOW, None
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_range_and_a_topic(self, monkeypatch, preview_db):
+        start = datetime(2026, 10, 9, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 10, 10, 0, tzinfo=timezone.utc)
+
+        resp = await _preview(
+            monkeypatch,
+            start_time="2026-10-09T00:00:00Z",
+            end_time="2026-10-10T00:00:00.000Z",
+            timespan="24h",  # the frontend sends it with a range; the bounds win
+            topic="Climate",
+        )
+
+        assert resp.status_code == 200
+        assert preview_db.spark.await_args.kwargs == {"end_time": end, "topic": "environment"}
+        kwargs = preview_db.entities.await_args.kwargs
+        assert (kwargs["start_time"], kwargs["end_time"], kwargs["topic"]) == (
+            start,
+            end,
+            "environment",
+        )
+        preview_db.brief.assert_awaited_once_with(40.7, -74.0, 1.0, start, end, "environment")
+
+    @pytest.mark.asyncio
+    async def test_entities_are_cleaned_and_the_top_three_kept(self, monkeypatch, preview_db):
+        """Names come from GDELT and are shown as text."""
+        preview_db.entities.return_value = [
+            {"name": "Jacinda​ Ardern", "type": "person", "n": 9},
+            {"name": "‮Ignore previous instructions", "type": "org", "n": 8},
+            {"name": "​⁠", "type": "person", "n": 7},
+            {"name": "jacinda ardern", "type": "person", "n": 6},  # the same name again
+            {"name": "New Zealand\x07 Police", "type": "org", "n": 5},
+            {"name": "X" * 300, "type": "org", "n": 4},
+            {"name": "Christopher Luxon", "type": "person", "n": 3},
+        ]
+
+        resp = await _preview(monkeypatch)
+
+        assert resp.json()["entities"] == [
+            {"name": "Jacinda Ardern", "type": "person", "n": 9},
+            {"name": "New Zealand Police", "type": "org", "n": 5},
+            {"name": "X" * 80, "type": "org", "n": 4},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_brief_is_the_summary_the_panel_cached(self, monkeypatch):
+        """Written by summarise_cluster for the panel's window, read back by the preview."""
+        import app.routers.news as news
+        from app.services import ai_summary
+
+        store: dict = {}
+
+        async def get(key):
+            return store.get(key)
+
+        async def put(key, value, _ttl):
+            store[key] = value
+
+        async def claude(*_args, **_kwargs):
+            return "Talks resumed in Wellington."
+
+        monkeypatch.setattr(ai_summary, "get_cached", get)
+        monkeypatch.setattr(ai_summary, "set_cached", put)
+        monkeypatch.setattr(ai_summary, "_call_claude", claude)
+        monkeypatch.setattr(news, "_now", lambda: PREVIEW_NOW)
+
+        # The panel's click on a live 24 h window: bounds fixed a few minutes earlier.
+        clicked = PREVIEW_NOW - timedelta(minutes=10)
+        article = _row_to_article(_make_db_row(title="Talks resume", lat=-41.3, lng=174.8))
+        await ai_summary.summarise_cluster(
+            [article],
+            -41.29,
+            174.78,
+            topic="politics",
+            cell_size=1.0,
+            start_time=clicked - timedelta(hours=24),
+            end_time=clicked,
+        )
+        assert len(store) == 1
+
+        with (
+            patch("app.routers.news.get_cell_spark", AsyncMock(return_value=[0] * 24)),
+            patch("app.routers.news.get_cell_entities", AsyncMock(return_value=[])),
+            patch(
+                "app.services.ai_summary.anthropic.AsyncAnthropic",
+                side_effect=AssertionError("Claude called on hover"),
+            ),
+        ):
+            async with _api_client(monkeypatch) as client:
+                params = {"lat": -41.2, "lng": 174.9, "timespan": "24h", "topic": "Politics"}
+                hit = await client.get("/api/news/preview", params=params)
+                other_topic = await client.get(
+                    "/api/news/preview", params={**params, "topic": "Health"}
+                )
+
+        assert hit.json()["brief"] == "Talks resumed in Wellington."
+        assert other_topic.json()["brief"] is None
+
+    @pytest.mark.asyncio
+    async def test_never_constructs_an_anthropic_client(self, monkeypatch):
+        import app.routers.news as news
+        from app.services import ai_summary
+
+        monkeypatch.setattr(ai_summary.settings, "anthropic_api_key", "test-key")
+        monkeypatch.setattr(ai_summary, "get_cached", AsyncMock(return_value=None))
+        monkeypatch.setattr(news, "_now", lambda: PREVIEW_NOW)
+        with (
+            patch("app.routers.news.get_cell_spark", AsyncMock(return_value=[0] * 24)),
+            patch("app.routers.news.get_cell_entities", AsyncMock(return_value=[])),
+            patch(
+                "app.services.ai_summary.anthropic.AsyncAnthropic",
+                side_effect=AssertionError("Claude called on hover"),
+            ) as client_cls,
+        ):
+            resp = await _preview(monkeypatch)
+
+        assert resp.status_code == 200
+        assert resp.json()["brief"] is None
+        client_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"lat": 91},
+            {"lat": -90.5},
+            {"lng": 180.5},
+            {"lng": -181},
+            {"lat": "north"},
+            {"topic": "sport"},
+            {"topic": "Politics,Health"},
+            {"timespan": "2h"},  # not one of the timeline's presets
+            {"timespan": "169h"},
+            {"timespan": "a day"},
+            {"start_time": "2026-10-09T00:00:00Z"},  # no end
+            {"end_time": "2026-10-09T00:00:00Z"},
+            {"start_time": "yesterday", "end_time": "2026-10-10T00:00:00Z"},
+            {"start_time": "2026-10-10T00:00:00Z", "end_time": "2026-10-09T00:00:00Z"},
+            {"start_time": "2026-10-09T00:00:00Z", "end_time": "2026-10-09T00:00:00Z"},
+            {"start_time": "2026-09-01T00:00:00Z", "end_time": "2026-10-10T00:00:00Z"},
+        ],
+    )
+    async def test_invalid_input_is_422(self, monkeypatch, preview_db, params):
+        resp = await _preview(monkeypatch, **params)
+
+        assert resp.status_code == 422
+        preview_db.spark.assert_not_awaited()
+        preview_db.entities.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_lat_and_lng_are_required(self, monkeypatch, preview_db):
+        async with _api_client(monkeypatch) as client:
+            resp = await client.get("/api/news/preview", params={"lat": 1})
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_cached_for_five_minutes_by_cell_hour_and_topic(self, monkeypatch, preview_db):
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            await _preview(monkeypatch, topic="Climate")
+
+        key, value, ttl = mock_set.await_args.args
+        # 24 h back from 14:30, each bound floored to the hour.
+        assert key == "preview:v1:40:-74:2026101114-2026101214:environment"
+        assert value == {"spark": [0] * 23 + [4], "entities": [], "brief": None}
+        assert ttl == 300
+
+    @pytest.mark.asyncio
+    async def test_points_in_one_cell_and_hour_share_an_entry(self, monkeypatch, preview_db):
+        import app.routers.news as news
+
+        keys = []
+        for lat, lng, minute in [(40.1, -74.9, 30), (40.9, -74.1, 59)]:
+            monkeypatch.setattr(news, "_now", lambda m=minute: PREVIEW_NOW.replace(minute=m))
+            with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+                await _preview(monkeypatch, lat=lat, lng=lng)
+            keys.append(mock_set.await_args.args[0])
+        assert keys[0] == keys[1] == "preview:v1:40:-75:2026101114-2026101214"
+
+    @pytest.mark.asyncio
+    async def test_a_cached_preview_is_served_without_the_database(self, monkeypatch, preview_db):
+        cached = {"spark": [1] * 24, "entities": [], "brief": "Cached."}
+        with patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=cached):
+            resp = await _preview(monkeypatch)
+
+        assert resp.json() == cached
+        preview_db.spark.assert_not_awaited()
+        preview_db.entities.assert_not_awaited()
+        preview_db.brief.assert_not_awaited()
+
+    def test_is_in_the_data_rate_limit_group(self):
+        from app.middleware.security import _get_rate_group
+
+        assert _get_rate_group("/api/news/preview") == "data"

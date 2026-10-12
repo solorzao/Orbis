@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, BeforeValidator, Field
@@ -146,6 +146,22 @@ class GlobeDataPoint(BaseModel):
     # two counts twice); topics without stories are left out.
     topic_mix: dict[str, int] = Field(default_factory=dict)
     tone: float = 0.0  # mean sentiment_score of the cell's stories, -1..1
+
+
+class PreviewEntity(BaseModel):
+    """A name a place's stories mention: a person or an organisation."""
+
+    name: str
+    type: Literal["person", "org"]
+    n: int  # stories naming it
+
+
+class PlacePreview(BaseModel):
+    """What the hover card adds after a dwell (/api/news/preview)."""
+
+    spark: list[int]  # stories per UTC hour, the 24 hours up to the window's end, oldest first
+    entities: list[PreviewEntity]  # up to 3, most stories first
+    brief: str | None = None  # the cell's cached AI summary, if a click has made one
 
 
 class ClusterSummaryResponse(BaseModel):

@@ -2,28 +2,39 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
+from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.models.news import (
     ClusterSummaryResponse,
     GlobeDataPoint,
     HourlyDensity,
     HourlyVolume,
     NewsArticle,
+    PlacePreview,
+    PreviewEntity,
     SelectionSummaryRequest,
     SelectionSummaryResponse,
     TopicCount,
 )
-from app.services.ai_summary import summarise_cluster, summarise_selection
+from app.services.ai_summary import (
+    _window_key,
+    cached_summary,
+    summarise_cluster,
+    summarise_selection,
+)
 from app.services.cache import get_cached, set_cached
 from app.services.database import (
     get_articles_in_bounds,
+    get_cell_entities,
+    get_cell_spark,
     get_globe_points,
     get_hourly_density,
     get_hourly_volume,
@@ -319,6 +330,125 @@ async def get_cluster_summary(
         article_count=len(nearby),
         summary=summary_text,
     )
+
+
+# How long a place's preview stays cached: new stories, and a summary a click
+# has just made, show within five minutes.
+_PREVIEW_TTL = 300
+
+# The timeline's live presets (frontend LiveHours); any other timespan is a 422.
+_LIVE_HOURS = frozenset({1, 6, 24, 168})
+
+# The longest range: the timeline's 7 days straddle 8 UTC days.
+_MAX_RANGE = timedelta(days=8)
+
+# Names fetched before cleaning, and the ones the card shows.
+_ENTITY_FETCH_LIMIT = 10
+_MAX_ENTITIES = 3
+_MAX_ENTITY_CHARS = 80
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _preview_window(
+    timespan: str, start_time: str | None, end_time: str | None
+) -> tuple[datetime, datetime]:
+    """The window's bounds, as the frontend's TimeWindow allows them, or a 422.
+
+    A range needs both bounds, as ISO 8601 times, in order and at most 8 days
+    apart. Otherwise the window is live: one of the timeline's presets, the
+    last that many hours up to now.
+    """
+    if start_time is not None or end_time is not None:
+        start, end = _parse_iso(start_time), _parse_iso(end_time)
+        if start is None or end is None:
+            raise HTTPException(
+                status_code=422,
+                detail="A range needs start_time and end_time, both ISO 8601 times.",
+            )
+        if start >= end:
+            raise HTTPException(status_code=422, detail="start_time must be before end_time.")
+        if end - start > _MAX_RANGE:
+            raise HTTPException(status_code=422, detail="A range spans at most 8 days.")
+        return start, end
+    match = re.fullmatch(r"(\d{1,3})h", timespan.strip().lower())
+    hours = int(match.group(1)) if match else 0
+    if hours not in _LIVE_HOURS:
+        raise HTTPException(status_code=422, detail="timespan must be 1h, 6h, 24h or 168h.")
+    now = _now()
+    return now - timedelta(hours=hours), now
+
+
+def _clean_entities(rows: list[dict]) -> list[PreviewEntity]:
+    """The top names as text to show, from GDELT's raw ones.
+
+    Hidden characters and control characters go, then whitespace collapses to
+    one line of at most 80 characters. A name left empty, one that looks like
+    a prompt injection (PR 17 sends tracked names to the co-pilot), and a
+    repeat of an earlier name are dropped.
+    """
+    seen: set[str] = set()
+    entities: list[PreviewEntity] = []
+    for row in rows:
+        raw = row.get("name")
+        if not isinstance(raw, str):
+            continue
+        name = " ".join(sanitise_text(strip_invisible(raw), max_length=_MAX_ENTITY_CHARS).split())
+        if not name or has_injection_pattern(name) or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        entities.append(PreviewEntity(name=name, type=row["type"], n=row["n"]))
+        if len(entities) == _MAX_ENTITIES:
+            break
+    return entities
+
+
+@router.get("/news/preview", response_model=PlacePreview)
+async def get_place_preview(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude of the dot"),
+    lng: float = Query(..., ge=-180, le=180, description="Longitude of the dot"),
+    timespan: str = Query("24h", description="A live window: 1h, 6h, 24h or 168h"),
+    start_time: str | None = Query(None, description="A range's ISO start, with end_time"),
+    end_time: str | None = Query(None, description="A range's ISO end, with start_time"),
+    topic: str | None = Query(
+        None,
+        description="Topic pill: Politics, Conflict, Technology, Climate, Economy, Health or All",
+    ),
+) -> PlacePreview:
+    """What the hover card adds once the pointer dwells on a dot.
+
+    For the dot's 1° cell, its window and topic: stories per hour over the 24
+    hours up to the window's end, the names its stories mention most, and
+    the AI brief a click on the dot has cached for the same window and topic.
+    Never calls Claude: no cached summary is a null brief.
+    """
+    tag = _globe_topic_tag(topic)
+    start, end = _preview_window(timespan, start_time, end_time)
+    cell_lat = cell_index(lat, _CELL_SIZE)
+    cell_lng = cell_index(lng, _CELL_SIZE)
+
+    # The window floored to the hour, as the summary's key has it.
+    topic_suffix = f":{tag}" if tag else ""
+    cache_k = f"preview:v1:{cell_lat}:{cell_lng}:{_window_key(start, end)}{topic_suffix}"
+    cached = await get_cached(cache_k)
+    if cached is not None:
+        return PlacePreview(**cached)
+
+    min_lat = cell_lat * _CELL_SIZE
+    min_lng = cell_lng * _CELL_SIZE
+    box = (min_lat, min_lng, min_lat + _CELL_SIZE, min_lng + _CELL_SIZE)
+    spark, names, brief = await asyncio.gather(
+        get_cell_spark(*box, end_time=end, topic=tag),
+        get_cell_entities(
+            *box, start_time=start, end_time=end, topic=tag, limit=_ENTITY_FETCH_LIMIT
+        ),
+        cached_summary(lat, lng, _CELL_SIZE, start, end, tag),
+    )
+    preview = PlacePreview(spark=spark, entities=_clean_entities(names), brief=brief)
+    await set_cached(cache_k, preview.model_dump(), _PREVIEW_TTL)
+    return preview
 
 
 @router.get("/news/density", response_model=list[HourlyDensity])

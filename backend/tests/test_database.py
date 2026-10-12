@@ -3,7 +3,7 @@
 import json
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -534,3 +534,80 @@ class TestGetHourlyVolume:
             "WHERE published_at >= date_trunc('hour', now() - make_interval(days => $1), 'UTC')"
             in query
         )
+
+
+SPARK_END = datetime(2026, 10, 12, 14, 30, tzinfo=timezone.utc)
+
+
+class TestGetCellSpark:
+    @pytest.mark.asyncio
+    async def test_counts_the_24_hours_up_to_the_windows_end_zeros_included(self, pool):
+        hours = [SPARK_END.replace(minute=0) - timedelta(hours=23 - i) for i in range(24)]
+        pool.fetch.return_value = [{"hour": h, "count": i % 3} for i, h in enumerate(hours)]
+
+        spark = await database.get_cell_spark(*CELL, end_time=SPARK_END)
+
+        assert spark == [i % 3 for i in range(24)]
+        query, args = _fetched(pool)
+        assert args == pytest.approx([*CELL, -75.01, 39.99, -73.99, 41.01, SPARK_END])
+        # Every hour from 23 before the end's hour to the end's, in UTC, oldest first.
+        assert (
+            "generate_series( date_trunc('hour', $9::timestamptz, 'UTC') - interval '23 hours', "
+            "date_trunc('hour', $9::timestamptz, 'UTC'), interval '1 hour') AS h(hour)" in query
+        )
+        assert "LEFT JOIN" in query and "COALESCE(c.count, 0)::int AS count" in query
+        assert "date_trunc('hour', published_at, 'UTC') AS hour" in query
+        assert query.endswith("ORDER BY h.hour")
+
+    @pytest.mark.asyncio
+    async def test_reads_the_cells_stories_in_those_hours(self, pool):
+        await database.get_cell_spark(*CELL, end_time=SPARK_END)
+
+        query, _ = _fetched(pool)
+        assert "location && ST_MakeEnvelope($5, $6, $7, $8, 4326)::geography" in query
+        assert "latitude >= $1 AND latitude < $3 AND longitude >= $2 AND longitude < $4" in query
+        assert (
+            "published_at >= date_trunc('hour', $9::timestamptz, 'UTC') - interval '23 hours' "
+            "AND published_at <= $9" in query
+        )
+        assert "topic_tags" not in query
+
+    @pytest.mark.asyncio
+    async def test_a_topic_counts_its_stories_only(self, pool):
+        await database.get_cell_spark(*CELL, end_time=SPARK_END, topic="health")
+
+        query, args = _fetched(pool)
+        assert args[-1] == "health"
+        assert "topic_tags && ARRAY[$10::text]" in query
+        assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
+
+
+class TestGetCellEntities:
+    @pytest.mark.asyncio
+    async def test_names_from_persons_and_orgs_by_stories(self, pool):
+        pool.fetch.return_value = [{"name": "Jacinda Ardern", "type": "person", "n": 4}]
+
+        rows = await database.get_cell_entities(*CELL, start_time=START, end_time=END, limit=10)
+
+        assert rows == [{"name": "Jacinda Ardern", "type": "person", "n": 4}]
+        query, args = _fetched(pool)
+        assert args == pytest.approx([*CELL, -75.01, 39.99, -73.99, 41.01, START, END, 10])
+        assert "published_at >= $9 AND published_at <= $10" in query
+        assert "unnest(persons) AS name, 'person' AS type" in query
+        assert "unnest(orgs) AS name, 'org' AS type" in query
+        # A story is a title: syndicated copies count once, and a name needs two.
+        assert "count(DISTINCT story) AS n" in query
+        assert "HAVING count(DISTINCT story) >= 2" in query
+        assert query.endswith("ORDER BY n DESC, name LIMIT $11")
+
+    @pytest.mark.asyncio
+    async def test_a_topic_keeps_its_stories_only(self, pool):
+        await database.get_cell_entities(
+            *CELL, start_time=START, end_time=END, topic="conflict", limit=10
+        )
+
+        query, args = _fetched(pool)
+        assert args[-2:] == ["conflict", 10]
+        assert "topic_tags && ARRAY[$11::text]" in query
+        assert query.endswith("LIMIT $12")
+        assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
