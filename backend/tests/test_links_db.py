@@ -51,6 +51,7 @@ async def conn():
 # ---------------------------------------------------------------------------
 
 EARHART = "zzlinks-Amelia Earhart expedition heads to South Pacific"
+GULF = "zzlinks-Gulf talks stall"
 OUTLETS = ["", " | AP News", " - WTOP", " - KSL.com", " | Fox News", " - The Spokesman-Review"]
 
 
@@ -68,11 +69,14 @@ def _story(title, country, mentions, topic="general", tone=0.0, keyless=False, *
 
 
 def _window_stories() -> list[dict]:
-    """15 stories in 28 rows, 14 of them linking two countries.
+    """16 stories in 30 rows, 15 of them linking two countries.
 
     KI-UM: one story, syndicated 10 times (7 copies placed in UM, 3 in KI).
-    IR-US: 6 stories. 4 from the US (politics, tone 0.5); 2 from Iran
-    (conflict, tone -0.5), one of them syndicated 5 times.
+    IR-US: 7 stories. 4 from the US (politics, tone 0.5); 2 from Iran
+    (conflict, tone -0.5), one of them syndicated 5 times; and "Gulf talks",
+    whose two copies differ: one from Iran naming the US (politics, 0.9),
+    one from the US naming Iran and Israel (conflict, -0.3), so IL-US has
+    that one story.
     DE-FR: 4 stories; CN-US: 3; plus a US story naming only the US (no link).
     """
     rows = [
@@ -112,6 +116,10 @@ def _window_stories() -> list[dict]:
             persons=["Abbas Araghchi"],
         )
     )
+    rows += [
+        _story(GULF + " - Reuters", "IR", ["IR", "US"], "politics", 0.9),
+        _story(GULF + " | AP News", "US", ["US", "IR", "IL"], "conflict", -0.3),
+    ]
     rows += [_story(f"zzlinks-France and Germany {i}", "FR", ["FR", "DE"]) for i in range(4)]
     rows += [_story(f"zzlinks-US and China {i}", "US", ["US", "CN"]) for i in range(3)]
     rows.append(_story("zzlinks-US only", "US", ["US"]))
@@ -179,32 +187,33 @@ class TestDistinctStories:
     async def test_a_syndicated_story_counts_once(self):
         pairs = _by_pair(await links.get_link_pairs(START, END, None))
         assert pairs["KI", "UM"]["n"] == 1
-        assert pairs["IR", "US"]["n"] == 6
+        assert pairs["IR", "US"]["n"] == 7
         assert (pairs["DE", "FR"]["n"], pairs["CN", "US"]["n"]) == (4, 3)
 
     @pytest.mark.asyncio
     async def test_lift_counts_stories_everywhere(self):
         pairs = _by_pair(await links.get_link_pairs(START, END, None))
         ki_um, ir_us = pairs["KI", "UM"], pairs["IR", "US"]
-        # 14 linking stories; the US is in 9 (6 with Iran, 3 with China), Iran in 6.
-        assert {r["total"] for r in pairs.values()} == {14}
+        # 15 linking stories; the US is in 10 (7 with Iran, 3 with China), Iran in 7.
+        assert {r["total"] for r in pairs.values()} == {15}
         assert (ki_um["n_a"], ki_um["n_b"]) == (1, 1)
-        assert (ir_us["n_a"], ir_us["n_b"]) == (6, 9)
-        assert lift(ir_us["n"], ir_us["n_a"], ir_us["n_b"], ir_us["total"]) == 6 * 14 / (6 * 9)
+        assert (ir_us["n_a"], ir_us["n_b"]) == (7, 10)
+        assert lift(ir_us["n"], ir_us["n_a"], ir_us["n_b"], ir_us["total"]) == 7 * 15 / (7 * 10)
 
     @pytest.mark.asyncio
     async def test_one_syndicated_story_does_not_rank_by_lift(self):
         rows = await links.get_link_pairs(START, END, None)
         by_lift = rank_links(rows, "lift", 40)
         assert [(r["a"]["iso"], r["b"]["iso"], r["n"], r["lift"]) for r in by_lift] == [
-            ("IR", "US", 6, 1.56)
+            ("IR", "US", 7, 1.5)
         ]
         by_count = rank_links(rows, "count", 40)
         assert [(r["a"]["iso"], r["b"]["iso"], r["n"]) for r in by_count] == [
-            ("IR", "US", 6),
+            ("IR", "US", 7),
             ("DE", "FR", 4),
             ("CN", "US", 3),
-            ("KI", "UM", 1),
+            ("KI", "UM", 1),  # lift 15
+            ("IL", "US", 1),  # lift 1.5
         ]
 
     @pytest.mark.asyncio
@@ -212,19 +221,47 @@ class TestDistinctStories:
         rows = await links.get_link_pairs(START, END, None)
         pairs = _by_pair(rows)
         ir_us, ki_um = pairs["IR", "US"], pairs["KI", "UM"]
-        # Copies would make it 4 politics to 6 conflict, -0.1 and from Iran (6 of 10 rows).
-        assert (ir_us["politics"], ir_us["conflict"]) == (4, 2)
-        assert round(ir_us["tone"], 4) == round((4 * 0.5 + 2 * -0.5) / 6, 4)
+        # Copies would make it 5 politics to 7 conflict, 0.05 and from Iran (7 of 12 rows).
+        assert (ir_us["politics"], ir_us["conflict"]) == (5, 3)
+        assert round(ir_us["tone"], 4) == round((4 * 0.5 + 2 * -0.5 + 0.3) / 7, 4)
         assert ir_us["from_iso"] == "US"
         assert (ki_um["environment"], ki_um["from_iso"]) == (1, "UM")
         [link] = [r for r in rank_links(rows, "count", 40) if r["a"]["iso"] == "IR"]
-        assert (link["topic"], link["tone"], link["from"]) == ("politics", 0.17, "US")
+        assert (link["topic"], link["tone"], link["from"]) == ("politics", 0.19, "US")
+
+    @pytest.mark.asyncio
+    async def test_a_storys_copies_can_differ(self):
+        """Gulf talks: a politics copy from Iran, a conflict copy from the US naming Israel too."""
+        pairs = _by_pair(await links.get_link_pairs(START, END, None))
+        ir_us, il_us = pairs["IR", "US"], pairs["IL", "US"]
+        # A story links a pair, and has a topic, if any of its copies does.
+        assert (ir_us["n"], ir_us["politics"], ir_us["conflict"]) == (7, 5, 3)
+        assert (il_us["n"], il_us["politics"], il_us["conflict"]) == (1, 0, 1)
+        # The US is in Gulf talks once, though in two of its pairs.
+        assert ir_us["n_b"] == il_us["n_b"] == 10
+        assert il_us["n_a"] == 1
+        # Its copies' tones average first (0.9 and -0.3: 0.3), then the pair's stories.
+        assert round(ir_us["tone"], 4) == round((4 * 0.5 + 2 * -0.5 + (0.9 - 0.3) / 2) / 7, 4)
+        assert round(il_us["tone"], 4) == -0.3
+        # The inspector agrees, though only one of the story's copies links IL-US.
+        il_us_detail = await links.get_link_detail("IL", "US", START, END, None)
+        assert (il_us_detail["n"], il_us_detail["lift"], il_us_detail["tone"]) == (1, 1.5, -0.3)
+        assert il_us_detail["topic_mix"] == {tag: int(tag == "conflict") for tag in TOPIC_TAGS}
+        ir_us_detail = await links.get_link_detail("IR", "US", START, END, None)
+        assert (ir_us_detail["n"], ir_us_detail["lift"]) == (7, 1.5)
+        assert (ir_us_detail["topic_mix"]["politics"], ir_us_detail["topic_mix"]["conflict"]) == (
+            5,
+            3,
+        )
+        assert ir_us_detail["tone"] == round(ir_us["tone"], 2)
 
     @pytest.mark.asyncio
     async def test_a_topic_filter_counts_that_topics_stories(self):
         pairs = _by_pair(await links.get_link_pairs(START, END, "conflict"))
-        assert list(pairs) == [("IR", "US")]
-        assert (pairs["IR", "US"]["n"], pairs["IR", "US"]["total"]) == (2, 2)
+        # Gulf talks' conflict copy only: it names Israel too.
+        assert sorted(pairs) == [("IL", "US"), ("IR", "US")]
+        assert (pairs["IR", "US"]["n"], pairs["IR", "US"]["total"]) == (3, 3)
+        assert pairs["IL", "US"]["n"] == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("topic", [None, "conflict"])
@@ -239,7 +276,7 @@ class TestDistinctStories:
     @pytest.mark.asyncio
     async def test_detail_names_and_themes_count_stories(self):
         ki_um = await links.get_link_detail("KI", "UM", START, END, None)
-        assert (ki_um["n"], ki_um["lift"]) == (1, 14.0)
+        assert (ki_um["n"], ki_um["lift"]) == (1, 15.0)
         # In ten copies of one story: not shared by two stories.
         assert ki_um["shared"] == []
         # TAX_FNCACT_EXPLORER, a functional actor, is not fetched.

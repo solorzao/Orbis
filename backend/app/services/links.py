@@ -92,12 +92,15 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
     Articles first collapse to one row per pair and story (``stories``),
     which is then grouped by pair and, for ``n_a`` and ``n_b``, by country
     and story (``touched``: the countries a story touches are the ends of
-    the pairs it links). Grouped aggregates hash, where ``count(DISTINCT
-    ...)`` and ``mode()`` would sort every pair row; a story's tone is
-    ``sum / count``, whose state is a number, where ``avg``'s is an array.
-    A pair's origin is always one of its two ends, so the most common one
-    is a count against half, for a story's copies and then for the pair's
-    stories.
+    the pairs it links). That is two grouping passes over the window's pair
+    rows, each grouped once (no ``count(DISTINCT ...)`` or ``mode()``, which
+    would sort each pair's rows again); the planner picks how. At 7 days on
+    the production server ``stories`` runs as a sort (spilled to disk, about
+    10 MB) feeding a GroupAggregate, and ``touched``'s HashAggregate spills,
+    at the default 4 MB work_mem. A story's tone is ``sum / count``, whose
+    state is a number, where ``avg``'s is an array. A pair's origin is
+    always one of its two ends, so the most common one is a count against
+    half, for a story's copies and then for the pair's stories.
     """
     conditions, args = _window(start, end, topic)
     story_topics = ",\n".join(

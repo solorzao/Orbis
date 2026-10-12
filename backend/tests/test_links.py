@@ -93,8 +93,8 @@ class TestLinksQuery:
         assert "count(*) FILTER (WHERE from_a) AS from_a" in flat
         assert "CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso" in flat
 
-    def test_aggregates_hash_rather_than_sort(self):
-        """count(DISTINCT) and mode() sort every pair row: 0.40 s, not 0.15, at 7 days locally."""
+    def test_no_distinct_aggregates_or_mode(self):
+        """count(DISTINCT) and mode() sort each pair's rows again: 0.40 s, not 0.15, locally."""
         flat = _sql(links_query(START, END, None)[0])
         assert "DISTINCT" not in flat and "mode()" not in flat
 
