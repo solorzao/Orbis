@@ -142,7 +142,8 @@ class TestRanking:
         assert len(rank_links(rows, rank="count", limit=2)) == 2
 
     def test_pairs_without_a_label_point_are_dropped_and_logged(self, caplog):
-        rows = [_pair("SG", "US", n=90), _pair("IR", "US", n=10)]
+        # Every ISO code has a point; a FIPS code left by a pre-switch row has none.
+        rows = [_pair("UK", "US", n=90), _pair("IR", "US", n=10)]
         with caplog.at_level(logging.DEBUG, logger="app.services.links"):
             ranked = rank_links(rows, rank="count", limit=1)
         assert [(r["a"]["iso"], r["b"]["iso"]) for r in ranked] == [("IR", "US")]

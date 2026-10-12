@@ -1,18 +1,31 @@
-"""Generate backend/app/services/country_centroids.py from Natural Earth's countries.
+"""Generate backend/app/services/country_centroids.py: a name and label point per country.
 
-Usage: python scripts/gen_country_centroids.py <ne_110m_admin_0_countries.geojson>
+Usage:
+    python scripts/gen_country_centroids.py <ne_110m_admin_0_countries.geojson> \\
+        --supplement scripts/data/gdelt_country_points.json
 
-The file is the one three-globe ships, pinned at 2.45.0 by the frontend's npm
-override: frontend/node_modules/three-globe/example/country-polygons/
-ne_110m_admin_0_countries.geojson (after npm ci in frontend/).
+Each ISO 3166-1 alpha-2 code gets a display name and a label point, from
+three sources in order of precedence:
 
-Each country gets its ISO 3166-1 alpha-2 code, a display name and a label
-point. Natural Earth's LABEL_X/LABEL_Y are used when the file has them; this
-version does not, so the point is the centroid of the country's largest
-polygon, or its pole of inaccessibility when that centroid falls outside it
-(Croatia, say). Either way the point lies on the country's main landmass.
+1. Natural Earth's 1:110m admin-0 countries, the file three-globe ships,
+   pinned at 2.45.0 by the frontend's npm override:
+   frontend/node_modules/three-globe/example/country-polygons/
+   ne_110m_admin_0_countries.geojson (after npm ci in frontend/). Its
+   LABEL_X/LABEL_Y are used when the file has them; this version does not,
+   so the point is the centroid of the country's largest polygon, or its
+   pole of inaccessibility when that centroid falls outside it (Croatia,
+   say). Either way the point lies on the country's main landmass.
+2. --supplement: GDELT's own country coordinates, for the small states and
+   territories the 110m file lacks (scripts/data/gdelt_country_points.json
+   holds its source note and query). SUPPLEMENT_CORRECTIONS replaces the
+   points in it that are wrong.
+3. MANUAL_POINTS: hand-entered points for the codes neither has.
+
+It refuses to write unless every ISO code ingestion can store (the values
+of backend/app/services/country_codes.py) has exactly one point.
 """
 
+import argparse
 import hashlib
 import heapq
 import itertools
@@ -26,13 +39,46 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "backend/app/services/country_centroids.py"
 SOURCE = "three-globe 2.45.0, example/country-polygons/ne_110m_admin_0_countries.geojson"
 
+Point = tuple[str, float, float]  # name, lat, lng
+
+# Supplement points that are wrong, replaced (keyed by ISO code).
+SUPPLEMENT_CORRECTIONS: dict[str, Point] = {
+    # GDELT's median (16.0, 146.0) lies in the Northern Mariana Islands.
+    "MU": ("Mauritius", -20.28, 57.58),
+}
+
+# Codes in neither source. Approximate: they only anchor arcs.
+MANUAL_POINTS: dict[str, Point] = {
+    "BL": ("Saint Barthélemy", 17.9, -62.83),  # Gustavia
+    "BV": ("Bouvet Island", -54.42, 3.36),  # the island itself
+    "CC": ("Cocos (Keeling) Islands", -12.17, 96.83),  # West Island
+    "CW": ("Curaçao", 12.17, -68.97),  # the island, by Willemstad
+    "FO": ("Faroe Islands", 62.0, -6.78),  # Tórshavn
+    "GS": ("South Georgia and the South Sandwich Islands", -54.28, -36.51),  # Grytviken
+    "HM": ("Heard Island and McDonald Islands", -53.08, 73.5),  # Heard Island
+    "IM": ("Isle of Man", 54.23, -4.55),  # the island's middle
+    "IO": ("British Indian Ocean Territory", -7.31, 72.41),  # Diego Garcia
+    "KN": ("Saint Kitts and Nevis", 17.3, -62.72),  # Basseterre
+    "NF": ("Norfolk Island", -29.04, 167.95),  # Kingston
+    "PM": ("Saint Pierre and Miquelon", 46.78, -56.18),  # Saint-Pierre
+    "PN": ("Pitcairn Islands", -25.07, -130.1),  # Adamstown
+    "SH": ("Saint Helena", -15.93, -5.72),  # Jamestown
+    "ST": ("São Tomé and Príncipe", 0.34, 6.73),  # São Tomé
+    "SX": ("Sint Maarten", 18.03, -63.05),  # Philipsburg
+    "TC": ("Turks and Caicos Islands", 21.7, -71.8),  # between Providenciales and Grand Turk
+    "VC": ("Saint Vincent and the Grenadines", 13.16, -61.22),  # Kingstown
+    "WF": ("Wallis and Futuna", -13.28, -176.18),  # Mata-Utu
+    "YT": ("Mayotte", -12.78, 45.23),  # Mamoudzou
+}
+
 # Natural Earth gives some countries ISO_A2 -99. Newer files carry the code in
 # ISO_A2_EH; this one does not, so these are keyed by ADM0_A3. Still skipped,
 # as they have no ISO code: Northern Cyprus and Somaliland.
 ISO_BY_ADM0 = {"FRA": "FR", "NOR": "NO"}
 
-# Display names where NAME_LONG is formal or out of date.
+# Display names where a source's is formal, out of date or not the country's.
 NAME_OVERRIDES = {
+    "AG": "Antigua and Barbuda",  # GDELT: "Antigua And Barbuda"
     "BN": "Brunei",
     "CZ": "Czechia",
     "KP": "North Korea",
@@ -41,6 +87,8 @@ NAME_OVERRIDES = {
     "MK": "North Macedonia",
     "RU": "Russia",
     "SZ": "Eswatini",
+    "UM": "US Minor Outlying Islands",  # GDELT: "Howland Island", one of them
+    "VI": "US Virgin Islands",  # GDELT: "Virgin Islands"
 }
 
 REQUIRED = ("FR", "NO", "US", "CN", "RU", "BR", "ZA", "AU")
@@ -160,12 +208,9 @@ def iso_code(props: dict) -> str:
     return ISO_BY_ADM0.get(props.get("ADM0_A3", ""), "")
 
 
-def main(path: str) -> None:
-    raw = Path(path).read_bytes()
-    sha256 = hashlib.sha256(raw).hexdigest()
-    features = json.loads(raw.decode("utf-8"))["features"]
-
-    points: dict[str, tuple[str, float, float]] = {}
+def natural_earth_points(features: list) -> tuple[dict[str, Point], list[str]]:
+    """Each feature's ISO code, name and label point; and the features without a code."""
+    points: dict[str, Point] = {}
     skipped = []
     for feature in features:
         props = feature["properties"]
@@ -174,17 +219,86 @@ def main(path: str) -> None:
             skipped.append(props.get("NAME_LONG") or props.get("ADMIN"))
             continue
         check(iso not in points, f"{iso} is listed twice")
-        name = NAME_OVERRIDES.get(iso) or " ".join(str(props["NAME_LONG"]).split())
         if props.get("LABEL_Y") is not None and props.get("LABEL_X") is not None:
             lat, lng = float(props["LABEL_Y"]), float(props["LABEL_X"])
         else:
             lat, lng = label_point(feature["geometry"])
+        points[iso] = (str(props["NAME_LONG"]), lat, lng)
+    return points, skipped
+
+
+def read_supplement(path: str) -> tuple[dict[str, Point], str]:
+    """The supplement's points, and its SHA-256 with line endings normalised to LF.
+
+    Normalised so that a Windows checkout (core.autocrlf) hashes the same.
+    """
+    raw = Path(path).read_bytes()
+    sha256 = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
+    entries = json.loads(raw.decode("utf-8"))["points"]
+    bad = sorted(iso for iso in entries if not re.fullmatch(r"[A-Z]{2}", iso))
+    check(not bad, f"supplement codes that are not ISO alpha-2: {bad}")
+    points = {iso: (str(p["name"]), float(p["lat"]), float(p["lng"])) for iso, p in entries.items()}
+    return points, sha256
+
+
+def merge_points(
+    natural_earth: dict[str, Point],
+    supplement: dict[str, Point],
+    corrections: dict[str, Point],
+    manual: dict[str, Point],
+) -> dict[str, Point]:
+    """Natural Earth's points, then the supplement's (corrected) for codes it lacks, then manual."""
+    points = dict(natural_earth)
+    for iso, point in supplement.items():
+        points.setdefault(iso, corrections.get(iso, point))
+    for iso, point in manual.items():
+        points.setdefault(iso, point)
+    return points
+
+
+def stored_iso_codes() -> set[str]:
+    """Every ISO code ingestion can store: the values of country_codes.FIPS_TO_ISO2."""
+    sys.path.insert(0, str(ROOT / "backend"))
+    from app.services.country_codes import FIPS_TO_ISO2
+
+    return set(FIPS_TO_ISO2.values())
+
+
+def display_path(path: str) -> str:
+    resolved = Path(path).resolve()
+    return resolved.relative_to(ROOT).as_posix() if resolved.is_relative_to(ROOT) else path
+
+
+def main(geojson: str, supplement_path: str | None) -> None:
+    raw = Path(geojson).read_bytes()
+    sha256 = hashlib.sha256(raw).hexdigest()
+    natural_earth, skipped = natural_earth_points(json.loads(raw.decode("utf-8"))["features"])
+    check(170 <= len(natural_earth) <= 260, f"{len(natural_earth)} countries, expected 170-260")
+    missing = [iso for iso in REQUIRED if iso not in natural_earth]
+    check(not missing, f"Natural Earth lacks {missing}")
+
+    supplement: dict[str, Point] = {}
+    supplement_sha256 = ""
+    if supplement_path:
+        supplement, supplement_sha256 = read_supplement(supplement_path)
+        stray = sorted(set(SUPPLEMENT_CORRECTIONS) - (set(supplement) - set(natural_earth)))
+        check(not stray, f"corrections for points the supplement does not supply: {stray}")
+    stale = sorted(set(MANUAL_POINTS) & (set(natural_earth) | set(supplement)))
+    check(not stale, f"manual points a source now supplies (remove them): {stale}")
+
+    merged = merge_points(natural_earth, supplement, SUPPLEMENT_CORRECTIONS, MANUAL_POINTS)
+    points: dict[str, Point] = {}
+    for iso, (name, lat, lng) in merged.items():
+        name = " ".join(NAME_OVERRIDES.get(iso, name).split())
         check(-90 <= lat <= 90 and -180 <= lng <= 180, f"{iso} is off the globe: {lat}, {lng}")
         points[iso] = (name, round(lat, 2), round(lng, 2))
 
-    check(170 <= len(points) <= 260, f"{len(points)} countries, expected 170 to 260")
-    missing = [iso for iso in REQUIRED if iso not in points]
-    check(not missing, f"missing {missing}")
+    stored = stored_iso_codes()
+    uncovered = sorted(stored - set(points))
+    hint = "" if supplement_path else "; pass --supplement scripts/data/gdelt_country_points.json"
+    check(not uncovered, f"no point for {len(uncovered)} codes: {uncovered}{hint}")
+    unknown = sorted(set(points) - stored)
+    check(not unknown, f"codes ingestion never stores: {unknown}")
     abbreviated = sorted(iso for iso, (name, _, _) in points.items() if "." in name)
     check(not abbreviated, f"abbreviated names: {abbreviated}")
     unquotable = sorted(iso for iso, (name, _, _) in points.items() if re.search(r'["\\]', name))
@@ -194,15 +308,26 @@ def main(path: str) -> None:
         f'    "{iso}": Centroid("{name}", {lat}, {lng}),'
         for iso, (name, lat, lng) in sorted(points.items())
     )
+    supplement_doc = (
+        "- GDELT's own country coordinates for the small states and territories\n"
+        "  that file lacks (some corrected in the script).\n"
+        f"  Source: {display_path(supplement_path)} (LF line endings)\n"
+        f"  Source SHA-256: {supplement_sha256}\n"
+        if supplement_path
+        else ""
+    )
     with open(OUT, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(
             '"""Country names and label points for link arcs, by ISO 3166-1 alpha-2 code.\n\n'
-            "Generated by scripts/gen_country_centroids.py from Natural Earth's 1:110m\n"
-            "admin-0 countries plus the overrides in that script. Do not edit by hand.\n"
-            "Each point is the centroid of the country's largest polygon, or its pole\n"
-            "of inaccessibility when that centroid falls outside it.\n\n"
-            f"Source: {SOURCE}\n"
-            f"Source SHA-256: {sha256}\n"
+            "Generated by scripts/gen_country_centroids.py. Do not edit by hand. Every\n"
+            "ISO code ingestion can store has a point, from the first of these that has it:\n\n"
+            "- Natural Earth's 1:110m admin-0 countries: the centroid of the country's\n"
+            "  largest polygon, or its pole of inaccessibility when that centroid falls\n"
+            "  outside it.\n"
+            f"  Source: {SOURCE}\n"
+            f"  Source SHA-256: {sha256}\n"
+            f"{supplement_doc}"
+            "- Hand-entered points (MANUAL_POINTS in the script) for the rest.\n"
             '"""\n\nfrom __future__ import annotations\n\n'
             "from typing import NamedTuple\n\n\n"
             "class Centroid(NamedTuple):\n"
@@ -215,11 +340,17 @@ def main(path: str) -> None:
             '    """The name and label point for an ISO alpha-2 code (any case), or None."""\n'
             '    return COUNTRY_CENTROIDS.get((iso or "").strip().upper())\n'
         )
-    print(f"wrote {len(points)} countries to {OUT}")
-    print(f"skipped (no ISO code): {', '.join(skipped) or 'none'}")
+    print(
+        f"wrote {len(points)} countries to {OUT}: {len(natural_earth)} from Natural Earth, "
+        f"{len(set(supplement) - set(natural_earth))} from the supplement "
+        f"({len(SUPPLEMENT_CORRECTIONS)} corrected), {len(MANUAL_POINTS)} by hand"
+    )
+    print(f"Natural Earth features skipped (no ISO code): {', '.join(skipped) or 'none'}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit(__doc__.splitlines()[2])
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("geojson", help="three-globe's ne_110m_admin_0_countries.geojson")
+    parser.add_argument("--supplement", help="scripts/data/gdelt_country_points.json")
+    args = parser.parse_args()
+    main(args.geojson, args.supplement)

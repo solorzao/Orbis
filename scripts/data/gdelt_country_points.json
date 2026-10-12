@@ -1,0 +1,271 @@
+{
+ "source": "GDELT country-level location coordinates (V1LOCATIONS type 1), read from the Orbis knowledge graph kg_nodes LOCATION nodes on 2026-10-12; median per ISO code",
+ "query": "SELECT metadata->>'country_code' iso, min(name) name,\n        percentile_cont(0.5) WITHIN GROUP (ORDER BY (metadata->>'lat')::float) lat,\n        percentile_cont(0.5) WITHIN GROUP (ORDER BY (metadata->>'lng')::float) lng\n      FROM kg_nodes WHERE type='LOCATION' AND metadata ? 'lat' AND metadata->>'country_code' = ANY($1::text[])\n        AND name NOT LIKE '%,%' GROUP BY 1 ORDER BY 1",
+ "points": {
+  "AD": {
+   "name": "Andorra",
+   "lat": 42.5,
+   "lng": 1.5
+  },
+  "AG": {
+   "name": "Antigua And Barbuda",
+   "lat": 17.05,
+   "lng": -61.8
+  },
+  "AI": {
+   "name": "Anguilla",
+   "lat": 18.2167,
+   "lng": -63.05
+  },
+  "AS": {
+   "name": "American Samoa",
+   "lat": -14.32,
+   "lng": -170.68
+  },
+  "AW": {
+   "name": "Aruba",
+   "lat": 12.5,
+   "lng": -69.9667
+  },
+  "BB": {
+   "name": "Barbados",
+   "lat": 13.1667,
+   "lng": -59.5333
+  },
+  "BH": {
+   "name": "Bahrain",
+   "lat": 26.0,
+   "lng": 50.5
+  },
+  "BM": {
+   "name": "Bermuda",
+   "lat": 32.3333,
+   "lng": -64.75
+  },
+  "CK": {
+   "name": "Cook Islands",
+   "lat": -16.0833,
+   "lng": -161.5833
+  },
+  "CV": {
+   "name": "Cape Verde",
+   "lat": 16.0,
+   "lng": -24.0
+  },
+  "CX": {
+   "name": "Christmas Island",
+   "lat": -10.5,
+   "lng": 105.6667
+  },
+  "DM": {
+   "name": "Dominica",
+   "lat": 15.5,
+   "lng": -61.3333
+  },
+  "FM": {
+   "name": "Micronesia",
+   "lat": 5.0,
+   "lng": 152.0
+  },
+  "GD": {
+   "name": "Grenada",
+   "lat": 12.1167,
+   "lng": -61.6667
+  },
+  "GF": {
+   "name": "French Guiana",
+   "lat": 4.0,
+   "lng": -53.0
+  },
+  "GG": {
+   "name": "Guernsey",
+   "lat": 49.5833,
+   "lng": -2.3333
+  },
+  "GI": {
+   "name": "Gibraltar",
+   "lat": 36.1333,
+   "lng": -5.35
+  },
+  "GP": {
+   "name": "Guadeloupe",
+   "lat": 16.25,
+   "lng": -61.5833
+  },
+  "GU": {
+   "name": "Guam",
+   "lat": 13.2613,
+   "lng": 145.096
+  },
+  "HK": {
+   "name": "Hong Kong",
+   "lat": 22.25,
+   "lng": 114.1667
+  },
+  "JE": {
+   "name": "Jersey",
+   "lat": 49.2167,
+   "lng": -2.1167
+  },
+  "KI": {
+   "name": "Kiribati",
+   "lat": -5.0,
+   "lng": -170.0
+  },
+  "KM": {
+   "name": "Comoros",
+   "lat": -12.1667,
+   "lng": 44.25
+  },
+  "KY": {
+   "name": "Cayman Islands",
+   "lat": 19.5,
+   "lng": -80.6667
+  },
+  "LC": {
+   "name": "Saint Lucia",
+   "lat": 13.8833,
+   "lng": -60.9667
+  },
+  "LI": {
+   "name": "Liechtenstein",
+   "lat": 47.1667,
+   "lng": 9.5333
+  },
+  "MC": {
+   "name": "Monaco",
+   "lat": 43.7333,
+   "lng": 7.4
+  },
+  "MF": {
+   "name": "Saint Martin",
+   "lat": 18.075,
+   "lng": -63.0583
+  },
+  "MH": {
+   "name": "Marshall Islands",
+   "lat": 10.0,
+   "lng": 167.0
+  },
+  "MO": {
+   "name": "Macau",
+   "lat": 22.1578,
+   "lng": 113.5597
+  },
+  "MP": {
+   "name": "Northern Mariana Islands",
+   "lat": 19.4355,
+   "lng": 144.888
+  },
+  "MQ": {
+   "name": "Martinique",
+   "lat": 14.6667,
+   "lng": -61.0
+  },
+  "MS": {
+   "name": "Montserrat",
+   "lat": 16.75,
+   "lng": -62.2
+  },
+  "MT": {
+   "name": "Malta",
+   "lat": 35.9167,
+   "lng": 14.4333
+  },
+  "MU": {
+   "name": "Mauritius",
+   "lat": 16.0,
+   "lng": 146.0
+  },
+  "MV": {
+   "name": "Maldives",
+   "lat": 3.2,
+   "lng": 73.0
+  },
+  "NR": {
+   "name": "Nauru",
+   "lat": -0.5333,
+   "lng": 166.9167
+  },
+  "NU": {
+   "name": "Niue",
+   "lat": -19.0333,
+   "lng": -169.8667
+  },
+  "PF": {
+   "name": "French Polynesia",
+   "lat": -15.0,
+   "lng": -140.0
+  },
+  "PW": {
+   "name": "Palau",
+   "lat": 6.0,
+   "lng": 134.0
+  },
+  "RE": {
+   "name": "Reunion",
+   "lat": -21.1,
+   "lng": 55.6
+  },
+  "SC": {
+   "name": "Seychelles",
+   "lat": -4.5833,
+   "lng": 55.6667
+  },
+  "SG": {
+   "name": "Singapore",
+   "lat": 1.3667,
+   "lng": 103.8
+  },
+  "SJ": {
+   "name": "Svalbard",
+   "lat": 78.0,
+   "lng": 20.0
+  },
+  "SM": {
+   "name": "San Marino",
+   "lat": 43.9333,
+   "lng": 12.4167
+  },
+  "TK": {
+   "name": "Tokelau",
+   "lat": -9.0,
+   "lng": -171.75
+  },
+  "TO": {
+   "name": "Tonga",
+   "lat": -20.0,
+   "lng": -175.0
+  },
+  "TV": {
+   "name": "Tuvalu",
+   "lat": -8.0,
+   "lng": 178.0
+  },
+  "UM": {
+   "name": "Howland Island",
+   "lat": 6.3453,
+   "lng": -162.691
+  },
+  "VA": {
+   "name": "Vatican City",
+   "lat": 41.9,
+   "lng": 12.45
+  },
+  "VG": {
+   "name": "British Virgin Islands",
+   "lat": 18.3483,
+   "lng": -64.9835
+  },
+  "VI": {
+   "name": "Virgin Islands",
+   "lat": 18.3333,
+   "lng": -64.8333
+  },
+  "WS": {
+   "name": "Samoa",
+   "lat": -13.8031,
+   "lng": -172.1783
+  }
+ }
+}

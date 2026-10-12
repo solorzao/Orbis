@@ -242,7 +242,7 @@ class TestGetLinkDetail:
         "params",
         [
             {"a": "ZZ", "b": "US"},  # not a country
-            {"a": "SG", "b": "US"},  # no label point
+            {"a": "UK", "b": "US"},  # FIPS for the UK, not ISO: no label point
             {"a": "USA", "b": "IR"},
             {"a": "US", "b": "us"},  # a country with itself
             {"a": "US"},
@@ -326,7 +326,7 @@ class TestExplainLink:
         "body",
         [
             {"a": "ZZ", "b": "US"},
-            {"a": "SG", "b": "US"},
+            {"a": "UK", "b": "US"},
             {"a": "US", "b": "US"},
             {"a": "US"},
             {"a": "US", "b": "IR", "topic": "Sports"},
