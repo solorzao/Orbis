@@ -272,6 +272,20 @@ _THEME_GROUPS = (
     ("MANMADE_DISASTER", "Man-made disaster"),
     ("NATURAL_DISASTER", "Natural disaster"),
 )
+# Families of names (taxonomy themes without the TAX_), shown as
+# "Family: Name": "TERROR_GROUP_HAMAS" -> "Terror group: Hamas".
+_NAMED_FAMILIES = (
+    ("TERROR_GROUP_", "Terror group"),
+    ("POLITICAL_PARTY_", "Political party"),
+    ("AIDGROUPS_", "Aid group"),
+)
+# Lower case inside a name ("Save the Children"); acronyms kept in one.
+_NAME_SMALL_WORDS = frozenset(
+    {"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to"}
+)
+_NAME_ACRONYMS = frozenset({"EU", "UK", "UN", "US"})
+# A one-word name this short is an acronym: ISIS, BJP, ANC, PKK.
+_MAX_ACRONYM_CHARS = 4
 # Families shown as "Family: theme".
 _THEME_FAMILIES = (
     ("ECON_", "Economy"),
@@ -423,6 +437,8 @@ def detail_themes_query(
     that show.
     """
     conditions, args = _pair_conditions(a, b, start, end, topic)
+    args += [list(DROPPED_THEME_PREFIXES), sorted(DROPPED_THEMES)]
+    prefixes, dropped = f"${len(args) - 1}", f"${len(args)}"
     args.append(limit)
     query = f"""
         SELECT theme, count(DISTINCT story) AS n
@@ -430,8 +446,8 @@ def detail_themes_query(
             SELECT {_STORY} AS story, themes FROM articles a
             WHERE {" AND ".join(conditions)}
         ) linked, unnest(themes) AS theme
-        WHERE NOT theme ^@ ANY ('{{{",".join(DROPPED_THEME_PREFIXES)}}}'::text[])
-          AND theme <> ALL ('{{{",".join(sorted(DROPPED_THEMES))}}}'::text[])
+        WHERE NOT theme ^@ ANY ({prefixes}::text[])
+          AND theme <> ALL ({dropped}::text[])
         GROUP BY theme
         ORDER BY n DESC, theme
         LIMIT ${len(args)}
@@ -442,6 +458,26 @@ def detail_themes_query(
 def _theme_words(code: str) -> str:
     """A theme code's words, lower case: "STOCKMARKET_CRASH" -> "stock market crash"."""
     return " ".join(_THEME_WORDS.get(word, word.lower()) for word in code.split("_") if word)
+
+
+def _name_words(code: str) -> str:
+    """A name's code in title case: "SAVE_THE_CHILDREN" -> "Save the Children".
+
+    A one-word name of up to four letters is an acronym (ISIS, BJP), as are
+    EU, UK, UN and US anywhere; small words after the first are lower case.
+    """
+    words = [word for word in code.split("_") if word]
+    if len(words) == 1 and len(words[0]) <= _MAX_ACRONYM_CHARS:
+        return words[0]
+    shown = []
+    for i, word in enumerate(words):
+        if word in _NAME_ACRONYMS:
+            shown.append(word)
+        elif i and word.lower() in _NAME_SMALL_WORDS:
+            shown.append(word.lower())
+        else:
+            shown.append(word.capitalize())
+    return " ".join(shown)
 
 
 def display_theme(theme: str) -> str:
@@ -468,6 +504,10 @@ def display_theme(theme: str) -> str:
     for start, label in _THEME_GROUPS:
         if code.startswith(start):
             return label
+    for prefix, family in _NAMED_FAMILIES:
+        if code.startswith(prefix):
+            name = _name_words(code[len(prefix) :])
+            return f"{family}: {name}" if name else family
     for prefix, family in _THEME_FAMILIES:
         if code.startswith(prefix):
             words = _theme_words(code[len(prefix) :])

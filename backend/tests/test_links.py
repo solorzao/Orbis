@@ -236,6 +236,18 @@ class TestDisplayTheme:
             ("ECON_STOCKMARKET", "Economy: stock market"),
             ("ENV_CLIMATECHANGE", "Environment: climate change"),
             ("TAX_WEAPONS_MISSILE", "Weapons: missile"),
+            # Named-entity families: the name in title case, short ones as acronyms.
+            ("TAX_TERROR_GROUP_HAMAS", "Terror group: Hamas"),
+            ("TAX_TERROR_GROUP_ISLAMIC_STATE", "Terror group: Islamic State"),
+            ("TAX_TERROR_GROUP_AL_QAEDA", "Terror group: Al Qaeda"),
+            ("TAX_TERROR_GROUP_ISIS", "Terror group: ISIS"),
+            ("TAX_POLITICAL_PARTY_REPUBLICANS", "Political party: Republicans"),
+            ("TAX_POLITICAL_PARTY_BJP", "Political party: BJP"),
+            ("TAX_AIDGROUPS_RED_CROSS", "Aid group: Red Cross"),
+            ("TAX_AIDGROUPS_SAVE_THE_CHILDREN", "Aid group: Save the Children"),
+            ("TAX_AIDGROUPS_DOCTORS_WITHOUT_BORDERS", "Aid group: Doctors Without Borders"),
+            ("TAX_AIDGROUPS_UN_REFUGEE_AGENCY", "Aid group: UN Refugee Agency"),
+            ("TAX_POLITICAL_PARTY", "Political party"),
             # World Bank: the number goes, the topic stays.
             ("WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE", "Fragility, conflict and violence"),
             ("WB_2433_CONFLICT_AND_VIOLENCE", "Conflict and violence"),
@@ -353,16 +365,25 @@ class TestDetailQueries:
         assert "unnest(themes) AS theme" in flat
         assert f"FROM ( SELECT {STORY}, themes FROM articles a WHERE" in flat
         assert "SELECT theme, count(DISTINCT story) AS n" in flat
-        assert "ORDER BY n DESC, theme LIMIT $5" in flat
+        assert "ORDER BY n DESC, theme LIMIT $7" in flat
 
-    def test_themes_shown_as_nothing_are_not_fetched(self):
-        """So the themes fetched for the top five are ones that show."""
-        flat = _sql(links.detail_themes_query("IR", "US", START, END, None, 25)[0])
-        prefixes = ",".join(links.DROPPED_THEME_PREFIXES)
-        themes = ",".join(sorted(links.DROPPED_THEMES))
-        assert f"WHERE NOT theme ^@ ANY ('{{{prefixes}}}'::text[])" in flat
-        assert f"AND theme <> ALL ('{{{themes}}}'::text[]) GROUP BY theme" in flat
-        assert "TAX_FNCACT_" in prefixes and "CRISISLEX_" in prefixes
+    @pytest.mark.parametrize("topic", [None, "conflict"])
+    def test_themes_shown_as_nothing_are_not_fetched(self, topic):
+        """So the themes fetched for the top five are ones that show; bound, not pasted in."""
+        sql, *args = links.detail_themes_query("IR", "US", START, END, topic, 25)
+        flat = _sql(sql)
+        first = 6 if topic else 5
+        assert (
+            f"WHERE NOT theme ^@ ANY (${first}::text[]) "
+            f"AND theme <> ALL (${first + 1}::text[]) GROUP BY theme"
+        ) in flat
+        assert args[first - 1 :] == [
+            list(links.DROPPED_THEME_PREFIXES),
+            sorted(links.DROPPED_THEMES),
+            25,
+        ]
+        assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
+        assert "TAX_FNCACT_" not in sql and "'{" not in sql
 
     def test_stats_count_the_pairs_stories_like_the_links_query(self):
         sql, *args = links.detail_stats_query("IR", "US", START, END, None)
