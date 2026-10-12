@@ -14,6 +14,7 @@ from app.config import settings
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.models.news import (
     ClusterSummaryResponse,
+    Delta,
     GlobeDataPoint,
     HourlyDensity,
     HourlyVolume,
@@ -42,6 +43,7 @@ from app.services.database import (
     get_hourly_volume,
     get_topic_counts,
 )
+from app.services.delta import get_delta
 from app.services.grid import cell_index
 from app.services.surges import get_surges
 from app.services.titles import dedup_key
@@ -474,6 +476,51 @@ async def get_news_surges(
     outage) is no surges.
     """
     return await _cached_surges(_globe_topic_tag(topic))
+
+
+# How long a delta stays cached, and the visits that share one: every visit
+# in the same quarter hour (UTC) gets the answer for its start.
+_DELTA_TTL = 300
+_DELTA_BUCKET_MINUTES = 15
+
+# The furthest back a delta reaches: articles are kept 7 days.
+_MAX_DELTA = timedelta(days=7)
+
+
+def _delta_start(since: str, now: datetime) -> datetime:
+    """The start a delta counts from: *since* in UTC, at most 7 days back,
+    floored to the quarter hour. Invalid, or after *now*, is a 422."""
+    start = _parse_iso(since)
+    if start is None:
+        raise HTTPException(status_code=422, detail="since must be an ISO 8601 time.")
+    if start > now:
+        raise HTTPException(status_code=422, detail="since is in the future.")
+    start = max(start, now - _MAX_DELTA).astimezone(timezone.utc)
+    minute = start.minute - start.minute % _DELTA_BUCKET_MINUTES
+    return start.replace(minute=minute, second=0, microsecond=0)
+
+
+@router.get("/news/delta", response_model=Delta, dependencies=[Depends(edge_cached)])
+async def get_news_delta(
+    since: str = Query(..., description="The last visit, an ISO 8601 time"),
+) -> Delta:
+    """What changed since a visit, for the "since your last visit" strip.
+
+    The distinct stories since then, the places (1° cells) they're in, the
+    places surging now (as /api/news/surges lists them, every topic), and
+    the 5 places with the most new stories, each with its lead. *since* is
+    clamped to the last 7 days and floored to the quarter hour.
+    """
+    start = _delta_start(since, _now())
+    cache_k = f"db:delta:v1:{start:%Y%m%d%H%M}"
+    cached = await get_cached(cache_k)
+    if cached is not None:
+        return Delta(**cached)
+
+    changes, surges = await asyncio.gather(get_delta(start), _cached_surges(None))
+    delta = Delta(**changes, surging=len(surges))
+    await set_cached(cache_k, delta.model_dump(mode="json"), _DELTA_TTL)
+    return delta
 
 
 @router.get("/news/density", response_model=list[HourlyDensity])

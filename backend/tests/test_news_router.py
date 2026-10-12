@@ -1321,3 +1321,129 @@ class TestGetSurges:
         from app.middleware.security import _get_rate_group
 
         assert _get_rate_group("/api/news/surges") == "data"
+
+
+# ── /api/news/delta: what changed since a visit ─────────────────────────
+
+CHANGES = {
+    "new_stories": 1286,
+    "new_places": 212,
+    "top": [
+        {
+            "lat": SURGE["lat"],
+            "lng": SURGE["lng"],
+            "place": SURGE["place"],
+            "new": 31,
+            "lead": SURGE["lead"],
+        }
+    ],
+}
+
+
+@pytest.fixture
+def delta_db(monkeypatch):
+    """The delta and surge queries stubbed; the clock frozen at 14:30."""
+    import app.routers.news as news
+
+    monkeypatch.setattr(news, "_now", lambda: PREVIEW_NOW)
+    with (
+        patch("app.routers.news.get_delta", AsyncMock(return_value=CHANGES)) as changes,
+        patch("app.routers.news.get_surges", AsyncMock(return_value=[SURGE, SURGE])) as found,
+    ):
+        yield SimpleNamespace(changes=changes, surges=found)
+
+
+class TestGetDelta:
+    @pytest.mark.asyncio
+    async def test_new_stories_places_surges_and_the_top_places(self, monkeypatch, delta_db):
+        resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "new_stories": 1286,
+            "new_places": 212,
+            "surging": 2,  # the surges list, as the ticker shows it
+            "top": [{**CHANGES["top"][0], "lead": SURGE_JSON["lead"]}],
+        }
+        delta_db.surges.assert_awaited_once_with(PREVIEW_NOW, None)  # every topic
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("since", "start"),
+        [
+            # Floored to 15 minutes, in UTC.
+            ("2026-10-12T00:20:00Z", datetime(2026, 10, 12, 0, 15, tzinfo=timezone.utc)),
+            ("2026-10-12T05:44:59.999+05:30", datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)),
+            ("2026-10-12T14:30:00", datetime(2026, 10, 12, 14, 30, tzinfo=timezone.utc)),
+            # Clamped to the last 7 days, then floored.
+            ("2026-09-01T00:00:00Z", datetime(2026, 10, 5, 14, 30, tzinfo=timezone.utc)),
+            ("0001-01-01T00:00:00+01:00", datetime(2026, 10, 5, 14, 30, tzinfo=timezone.utc)),
+        ],
+    )
+    async def test_since_is_floored_to_15_minutes_and_clamped_to_7_days(
+        self, monkeypatch, delta_db, since, start
+    ):
+        resp = await _get(monkeypatch, "/api/news/delta", since=since)
+
+        assert resp.status_code == 200
+        delta_db.changes.assert_awaited_once_with(start)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {},  # since is required
+            {"since": ""},
+            {"since": "yesterday"},
+            {"since": "2026-10-12T25:00:00Z"},
+            {"since": "2026-10-12T14:31:00Z"},  # a minute in the future
+            {"since": "9999-12-31T00:00:00Z"},
+        ],
+    )
+    async def test_invalid_or_future_since_is_422(self, monkeypatch, delta_db, params):
+        resp = await _get(monkeypatch, "/api/news/delta", **params)
+
+        assert resp.status_code == 422
+        assert "s-maxage" not in resp.headers.get("cache-control", "")
+        delta_db.changes.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cached_for_five_minutes_by_the_floored_since(self, monkeypatch, delta_db):
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:29:59Z")
+
+        key, value, ttl = mock_set.await_args_list[-1].args
+        assert key == "db:delta:v1:202610120015"
+        assert value["new_stories"] == 1286 and value["surging"] == 2
+        assert value["top"][0]["lead"]["published_at"] == "2026-10-12T14:15:00Z"
+        assert ttl == 300
+
+    @pytest.mark.asyncio
+    async def test_visits_in_one_quarter_hour_share_an_entry(self, monkeypatch, delta_db):
+        keys = []
+        for since in ["2026-10-12T00:15:00Z", "2026-10-12T00:29:59Z"]:
+            with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+                await _get(monkeypatch, "/api/news/delta", since=since)
+            keys.append(mock_set.await_args_list[-1].args[0])
+        assert keys[0] == keys[1]
+
+    @pytest.mark.asyncio
+    async def test_a_cached_delta_is_served_without_the_database(self, monkeypatch, delta_db):
+        cached = {"new_stories": 3, "new_places": 1, "surging": 0, "top": []}
+        with patch("app.routers.news.get_cached", AsyncMock(return_value=cached)):
+            resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
+
+        assert resp.json() == cached
+        delta_db.changes.assert_not_awaited()
+        delta_db.surges.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_is_edge_cached(self, monkeypatch, delta_db):
+        resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
+
+        assert resp.headers["cache-control"] == EDGE
+
+    def test_is_in_the_data_rate_limit_group(self):
+        from app.middleware.security import _get_rate_group
+
+        assert _get_rate_group("/api/news/delta") == "data"

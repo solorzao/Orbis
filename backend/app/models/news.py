@@ -163,6 +163,25 @@ class Surge(BaseModel):
     lead: GlobeLead  # the newest recent story, preferring an https image
 
 
+class DeltaPlace(BaseModel):
+    """One of the places with the most new stories since a visit."""
+
+    lat: float  # the 1° cell's centre, as its globe dot has it
+    lng: float
+    place: str  # display_place of the lead's region
+    new: int  # distinct stories since the visit
+    lead: GlobeLead  # the newest of them, preferring an https image
+
+
+class Delta(BaseModel):
+    """What changed since a visit (/api/news/delta)."""
+
+    new_stories: int  # distinct stories since the visit
+    new_places: int  # 1° cells with any of them
+    surging: int  # places surging now, as /api/news/surges lists them (at most 8)
+    top: list[DeltaPlace]  # up to 5, most new stories first
+
+
 class PreviewEntity(BaseModel):
     """A name a place's stories mention: a person or an organisation."""
 

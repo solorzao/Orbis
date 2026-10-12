@@ -129,7 +129,7 @@ class TestDedupTitleSql:
 
     def test_the_sql_reads_the_column_it_is_given(self):
         sql = dedup_title_sql("a.title")
-        assert sql.startswith("lower(")
+        assert sql.startswith("(lower(")
         assert "regexp_replace(a.title," in sql
         assert not re.search(r"\$\d", sql)  # no bind parameter, only the regexes' anchors
 
@@ -143,3 +143,8 @@ class TestDedupTitleSql:
         )
 
         assert [r["key"] for r in rows] == [dedup_key(t) for t in SQL_TITLES]
+
+    def test_the_key_compares_bytewise(self):
+        """Only ever compared for equality: "C" sorts it a third faster than the locale, and
+        a deterministic collation's equality is bytewise anyway."""
+        assert dedup_title_sql("title").endswith(') COLLATE "C")')
