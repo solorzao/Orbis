@@ -1,56 +1,80 @@
-"""Tests for the country centroid lookup module."""
+"""Tests for the generated country label points (scripts/gen_country_centroids.py)."""
 
-from app.services.country_centroids import COUNTRY_CENTROIDS, get_centroid, normalize_country
+import math
+import re
 
+import pytest
 
-def test_known_country_returns_coords():
-    result = get_centroid("US")
-    assert result is not None
-    lat, lng = result
-    assert 30.0 < lat < 50.0
-    assert -130.0 < lng < -70.0
+from app.services import country_centroids
+from app.services.country_centroids import COUNTRY_CENTROIDS, Centroid, centroid
+from app.services.country_codes import FIPS_TO_ISO2
 
-
-def test_case_insensitive_lookup():
-    assert get_centroid("us") == get_centroid("US")
-    assert get_centroid("Gb") == get_centroid("GB")
-
-
-def test_unknown_country_returns_none():
-    assert get_centroid("ZZ") is None
-    assert get_centroid("") is None
-    assert get_centroid("INVALID") is None
-
-
-def test_centroid_dict_has_major_countries():
-    for code in ["US", "GB", "FR", "DE", "CN", "RU", "IN", "BR", "AU", "JP"]:
-        assert code in COUNTRY_CENTROIDS, f"Missing country: {code}"
+# Well-known centre points, within 3 degrees of which each label point must lie.
+_KNOWN_POINTS = {
+    "US": (39.83, -98.58),  # Lebanon, Kansas: the centre of the contiguous states
+    "AU": (-25.61, 134.35),  # the Lambert Centre
+    "FR": (46.54, 2.43),  # Vesdun, the centre of metropolitan France
+    "DE": (51.16, 10.45),  # Niederdorla
+    "ES": (40.31, -3.69),  # Cerro de los Angeles, the centre of mainland Spain
+    "IR": (32.0, 53.7),
+    "IN": (21.15, 79.08),  # Nagpur's Zero Mile Stone
+}
 
 
-def test_all_centroids_have_valid_ranges():
-    for code, (lat, lng) in COUNTRY_CENTROIDS.items():
-        assert -90.0 <= lat <= 90.0, f"{code} lat out of range: {lat}"
-        assert -180.0 <= lng <= 180.0, f"{code} lng out of range: {lng}"
+def _degrees_apart(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle distance in degrees."""
+    lat1, lng1, lat2, lng2 = map(math.radians, (*a, *b))
+    cos = math.sin(lat1) * math.sin(lat2) + math.cos(lat1) * math.cos(lat2) * math.cos(lng1 - lng2)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
 
 
-def test_full_country_name_lookup():
-    """GDELT sends full names like 'United States', not ISO codes."""
-    result = get_centroid("United States")
-    assert result is not None
-    assert 30.0 < result[0] < 50.0
+@pytest.mark.parametrize("iso", sorted(_KNOWN_POINTS))
+def test_anchor_points_are_within_3_degrees_of_known_centres(iso):
+    point = COUNTRY_CENTROIDS[iso]
+    assert _degrees_apart((point.lat, point.lng), _KNOWN_POINTS[iso]) <= 3.0, point
 
 
-def test_normalize_country_full_name():
-    assert normalize_country("United States") == "US"
-    assert normalize_country("United Kingdom") == "GB"
-    assert normalize_country("France") == "FR"
+def test_countries_natural_earth_codes_as_minus_99_are_present():
+    """Natural Earth gives France and Norway ISO_A2 -99; the generator recovers them."""
+    for iso in ("FR", "NO", "US", "CN", "RU", "BR", "ZA", "AU"):
+        assert iso in COUNTRY_CENTROIDS, iso
+    assert COUNTRY_CENTROIDS["FR"].name == "France"
+    assert COUNTRY_CENTROIDS["NO"].name == "Norway"
 
 
-def test_normalize_country_iso_code():
-    assert normalize_country("US") == "US"
-    assert normalize_country("gb") == "GB"
+def test_covers_at_least_170_of_the_codes_ingestion_can_store():
+    """Stands in for "every code in the last 7 days has a point" (gaps: small states)."""
+    covered = set(COUNTRY_CENTROIDS) & set(FIPS_TO_ISO2.values())
+    assert len(covered) >= 170
 
 
-def test_normalize_country_unknown():
-    assert normalize_country("ZZ") == "ZZ"
-    assert normalize_country("") == ""
+def test_every_code_is_an_iso_code_ingestion_can_store():
+    assert set(COUNTRY_CENTROIDS) <= set(FIPS_TO_ISO2.values())
+
+
+def test_names_are_one_readable_line():
+    assert COUNTRY_CENTROIDS["US"].name == "United States"
+    assert COUNTRY_CENTROIDS["IR"].name == "Iran"
+    for iso, point in COUNTRY_CENTROIDS.items():
+        assert point.name and point.name == " ".join(point.name.split()), iso
+        assert "." not in point.name, iso  # no abbreviations ("Dem. Rep. Congo")
+
+
+def test_points_are_on_the_globe():
+    for iso, point in COUNTRY_CENTROIDS.items():
+        assert -90 <= point.lat <= 90 and -180 <= point.lng <= 180, iso
+
+
+def test_lookup_takes_any_case_and_misses_with_none():
+    assert centroid("us") == centroid("US") == COUNTRY_CENTROIDS["US"]
+    assert isinstance(centroid("US"), Centroid)
+    assert centroid("ZZ") is None
+    assert centroid("") is None
+    assert centroid(None) is None
+
+
+def test_generated_header_records_source_and_checksum():
+    doc = country_centroids.__doc__
+    assert "ne_110m_admin_0_countries.geojson" in doc
+    assert "three-globe 2.45.0" in doc
+    assert re.search(r"SHA-256: [0-9a-f]{64}\b", doc)
