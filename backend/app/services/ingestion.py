@@ -252,13 +252,49 @@ async def _purge_old_articles() -> None:
     await purge_orphaned_nodes()
 
 
+# The cycle's background tasks, held so they are not garbage-collected mid-run.
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def _warm_caches() -> None:
+    try:
+        # Here, not at the top: app.warm imports the routers, which import services.
+        from app.warm import warm_caches
+
+        await warm_caches()
+    except Exception:
+        logger.warning("Cache warm failed; continuing.", exc_info=True)
+
+
+def _start_cache_warm() -> None:
+    """Refill the busiest API caches (app.warm) in the background."""
+    task = asyncio.create_task(_warm_caches())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def stop_background_tasks() -> None:
+    """Cancel the cycle's background tasks (a cache warm) and wait until they stop.
+
+    At shutdown, before Redis and the pool close, so a warm cannot reopen
+    them; and as a cycle starts, so a warm cannot write answers back after
+    the cycle has invalidated them.
+    """
+    tasks = list(_background_tasks)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run_ingestion_cycle() -> int:
     """Run the ingestion pipeline.  Never raises.
 
     First converts any rows still holding FIPS country codes to ISO. Then
     downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
-    Then purges articles outside the retention window.
+    Then purges articles outside the retention window. Once the cycle has
+    released its lock, the caches it invalidated are refilled in the
+    background, so neither the next cycle nor a visitor waits on that.
 
     Cycles never overlap: if one is already running (the startup run and the
     scheduler can coincide), this returns 0 without doing anything.
@@ -270,6 +306,7 @@ async def run_ingestion_cycle() -> int:
         return 0
     async with _ingestion_lock:
         _cycle_started_at = time.monotonic()
+        await stop_background_tasks()  # the last cycle's warm, if still running
         try:
             logger.info("Ingestion cycle starting …")
             try:
@@ -280,7 +317,8 @@ async def run_ingestion_cycle() -> int:
             await _purge_old_articles()
             await generate_embeddings()
             logger.info("Ingestion cycle complete: %d articles.", count)
-            return count
         except Exception:
             logger.error("Ingestion cycle failed.", exc_info=True)
-            return 0
+            count = 0
+    _start_cache_warm()
+    return count

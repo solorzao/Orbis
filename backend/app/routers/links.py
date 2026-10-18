@@ -12,7 +12,7 @@ from app.models.links import Link, LinkDetail, LinkExplainRequest, LinkExplanati
 from app.routers.http_cache import edge_cached
 from app.routers.news import _deduplicate_articles, _globe_topic_tag, _parse_iso, _row_to_article
 from app.services.ai_summary import _window_key
-from app.services.cache import get_cached, set_cached
+from app.services.cache import cycle_ttl, get_cached, set_cached
 from app.services.country_centroids import centroid
 from app.services.links import explain_link, get_link_detail, get_link_pairs, rank_links
 
@@ -96,6 +96,11 @@ def _pair(a: str, b: str) -> tuple[str, str]:
     return codes[0], codes[1]
 
 
+# What /api/links ranks by and returns when the request does not say.
+DEFAULT_RANK = "lift"
+DEFAULT_LIMIT = 40
+
+
 @router.get("/links", response_model=list[Link], dependencies=[Depends(edge_cached)])
 async def get_links(
     timespan: Timespan = "24h",
@@ -105,8 +110,8 @@ async def get_links(
     rank: Annotated[
         Literal["lift", "count"],
         Query(description="lift: surprisingly often together; count: most stories"),
-    ] = "lift",
-    limit: Annotated[int, Query(ge=1, le=60, description="Most links to return")] = 40,
+    ] = DEFAULT_RANK,
+    limit: Annotated[int, Query(ge=1, le=60, description="Most links to return")] = DEFAULT_LIMIT,
 ) -> list[Link]:
     """Pairs of countries the window's stories cover together, for arcs on the globe.
 
@@ -115,7 +120,15 @@ async def get_links(
     """
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
+    return await cached_links(window, tag, rank, limit)
 
+
+async def cached_links(window: Window, tag: str | None, rank: str, limit: int) -> list[Link]:
+    """/api/links' answer for the window: cached, else computed and cached.
+
+    The request and the cache warmers both come here, so a warmed entry has
+    the key and the bytes a request would have stored.
+    """
     cache_k = f"db:links:v2:{window.key}:{tag or ''}:{rank}:{limit}"
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
@@ -124,9 +137,19 @@ async def get_links(
     rows = await get_link_pairs(window.start, window.end, tag)
     links = [Link.model_validate(link) for link in rank_links(rows, rank, limit, tag)]
 
-    ttl = _LINKS_TTL if links else _EMPTY_LINKS_TTL
+    ttl = cycle_ttl(_LINKS_TTL) if links else _EMPTY_LINKS_TTL
     await set_cached(cache_k, [link.model_dump(by_alias=True) for link in links], ttl)
     return links
+
+
+async def warm_links_24h() -> None:
+    """Cache the default 24-hour /api/links answer (app.warm, after each ingestion cycle)."""
+    await cached_links(_window("24h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT)
+
+
+async def warm_links_7d() -> None:
+    """Cache the default 7-day /api/links answer: 4.7 s cold on production."""
+    await cached_links(_window("168h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT)
 
 
 Country = Annotated[str, Query(max_length=8, description="ISO 3166-1 alpha-2 code")]

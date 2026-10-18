@@ -1,5 +1,6 @@
 """Tests for the raw GKG → PostgreSQL ingestion service."""
 
+import asyncio
 import logging
 import time
 import uuid
@@ -390,6 +391,62 @@ class TestTitlesAndGkgFields:
 
 
 class TestRunIngestionCycle:
+    @pytest.fixture(autouse=True)
+    def warm(self):
+        """The cache warm the cycle starts, recording whether the lock was held."""
+        from app.services import ingestion
+
+        calls: list[bool] = []
+        with patch(
+            "app.services.ingestion._start_cache_warm",
+            side_effect=lambda: calls.append(ingestion._ingestion_lock.locked()),
+        ):
+            yield calls
+
+    @pytest.mark.asyncio
+    async def test_warms_caches_once_the_lock_is_released(self, warm):
+        from app.services.ingestion import run_ingestion_cycle
+
+        with (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion._backfill_iso_country_codes", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion._ingest_from_raw_gkg",
+                new_callable=AsyncMock,
+                return_value=5,
+            ),
+            patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
+            patch("app.services.ingestion.generate_embeddings", new_callable=AsyncMock),
+        ):
+            assert await run_ingestion_cycle() == 5
+
+        assert warm == [False]  # started once, after the lock was released
+
+    @pytest.mark.asyncio
+    async def test_a_failed_cycle_still_warms(self, warm):
+        """Its backfill may have invalidated the caches before it failed."""
+        from app.services.ingestion import run_ingestion_cycle
+
+        with (
+            patch("app.services.ingestion._backfill_iso_country_codes", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion._ingest_from_raw_gkg",
+                new_callable=AsyncMock,
+                side_effect=Exception("boom"),
+            ),
+        ):
+            assert await run_ingestion_cycle() == 0
+
+        assert warm == [False]
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_cycle_does_not_warm(self, warm):
+        from app.services import ingestion
+
+        async with ingestion._ingestion_lock:
+            assert await ingestion.run_ingestion_cycle() == 0
+        assert warm == []
+
     @pytest.mark.asyncio
     async def test_happy_path(self):
         from app.services.ingestion import run_ingestion_cycle
@@ -537,6 +594,88 @@ class TestRunIngestionCycle:
         mock_ingest.assert_awaited_once()
         mock_purge.assert_awaited_once()
         mock_embed.assert_awaited_once()
+
+
+class TestStartCacheWarm:
+    @pytest.mark.asyncio
+    async def test_runs_the_warmers_in_the_background(self):
+        from app.services import ingestion
+
+        with patch("app.warm.warm_caches", new_callable=AsyncMock) as warm_caches:
+            ingestion._start_cache_warm()
+            assert ingestion._background_tasks  # held until done
+            await asyncio.gather(*ingestion._background_tasks)
+
+        warm_caches.assert_awaited_once_with()
+        assert not ingestion._background_tasks
+
+    @pytest.mark.asyncio
+    async def test_a_failure_is_a_warning(self, caplog):
+        from app.services import ingestion
+
+        with (
+            patch("app.warm.warm_caches", new_callable=AsyncMock, side_effect=RuntimeError("x")),
+            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
+        ):
+            ingestion._start_cache_warm()
+            await asyncio.gather(*ingestion._background_tasks)  # does not raise
+
+        assert "Cache warm failed; continuing." in caplog.text
+
+    @staticmethod
+    def _slow_warm():
+        """A warm that runs until cancelled, and an event set once it has started."""
+        started = asyncio.Event()
+
+        async def warm_caches():
+            started.set()
+            await asyncio.sleep(60)
+
+        return warm_caches, started
+
+    @pytest.mark.asyncio
+    async def test_stop_background_tasks_cancels_a_running_warm(self):
+        """At shutdown: a warm must not reopen the pool or Redis after they close."""
+        from app.services import ingestion
+
+        warm_caches, started = self._slow_warm()
+        with patch("app.warm.warm_caches", new=warm_caches):
+            ingestion._start_cache_warm()
+            [task] = ingestion._background_tasks
+            await started.wait()
+            await ingestion.stop_background_tasks()
+
+        assert task.cancelled()
+        assert not ingestion._background_tasks
+
+    @pytest.mark.asyncio
+    async def test_a_new_cycle_cancels_the_warm_still_running(self):
+        """Its answers are about to be invalidated: it must not write them back after."""
+        from app.services import ingestion
+
+        warm_caches, started = self._slow_warm()
+        running_at_ingest: list[bool] = []
+
+        async def ingest():
+            running_at_ingest.append(not old_warm.done())
+            return 3
+
+        with (
+            patch("app.warm.warm_caches", new=warm_caches),
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion._backfill_iso_country_codes", new_callable=AsyncMock),
+            patch("app.services.ingestion._ingest_from_raw_gkg", side_effect=ingest),
+            patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
+            patch("app.services.ingestion.generate_embeddings", new_callable=AsyncMock),
+        ):
+            ingestion._start_cache_warm()
+            [old_warm] = ingestion._background_tasks
+            await started.wait()
+            assert await ingestion.run_ingestion_cycle() == 3
+            await ingestion.stop_background_tasks()  # the new cycle's warm
+
+        assert running_at_ingest == [False]
+        assert old_warm.cancelled()
 
 
 class _FakeArticlesPool:

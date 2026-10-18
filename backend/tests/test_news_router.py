@@ -8,6 +8,7 @@ import pytest
 
 from app.config import settings
 from app.routers.news import _row_to_article
+from app.services.cache import cycle_ttl
 
 
 def _make_globe_row(lat: float = 40.0, lng: float = -74.0, count: int = 3, topic: str = "general"):
@@ -275,7 +276,8 @@ class TestGetGlobeDataCache:
 
         _, value, ttl = mock_set.await_args.args
         assert len(value) == 1
-        assert ttl == settings.db_cache_ttl
+        # Until the next cycle's warm replaces it: ingestion invalidates db:* anyway.
+        assert ttl == cycle_ttl(settings.db_cache_ttl) > settings.ingestion_interval_seconds
 
     @pytest.mark.asyncio
     async def test_an_empty_window_is_cached_briefly(self):
@@ -890,7 +892,7 @@ class TestGetVolume:
         key, value, ttl = mock_set.await_args.args
         assert key == "db:volume:7"
         assert value == [{"hour": "2026-10-11T14:00:00Z", "count": 5}]
-        assert ttl == settings.db_cache_ttl
+        assert ttl == cycle_ttl(settings.db_cache_ttl) > settings.ingestion_interval_seconds
 
     @pytest.mark.asyncio
     async def test_serves_the_cached_volume(self, monkeypatch):
@@ -904,6 +906,62 @@ class TestGetVolume:
 
         assert resp.json() == cached
         mock_db.assert_not_awaited()
+
+
+# ── Cache warmers: the first visit's requests, refilled after ingestion ──
+
+
+class TestFirstLoadWarmers:
+    """Each warmer stores the key and bytes the frontend's first-load request would."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("warmer", "path", "params", "db_function", "rows", "key"),
+        [
+            (  # useGlobePoints: DEFAULT_WINDOW 24h, GLOBE_LIMIT 500, topic All
+                "warm_globe",
+                "/api/news",
+                {"timespan": "24h", "limit": "500"},
+                "get_globe_points",
+                [_make_globe_row(lat=33.0, lng=44.0, count=5, topic="conflict")],
+                "db:globe:v2:24::500:",
+            ),
+            (  # TimelineCapsule: fetchVolume(CHART_DAYS = 7)
+                "warm_volume",
+                "/api/news/volume",
+                {"days": "7"},
+                "get_hourly_volume",
+                [{"hour": datetime(2026, 10, 11, 14, tzinfo=timezone.utc), "count": 5}],
+                "db:volume:7",
+            ),
+        ],
+    )
+    async def test_a_warmed_entry_is_what_the_first_load_request_would_cache(
+        self, monkeypatch, warmer, path, params, db_function, rows, key
+    ):
+        import app.routers.news as news
+
+        with (
+            patch(f"app.routers.news.{db_function}", new_callable=AsyncMock, return_value=rows),
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+        ):
+            async with _api_client(monkeypatch) as client:
+                miss = await client.get(path, params=params)
+            await getattr(news, warmer)()
+
+        (requested_key, requested, ttl), (warmed_key, warmed, warmed_ttl) = [
+            c.args for c in mock_set.await_args_list
+        ]
+        assert warmed_key == requested_key == key
+        assert (warmed, warmed_ttl) == (requested, ttl)
+        # Warmed after one cycle, it lasts until the next cycle's warm.
+        assert warmed_ttl > settings.ingestion_interval_seconds
+
+        with patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=warmed):
+            async with _api_client(monkeypatch) as client:
+                hit = await client.get(path, params=params)
+        assert hit.status_code == miss.status_code == 200
+        assert hit.content == miss.content
 
 
 # ── /api/news/preview: the hover card's dwell data ──────────────────────

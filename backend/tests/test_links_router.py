@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.config import settings
 from app.routers.http_cache import EDGE_CACHE_CONTROL
+from app.services.cache import cycle_ttl
 from app.services.links import TOPIC_TAGS
 
 NOW = datetime(2026, 10, 12, 15, 37, tzinfo=timezone.utc)
@@ -137,7 +139,7 @@ class TestGetLinks:
 
         (key1, value1, ttl1), (key2, _, _) = [c.args for c in mock_set.await_args_list]
         assert key1 == "db:links:v2:live:24:politics:count:40"
-        assert ttl1 == 600
+        assert ttl1 == cycle_ttl(600) > settings.ingestion_interval_seconds
         assert value1[0]["from"] == "US"
         assert key2 == "db:links:v2:2026101008-2026101108::lift:12"
 
@@ -149,6 +151,35 @@ class TestGetLinks:
                 resp = await client.get("/api/links")
         assert resp.json() == []
         assert mock_set.await_args.args[1:] == ([], 60)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("warmer", "timespan"), [("warm_links_24h", "24h"), ("warm_links_7d", "168h")]
+    )
+    async def test_a_warmed_entry_is_what_a_request_would_cache(
+        self, monkeypatch, db, warmer, timespan
+    ):
+        """Warmed after ingestion, the default request's key and value, byte for byte."""
+        from app.routers import links as links_router
+
+        with patch("app.routers.links.set_cached", new_callable=AsyncMock) as mock_set:
+            async with _client(monkeypatch) as client:
+                miss = await client.get("/api/links", params={"timespan": timespan})
+            await getattr(links_router, warmer)()
+
+        (requested_key, requested, ttl), (warmed_key, warmed, warmed_ttl) = [
+            c.args for c in mock_set.await_args_list
+        ]
+        hours = timespan.removesuffix("h")
+        assert warmed_key == requested_key == f"db:links:v2:live:{hours}::lift:40"
+        assert (warmed, warmed_ttl) == (requested, ttl)
+        # Warmed after one cycle, it lasts until the next cycle's warm.
+        assert warmed_ttl > settings.ingestion_interval_seconds
+
+        with patch("app.routers.links.get_cached", new_callable=AsyncMock, return_value=warmed):
+            async with _client(monkeypatch) as client:
+                hit = await client.get("/api/links", params={"timespan": timespan})
+        assert hit.content == miss.content
 
     @pytest.mark.asyncio
     async def test_serves_the_cached_answer(self, monkeypatch, db):
