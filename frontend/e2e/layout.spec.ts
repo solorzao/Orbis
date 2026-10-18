@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { CAIRO, PARIS, hoverPlace, mockAllApiRoutes, withCairo } from "./fixtures";
+import { CAIRO, MOCK_LINKS_LIFT, PARIS, hoverPlace, mockAllApiRoutes, withCairo } from "./fixtures";
 
 const SIZES = [
   { width: 1920, height: 1080 },
@@ -37,15 +37,35 @@ function regionsAt(width: number, side: "side-panel" | "side-open" = "side-panel
 
 type Box = { id: string; x: number; y: number; w: number; h: number };
 
-async function boxes(page: Page, ids: string[]) {
-  const out: Box[] = [];
-  for (const id of ids) {
-    const el = page.getByTestId(id);
-    if (!(await el.isVisible())) continue;
-    const b = await el.boundingBox();
-    if (b) out.push({ id, x: b.x, y: b.y, w: b.width, h: b.height });
-  }
-  return out;
+/**
+ * The shown regions' boxes, as Playwright's isVisible and boundingBox report
+ * them (shown: a non-empty box, not visibility: hidden; one element per test
+ * id), measured in one call into the page. On a busy CI runner each call can
+ * take a second or more, and two per region pushed whole tests past 30 s.
+ */
+async function boxes(page: Page, ids: string[]): Promise<Box[]> {
+  return page.evaluate((ids) => {
+    const out: { id: string; x: number; y: number; w: number; h: number }[] = [];
+    for (const id of ids) {
+      const found = document.querySelectorAll(`[data-testid="${id}"]`);
+      if (found.length > 1) throw new Error(`${found.length} elements for test id ${id}`);
+      const el = found[0];
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0 || getComputedStyle(el).visibility === "hidden") continue;
+      out.push({ id, x: r.x, y: r.y, w: r.width, h: r.height });
+    }
+    return out;
+  }, ids);
+}
+
+/** Turn the Links layer on and wait until its arcs are drawn: its ready signal. */
+async function linksOn(page: Page) {
+  await page.getByRole("button", { name: "Links", exact: true }).click();
+  await expect(page.getByTestId("globe")).toHaveAttribute(
+    "data-arcs",
+    String(MOCK_LINKS_LIFT.length),
+  );
 }
 
 const GAP = 12;
@@ -231,7 +251,7 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
   }) => {
     await settle(page, size);
     const before = (await page.getByTestId("layer-switcher").boundingBox())!;
-    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await linksOn(page);
     await expect(page.getByTestId("link-rank")).toBeVisible();
     const regions = [...regionsAt(size.width), "link-rank"];
     const b = await expectApart(page, size.width, "Links on", regions);
@@ -276,7 +296,7 @@ for (const size of SIZES.filter((s) => s.width <= NARROW_MAX)) {
   test(`the Links chip keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({ page }) => {
     // Turn Links on where the layers show, then narrow the window.
     await settle(page, { width: 800, height: size.height });
-    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await linksOn(page);
     await page.setViewportSize(size);
     const chip = page.getByTestId("links-chip");
     await expect(chip).toBeVisible();
