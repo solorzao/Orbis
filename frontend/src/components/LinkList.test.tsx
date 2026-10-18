@@ -15,7 +15,7 @@ const LINKS: CountryLink[] = [
 
 describe("LinkList", () => {
   it("lists the drawn links in rank order, each a button with its codes, names and stories", () => {
-    render(<LinkList links={LINKS} rank="lift" onOpen={() => {}} />);
+    render(<LinkList links={LINKS} rank="lift" status={null} onOpen={() => {}} />);
     const list = screen.getByRole("list", { name: "Links on the globe" });
     const buttons = within(list).getAllByRole("button");
     expect(buttons.map((b) => b.textContent)).toEqual([
@@ -28,19 +28,77 @@ describe("LinkList", () => {
   });
 
   it("says how they are ranked", () => {
-    render(<LinkList links={LINKS} rank="count" onOpen={() => {}} />);
+    render(<LinkList links={LINKS} rank="count" status={null} onOpen={() => {}} />);
     expect(screen.getByText("Most covered first")).toBeInTheDocument();
   });
 
   it("opens the link picked", () => {
     const onOpen = vi.fn();
-    render(<LinkList links={LINKS} rank="lift" onOpen={onOpen} />);
+    render(<LinkList links={LINKS} rank="lift" status={null} onOpen={onOpen} />);
     fireEvent.click(screen.getByRole("button", { name: /^United States and Iran/ }));
     expect(onOpen).toHaveBeenCalledWith(LINKS[1]);
   });
 
-  it("renders nothing without links", () => {
-    const { container } = render(<LinkList links={[]} rank="lift" onOpen={() => {}} />);
-    expect(container).toBeEmptyDOMElement();
+  it("without links, says why (the Links status), or that they are loading", () => {
+    const { rerender } = render(
+      <LinkList links={[]} rank="lift" status="No links in this window" onOpen={() => {}} />,
+    );
+    expect(screen.getByTestId("link-list")).toHaveTextContent("No links in this window");
+    expect(screen.queryByRole("list")).toBeNull();
+    rerender(<LinkList links={[]} rank="lift" status={null} onOpen={() => {}} />);
+    expect(screen.getByTestId("link-list")).toHaveTextContent("Loading links…");
+  });
+
+  describe("focus while the links change", () => {
+    const [RU_UA, IR_US] = LINKS;
+    const SA_YE: CountryLink = {
+      a: { iso: "SA", name: "Saudi Arabia", lat: 24.12, lng: 44.52 },
+      b: { iso: "YE", name: "Yemen", lat: 15.91, lng: 47.54 },
+      n: 46,
+      lift: 6.2,
+      topic: "Conflict",
+      tone: -0.5,
+      from: "SA",
+    };
+    const row = (name: RegExp) => screen.getByRole("button", { name });
+    const list = (links: CountryLink[]) => (
+      <LinkList links={links} rank="lift" status={null} onOpen={() => {}} />
+    );
+
+    it("stays on a focused row that is still listed (a new rank or window)", () => {
+      const { rerender } = render(list([RU_UA, IR_US]));
+      row(/^United States and Iran/).focus();
+      rerender(list([IR_US, SA_YE]));
+      expect(row(/^United States and Iran/)).toHaveFocus();
+    });
+
+    it("moves to the first row when the focused row drops out", () => {
+      const { rerender } = render(list([RU_UA, IR_US]));
+      row(/^United States and Iran/).focus();
+      rerender(list([SA_YE, RU_UA]));
+      expect(row(/^Saudi Arabia and Yemen/)).toHaveFocus();
+    });
+
+    it("moves to the list itself when no links are left", () => {
+      const { rerender } = render(list([RU_UA, IR_US]));
+      row(/^United States and Iran/).focus();
+      rerender(
+        <LinkList links={[]} rank="lift" status="No links in this window" onOpen={() => {}} />,
+      );
+      const listBox = screen.getByTestId("link-list");
+      expect(listBox).toHaveFocus();
+      expect(listBox).toHaveAttribute("tabindex", "-1");
+      expect(listBox).toHaveAccessibleName("Links on the globe");
+    });
+
+    it("leaves the focus alone when it is outside the list", () => {
+      const elsewhere = document.createElement("button");
+      document.body.appendChild(elsewhere);
+      const { rerender } = render(list([RU_UA, IR_US]));
+      elsewhere.focus();
+      rerender(list([SA_YE]));
+      expect(elsewhere).toHaveFocus();
+      elsewhere.remove();
+    });
   });
 });

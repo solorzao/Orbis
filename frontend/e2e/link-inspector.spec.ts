@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
+  MOCK_LINKS_COUNT,
   MOCK_LINKS_LIFT,
   MOCK_LINK_DETAIL,
   MOCK_LINK_EXPLAIN,
@@ -201,9 +202,35 @@ test.describe("Inspect tab: a link", () => {
     await expect(first).toBeFocused();
     await expect(first).toHaveAccessibleName("Saudi Arabia and Yemen, SA ↔ YE, 46 stories");
     await page.keyboard.press("Enter");
-    await expect(
-      page.getByTestId("link-inspector").getByRole("heading", { name: "Saudi Arabia and Yemen" }),
-    ).toBeVisible();
+    const heading = page
+      .getByTestId("link-inspector")
+      .getByRole("heading", { name: "Saudi Arabia and Yemen" });
+    await expect(heading).toBeVisible();
+    // The row went with the list: the focus is on the inspector's heading, not the page.
+    await expect(heading).toBeFocused();
+  });
+
+  test("a focused row that drops out of the list hands the focus to the first row", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page);
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-arcs",
+      String(MOCK_LINKS_LIFT.length),
+    );
+    await page.getByTestId("side-tab-inspect").click();
+    const rows = page.getByRole("list", { name: "Links on the globe" }).getByRole("button");
+    // France and the UK are linked by lift only: a count ranking drops them.
+    const frGb = rows.filter({ hasText: "United Kingdom and France" });
+    await frGb.focus();
+    // The rank changes without the focus moving (as a replay changes the window).
+    await page
+      .getByTestId("link-rank")
+      .getByRole("button", { name: "Most covered" })
+      .evaluate((b: HTMLElement) => b.click());
+    await expect(rows).toHaveCount(MOCK_LINKS_COUNT.length);
+    await expect(rows.first()).toBeFocused();
   });
 });
 

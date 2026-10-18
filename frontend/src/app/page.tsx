@@ -11,14 +11,7 @@ import type {
   PanelQuery,
   Topic,
 } from "@/types/news";
-import {
-  LINK_EXPLAIN_FAILED,
-  explainLink,
-  fetchClusterArticles,
-  fetchClusterSummary,
-  fetchLinkDetail,
-  isExplainFallback,
-} from "@/lib/api";
+import { fetchClusterArticles, fetchClusterSummary, fetchLinkDetail } from "@/lib/api";
 import { apiArticlesToNewsArticles } from "@/lib/clustering";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/panelQuery";
@@ -36,6 +29,7 @@ import {
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
+import { useLinkExplain } from "@/hooks/useLinkExplain";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
@@ -353,31 +347,8 @@ export default function Home() {
     [panelQueue, linkQueue, activeTopic, timeWindow, fetchLinkData, showInspect],
   );
 
-  // Explain this link: Claude's words with the AI badge, or the message it
-  // sent instead (paused, failed, too few stories) as plain text.
-  const handleExplain = useCallback(
-    async (entry: LinkEntry) => {
-      if (entry.explaining) return;
-      updateLink(entry.linkId, { explaining: true });
-      try {
-        const { text } = await explainLink({
-          a: entry.link.a.iso,
-          b: entry.link.b.iso,
-          query: entry.query,
-        });
-        updateLink(entry.linkId, {
-          explaining: false,
-          explanation: { text, ai: !isExplainFallback(text) },
-        });
-      } catch {
-        updateLink(entry.linkId, {
-          explaining: false,
-          explanation: { text: LINK_EXPLAIN_FAILED, ai: false },
-        });
-      }
-    },
-    [updateLink],
-  );
+  // Explain this link: one request per link at a time (useLinkExplain).
+  const handleExplain = useLinkExplain(updateLink);
 
   // A dot's click opens its panel. On a touch screen the first tap shows its
   // hover card instead, and a second tap (or the card's Open stories) opens it.
@@ -510,7 +481,9 @@ export default function Home() {
               : "Click a dot on the globe to see its stories here."}
           </p>
           {/* With Links on, its links: open one without pointing at its arc. */}
-          {linksOn && <LinkList links={links} rank={linkRank} onOpen={handleLinkOpen} />}
+          {linksOn && (
+            <LinkList links={links} rank={linkRank} status={linksNote} onOpen={handleLinkOpen} />
+          )}
         </>
       )}
     </>

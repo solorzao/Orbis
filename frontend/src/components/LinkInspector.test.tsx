@@ -260,4 +260,33 @@ describe("LinkInspector", () => {
       expect(screen.getByRole("button", { name: "AI Explain this link" })).toBeEnabled();
     });
   });
+
+  describe("focus when it opens", () => {
+    const props = { onClose: vi.fn(), onMinimize: vi.fn(), onExplain: vi.fn() };
+
+    it("takes the focus on its heading when it was nowhere (the list row that opened it went)", () => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      render(<LinkInspector entry={loaded()} {...props} />);
+      const heading = screen.getByRole("heading", { level: 2 });
+      expect(heading).toHaveFocus();
+      expect(heading).toHaveAttribute("tabindex", "-1");
+    });
+
+    it("leaves the focus where it is when something holds it", () => {
+      const elsewhere = document.createElement("button");
+      document.body.appendChild(elsewhere);
+      elsewhere.focus();
+      render(<LinkInspector entry={loaded()} {...props} />);
+      expect(elsewhere).toHaveFocus();
+      elsewhere.remove();
+    });
+
+    it("opens on its heading, not on an explanation it already had", () => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      render(
+        <LinkInspector entry={loaded({ explanation: { text: "Talks.", ai: true } })} {...props} />,
+      );
+      expect(screen.getByRole("heading", { level: 2 })).toHaveFocus();
+    });
+  });
 });

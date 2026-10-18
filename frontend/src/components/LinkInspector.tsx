@@ -47,13 +47,27 @@ export default function LinkInspector({
   onExplain,
 }: LinkInspectorProps) {
   const { link, detail, query, explanation, explaining } = entry;
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const explanationRef = useRef<HTMLDivElement>(null);
+  // The explanation it opened with: only a new one takes the focus.
+  const shownExplanation = useRef(explanation);
+
+  // Opened with the focus nowhere (the list row that opened it went with the
+  // list, or a click on the globe): it starts on the heading, not the page.
+  useEffect(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) headingRef.current?.focus();
+  }, []);
 
   // Claude's text takes the Explain button's place: the focus follows it there
   // rather than falling to the page (a message keeps the button, and its focus).
   useEffect(() => {
+    const isNew = explanation !== shownExplanation.current;
+    shownExplanation.current = explanation;
     const active = document.activeElement;
-    if (explanation?.ai && (!active || active === document.body)) explanationRef.current?.focus();
+    if (isNew && explanation?.ai && (!active || active === document.body)) {
+      explanationRef.current?.focus();
+    }
   }, [explanation]);
   const [from, to] = linkEnds(link);
   const n = detail?.n ?? link.n;
@@ -94,7 +108,7 @@ export default function LinkInspector({
               <span>Link</span>
               <span>covered together, {windowWords}</span>
             </p>
-            <h2 className="insp-title">
+            <h2 ref={headingRef} className="insp-title" tabIndex={-1}>
               {from.name} <span className="insp-amp">and</span> {to.name}
             </h2>
           </div>
