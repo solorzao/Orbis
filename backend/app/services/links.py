@@ -110,9 +110,9 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
 
     ``outlets`` is how many sites (non-empty source names) the pair's
     copies come from. The story pass gathers each story's copies' sites
-    (usually one: a DISTINCT that rides on its sort by story), and
-    ``pair_outlets`` counts them per pair from those story rows, not from
-    the articles again.
+    (usually one, repeats and all, so that level can still hash), and
+    ``pair_outlets`` counts them once per pair from those story rows, not
+    from the articles again.
     """
     conditions, args = _window(start, end, topic)
     story_topics = ",\n".join(
@@ -125,7 +125,7 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
             SELECT LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b, l.story,
                    sum(l.sentiment_score) / count(l.sentiment_score) AS tone,
                    2 * count(*) FILTER (WHERE l.country_code < m) >= count(*) AS from_a,
-                   array_agg(DISTINCT l.outlet) FILTER (WHERE l.outlet <> '') AS outlets,
+                   array_agg(l.outlet) FILTER (WHERE l.outlet <> '') AS outlets,
                    {story_topics}
             FROM linking l, unnest(l.others) AS m
             GROUP BY 1, 2, 3
@@ -326,6 +326,7 @@ _NAME_OVERRIDES = {
     "SINN_FEIN": "Sinn Féin",
     "UNICEF": "UNICEF",
     "NAFTA": "NAFTA",
+    "NORTH_AMERICAN_FREE_TRADE_AGREEMENT": "NAFTA",
     # A free trade agreement among the free trade agreements: no name to add.
     "FREE_TRADE_AGREEMENT": "",
 }
@@ -408,7 +409,7 @@ def detail_stats_query(
                    bool_or(linked) AS linked,
                    sum(sentiment_score) FILTER (WHERE linked)
                    / count(sentiment_score) FILTER (WHERE linked) AS tone,
-                   array_agg(DISTINCT outlet) FILTER (WHERE linked AND outlet <> '') AS outlets,
+                   array_agg(outlet) FILTER (WHERE linked AND outlet <> '') AS outlets,
                    {story_topics}
             FROM (
                 SELECT story, country_code, others, topic_tags, sentiment_score, outlet,
@@ -610,24 +611,19 @@ def _within(label: str, broader: str) -> bool:
 
 
 def top_themes(rows: list[dict]) -> list[str]:
-    """The first MAX_THEMES themes as shown, each said once.
+    """The first MAX_THEMES themes as shown, in *rows*' order (most stories first).
 
-    A label within one already shown is dropped ("Economy: free trade"
-    over "Economy: free trade agreements: NAFTA"); a broader label takes
-    the place of the first narrower one shown and drops the rest.
+    A label within one already shown, or containing one, is dropped: each
+    family shows its most covered label, with its detail ("Health:
+    pandemic" before "Health" keeps the pandemic). Siblings both show
+    ("…: NAFTA", "…: Mercosur").
     """
     themes: list[str] = []
     for row in rows:
         shown = display_theme(row.get("theme"))
-        if not shown or any(_within(shown, t) for t in themes):
+        if not shown or any(_within(shown, t) or _within(t, shown) for t in themes):
             continue
-        narrower = [i for i, t in enumerate(themes) if _within(t, shown)]
-        if narrower:
-            themes[narrower[0]] = shown
-            for i in reversed(narrower[1:]):
-                del themes[i]
-        else:
-            themes.append(shown)
+        themes.append(shown)
         if len(themes) == MAX_THEMES:
             break
     return themes

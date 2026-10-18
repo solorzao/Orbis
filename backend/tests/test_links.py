@@ -94,10 +94,10 @@ class TestLinksQuery:
         assert "count(*) FILTER (WHERE from_a) AS from_a" in flat
         assert "CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso" in flat
 
-    def test_no_distinct_counts_or_mode(self):
-        """count(DISTINCT) and mode() sort each pair's rows again: 0.40 s, not 0.15, locally."""
+    def test_no_distinct_aggregates_or_mode(self):
+        """They sort each group's rows: 0.40 s, not 0.15, locally; and keep a level from hashing."""
         flat = _sql(links_query(START, END, None)[0])
-        assert "count(DISTINCT" not in flat and "mode()" not in flat
+        assert "DISTINCT" not in flat and "mode()" not in flat
 
     def test_counts_a_pairs_outlets_over_all_its_copies(self):
         """One site tagging a country on every page must not make a link of it."""
@@ -105,7 +105,8 @@ class TestLinksQuery:
         assert "others, story, outlet FROM ( SELECT country_code, topic_tags" in flat
         assert f"{STORY}, source_name AS outlet FROM articles a" in flat
         # Gathered in the story pass (each story's copies' outlets), counted per pair.
-        assert "array_agg(DISTINCT l.outlet) FILTER (WHERE l.outlet <> '') AS outlets" in flat
+        # (Repeats are fine: pair_outlets' GROUP BY drops them.)
+        assert "array_agg(l.outlet) FILTER (WHERE l.outlet <> '') AS outlets" in flat
         assert (
             "pair_outlets AS ( SELECT a, b, count(*) AS outlets FROM ( "
             "SELECT s.a, s.b, o FROM stories s, unnest(s.outlets) AS o GROUP BY 1, 2, 3 ) t "
@@ -271,6 +272,10 @@ class TestDisplayTheme:
                 "Economy: free trade agreements: European Free Trade Association",
             ),
             ("TAX_ECON_FREETRADEAGREEMENTS_NAFTA", "Economy: free trade agreements: NAFTA"),
+            (
+                "TAX_ECON_FREETRADEAGREEMENTS_NORTH_AMERICAN_FREE_TRADE_AGREEMENT",
+                "Economy: free trade agreements: NAFTA",
+            ),
             ("TAX_ECON_FREETRADEAGREEMENTS_MERCOSUR", "Economy: free trade agreements: Mercosur"),
             ("TAX_ECON_FREETRADEAGREEMENTS_FREE_TRADE_AGREEMENT", "Economy: free trade agreements"),
             ("SOC_USSECURITYAGENCIES", "US security agencies"),
@@ -409,15 +414,36 @@ class TestDisplayTheme:
         ]
         assert links.top_themes(rows) == ["Economy: free trade", "Killings", "US security agencies"]
 
-    def test_a_broader_label_takes_the_place_of_the_narrower_ones(self):
+    def test_a_broader_label_after_a_narrower_one_is_dropped(self):
+        """The most covered label of a family stays, with its detail."""
+        rows = [
+            {"theme": "HEALTH_PANDEMIC", "n": 9},  # "Health: pandemic"
+            {"theme": "KILL", "n": 8},
+            {"theme": "GENERAL_HEALTH", "n": 7},  # "Health": contains it
+        ]
+        assert links.top_themes(rows) == ["Health: pandemic", "Killings"]
+
+    def test_siblings_stay_and_their_broader_label_goes(self):
         rows = [
             {"theme": "TAX_ECON_FREETRADEAGREEMENTS_NAFTA", "n": 9},
             {"theme": "KILL", "n": 8},
             {"theme": "TAX_ECON_FREETRADEAGREEMENTS_MERCOSUR", "n": 7},  # a sibling: shown
-            {"theme": "ECON_FREETRADE", "n": 6},  # broader than both
+            {"theme": "ECON_FREETRADE", "n": 6},  # contains both
             {"theme": "ARMEDCONFLICT", "n": 5},
         ]
-        assert links.top_themes(rows) == ["Economy: free trade", "Killings", "Armed conflict"]
+        assert links.top_themes(rows) == [
+            "Economy: free trade agreements: NAFTA",
+            "Killings",
+            "Economy: free trade agreements: Mercosur",
+            "Armed conflict",
+        ]
+
+    def test_nafta_by_either_code_is_one_label(self):
+        rows = [
+            {"theme": "TAX_ECON_FREETRADEAGREEMENTS_NAFTA", "n": 9},
+            {"theme": "TAX_ECON_FREETRADEAGREEMENTS_NORTH_AMERICAN_FREE_TRADE_AGREEMENT", "n": 8},
+        ]
+        assert links.top_themes(rows) == ["Economy: free trade agreements: NAFTA"]
 
     def test_narrower_means_whole_words(self):
         rows = [
@@ -529,14 +555,14 @@ class TestDetailQueries:
         assert "count(*) FILTER (WHERE linked) AS n, avg(tone) AS tone" in flat
         # The pair's outlets, as the links query counts them: its copies' sites.
         assert "SELECT story, country_code, others, topic_tags, sentiment_score, outlet," in flat
-        assert (
-            "array_agg(DISTINCT outlet) FILTER (WHERE linked AND outlet <> '') AS outlets"
-        ) in flat
+        # (Repeats are fine: the count's DISTINCT drops them.)
+        assert "array_agg(outlet) FILTER (WHERE linked AND outlet <> '') AS outlets" in flat
         assert (
             "(SELECT count(DISTINCT o) FROM stories, unnest(stories.outlets) AS o) AS outlets"
             in flat
         )
-        # Each story's key once: no pairs to unnest, so no need to materialise.
+        # linking is read once (by stories, which PostgreSQL materialises, being read
+        # twice): no pairs to unnest, so no MATERIALIZED needed for each article's key.
         assert flat.startswith("WITH linking AS ( SELECT")
         for tag in TOPIC_TAGS:
             assert f"bool_or(linked AND topic_tags && '{{{tag}}}') AS {tag}" in flat

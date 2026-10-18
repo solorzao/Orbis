@@ -53,16 +53,24 @@ async def conn():
 EARHART = "zzlinks-Amelia Earhart expedition heads to South Pacific"
 GULF = "zzlinks-Gulf talks stall"
 OUTLETS = ["", " | AP News", " - WTOP", " - KSL.com", " | Fox News", " - The Spokesman-Review"]
+# The site each of OUTLETS' titles comes from (its source_name).
+SITES = ["wire.test", "apnews.test", "wtop.test", "ksl.test", "foxnews.test", "spokesman.test"]
 
 
 def _story(
-    title, country, mentions, topic="general", tone=0.0, keyless=False, outlet=None, **gkg
+    title,
+    country,
+    mentions,
+    topic="general",
+    tone=0.0,
+    keyless=False,
+    outlet="zzlinks.test",
+    **gkg,
 ) -> dict:
     """An article; *keyless* if written before ingestion stored story_key.
 
-    *outlet* is its source_name; by default _insert spreads rows over four
-    outlets (outlet0..3.zzlinks.test, by position), so a pair with three
-    rows or more in a row has three outlets or more.
+    *outlet* is its source_name: one site for all unless a test says
+    otherwise, so a pair is a link only when its test gives it three.
     """
     return {
         "title": title,
@@ -79,13 +87,13 @@ def _story(
 def _window_stories() -> list[dict]:
     """16 stories in 30 rows, 15 of them linking two countries.
 
-    KI-UM: one story, syndicated 10 times (7 copies placed in UM, 3 in KI).
-    IR-US: 7 stories. 4 from the US (politics, tone 0.5); 2 from Iran
-    (conflict, tone -0.5), one of them syndicated 5 times; and "Gulf talks",
-    whose two copies differ: one from Iran naming the US (politics, 0.9),
-    one from the US naming Iran and Israel (conflict, -0.3), so IL-US has
-    that one story.
-    DE-FR: 4 stories; CN-US: 3; plus a US story naming only the US (no link).
+    KI-UM: one story, syndicated 10 times (7 copies placed in UM, 3 in KI)
+    by 6 sites. IR-US: 7 stories. 4 from the US (politics, tone 0.5); 2 from
+    Iran (conflict, tone -0.5), one of them syndicated 5 times; and "Gulf
+    talks", whose two copies differ: one from Iran naming the US (politics,
+    0.9), one from the US naming Iran and Israel (conflict, -0.3), so IL-US
+    has that one story, from one site. DE-FR: 4 stories from 4 sites; CN-US:
+    3 from 3; plus a US story naming only the US (no link).
     """
     rows = [
         _story(
@@ -94,6 +102,7 @@ def _window_stories() -> list[dict]:
             ["KI", "UM"],
             topic="environment",
             tone=-0.2,
+            outlet=SITES[i % len(SITES)],
             persons=["Amelia Earhart"],
             themes=[
                 "MARITIME",
@@ -105,9 +114,17 @@ def _window_stories() -> list[dict]:
         )
         for i in range(10)
     ]
+    us_iran_sites = ["reuters.test", "apnews.test", "bbc.test", "aljazeera.test"]
     rows += [
-        _story(f"zzlinks-US and Iran story {i}", "US", ["US", "IR"], "politics", 0.5)
-        for i in range(4)
+        _story(
+            f"zzlinks-US and Iran story {i}",
+            "US",
+            ["US", "IR"],
+            "politics",
+            0.5,
+            outlet=site,
+        )
+        for i, site in enumerate(us_iran_sites)
     ]
     rows += [
         _story(
@@ -116,6 +133,7 @@ def _window_stories() -> list[dict]:
             ["IR", "US"],
             "conflict",
             -0.5,
+            outlet=SITES[i],
             persons=["Abbas Araghchi"],
         )
         for i in range(5)
@@ -127,15 +145,24 @@ def _window_stories() -> list[dict]:
             ["IR", "US"],
             "conflict",
             -0.5,
+            outlet="presstv.test",
             persons=["Abbas Araghchi"],
         )
     )
     rows += [
-        _story(GULF + " - Reuters", "IR", ["IR", "US"], "politics", 0.9),
-        _story(GULF + " | AP News", "US", ["US", "IR", "IL"], "conflict", -0.3),
+        _story(GULF + " - Reuters", "IR", ["IR", "US"], "politics", 0.9, outlet="reuters.test"),
+        _story(
+            GULF + " | AP News", "US", ["US", "IR", "IL"], "conflict", -0.3, outlet="apnews.test"
+        ),
     ]
-    rows += [_story(f"zzlinks-France and Germany {i}", "FR", ["FR", "DE"]) for i in range(4)]
-    rows += [_story(f"zzlinks-US and China {i}", "US", ["US", "CN"]) for i in range(3)]
+    rows += [
+        _story(f"zzlinks-France and Germany {i}", "FR", ["FR", "DE"], outlet=site)
+        for i, site in enumerate(["lemonde.test", "dw.test", "france24.test", "spiegel.test"])
+    ]
+    rows += [
+        _story(f"zzlinks-US and China {i}", "US", ["US", "CN"], outlet=site)
+        for i, site in enumerate(["scmp.test", "nytimes.test", "xinhua.test"])
+    ]
     rows.append(_story("zzlinks-US only", "US", ["US"]))
     return rows
 
@@ -164,7 +191,7 @@ async def _insert(conn, stories: list[dict], start: datetime = START) -> None:
             s.get("persons", []),
             s.get("themes", []),
             None if s["keyless"] else story_key(s["title"], url),
-            f"outlet{i % 4}.zzlinks.test" if s["outlet"] is None else s["outlet"],
+            s["outlet"],
         )
 
 
@@ -235,7 +262,7 @@ class TestDistinctStories:
             ("IR", "US", 7),
             ("DE", "FR", 4),
             ("CN", "US", 3),
-            ("KI", "UM", 1),  # its ten copies come from four outlets
+            ("KI", "UM", 1),  # its ten copies come from six sites
             # IL-US: one copy, so one outlet, under MIN_LINK_OUTLETS.
         ]
         assert _by_pair(rows)["IL", "US"]["outlets"] == 1
