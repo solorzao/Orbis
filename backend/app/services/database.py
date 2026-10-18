@@ -310,8 +310,7 @@ def _upsert_article_args(article: dict[str, Any]) -> tuple:
         article.get("sentiment_score", 0.0),
         json.dumps(article.get("entities", {})),
         article.get("image_url"),
-        # Never NULL: NULL marks rows written before the FIPS to ISO
-        # switch, which the ingestion backfill converts.
+        # GDELT's own (FIPS) code, kept beside the ISO country_code; '' if none.
         article.get("country_fips") or "",
         article.get("themes", []),
         article.get("persons", []),
