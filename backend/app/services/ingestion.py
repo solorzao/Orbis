@@ -227,8 +227,11 @@ async def run_ingestion_cycle() -> int:
     rows. The API caches (db:*) are invalidated once, at the end, even if a
     step failed: until then visitors get the last cycle's answers rather than
     a cold query while the embeddings keep the database busy, and breaking
-    stories, which count embedded rows only, are never cached without the
-    newest batch. Once the cycle has released its lock, those caches are
+    stories, which count embedded rows only, are not refilled before the
+    newest batch is embedded. (A breaking list computed mid-cycle, when its
+    key was missing, can still land just after the invalidation and stay
+    until its TTL; the warm joins that in-flight query rather than redoing
+    it.) Once the cycle has released its lock, those caches are
     refilled in the background, so neither the next cycle nor a visitor
     waits on that.
 
