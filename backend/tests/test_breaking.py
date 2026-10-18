@@ -66,6 +66,7 @@ def _row(**overrides):
 class TestRule:
     def test_the_rule_is_in_named_constants(self):
         assert breaking.MIN_OUTLETS == 7
+        assert breaking.MIN_STORIES == 3
         assert breaking.SAME_STORY_SIM == 0.60
         assert breaking.MIN_NEW_SHARE == 0.5
         assert (breaking.RECENT, breaking.PRIOR) == (timedelta(hours=2), timedelta(hours=24))
@@ -78,27 +79,37 @@ class TestBreakingQuery:
 
         query, args = _fetched(pool)
         assert args == [NOW - timedelta(hours=2), NOW - timedelta(hours=24)]
-        assert "WHERE a.published_at >= $1 AND a.embedding IS NOT NULL" in query
+        assert "FROM articles a WHERE a.published_at >= $1 )" in query
         assert "p.published_at >= $2 AND p.published_at < $1" in query
         assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
 
     @pytest.mark.asyncio
-    async def test_one_row_per_story_its_newest_embedded_copy(self, pool):
+    async def test_a_story_is_its_newest_embedded_copy_with_every_copys_outlet(self, pool):
+        """Similarity is between stories (one embedding each); outlets are every copy's,
+        embedded or not: twenty outlets running one headline are twenty outlets."""
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
-        recent = query[query.index("WITH recent AS") : query.index("candidates AS (")]
-        assert f"{story_key_sql('a')} AS story" in recent
+        copies = query[query.index("WITH copies AS") : query.index("recent AS (")]
+        assert f"{story_key_sql('a')} AS story" in copies
+        assert "NULLIF(a.source_name, '') AS outlet" in copies
+        assert "a.embedding IS NOT NULL AS embedded" in copies
+        recent = query[query.index("recent AS (") : query.index("candidates AS (")]
         assert "SELECT DISTINCT ON (story)" in recent
-        assert "ORDER BY story, published_at DESC, id" in recent
-        assert "NULLIF(a.source_name, '') AS outlet" in recent
+        assert "FROM copies WHERE embedded ORDER BY story, published_at DESC, id" in recent
+        assert (
+            "SELECT story, array_agg(DISTINCT outlet) FILTER (WHERE outlet IS NOT NULL)"
+            " AS outlets, min(published_at) AS first_at FROM copies GROUP BY story"
+        ) in recent
 
     @pytest.mark.asyncio
     async def test_candidates_are_cells_with_seven_outlets(self, pool):
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
-        assert "GROUP BY 1, 2 HAVING count(DISTINCT outlet) >= 7" in query
+        candidates = query[query.index("candidates AS (") : query.index("stories AS")]
+        assert "FROM recent r, unnest(r.outlets) AS o(outlet)" in candidates
+        assert "GROUP BY 1, 2 HAVING count(DISTINCT o.outlet) >= 7" in candidates
 
     @pytest.mark.asyncio
     async def test_neighbours_are_alike_stories_in_the_same_cell_exactly(self, pool):
@@ -110,20 +121,24 @@ class TestBreakingQuery:
         assert "FROM stories s JOIN stories t" in hood
         assert "ON t.lat_cell = s.lat_cell AND t.lng_cell = s.lng_cell" in hood
         assert "AND 1 - (s.embedding <=> t.embedding) >= 0.6" in hood
-        assert "count(DISTINCT t.outlet) AS outlets" in hood
+        assert "LEFT JOIN LATERAL unnest(t.outlets) AS o(outlet) ON true" in hood
+        assert "count(DISTINCT o.outlet) AS outlets" in hood
         assert "count(DISTINCT t.story) AS stories" in hood
-        assert "min(t.published_at) AS first_seen" in hood
+        assert "count(DISTINCT t.story) FILTER (WHERE t.topic_tags && '{politics}')" in hood
+        assert "min(t.first_at) AS first_seen" in hood  # the earliest copy of any of them
         assert "halfvec" not in query
 
     @pytest.mark.asyncio
-    async def test_a_cells_event_is_its_most_covered_story_newest_on_a_tie(self, pool):
+    async def test_a_cells_event_is_its_most_covered_with_three_stories(self, pool):
+        """Chosen among the neighbourhoods big enough, so one wire feature run everywhere
+        (one story) can't hide the cell's event."""
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
         events = query[query.index("events AS (") : query.index("prior AS (")]
         assert "SELECT DISTINCT ON (lat_cell, lng_cell)" in events
+        assert "WHERE outlets >= 7 AND stories >= 3" in events
         assert "ORDER BY lat_cell, lng_cell, outlets DESC, published_at DESC, id" in events
-        assert "WHERE best.outlets >= 7" in events  # only events big enough go on
 
     @pytest.mark.asyncio
     async def test_coverage_must_be_mostly_new(self, pool):
@@ -196,7 +211,8 @@ class TestGetBreaking:
 
     @pytest.mark.asyncio
     async def test_the_headline_is_one_clean_line(self, pool):
-        pool.fetch.return_value = [_row(headline="  Quake\u200b hits\n\nKathmandu\x07  " + "x" * 300)]
+        headline = "  Quake\u200b hits\n\nKathmandu\x07  " + "x" * 300
+        pool.fetch.return_value = [_row(headline=headline)]
 
         [story] = await breaking.get_breaking(NOW)
 
@@ -289,6 +305,13 @@ class _Feed:
             )
             for i in range(n)
         ]
+
+    def copies(self, row, outlets, *, minutes=None, **extra):
+        """*row*'s headline run word for word by each of *outlets* (one story, its vector)."""
+        at = row["at"] if minutes is None else DB_NOW - timedelta(minutes=minutes)
+        made = [{**row, "source": outlet, "at": at, **extra} for outlet in outlets]
+        self.rows.extend(made)
+        return made
 
     async def insert(self, pg):
         args = []
@@ -417,14 +440,65 @@ class TestBreakingOnPostgres:
         assert await _db_breaking(pg) == []
 
     @pytest.mark.asyncio
-    async def test_copies_of_one_story_are_one_story_and_its_newest_outlet(self, pg):
-        """8 outlets running one wire copy word for word: one story, one outlet."""
+    async def test_twenty_outlets_on_one_identical_headline_are_not_breaking(self, pg):
+        """A wire feature run word for word everywhere (the Amelia Earhart story): 20
+        outlets, but 1 story."""
         feed = _Feed()
-        for i in range(8):
-            feed.story(36.1, -95.9, "one wire story", outlet=f"o{i}.example", event=6)
+        wire = feed.story(36.1, -95.9, "wire feature", outlet="o0.example", event=6)
+        feed.copies(wire, [f"o{i}.example" for i in range(1, 20)])
         await feed.insert(pg)
 
         assert await _db_breaking(pg) == []
+
+    @pytest.mark.asyncio
+    async def test_eight_outlets_across_three_headlines_of_one_event_are_breaking(self, pg):
+        """Three newsrooms' headlines, run by 4, 2 and 2 outlets: every copy's outlet counts.
+        Two of the copies aren't embedded yet: their story's vector stands for them."""
+        feed = _Feed()
+        a, b, c = (
+            feed.story(-33.9, 18.4, f"headline {k}", outlet=f"{k}0.example", event=7, minutes=m)
+            for k, m in (("a", 10), ("b", 20), ("c", 30))
+        )
+        feed.copies(a, ["a1.example", "a2.example"])
+        feed.copies(a, ["a3.example"], unembedded=True, minutes=5)
+        feed.copies(b, ["b1.example"], unembedded=True, minutes=15)
+        feed.copies(c, ["c1.example"])
+        await feed.insert(pg)
+
+        [story] = await _db_breaking(pg)
+
+        assert (story["outlets"], story["stories"]) == (8, 3)
+        assert story["headline"] == "zzbreak-headline a"  # the newest embedded copy's story
+        assert story["first_seen"] == DB_NOW - timedelta(minutes=30)
+
+    @pytest.mark.asyncio
+    async def test_two_headlines_are_not_enough(self, pg):
+        """8 outlets, but only 2 stories: under MIN_STORIES."""
+        feed = _Feed()
+        a = feed.story(-33.9, 18.4, "headline a", outlet="a0.example", event=7)
+        b = feed.story(-33.9, 18.4, "headline b", outlet="b0.example", event=7, minutes=20)
+        feed.copies(a, [f"a{i}.example" for i in range(1, 5)])
+        feed.copies(b, ["b1.example", "b2.example"])
+        await feed.insert(pg)
+
+        assert await _db_breaking(pg) == []
+
+    @pytest.mark.asyncio
+    async def test_a_wire_feature_doesnt_hide_the_cells_event(self, pg):
+        """The cell's most-covered story is a feature 20 outlets ran word for word; its
+        event is the one with 3 stories, 8 outlets."""
+        feed = _Feed()
+        wire = feed.story(40.7, -74.0, "wire feature", outlet="w0.example", event=6)
+        feed.copies(wire, [f"w{i}.example" for i in range(1, 20)])
+        feed.event(40.7, -74.0, 3, event=8, prefix="nyc")
+        news = feed.rows[-3]
+        feed.copies(news, [f"nyc-copy{i}.example" for i in range(5)])
+        await feed.insert(pg)
+
+        [story] = await _db_breaking(pg)
+
+        assert (story["outlets"], story["stories"]) == (8, 3)
+        assert story["headline"].startswith("zzbreak-nyc")
 
     @pytest.mark.asyncio
     async def test_seven_outlets_are_enough_and_six_are_not(self, pg):
