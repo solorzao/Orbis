@@ -42,6 +42,10 @@ TOPIC_TAGS = ("politics", "conflict", "technology", "environment", "economy", "h
 # Lift is noisy on few stories: a pair needs this many to rank by it.
 MIN_LIFT_STORIES = 5
 
+# A pair needs this many sites behind its copies, so one site that tags a
+# country on every page (srilankamirror.com and the BVI) is not a link.
+MIN_LINK_OUTLETS = 3
+
 # An article's story, in queries that alias articles as a.
 _STORY = story_key_sql("a")
 
@@ -64,15 +68,17 @@ def _window(start: datetime, end: datetime, topic: str | None) -> tuple[list[str
 def _linking_cte(conditions: list[str]) -> str:
     """The ``linking`` CTE: the window's articles that mention another country.
 
-    ``others`` is the countries an article mentions besides its own, and
-    ``story`` the story it is a copy of. Shared by the links and the detail
-    queries, so a pair's n and lift agree in both.
+    ``others`` is the countries an article mentions besides its own,
+    ``story`` the story it is a copy of, and ``outlet`` the site it is on.
+    Shared by the links and the detail queries, so a pair's n, lift and
+    outlets agree in both.
     """
     return f"""linking AS (
-            SELECT country_code, topic_tags, sentiment_score, others, story
+            SELECT country_code, topic_tags, sentiment_score, others, story, outlet
             FROM (
                 SELECT country_code, topic_tags, sentiment_score,
-                       array_remove(mentioned_countries, country_code) AS others, {_STORY} AS story
+                       array_remove(mentioned_countries, country_code) AS others, {_STORY} AS story,
+                       source_name AS outlet
                 FROM articles a
                 WHERE {" AND ".join(conditions)}
                   AND country_code <> '' AND cardinality(mentioned_countries) > 0
@@ -101,6 +107,12 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
     state is a number, where ``avg``'s is an array. A pair's origin is
     always one of its two ends, so the most common one is a count against
     half, for a story's copies and then for the pair's stories.
+
+    ``outlets`` is how many sites (non-empty source names) the pair's
+    copies come from. The story pass gathers each story's copies' sites
+    (usually one: a DISTINCT that rides on its sort by story), and
+    ``pair_outlets`` counts them per pair from those story rows, not from
+    the articles again.
     """
     conditions, args = _window(start, end, topic)
     story_topics = ",\n".join(
@@ -113,6 +125,7 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
             SELECT LEAST(l.country_code, m) AS a, GREATEST(l.country_code, m) AS b, l.story,
                    sum(l.sentiment_score) / count(l.sentiment_score) AS tone,
                    2 * count(*) FILTER (WHERE l.country_code < m) >= count(*) AS from_a,
+                   array_agg(DISTINCT l.outlet) FILTER (WHERE l.outlet <> '') AS outlets,
                    {story_topics}
             FROM linking l, unnest(l.others) AS m
             GROUP BY 1, 2, 3
@@ -125,6 +138,14 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
             ) t
             GROUP BY c
         ),
+        pair_outlets AS (
+            SELECT a, b, count(*) AS outlets
+            FROM (
+                SELECT s.a, s.b, o FROM stories s, unnest(s.outlets) AS o
+                GROUP BY 1, 2, 3
+            ) t
+            GROUP BY a, b
+        ),
         grouped AS (
             SELECT a, b, count(*) AS n, avg(tone) AS tone,
                    count(*) FILTER (WHERE from_a) AS from_a,
@@ -136,10 +157,12 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
                CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso,
                {", ".join(f"g.{tag}" for tag in TOPIC_TAGS)},
                ta.n AS n_a, tb.n AS n_b,
-               (SELECT count(*) FROM (SELECT story FROM stories GROUP BY story) s) AS total
+               (SELECT count(*) FROM (SELECT story FROM stories GROUP BY story) s) AS total,
+               COALESCE(po.outlets, 0) AS outlets
         FROM grouped g
         JOIN touched ta ON ta.c = g.a
         JOIN touched tb ON tb.c = g.b
+        LEFT JOIN pair_outlets po ON po.a = g.a AND po.b = g.b
     """
     return query, *args
 
@@ -172,12 +195,14 @@ def rank_links(rows: list[dict], rank: Rank, limit: int, topic: str | None = Non
 
     ``lift`` ranks pairs with MIN_LIFT_STORIES stories or more by lift, then
     stories; ``count`` ranks every pair by stories, then lift. Pairs with a
-    country that has no label point are dropped first. *topic* is the
-    window's topic filter: every link is then of that topic.
+    country that has no label point, or fewer than MIN_LINK_OUTLETS sites
+    behind them, are dropped first. *topic* is the window's topic filter:
+    every link is then of that topic.
     """
     usable = [r for r in rows if centroid(r["a"]) and centroid(r["b"])]
     if dropped := len(rows) - len(usable):
         logger.debug("Links: dropped %d country pairs without a label point.", dropped)
+    usable = [r for r in usable if r["outlets"] >= MIN_LINK_OUTLETS]
     scored = [(lift(r["n"], r["n_a"], r["n_b"], r["total"]), r) for r in usable]
     if rank == "lift":
         scored = [(x, r) for x, r in scored if r["n"] >= MIN_LIFT_STORIES]
@@ -202,6 +227,7 @@ def rank_links(rows: list[dict], rank: Rank, limit: int, topic: str | None = Non
                 "topic": topic or dominant_topic(row),
                 "tone": round(row["tone"] or 0.0, 2),
                 "from": row["from_iso"],
+                "outlets": row["outlets"],
             }
         )
     return links
@@ -355,7 +381,9 @@ def detail_stats_query(
 
     Stories, as the links query counts them: each story is one row, which
     links the pair, or touches a country, if any of its copies does. Its
-    tone and topics are those of the copies that link the pair.
+    tone and topics are those of the copies that link the pair, and
+    ``outlets`` is the sites those copies come from, as the links query
+    counts them.
     """
     conditions, args = _window(start, end, topic)
     args += [a, b]
@@ -373,9 +401,10 @@ def detail_stats_query(
                    bool_or(linked) AS linked,
                    sum(sentiment_score) FILTER (WHERE linked)
                    / count(sentiment_score) FILTER (WHERE linked) AS tone,
+                   array_agg(DISTINCT outlet) FILTER (WHERE linked AND outlet <> '') AS outlets,
                    {story_topics}
             FROM (
-                SELECT story, country_code, others, topic_tags, sentiment_score,
+                SELECT story, country_code, others, topic_tags, sentiment_score, outlet,
                        (country_code = {pa} AND {pb} = ANY(others))
                        OR (country_code = {pb} AND {pa} = ANY(others)) AS linked
                 FROM linking
@@ -387,6 +416,7 @@ def detail_stats_query(
                count(*) FILTER (WHERE has_b) AS n_b,
                count(*) FILTER (WHERE linked) AS n,
                avg(tone) AS tone,
+               (SELECT count(DISTINCT o) FROM stories, unnest(stories.outlets) AS o) AS outlets,
                {topic_counts}
         FROM stories
     """
@@ -600,7 +630,9 @@ async def get_link_detail(
     """Everything the link inspector shows for the pair a, b in the window.
 
     ``articles`` are raw rows, each story's newest copy, newest first (up to
-    ARTICLE_FETCH_LIMIT); the rest is ready to show.
+    ARTICLE_FETCH_LIMIT); the rest is ready to show. Any pair answers, also
+    one /api/links does not list: ``outlets`` under MIN_LINK_OUTLETS says
+    why (the frontend only opens listed links).
     """
     pool = await get_pool()
     stats, names, themes, articles = await asyncio.gather(
@@ -614,6 +646,7 @@ async def get_link_detail(
         "b": _country(b),
         "n": stats["n"],
         "lift": round(lift(stats["n"], stats["n_a"], stats["n_b"], stats["total"]), 2),
+        "outlets": stats["outlets"],
         "topic_mix": {tag: stats[tag] for tag in TOPIC_TAGS},
         "tone": round(stats["tone"] or 0.0, 2),
         "shared": clean_entities([dict(r) for r in names]),

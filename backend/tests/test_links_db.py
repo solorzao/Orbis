@@ -55,8 +55,15 @@ GULF = "zzlinks-Gulf talks stall"
 OUTLETS = ["", " | AP News", " - WTOP", " - KSL.com", " | Fox News", " - The Spokesman-Review"]
 
 
-def _story(title, country, mentions, topic="general", tone=0.0, keyless=False, **gkg) -> dict:
-    """An article; *keyless* if written before ingestion stored story_key."""
+def _story(
+    title, country, mentions, topic="general", tone=0.0, keyless=False, outlet=None, **gkg
+) -> dict:
+    """An article; *keyless* if written before ingestion stored story_key.
+
+    *outlet* is its source_name; by default _insert spreads rows over four
+    outlets (outlet0..3.zzlinks.test, by position), so a pair with three
+    rows or more in a row has three outlets or more.
+    """
     return {
         "title": title,
         "country_code": country,
@@ -64,6 +71,7 @@ def _story(title, country, mentions, topic="general", tone=0.0, keyless=False, *
         "topic_tags": [topic],
         "sentiment_score": tone,
         "keyless": keyless,
+        "outlet": outlet,
         **gkg,
     }
 
@@ -143,7 +151,7 @@ async def _insert(conn, stories: list[dict], start: datetime = START) -> None:
                 country_code, topic_tags, sentiment_score, mentioned_countries, persons, themes,
                 story_key
             )
-            VALUES ($1, $2, 'zzlinks.test', $3, 0, 0,
+            VALUES ($1, $2, $11, $3, 0, 0,
                     ST_SetSRID(ST_MakePoint(0, 0), 4326)::geography, $4, $5, $6, $7, $8, $9, $10)
             """,
             s["title"],
@@ -156,6 +164,7 @@ async def _insert(conn, stories: list[dict], start: datetime = START) -> None:
             s.get("persons", []),
             s.get("themes", []),
             None if s["keyless"] else story_key(s["title"], url),
+            f"outlet{i % 4}.zzlinks.test" if s["outlet"] is None else s["outlet"],
         )
 
 
@@ -226,9 +235,10 @@ class TestDistinctStories:
             ("IR", "US", 7),
             ("DE", "FR", 4),
             ("CN", "US", 3),
-            ("KI", "UM", 1),  # lift 15
-            ("IL", "US", 1),  # lift 1.5
+            ("KI", "UM", 1),  # its ten copies come from four outlets
+            # IL-US: one copy, so one outlet, under MIN_LINK_OUTLETS.
         ]
+        assert _by_pair(rows)["IL", "US"]["outlets"] == 1
 
     @pytest.mark.asyncio
     async def test_topic_tone_and_origin_are_per_story(self):
@@ -286,6 +296,7 @@ class TestDistinctStories:
             assert detail["lift"] == round(lift(row["n"], row["n_a"], row["n_b"], row["total"]), 2)
             assert detail["tone"] == round(row["tone"], 2)
             assert detail["topic_mix"] == {tag: row[tag] for tag in TOPIC_TAGS}
+            assert detail["outlets"] == row["outlets"]
 
     @pytest.mark.asyncio
     async def test_detail_names_and_themes_count_stories(self):
@@ -357,3 +368,48 @@ async def test_a_syndicated_story_takes_one_place_in_the_inspector(conn):
 
     headlines = await links.get_link_headlines("IN", "NP", start, end, None, 25)
     assert [dedup_key(t) for t in headlines] == newest_first
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_one_outlet_does_not_make_a_link(conn):
+    """srilankamirror.com tagged the BVI on every page: six unrelated stories, one site."""
+    start = datetime(2001, 4, 10, tzinfo=timezone.utc)
+    site = "srilankamirror.com"
+    titles = ["Port compensation", "Cinema weapons find", "France protests", "Stress among wives"]
+    stories = [_story(f"zzlinks-{t}", "LK", ["LK", "VG"], outlet=site) for t in titles]
+    stories += [_story(f"zzlinks-More news {i}", "LK", ["LK", "VG"], outlet=site) for i in range(2)]
+    stories.append(_story("zzlinks-Port compensation", "LK", ["LK", "VG"], outlet=""))  # no site
+    await _insert(conn, stories, start)
+    end = start + timedelta(days=1)
+
+    [row] = await links.get_link_pairs(start, end, None)
+    assert (row["a"], row["b"], row["n"], row["outlets"]) == ("LK", "VG", 6, 1)
+    assert rank_links([row], "lift", 40) == rank_links([row], "count", 40) == []
+    # The inspector still answers for it, and says why it is not listed.
+    detail = await links.get_link_detail("LK", "VG", start, end, None)
+    assert (detail["n"], detail["outlets"]) == (6, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_three_outlets_make_a_link(conn):
+    """Outlets count over every copy: five stories from one site, one syndicated to two more."""
+    start = datetime(2001, 5, 10, tzinfo=timezone.utc)
+    stories = [
+        _story(f"zzlinks-Island story {i}", "LK", ["LK", "VG"], outlet="a.zzlinks.test")
+        for i in range(5)
+    ]
+    stories += [
+        _story("zzlinks-Island deal - Reuters", "VG", ["VG", "LK"], outlet="b.zzlinks.test"),
+        _story("zzlinks-Island deal | AP News", "VG", ["VG", "LK"], outlet="c.zzlinks.test"),
+    ]
+    await _insert(conn, stories, start)
+    end = start + timedelta(days=1)
+
+    [row] = await links.get_link_pairs(start, end, None)
+    assert (row["n"], row["outlets"]) == (6, 3)
+    [by_lift] = rank_links([row], "lift", 40)
+    assert (by_lift["a"]["iso"], by_lift["b"]["iso"], by_lift["outlets"]) == ("LK", "VG", 3)
+    detail = await links.get_link_detail("LK", "VG", start, end, None)
+    assert (detail["n"], detail["outlets"]) == (6, 3)

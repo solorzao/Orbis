@@ -26,7 +26,7 @@ def _sql(query: str) -> str:
 STORY = f"{story_key_sql('a')} AS story"
 
 
-def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, **extra) -> dict:
+def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, outlets=4, **extra) -> dict:
     """A row as the links query returns it."""
     row = {
         "a": a,
@@ -35,6 +35,7 @@ def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, **extra) -> dict:
         "n_a": n_a,
         "n_b": n_b,
         "total": total,
+        "outlets": outlets,
         "tone": -0.3123,
         "from_iso": b,
         **{tag: 0 for tag in TOPIC_TAGS},
@@ -73,7 +74,7 @@ class TestLinksQuery:
             "WITH linking AS ( SELECT country_code, topic_tags, sentiment_score, others, story"
         )
         assert (
-            f"array_remove(mentioned_countries, country_code) AS others, {STORY} FROM articles a"
+            f"array_remove(mentioned_countries, country_code) AS others, {STORY}, source_name"
         ) in flat
         assert "regexp" not in flat and "OFFSET" not in flat
 
@@ -93,10 +94,25 @@ class TestLinksQuery:
         assert "count(*) FILTER (WHERE from_a) AS from_a" in flat
         assert "CASE WHEN 2 * g.from_a >= g.n THEN g.a ELSE g.b END AS from_iso" in flat
 
-    def test_no_distinct_aggregates_or_mode(self):
+    def test_no_distinct_counts_or_mode(self):
         """count(DISTINCT) and mode() sort each pair's rows again: 0.40 s, not 0.15, locally."""
         flat = _sql(links_query(START, END, None)[0])
-        assert "DISTINCT" not in flat and "mode()" not in flat
+        assert "count(DISTINCT" not in flat and "mode()" not in flat
+
+    def test_counts_a_pairs_outlets_over_all_its_copies(self):
+        """One site tagging a country on every page must not make a link of it."""
+        flat = _sql(links_query(START, END, None)[0])
+        assert "others, story, outlet FROM ( SELECT country_code, topic_tags" in flat
+        assert f"{STORY}, source_name AS outlet FROM articles a" in flat
+        # Gathered in the story pass (each story's copies' outlets), counted per pair.
+        assert "array_agg(DISTINCT l.outlet) FILTER (WHERE l.outlet <> '') AS outlets" in flat
+        assert (
+            "pair_outlets AS ( SELECT a, b, count(*) AS outlets FROM ( "
+            "SELECT s.a, s.b, o FROM stories s, unnest(s.outlets) AS o GROUP BY 1, 2, 3 ) t "
+            "GROUP BY a, b )"
+        ) in flat
+        assert "COALESCE(po.outlets, 0) AS outlets" in flat
+        assert "LEFT JOIN pair_outlets po ON po.a = g.a AND po.b = g.b" in flat
 
     def test_counts_each_topic_and_the_totals_for_lift_in_stories(self):
         flat = _sql(links_query(START, END, None)[0])
@@ -136,6 +152,18 @@ class TestLift:
 
 
 class TestRanking:
+    @pytest.mark.parametrize("rank", ["lift", "count"])
+    def test_a_pair_needs_three_outlets(self, rank):
+        """One site (srilankamirror.com, tagging the BVI on every page) is not a link."""
+        rows = [
+            _pair("LK", "VG", n=6, outlets=1),
+            _pair("FR", "US", n=6, outlets=2),
+            _pair("IR", "US", n=6, outlets=3),
+        ]
+        ranked = rank_links(rows, rank=rank, limit=40)
+        assert [(r["a"]["iso"], r["b"]["iso"], r["outlets"]) for r in ranked] == [("IR", "US", 3)]
+        assert links.MIN_LINK_OUTLETS == 3
+
     def test_lift_needs_five_stories(self):
         rows = [_pair("FR", "US", n=4, n_a=4, n_b=4), _pair("IR", "US", n=5)]
         ranked = rank_links(rows, rank="lift", limit=40)
@@ -448,7 +476,7 @@ class TestDetailQueries:
         # The same linking stories as /api/links, so n and lift agree.
         assert "array_remove(mentioned_countries, country_code) AS others" in flat
         assert "WHERE cardinality(others) > 0" in flat
-        assert f"AS others, {STORY} FROM articles a" in flat
+        assert f"AS others, {STORY}, source_name AS outlet FROM articles a" in flat
         # One row per story, whatever its copies.
         assert "FROM linking ) marked GROUP BY story" in flat
         assert "bool_or(country_code = $3 OR $3 = ANY(others)) AS has_a" in flat
@@ -458,6 +486,15 @@ class TestDetailQueries:
         tone = "sum(sentiment_score) FILTER (WHERE linked) / count(sentiment_score) FILTER"
         assert f"{tone} (WHERE linked) AS tone" in flat
         assert "count(*) FILTER (WHERE linked) AS n, avg(tone) AS tone" in flat
+        # The pair's outlets, as the links query counts them: its copies' sites.
+        assert "SELECT story, country_code, others, topic_tags, sentiment_score, outlet," in flat
+        assert (
+            "array_agg(DISTINCT outlet) FILTER (WHERE linked AND outlet <> '') AS outlets"
+        ) in flat
+        assert (
+            "(SELECT count(DISTINCT o) FROM stories, unnest(stories.outlets) AS o) AS outlets"
+            in flat
+        )
         # Each story's key once: no pairs to unnest, so no need to materialise.
         assert flat.startswith("WITH linking AS ( SELECT")
         for tag in TOPIC_TAGS:
@@ -484,7 +521,7 @@ def _detail_pool(stats: dict, names: list, themes: list, articles: list) -> Asyn
 class TestGetLinkDetail:
     @pytest.mark.asyncio
     async def test_assembles_the_pair(self):
-        stats = {"n": 6, "n_a": 8, "n_b": 30, "total": 200, "tone": -0.456}
+        stats = {"n": 6, "n_a": 8, "n_b": 30, "total": 200, "tone": -0.456, "outlets": 2}
         stats.update({tag: 0 for tag in TOPIC_TAGS}, conflict=5, politics=2)
         pool = _detail_pool(
             stats,
@@ -497,6 +534,8 @@ class TestGetLinkDetail:
 
         assert detail["a"]["name"] == "Iran" and detail["b"]["name"] == "United States"
         assert (detail["n"], detail["lift"], detail["tone"]) == (6, 5.0, -0.46)
+        # Below MIN_LINK_OUTLETS: /api/links would not list it, but the inspector answers.
+        assert detail["outlets"] == 2
         assert detail["topic_mix"] == {
             "politics": 2,
             "conflict": 5,
@@ -511,7 +550,7 @@ class TestGetLinkDetail:
 
     @pytest.mark.asyncio
     async def test_a_pair_without_stories_is_empty(self):
-        stats = {"n": 0, "n_a": 0, "n_b": 0, "total": 0, "tone": None}
+        stats = {"n": 0, "n_a": 0, "n_b": 0, "total": 0, "tone": None, "outlets": 0}
         stats.update({tag: 0 for tag in TOPIC_TAGS})
         pool = _detail_pool(stats, [], [], [])
         with patch("app.services.links.get_pool", new_callable=AsyncMock, return_value=pool):
