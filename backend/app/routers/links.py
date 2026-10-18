@@ -129,7 +129,7 @@ async def cached_links(window: Window, tag: str | None, rank: str, limit: int) -
     The request and the cache warmers both come here, so a warmed entry has
     the key and the bytes a request would have stored.
     """
-    cache_k = f"db:links:v3:{window.key}:{tag or ''}:{rank}:{limit}"
+    cache_k = f"db:links:v4:{window.key}:{tag or ''}:{rank}:{limit}"
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
         return [Link.model_validate(link) for link in cached]
@@ -174,7 +174,7 @@ async def get_link(
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
 
-    cache_k = f"db:links:detail:v9:{a}:{b}:{window.key}:{tag or ''}"
+    cache_k = f"db:links:detail:v10:{a}:{b}:{window.key}:{tag or ''}"
     cached = await get_cached(cache_k)
     if cached is not None:
         return LinkDetail.model_validate(cached)

@@ -26,7 +26,9 @@ def _sql(query: str) -> str:
 STORY = f"{story_key_sql('a')} AS story"
 
 
-def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, outlets=4, **extra) -> dict:
+def _pair(
+    a="IR", b="US", n=10, n_a=20, n_b=50, total=100, outlets=4, top_outlet_stories=1, **extra
+) -> dict:
     """A row as the links query returns it."""
     row = {
         "a": a,
@@ -36,6 +38,7 @@ def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, outlets=4, **extra) -
         "n_b": n_b,
         "total": total,
         "outlets": outlets,
+        "top_outlet_stories": top_outlet_stories,
         "tone": -0.3123,
         "from_iso": b,
         **{tag: 0 for tag in TOPIC_TAGS},
@@ -105,14 +108,20 @@ class TestLinksQuery:
         assert "others, story, outlet FROM ( SELECT country_code, topic_tags" in flat
         assert f"{STORY}, source_name AS outlet FROM articles a" in flat
         # Gathered in the story pass (each story's copies' outlets), counted per pair.
-        # (Repeats are fine: pair_outlets' GROUP BY drops them.)
+        # (Repeats are fine: outlet_stories' GROUP BY drops them.)
         assert "array_agg(l.outlet) FILTER (WHERE l.outlet <> '') AS outlets" in flat
+        # Per pair and outlet, the stories it carried, each once; then per pair.
         assert (
-            "pair_outlets AS ( SELECT a, b, count(*) AS outlets FROM ( "
-            "SELECT s.a, s.b, o FROM stories s, unnest(s.outlets) AS o GROUP BY 1, 2, 3 ) t "
-            "GROUP BY a, b )"
+            "outlet_stories AS ( SELECT a, b, o, count(*) AS stories FROM ( "
+            "SELECT s.a, s.b, o, s.story FROM stories s, unnest(s.outlets) AS o "
+            "GROUP BY 1, 2, 3, 4 ) t GROUP BY 1, 2, 3 )"
+        ) in flat
+        assert (
+            "pair_outlets AS ( SELECT a, b, count(*) AS outlets, "
+            "max(stories) AS top_outlet_stories FROM outlet_stories GROUP BY a, b )"
         ) in flat
         assert "COALESCE(po.outlets, 0) AS outlets" in flat
+        assert "COALESCE(po.top_outlet_stories, 0) AS top_outlet_stories" in flat
         assert "LEFT JOIN pair_outlets po ON po.a = g.a AND po.b = g.b" in flat
 
     def test_counts_each_topic_and_the_totals_for_lift_in_stories(self):
@@ -164,6 +173,21 @@ class TestRanking:
         ranked = rank_links(rows, rank=rank, limit=40)
         assert [(r["a"]["iso"], r["b"]["iso"], r["outlets"]) for r in ranked] == [("IR", "US", 3)]
         assert links.MIN_LINK_OUTLETS == 3
+
+    @pytest.mark.parametrize("rank", ["lift", "count"])
+    def test_no_outlet_may_supply_more_than_half_the_stories(self, rank):
+        """LK-VG, live: srilankamirror.com 4 of 6 stories, beside two genuine ones."""
+        rows = [
+            _pair("LK", "VG", n=6, outlets=3, top_outlet_stories=4),  # 4+1+1: 0.67
+            _pair("FR", "US", n=6, outlets=3, top_outlet_stories=2),  # 2+2+2: 0.33
+            _pair("IR", "US", n=6, outlets=3, top_outlet_stories=3),  # exactly half: listed
+        ]
+        ranked = rank_links(rows, rank=rank, limit=40)
+        assert sorted((r["a"]["iso"], r["b"]["iso"], r["top_outlet_share"]) for r in ranked) == [
+            ("FR", "US", 0.33),
+            ("IR", "US", 0.5),
+        ]
+        assert links.MAX_OUTLET_SHARE == 0.5
 
     def test_lift_needs_five_stories(self):
         rows = [_pair("FR", "US", n=4, n_a=4, n_b=4), _pair("IR", "US", n=5)]
@@ -561,8 +585,14 @@ class TestDetailQueries:
             "(SELECT count(DISTINCT o) FROM stories, unnest(stories.outlets) AS o) AS outlets"
             in flat
         )
+        # The busiest outlet's stories, each counted once, as the links query does.
+        assert (
+            "(SELECT max(c) FROM ( SELECT count(DISTINCT stories.story) AS c "
+            "FROM stories, unnest(stories.outlets) AS o GROUP BY o ) per_outlet) "
+            "AS top_outlet_stories"
+        ) in flat
         # linking is read once (by stories, which PostgreSQL materialises, being read
-        # twice): no pairs to unnest, so no MATERIALIZED needed for each article's key.
+        # more than once): no pairs to unnest, so no MATERIALIZED for each article's key.
         assert flat.startswith("WITH linking AS ( SELECT")
         for tag in TOPIC_TAGS:
             assert f"bool_or(linked AND topic_tags && '{{{tag}}}') AS {tag}" in flat
@@ -589,6 +619,7 @@ class TestGetLinkDetail:
     @pytest.mark.asyncio
     async def test_assembles_the_pair(self):
         stats = {"n": 6, "n_a": 8, "n_b": 30, "total": 200, "tone": -0.456, "outlets": 2}
+        stats["top_outlet_stories"] = 4
         stats.update({tag: 0 for tag in TOPIC_TAGS}, conflict=5, politics=2)
         pool = _detail_pool(
             stats,
@@ -603,6 +634,7 @@ class TestGetLinkDetail:
         assert (detail["n"], detail["lift"], detail["tone"]) == (6, 5.0, -0.46)
         # Below MIN_LINK_OUTLETS: /api/links would not list it, but the inspector answers.
         assert detail["outlets"] == 2
+        assert detail["top_outlet_share"] == 0.67  # 4 of 6: over MAX_OUTLET_SHARE too
         assert detail["topic_mix"] == {
             "politics": 2,
             "conflict": 5,
@@ -618,10 +650,12 @@ class TestGetLinkDetail:
     @pytest.mark.asyncio
     async def test_a_pair_without_stories_is_empty(self):
         stats = {"n": 0, "n_a": 0, "n_b": 0, "total": 0, "tone": None, "outlets": 0}
+        stats["top_outlet_stories"] = None  # no outlets: max() of nothing
         stats.update({tag: 0 for tag in TOPIC_TAGS})
         pool = _detail_pool(stats, [], [], [])
         with patch("app.services.links.get_pool", new_callable=AsyncMock, return_value=pool):
             detail = await links.get_link_detail("IR", "US", START, END, "health")
 
         assert (detail["n"], detail["lift"], detail["tone"]) == (0, 0.0, 0.0)
+        assert detail["top_outlet_share"] == 0.0
         assert detail["shared"] == [] and detail["themes"] == [] and detail["articles"] == []

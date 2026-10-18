@@ -262,10 +262,14 @@ class TestDistinctStories:
             ("IR", "US", 7),
             ("DE", "FR", 4),
             ("CN", "US", 3),
-            ("KI", "UM", 1),  # its ten copies come from six sites
+            # KI-UM: six sites, but each carries its one story: all of n, over half.
             # IL-US: one copy, so one outlet, under MIN_LINK_OUTLETS.
         ]
-        assert _by_pair(rows)["IL", "US"]["outlets"] == 1
+        pairs = _by_pair(rows)
+        assert (pairs["KI", "UM"]["outlets"], pairs["KI", "UM"]["top_outlet_stories"]) == (6, 1)
+        assert pairs["IL", "US"]["outlets"] == 1
+        # IR-US: apnews.test carried 3 of its 7 stories (one of them syndicated).
+        assert pairs["IR", "US"]["top_outlet_stories"] == 3
 
     @pytest.mark.asyncio
     async def test_topic_tone_and_origin_are_per_story(self):
@@ -324,6 +328,7 @@ class TestDistinctStories:
             assert detail["tone"] == round(row["tone"], 2)
             assert detail["topic_mix"] == {tag: row[tag] for tag in TOPIC_TAGS}
             assert detail["outlets"] == row["outlets"]
+            assert detail["top_outlet_share"] == round(row["top_outlet_stories"] / row["n"], 2)
 
     @pytest.mark.asyncio
     async def test_detail_names_and_themes_count_stories(self):
@@ -420,23 +425,73 @@ async def test_one_outlet_does_not_make_a_link(conn):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("pool")
-async def test_three_outlets_make_a_link(conn):
-    """Outlets count over every copy: five stories from one site, one syndicated to two more."""
-    start = datetime(2001, 5, 10, tzinfo=timezone.utc)
+async def _lk_vg(conn, day: int, stories_by_outlet: dict[str, list[str]]):
+    """LK-VG stories on 2001-06-<day>, by site; a title under two sites is one story twice."""
+    start = datetime(2001, 6, day, tzinfo=timezone.utc)
     stories = [
-        _story(f"zzlinks-Island story {i}", "LK", ["LK", "VG"], outlet="a.zzlinks.test")
-        for i in range(5)
-    ]
-    stories += [
-        _story("zzlinks-Island deal - Reuters", "VG", ["VG", "LK"], outlet="b.zzlinks.test"),
-        _story("zzlinks-Island deal | AP News", "VG", ["VG", "LK"], outlet="c.zzlinks.test"),
+        _story(f"zzlinks-{title}", "LK", ["LK", "VG"], outlet=site)
+        for site, titles in stories_by_outlet.items()
+        for title in titles
     ]
     await _insert(conn, stories, start)
     end = start + timedelta(days=1)
-
     [row] = await links.get_link_pairs(start, end, None)
-    assert (row["n"], row["outlets"]) == (6, 3)
-    [by_lift] = rank_links([row], "lift", 40)
-    assert (by_lift["a"]["iso"], by_lift["b"]["iso"], by_lift["outlets"]) == ("LK", "VG", 3)
     detail = await links.get_link_detail("LK", "VG", start, end, None)
-    assert (detail["n"], detail["outlets"]) == (6, 3)
+    return row, detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_one_outlet_with_most_of_the_stories_is_not_a_link(conn):
+    """LK-VG, live: srilankamirror.com's four mis-tagged stories beside two genuine ones."""
+    row, detail = await _lk_vg(
+        conn,
+        10,
+        {
+            "srilankamirror.com": ["Port compensation", "Cinema weapons", "Protests", "Wives"],
+            "slguardian.org": ["China Merchants port settlement"],
+            "sundaytimes.lk": ["Port settlement reached"],
+        },
+    )
+    assert (row["n"], row["outlets"], row["top_outlet_stories"]) == (6, 3, 4)
+    assert rank_links([row], "lift", 40) == rank_links([row], "count", 40) == []
+    # The inspector answers, and says why: 4 of 6 from one site.
+    assert (detail["n"], detail["outlets"], detail["top_outlet_share"]) == (6, 3, 0.67)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_an_even_spread_is_a_link(conn):
+    row, detail = await _lk_vg(
+        conn,
+        11,
+        {
+            "a.zzlinks.test": ["Story 1", "Story 2"],
+            "b.zzlinks.test": ["Story 3", "Story 4"],
+            "c.zzlinks.test": ["Story 5", "Story 6"],
+        },
+    )
+    assert (row["n"], row["outlets"], row["top_outlet_stories"]) == (6, 3, 2)
+    [link] = rank_links([row], "lift", 40)
+    assert (link["outlets"], link["top_outlet_share"]) == (3, 0.33)
+    assert detail["top_outlet_share"] == 0.33
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_exactly_half_is_a_link(conn):
+    """3 of 6 from the busiest site is not more than half. A story counts once under
+    each site that carried it (Story 3: a and b), and once however many copies one has."""
+    row, detail = await _lk_vg(
+        conn,
+        12,
+        {
+            "a.zzlinks.test": ["Story 1", "Story 1 - Wire", "Story 2", "Story 3"],
+            "b.zzlinks.test": ["Story 3 | B News", "Story 4", "Story 5"],
+            "c.zzlinks.test": ["Story 6"],
+        },
+    )
+    assert (row["n"], row["outlets"], row["top_outlet_stories"]) == (6, 3, 3)
+    [link] = rank_links([row], "count", 40)
+    assert link["top_outlet_share"] == 0.5
+    assert (detail["n"], detail["top_outlet_share"]) == (6, 0.5)
