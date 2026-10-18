@@ -11,7 +11,7 @@ import pytest
 from app import warm
 from app.config import settings
 from app.routers.links import warm_links_7d, warm_links_24h
-from app.routers.news import warm_globe, warm_volume
+from app.routers.news import warm_breaking, warm_globe, warm_volume
 from app.services.cache import cycle_ttl
 
 
@@ -22,9 +22,16 @@ def redis_up():
         yield mock
 
 
-def test_the_first_visit_is_warmed_globe_first_then_the_links_layer():
-    """The globe is on the first visit's critical path; links only once the layer is on."""
-    assert warm.WARMERS == (warm_globe, warm_volume, warm_links_24h, warm_links_7d)
+def test_the_first_visit_is_warmed_globe_first_then_the_links_layer_then_breaking():
+    """The globe is on the first visit's critical path; links only once the layer is on;
+    breaking stories (one list for every topic) for the ticker and the delta."""
+    assert warm.WARMERS == (
+        warm_globe,
+        warm_volume,
+        warm_links_24h,
+        warm_links_7d,
+        warm_breaking,
+    )
     assert warm.WARM_TIMEOUT == 30
 
 

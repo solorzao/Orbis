@@ -1280,35 +1280,51 @@ class TestEdgeCaching:
         assert "cache-control" not in resp.headers
 
 
-# ── /api/news/surges: places whose coverage is surging ──────────────────
+# ── /api/news/breaking: events many outlets have just started covering ─────
 
-SURGE = {
-    "lat": -4.5,
-    "lng": 15.5,
-    "place": "Kinshasa, Congo",
-    "recent": 21,
-    "baseline": 0.73,
-    "ratio": 28.57,
+LEAD = {
+    "title": "Pupil detained after school shooting in France",
+    "source_name": "example.com",
+    "published_at": datetime(2026, 10, 12, 14, 15, tzinfo=timezone.utc),
+    "image_url": "https://cdn.example.com/a.jpg",
     "topic": "conflict",
-    "lead": {
-        "title": "Clashes near Kinshasa",
-        "source_name": "example.com",
-        "published_at": datetime(2026, 10, 12, 14, 15, tzinfo=timezone.utc),
-        "image_url": "https://cdn.example.com/k.jpg",
-        "topic": "conflict",
-        "sensitive": True,
-    },
+    "sensitive": True,
 }
-SURGE_JSON = {**SURGE, "lead": {**SURGE["lead"], "published_at": "2026-10-12T14:15:00Z"}}
+
+
+def _story(n: int, topic: str = "conflict", outlets: int = 10) -> dict:
+    return {
+        "headline": f"Breaking story {n}",
+        "place": "Aubagne, France",
+        "lat": 43.5,
+        "lng": 5.5 + n,
+        "outlets": outlets,
+        "stories": 9,
+        "first_seen": datetime(2026, 10, 12, 13, 50, tzinfo=timezone.utc),
+        "topic": topic,
+        "lead": LEAD,
+    }
+
+
+def _json(story: dict) -> dict:
+    return {
+        **story,
+        "first_seen": "2026-10-12T13:50:00Z",
+        "lead": {**story["lead"], "published_at": "2026-10-12T14:15:00Z"},
+    }
+
+
+STORY = _story(0)
+STORY_JSON = _json(STORY)
 
 
 @pytest.fixture
-def surges_db(monkeypatch):
-    """The surge query stubbed; the clock frozen."""
+def breaking_db(monkeypatch):
+    """The breaking query stubbed; the clock frozen."""
     import app.routers.news as news
 
     monkeypatch.setattr(news, "_now", lambda: PREVIEW_NOW)
-    with patch("app.routers.news.get_surges", AsyncMock(return_value=[SURGE])) as mock:
+    with patch("app.routers.news.get_breaking", AsyncMock(return_value=[STORY])) as mock:
         yield mock
 
 
@@ -1317,86 +1333,127 @@ async def _get(monkeypatch, path, **params):
         return await client.get(path, params=params)
 
 
-class TestGetSurges:
+class TestGetBreaking:
     @pytest.mark.asyncio
-    async def test_returns_the_surging_places_as_of_now(self, monkeypatch, surges_db):
-        resp = await _get(monkeypatch, "/api/news/surges")
+    async def test_returns_the_breaking_stories_as_of_now(self, monkeypatch, breaking_db):
+        resp = await _get(monkeypatch, "/api/news/breaking")
 
         assert resp.status_code == 200
-        assert resp.json() == [SURGE_JSON]
-        surges_db.assert_awaited_once_with(PREVIEW_NOW, None)
+        assert resp.json() == [STORY_JSON]
+        breaking_db.assert_awaited_once_with(PREVIEW_NOW)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("topic", "tag"),
-        [("Climate", "environment"), ("politics", "politics"), ("All", None)],
+        ("topic", "kept"),
+        [("Conflict", [0, 2]), ("climate", [1]), ("Health", []), ("All", [0, 1, 2, 3])],
     )
-    async def test_a_topic_reaches_the_query_as_its_tag(self, monkeypatch, surges_db, topic, tag):
-        resp = await _get(monkeypatch, "/api/news/surges", topic=topic)
+    async def test_a_topic_keeps_the_events_whose_dominant_topic_it_is(
+        self, monkeypatch, breaking_db, topic, kept
+    ):
+        """One query serves every topic: an event is an event, the topic its neighbours'."""
+        topics = ["conflict", "environment", "conflict", "politics"]
+        breaking_db.return_value = [_story(i, t) for i, t in enumerate(topics)]
 
-        assert resp.status_code == 200
-        surges_db.assert_awaited_once_with(PREVIEW_NOW, tag)
+        resp = await _get(monkeypatch, "/api/news/breaking", topic=topic)
+
+        assert [s["headline"] for s in resp.json()] == [f"Breaking story {i}" for i in kept]
+        breaking_db.assert_awaited_once_with(PREVIEW_NOW)
+
+    @pytest.mark.asyncio
+    async def test_at_most_eight_most_outlets_first(self, monkeypatch, breaking_db):
+        breaking_db.return_value = [_story(i, outlets=20 - i) for i in range(11)]
+
+        resp = await _get(monkeypatch, "/api/news/breaking")
+
+        assert [s["outlets"] for s in resp.json()] == [20, 19, 18, 17, 16, 15, 14, 13]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("topic", ["sport", "Politics,Health"])
-    async def test_an_unknown_topic_is_422_and_not_edge_cached(self, monkeypatch, surges_db, topic):
-        resp = await _get(monkeypatch, "/api/news/surges", topic=topic)
+    async def test_an_unknown_topic_is_422_and_not_edge_cached(
+        self, monkeypatch, breaking_db, topic
+    ):
+        resp = await _get(monkeypatch, "/api/news/breaking", topic=topic)
 
         assert resp.status_code == 422
         assert "s-maxage" not in resp.headers.get("cache-control", "")
-        surges_db.assert_not_awaited()
+        breaking_db.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_cached_for_five_minutes_by_topic(self, monkeypatch, surges_db):
+    async def test_every_breaking_story_is_cached_once_until_the_next_warm(
+        self, monkeypatch, breaking_db
+    ):
+        """Uncapped and for every topic: each request then filters and caps it. Kept a
+        cycle and more (the warm refills it after each ingestion), not 300 s."""
+        breaking_db.return_value = [_story(i) for i in range(9)]
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
-            await _get(monkeypatch, "/api/news/surges", topic="Climate")
+            await _get(monkeypatch, "/api/news/breaking", topic="Climate")
 
-        mock_set.assert_awaited_once_with("db:surges:v1:environment", [SURGE_JSON], 300)
+        mock_set.assert_awaited_once_with(
+            "db:breaking:v1", [_json(_story(i)) for i in range(9)], cycle_ttl(300)
+        )
 
     @pytest.mark.asyncio
-    async def test_no_surges_is_cached_too(self, monkeypatch, surges_db):
-        surges_db.return_value = []
+    async def test_none_breaking_is_cached_too(self, monkeypatch, breaking_db):
+        breaking_db.return_value = []
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
-            resp = await _get(monkeypatch, "/api/news/surges")
+            resp = await _get(monkeypatch, "/api/news/breaking")
 
         assert resp.json() == []
-        mock_set.assert_awaited_once_with("db:surges:v1:", [], 300)
+        mock_set.assert_awaited_once_with("db:breaking:v1", [], cycle_ttl(300))
 
     @pytest.mark.asyncio
-    async def test_cached_surges_are_served_without_the_database(self, monkeypatch, surges_db):
-        with patch("app.routers.news.get_cached", AsyncMock(return_value=[SURGE_JSON])):
-            resp = await _get(monkeypatch, "/api/news/surges")
+    async def test_the_warmer_caches_what_the_first_request_would(self, monkeypatch, breaking_db):
+        """app.warm refills it after each ingestion cycle, with the request's key and bytes."""
+        import app.routers.news as news
 
-        assert resp.json() == [SURGE_JSON]
-        surges_db.assert_not_awaited()
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            await _get(monkeypatch, "/api/news/breaking")
+            await news.warm_breaking()
+
+        requested, warmed = [c.args for c in mock_set.await_args_list]
+        assert requested == warmed == ("db:breaking:v1", [STORY_JSON], cycle_ttl(300))
 
     @pytest.mark.asyncio
-    async def test_is_edge_cached(self, monkeypatch, surges_db):
-        resp = await _get(monkeypatch, "/api/news/surges")
+    async def test_cached_stories_are_served_without_the_database(self, monkeypatch, breaking_db):
+        with patch("app.routers.news.get_cached", AsyncMock(return_value=[STORY_JSON])):
+            resp = await _get(monkeypatch, "/api/news/breaking", topic="Conflict")
+
+        assert resp.json() == [STORY_JSON]
+        breaking_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_is_edge_cached(self, monkeypatch, breaking_db):
+        resp = await _get(monkeypatch, "/api/news/breaking")
 
         assert resp.headers["cache-control"] == EDGE
 
     def test_is_in_the_data_rate_limit_group(self):
         from app.middleware.security import _get_rate_group
 
-        assert _get_rate_group("/api/news/surges") == "data"
+        assert _get_rate_group("/api/news/breaking") == "data"
 
     @pytest.mark.asyncio
-    async def test_a_database_error_is_a_500_and_nothing_is_cached(self, monkeypatch, surges_db):
-        surges_db.side_effect = RuntimeError("connection reset")
+    async def test_place_surges_are_gone(self, monkeypatch, breaking_db):
+        resp = await _get(monkeypatch, "/api/news/surges")
+
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_a_database_error_is_a_500_and_nothing_is_cached(self, monkeypatch, breaking_db):
+        breaking_db.side_effect = RuntimeError("connection reset")
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
-            resp = await _get(monkeypatch, "/api/news/surges")
+            resp = await _get(monkeypatch, "/api/news/breaking")
 
         assert resp.status_code == 500
         assert "s-maxage" not in resp.headers.get("cache-control", "")
         mock_set.assert_not_awaited()
 
 
-class TestSurgesSingleFlight:
-    """Concurrent misses for one key share one query (the delta asks too)."""
+class TestBreakingSingleFlight:
+    """Concurrent misses share one query (the delta asks too)."""
 
     @pytest.mark.asyncio
-    async def test_two_concurrent_misses_run_the_query_once(self, monkeypatch, surges_db):
+    async def test_two_concurrent_misses_run_the_query_once(self, monkeypatch, breaking_db):
         import asyncio
 
         import app.routers.news as news
@@ -1405,26 +1462,24 @@ class TestSurgesSingleFlight:
 
         async def slow(*_args):
             await release.wait()
-            return [SURGE]
+            return [STORY]
 
-        surges_db.side_effect = slow
+        breaking_db.side_effect = slow
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
-            first = asyncio.create_task(news._cached_surges(None))
-            second = asyncio.create_task(news._cached_surges(None))
-            await asyncio.sleep(0)
-            other_topic = asyncio.create_task(news._cached_surges("health"))
+            first = asyncio.create_task(news._cached_breaking())
+            second = asyncio.create_task(news._cached_breaking())
             await asyncio.sleep(0)
             release.set()
-            a, b, c = await asyncio.gather(first, second, other_topic)
+            a, b = await asyncio.gather(first, second)
 
-        assert a == b == c
-        assert surges_db.await_count == 2  # once for all topics, once for health
-        assert mock_set.await_count == 2
-        assert news._surges_in_flight == {}
+        assert a == b
+        assert breaking_db.await_count == 1
+        assert mock_set.await_count == 1
+        assert news._breaking_in_flight == {}
 
     @pytest.mark.asyncio
     async def test_an_error_reaches_every_waiter_and_nothing_is_cached(
-        self, monkeypatch, surges_db
+        self, monkeypatch, breaking_db
     ):
         import asyncio
 
@@ -1436,27 +1491,27 @@ class TestSurgesSingleFlight:
             await release.wait()
             raise RuntimeError("connection reset")
 
-        surges_db.side_effect = failing
+        breaking_db.side_effect = failing
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
-            waiters = [asyncio.create_task(news._cached_surges(None)) for _ in range(2)]
+            waiters = [asyncio.create_task(news._cached_breaking()) for _ in range(2)]
             await asyncio.sleep(0)
             release.set()
             results = await asyncio.gather(*waiters, return_exceptions=True)
 
         assert [type(r) for r in results] == [RuntimeError, RuntimeError]
-        assert surges_db.await_count == 1
+        assert breaking_db.await_count == 1
         mock_set.assert_not_awaited()
-        assert news._surges_in_flight == {}
+        assert news._breaking_in_flight == {}
 
-        # The next miss queries again.
-        surges_db.side_effect = None
-        surges_db.return_value = [SURGE]
-        assert len(await news._cached_surges(None)) == 1
-        assert surges_db.await_count == 2
+        breaking_db.side_effect = None
+        breaking_db.return_value = [STORY]
+        assert len(await news._cached_breaking()) == 1
+        assert breaking_db.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_a_waiter_cancelled_leaves_the_query_to_the_others(self, monkeypatch, surges_db):
-        """A visitor who leaves doesn't cancel the query the others are waiting on."""
+    async def test_a_waiter_cancelled_leaves_the_query_to_the_others(
+        self, monkeypatch, breaking_db
+    ):
         import asyncio
 
         import app.routers.news as news
@@ -1465,11 +1520,11 @@ class TestSurgesSingleFlight:
 
         async def slow(*_args):
             await release.wait()
-            return [SURGE]
+            return [STORY]
 
-        surges_db.side_effect = slow
-        first = asyncio.create_task(news._cached_surges(None))
-        second = asyncio.create_task(news._cached_surges(None))
+        breaking_db.side_effect = slow
+        first = asyncio.create_task(news._cached_breaking())
+        second = asyncio.create_task(news._cached_breaking())
         await asyncio.sleep(0)
         first.cancel()
         await asyncio.sleep(0)
@@ -1477,38 +1532,38 @@ class TestSurgesSingleFlight:
 
         assert len(await second) == 1
         assert first.cancelled()
-        assert surges_db.await_count == 1
+        assert breaking_db.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_a_hung_query_times_out_for_every_waiter(self, monkeypatch, surges_db):
-        """A query that never returns (a half-open connection) can't hold up every later
-        surges or delta request: it gives up, nothing is cached, and the next miss retries."""
+    async def test_a_hung_query_times_out_for_every_waiter(self, monkeypatch, breaking_db):
+        """A query that never returns can't hold up every later breaking or delta request:
+        it gives up, nothing is cached, and the next miss retries."""
         import asyncio
 
         import app.routers.news as news
 
-        assert news._SURGES_QUERY_TIMEOUT == 15
-        monkeypatch.setattr(news, "_SURGES_QUERY_TIMEOUT", 0.01)
+        assert news._BREAKING_QUERY_TIMEOUT == 15
+        monkeypatch.setattr(news, "_BREAKING_QUERY_TIMEOUT", 0.01)
 
         async def hung(*_args):
             await asyncio.Event().wait()  # never set
 
-        surges_db.side_effect = hung
+        breaking_db.side_effect = hung
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
-            waiters = [asyncio.create_task(news._cached_surges(None)) for _ in range(2)]
+            waiters = [asyncio.create_task(news._cached_breaking()) for _ in range(2)]
             results = await asyncio.wait_for(
                 asyncio.gather(*waiters, return_exceptions=True), timeout=5
             )
 
         assert [type(r) for r in results] == [TimeoutError, TimeoutError]
-        assert surges_db.await_count == 1
+        assert breaking_db.await_count == 1
         mock_set.assert_not_awaited()
-        assert news._surges_in_flight == {}
+        assert news._breaking_in_flight == {}
 
-        surges_db.side_effect = None
-        surges_db.return_value = [SURGE]
-        assert len(await news._cached_surges(None)) == 1
-        assert surges_db.await_count == 2
+        breaking_db.side_effect = None
+        breaking_db.return_value = [STORY]
+        assert len(await news._cached_breaking()) == 1
+        assert breaking_db.await_count == 2
 
 
 # ── /api/news/delta: what changed since a visit ─────────────────────────
@@ -1518,11 +1573,11 @@ CHANGES = {
     "new_places": 212,
     "top": [
         {
-            "lat": SURGE["lat"],
-            "lng": SURGE["lng"],
-            "place": SURGE["place"],
+            "lat": STORY["lat"],
+            "lng": STORY["lng"],
+            "place": STORY["place"],
             "new": 31,
-            "lead": SURGE["lead"],
+            "lead": STORY["lead"],
         }
     ],
 }
@@ -1530,30 +1585,42 @@ CHANGES = {
 
 @pytest.fixture
 def delta_db(monkeypatch):
-    """The delta and surge queries stubbed; the clock frozen at 14:30."""
+    """The delta and breaking queries stubbed; the clock frozen at 14:30."""
     import app.routers.news as news
 
     monkeypatch.setattr(news, "_now", lambda: PREVIEW_NOW)
     with (
         patch("app.routers.news.get_delta", AsyncMock(return_value=CHANGES)) as changes,
-        patch("app.routers.news.get_surges", AsyncMock(return_value=[SURGE, SURGE])) as found,
+        patch("app.routers.news.get_breaking", AsyncMock(return_value=[STORY, STORY])) as found,
     ):
-        yield SimpleNamespace(changes=changes, surges=found)
+        yield SimpleNamespace(changes=changes, breaking=found)
 
 
 class TestGetDelta:
     @pytest.mark.asyncio
-    async def test_new_stories_places_surges_and_the_top_places(self, monkeypatch, delta_db):
+    async def test_the_breaking_count_is_at_most_eight_as_the_ticker_lists(
+        self, monkeypatch, delta_db
+    ):
+        delta_db.breaking.return_value = [_story(i) for i in range(11)]
+
+        resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
+
+        assert resp.json()["breaking"] == 8
+
+    @pytest.mark.asyncio
+    async def test_new_stories_places_breaking_stories_and_the_top_places(
+        self, monkeypatch, delta_db
+    ):
         resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
 
         assert resp.status_code == 200
         assert resp.json() == {
             "new_stories": 1286,
             "new_places": 212,
-            "surging": 2,  # the surges list, as the ticker shows it
-            "top": [{**CHANGES["top"][0], "lead": SURGE_JSON["lead"]}],
+            "breaking": 2,  # the breaking list, as the ticker shows it
+            "top": [{**CHANGES["top"][0], "lead": STORY_JSON["lead"]}],
         }
-        delta_db.surges.assert_awaited_once_with(PREVIEW_NOW, None)  # every topic
+        delta_db.breaking.assert_awaited_once_with(PREVIEW_NOW)  # every topic
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1618,12 +1685,13 @@ class TestGetDelta:
 
     @pytest.mark.asyncio
     async def test_cached_for_five_minutes_by_the_floored_since(self, monkeypatch, delta_db):
+        """v2: surging became breaking; a v1 entry cached before the deploy would fail."""
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
             await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:29:59Z")
 
         key, value, ttl = mock_set.await_args_list[-1].args
-        assert key == "db:delta:v1:202610120015"
-        assert value["new_stories"] == 1286 and value["surging"] == 2
+        assert key == "db:delta:v2:202610120015"
+        assert value["new_stories"] == 1286 and value["breaking"] == 2
         assert value["top"][0]["lead"]["published_at"] == "2026-10-12T14:15:00Z"
         assert ttl == 300
 
@@ -1638,13 +1706,13 @@ class TestGetDelta:
 
     @pytest.mark.asyncio
     async def test_a_cached_delta_is_served_without_the_database(self, monkeypatch, delta_db):
-        cached = {"new_stories": 3, "new_places": 1, "surging": 0, "top": []}
+        cached = {"new_stories": 3, "new_places": 1, "breaking": 0, "top": []}
         with patch("app.routers.news.get_cached", AsyncMock(return_value=cached)):
             resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
 
         assert resp.json() == cached
         delta_db.changes.assert_not_awaited()
-        delta_db.surges.assert_not_awaited()
+        delta_db.breaking.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_is_edge_cached(self, monkeypatch, delta_db):
@@ -1676,10 +1744,10 @@ class TestGetDelta:
             codes += [
                 (await client.get("/api/news/delta", params=params)).status_code for _ in range(10)
             ]
-            surges = await client.get("/api/news/surges")
+            breaking = await client.get("/api/news/breaking")
 
         assert codes == [200] * 10 + [429]
-        assert surges.status_code == 200
+        assert breaking.status_code == 200
 
     @pytest.mark.asyncio
     async def test_a_database_error_is_a_500_and_nothing_is_cached(self, monkeypatch, delta_db):

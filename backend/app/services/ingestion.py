@@ -66,11 +66,14 @@ async def _ingest_from_raw_gkg() -> int:
         if not title:
             continue
 
-        # Deduplicate: strip outlet suffix so syndicated copies collapse
+        # Deduplicate: strip outlet suffix so syndicated copies collapse. A title with
+        # no headline left ("LIVE:") can't be told from another: each is kept (its
+        # story_key falls back to its URL).
         norm = dedup_key(title)
-        if norm in seen_titles:
-            continue
-        seen_titles.add(norm)
+        if norm:
+            if norm in seen_titles:
+                continue
+            seen_titles.add(norm)
 
         # Placeholders — overwritten by batch ML classification below
         topic_tags = ["general"]
@@ -221,9 +224,13 @@ async def run_ingestion_cycle() -> int:
 
     Downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
-    Then purges articles outside the retention window. Once the cycle has
-    released its lock, the caches it invalidated are refilled in the
-    background, so neither the next cycle nor a visitor waits on that.
+    Then purges articles outside the retention window and embeds the new
+    rows. Breaking stories (and so deltas) count embedded rows only, so their
+    caches are invalidated again once the rows are embedded: one cached
+    between the upsert's invalidation and then would miss the newest batch.
+    Once the cycle has released its lock, the caches it invalidated are
+    refilled in the background, so neither the next cycle nor a visitor
+    waits on that.
 
     Cycles never overlap: if one is already running (the startup run and the
     scheduler can coincide), this returns 0 without doing anything.
@@ -241,6 +248,8 @@ async def run_ingestion_cycle() -> int:
             count = await _ingest_from_raw_gkg()
             await _purge_old_articles()
             await generate_embeddings()
+            await invalidate("db:breaking*")
+            await invalidate("db:delta*")
             logger.info("Ingestion cycle complete: %d articles.", count)
         except Exception:
             logger.error("Ingestion cycle failed.", exc_info=True)

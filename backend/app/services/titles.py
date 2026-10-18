@@ -1,31 +1,79 @@
 """Story identity: a title without its outlet suffix, and a stable key for it.
 
 Syndicated copies of one story carry its headline with different outlet
-names ("Quake hits Kathmandu - Reuters", "... | BBC News"): ``dedup_key``
-is what they share, and ``story_key`` is that as the 64-bit integer
-ingestion stores in ``articles.story_key``, so queries can count stories
-rather than copies.
+names ("Quake hits Kathmandu - Reuters", "... | BBC News") and different
+typography (curly or straight quotes, an en dash or a hyphen, "WATCH:" in
+front, a full stop at the end): ``dedup_key`` is what they share, and
+``story_key`` is that as the 64-bit integer ingestion stores in
+``articles.story_key``, so queries can count stories rather than copies.
+``display_title`` is the same headline with its case, to show.
 """
 
 from __future__ import annotations
 
 import hashlib
+import html
 import re
+import unicodedata
 
 # Pattern: "Headline : NPR", "Headline | WXXJ News", "Headline - The Post"
-_OUTLET_SEP = re.compile(r"\s+[|:–—-]\s+")
+# (dashes are folded to "-" first).
+_OUTLET_SEP = re.compile(r"\s+[|:-]\s+")
+
+# Curly quotes as straight ones; every dash style as "-" (NFKC leaves these).
+_QUOTES = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201a": "'",
+        "\u201b": "'",
+        "\u2032": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u201e": '"',
+        "\u201f": '"',
+        "\u2033": '"',
+    }
+)
+_DASHES = re.compile(r"[\u2010-\u2015\u2212\u2e3a\u2e3b\ufe58\ufe63\uff0d]")
+_SPACES = re.compile(r"\s+")
+
+# Tags newsrooms put before a headline: "WATCH:", "LIVE |", "Live updates - ",
+# "BREAKING NEWS:", and Reuters' "UPDATE 2-". A tag needs a colon, a bar or a
+# spaced dash after it ("Live-action remake" keeps its word), except UPDATE n.
+_LEADING_TAGS = re.compile(
+    r"^\s*(?:"
+    r"(?:breaking(?: news)?|live(?: updates?)?|watch|video|exclusive|analysis|opinion)"
+    r"\s*(?::|\||\s-\s)\s*"
+    r"|update(?:d)?(?: \d+)?\s*(?::|\||-)\s*"
+    r")+",
+    re.IGNORECASE,
+)
+_TRAILING_PUNCTUATION = re.compile(r"[\s.,;:!?]+$")
+
+
+def display_title(title: str) -> str:
+    """A title as one headline to show, its case kept.
+
+    HTML entities decoded, NFKC, straight quotes, every dash as "-", one
+    space between words; a leading tag ("WATCH:", "UPDATE 2-") dropped; then
+    the outlet's name: the text after the last separator (whitespace, one of
+    | : -, whitespace), when it is shorter than 40 characters.
+    """
+    text = unicodedata.normalize("NFKC", html.unescape(title))
+    text = _SPACES.sub(" ", _DASHES.sub("-", text.translate(_QUOTES)))
+    text = _LEADING_TAGS.sub("", text)
+    parts = list(_OUTLET_SEP.finditer(text))
+    if parts:
+        last = parts[-1]
+        if len(text[last.end() :]) < 40:
+            text = text[: last.start()]
+    return text.strip()
 
 
 def dedup_key(title: str) -> str:
-    """Normalize a title for dedup by stripping the trailing outlet name."""
-    # Split on the last separator; if suffix is short it's likely an outlet name
-    parts = list(_OUTLET_SEP.finditer(title))
-    if parts:
-        last = parts[-1]
-        suffix = title[last.end() :]
-        if len(suffix) < 40:
-            title = title[: last.start()]
-    return title.strip().lower()
+    """A title's story: ``display_title`` without trailing punctuation, lowercased."""
+    return _TRAILING_PUNCTUATION.sub("", display_title(title)).lower()
 
 
 def story_key(title: str, source_url: str) -> int:

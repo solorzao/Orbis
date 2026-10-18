@@ -142,6 +142,39 @@ class TestIngestFromRawGkg:
             assert row["image_url"] == "https://example.com/img.jpg"
 
     @pytest.mark.asyncio
+    async def test_titles_with_no_headline_left_are_each_kept(self):
+        """A tag-only title ("LIVE:") folds to an empty key: no headline to tell copies
+        apart, so each is its own article (story_key falls back to its URL), not a copy of
+        the first. Copies of a real headline still collapse."""
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [
+            _make_gkg_article(url="https://example.com/live-1", title="LIVE:"),
+            _make_gkg_article(url="https://example.com/live-2", title="WATCH:"),
+            _make_gkg_article(url="https://example.com/a", title="Quake hits Kathmandu - AP"),
+            _make_gkg_article(url="https://example.com/b", title="Quake hits Kathmandu | BBC"),
+        ]
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
+            await _ingest_from_raw_gkg()
+
+        urls = [row["source_url"] for row in mock_upsert.call_args[0][0]]
+        assert urls == [
+            "https://example.com/live-1",
+            "https://example.com/live-2",
+            "https://example.com/a",
+        ]
+
+    @pytest.mark.asyncio
     async def test_carries_country_fips_through(self):
         from app.services.ingestion import _ingest_from_raw_gkg
 
@@ -402,6 +435,42 @@ class TestRunIngestionCycle:
             side_effect=lambda: calls.append(ingestion._ingestion_lock.locked()),
         ):
             yield calls
+
+    @pytest.mark.asyncio
+    async def test_breaking_and_deltas_are_invalidated_again_once_embedded(self, warm):
+        """Ingestion invalidates db:* before the embeddings; breaking stories count only
+        embedded rows, so one cached in between would miss the newest batch for a cycle.
+        Invalidated again inside the cycle, before the warm refills them."""
+        from app.services import ingestion
+
+        events: list[str] = []
+
+        def ingest():
+            events.append("ingest")
+            return 5
+
+        def invalidated(pattern):
+            events.append(f"invalidate {pattern} locked={ingestion._ingestion_lock.locked()}")
+
+        with (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion._ingest_from_raw_gkg", AsyncMock(side_effect=ingest)),
+            patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion.generate_embeddings",
+                AsyncMock(side_effect=lambda: events.append("embed")),
+            ),
+            patch("app.services.ingestion.invalidate", AsyncMock(side_effect=invalidated)),
+        ):
+            assert await ingestion.run_ingestion_cycle() == 5
+
+        assert events == [
+            "ingest",
+            "embed",
+            "invalidate db:breaking* locked=True",
+            "invalidate db:delta* locked=True",
+        ]
+        assert warm == [False]  # the warm starts after, once the lock is released
 
     @pytest.mark.asyncio
     async def test_warms_caches_once_the_lock_is_released(self, warm):
