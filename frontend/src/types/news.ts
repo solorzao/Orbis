@@ -10,6 +10,8 @@ export interface NewsArticle {
   latitude: number;
   longitude: number;
   countryCode: string;
+  /** Where the story is placed, e.g. "Paris, France" ("" when unknown). */
+  region?: string;
   topicTags: string[];
   sentimentScore: number; // -1 to 1, negative = bad, positive = good
 }
@@ -60,6 +62,35 @@ export interface GlobePoint {
   tone?: number;
 }
 
+/** One end of a co-coverage link: a country and its label point. */
+export interface LinkCountry {
+  /** ISO 3166-1 alpha-2. */
+  iso: string;
+  name: string;
+  lat: number;
+  lng: number;
+}
+
+/**
+ * Two countries the window's stories cover together (/api/links): an arc on
+ * the globe. `a` and `b` come in code order; `from` is the end most of the
+ * stories come from, where the arc starts.
+ */
+export interface CountryLink {
+  a: LinkCountry;
+  b: LinkCountry;
+  /** Stories that link the two. */
+  n: number;
+  /** How many times more often than chance they are covered together. */
+  lift: number;
+  /** The stories' main topic pill ("All" when it is none of the six). */
+  topic: Topic;
+  /** Mean sentiment of the stories, -1 to 1. */
+  tone: number;
+  /** ISO code of the end most of the stories come from. */
+  from: string;
+}
+
 export interface PanelFilters {
   topics: string[];
   sentiment: string | null;
@@ -91,4 +122,43 @@ export interface PanelEntry {
   loadingMore?: boolean;
   filters?: PanelFilters;
   filterSummary?: string | null;
+}
+
+/** What the link inspector shows for a pair (/api/links/detail), the pair in code order. */
+export interface LinkDetail {
+  a: LinkCountry;
+  b: LinkCountry;
+  n: number;
+  lift: number;
+  /** Stories per topic pill (a story with two topics counts for both). */
+  topicMix: Partial<Record<Topic, number>>;
+  tone: number;
+  /** People and organisations named in two or more of the stories. */
+  shared: { name: string; type: "person" | "org"; n: number }[];
+  /** The stories' top themes, as words. */
+  themes: string[];
+  /** The newest distinct stories that link the two. */
+  articles: NewsArticle[];
+}
+
+/** A link's explanation: Claude's words (ai), or a message saying why there are none. */
+export interface LinkExplanation {
+  text: string;
+  ai: boolean;
+}
+
+/** A link open in the Inspect tab, its query fixed when it was opened (like a panel's). */
+export interface LinkEntry {
+  linkId: string;
+  /** The link as its arc had it: its ends, numbers and origin. */
+  link: CountryLink;
+  query: PanelQuery;
+  detail: LinkDetail | null;
+  detailLoading: boolean;
+  detailError?: boolean;
+  /** When the detail landed (Date.now()), for its stories' ages. */
+  loadedAt?: number;
+  explanation: LinkExplanation | null;
+  explaining: boolean;
+  createdAt: number;
 }

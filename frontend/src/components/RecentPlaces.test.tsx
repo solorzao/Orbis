@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import RecentPlaces from "./RecentPlaces";
-import type { PanelEntry } from "@/types/news";
+import type { LinkEntry, PanelEntry } from "@/types/news";
 import { MAX_PANELS } from "@/lib/panelQuery";
 
 function entry(panelId: string, locationName: string | undefined, count = 4): PanelEntry {
@@ -29,6 +29,22 @@ function entry(panelId: string, locationName: string | undefined, count = 4): Pa
   };
 }
 
+const US = { iso: "US", name: "United States", lat: 39.5, lng: -99.06 };
+const IR = { iso: "IR", name: "Iran", lat: 32.52, lng: 54.29 };
+
+function linkEntry(linkId: string, createdAt: number, from = "US"): LinkEntry {
+  return {
+    linkId,
+    link: { a: IR, b: US, n: 41, lift: 1.8, topic: "Politics", tone: -0.3, from },
+    query: { startTime: "2026-10-10T00:00:00Z", endTime: "2026-10-11T00:00:00Z", live: true },
+    detail: null,
+    detailLoading: true,
+    explanation: null,
+    explaining: false,
+    createdAt,
+  };
+}
+
 const PLACES = [
   entry("a", "Paris, France", 5),
   entry("b", "London, United Kingdom", 3),
@@ -38,7 +54,7 @@ const PLACES = [
 describe("RecentPlaces", () => {
   it("shows one pill per open place, named before the comma, with its count", () => {
     render(<RecentPlaces places={PLACES} activeId="a" onSelect={() => {}} onClose={() => {}} />);
-    const group = screen.getByRole("group", { name: "Recent places" });
+    const group = screen.getByRole("group", { name: "Recent places and links" });
     const picks = within(group)
       .getAllByRole("button")
       .filter((b) => b.hasAttribute("aria-pressed"));
@@ -84,6 +100,53 @@ describe("RecentPlaces", () => {
       "Close Place e",
       "Close Place f",
     ]);
+  });
+
+  it("holds links too, in the order they were opened, named by their codes from the origin", () => {
+    const places = [{ ...entry("a", "Paris, France", 5), createdAt: 1 }];
+    const links = [linkEntry("l1", 2), linkEntry("l0", 0, "IR")];
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <RecentPlaces
+        places={places}
+        links={links}
+        activeId="l1"
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+    const picks = screen.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
+    expect(picks.map((b) => b.textContent)).toEqual(["IR ↔ US41", "Paris5", "US ↔ IR41"]);
+    expect(picks.map((b) => b.getAttribute("data-place"))).toEqual(["l0", "a", "l1"]);
+    expect(picks[2]).toHaveAttribute("aria-pressed", "true");
+    expect(picks[2]).toHaveAttribute("title", "United States and Iran");
+    // Its visible codes first (label in name, WCAG 2.5.3), then the names in full.
+    expect(picks[2]).toHaveAccessibleName("US ↔ IR: United States and Iran, 41 stories");
+
+    fireEvent.click(picks[2]);
+    expect(onSelect).toHaveBeenCalledWith("l1");
+    fireEvent.click(screen.getByRole("button", { name: "Close United States and Iran" }));
+    expect(onClose).toHaveBeenCalledWith("l1");
+  });
+
+  it("shows at most MAX_PANELS places and links together, the newest", () => {
+    const places = ["a", "b", "c"].map((id, i) => ({
+      ...entry(id, `Place ${id}, X`),
+      createdAt: i,
+    }));
+    const links = [linkEntry("l3", 3), linkEntry("l4", 4), linkEntry("l5", 5)];
+    render(
+      <RecentPlaces
+        places={places}
+        links={links}
+        activeId={null}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const picks = screen.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
+    expect(picks.map((b) => b.getAttribute("data-place"))).toEqual(["b", "c", "l3", "l4", "l5"]);
   });
 
   it("renders nothing without places", () => {

@@ -2,15 +2,34 @@
 
 import { useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Topic, GlobePoint, NewsArticle, PanelEntry, PanelFilters, PanelQuery } from "@/types/news";
-import { fetchClusterArticles, fetchClusterSummary } from "@/lib/api";
+import type {
+  CountryLink,
+  GlobePoint,
+  LinkEntry,
+  PanelEntry,
+  PanelFilters,
+  PanelQuery,
+  Topic,
+} from "@/types/news";
+import { fetchClusterArticles, fetchClusterSummary, fetchLinkDetail } from "@/lib/api";
+import { apiArticlesToNewsArticles } from "@/lib/clustering";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
-import { MAX_PANELS, panelQuery, queryWindow, samePanelQuery } from "@/lib/panelQuery";
+import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/panelQuery";
 import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
+import {
+  actionCountries,
+  linkKey,
+  linkedCountries,
+  linksStatus,
+  toLinkDetail,
+  type LinkRank,
+} from "@/lib/links";
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
+import { useLinks } from "@/hooks/useLinks";
+import { useLinkExplain } from "@/hooks/useLinkExplain";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
@@ -21,6 +40,8 @@ import BottomBar from "@/components/BottomBar";
 import LayerSwitcher, { type GlobeLayer } from "@/components/LayerSwitcher";
 import TimelineCapsule from "@/components/TimelineCapsule";
 import NewsPanel from "@/components/NewsPanel";
+import LinkInspector from "@/components/LinkInspector";
+import LinkList from "@/components/LinkList";
 import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
 import CoPilot from "@/components/CoPilot";
@@ -29,6 +50,8 @@ import Sky from "@/components/Sky";
 import OrbitRings from "@/components/OrbitRings";
 import GlobeHud from "@/components/GlobeHud";
 import HoverCard from "@/components/HoverCard";
+import ArcPill from "@/components/ArcPill";
+import LinksChip from "@/components/LinksChip";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -42,20 +65,33 @@ export default function Home() {
   // The dots for the window and topic, filtered on the server (same array until new dots land)
   const { points, error: apiError, loading } = useGlobePoints(timeWindow, activeTopic);
   const [layer, setLayer] = useState<GlobeLayer>("dots");
+  // The Links overlay: co-coverage arcs over either base layer, ranked by lift or count.
+  const [linksOn, setLinksOn] = useState(false);
+  const [linkRank, setLinkRank] = useState<LinkRank>("lift");
+  const linksResult = useLinks(timeWindow, activeTopic, linkRank, linksOn);
+  const { links } = linksResult;
+  // Said when Links draws nothing: an empty window, or links that failed to load.
+  const linksNote = linksStatus({ on: linksOn, ...linksResult });
+  // The arc under the pointer, named by the arc pill.
+  const [hoveredLink, setHoveredLink] = useState<CountryLink | null>(null);
   // The timeline's replay: the status pill says Replay rather than flashing each step's load.
   const [replaying, setReplaying] = useState(false);
 
+  // What the Inspect tab holds: places (their stories) and links, up to
+  // MAX_PANELS together, and the one shown (a panelId or a linkId).
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
-  const [expandedPanelId, setExpandedPanelId] = useState<string | null>(null);
+  const [linkQueue, setLinkQueue] = useState<LinkEntry[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
 
-  // Side panel (Co-pilot | Stories): open by default on wide screens
+  // Side panel (Co-pilot | Inspect): open by default on wide screens
   const side = useSidePanel();
-  const { showStories } = side;
-  // Minimize and close remove the focused control: keep focus in the Stories tab.
-  const storiesRef = useRef<HTMLDivElement>(null);
-  const keepStoriesFocus = useKeepFocus(storiesRef);
+  const { showInspect } = side;
+  // Minimize and close remove the focused control: keep focus in the Inspect tab.
+  const inspectRef = useRef<HTMLDivElement>(null);
+  const keepInspectFocus = useKeepFocus(inspectRef);
 
   const globeControlsRef = useRef<GlobeControls | null>(null);
+  const playRef = useRef<HTMLButtonElement>(null);
 
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
@@ -76,7 +112,8 @@ export default function Home() {
     activeTopic,
   );
   const projectPoint = useCallback(
-    (lat: number, lng: number) => globeControlsRef.current?.project(lat, lng) ?? null,
+    (lat: number, lng: number, altitude?: number) =>
+      globeControlsRef.current?.project(lat, lng, altitude) ?? null,
     [],
   );
   // Conflict images the visitor chose to see: kept for the session, never stored.
@@ -118,23 +155,6 @@ export default function Home() {
     setPanelQueue((prev) => prev.map((p) => (p.panelId === panelId ? { ...p, ...updates } : p)));
   }, []);
 
-  const mapArticles = (
-    apiArticles: Awaited<ReturnType<typeof fetchClusterArticles>>,
-  ): NewsArticle[] =>
-    apiArticles.map((a) => ({
-      id: a.id,
-      title: a.title,
-      summary: a.summary ?? undefined,
-      sourceUrl: a.source_url,
-      sourceName: a.source_name,
-      publishedAt: a.published_at,
-      latitude: a.latitude,
-      longitude: a.longitude,
-      countryCode: a.country_code,
-      topicTags: a.topic_tags,
-      sentimentScore: a.sentiment_score,
-    }));
-
   // Panels read only their own query, fixed at click time (see panelQuery).
   const fetchPanelData = useCallback(
     async (panelId: string, point: GlobePoint, query: PanelQuery) => {
@@ -152,7 +172,7 @@ export default function Home() {
         );
         const page = applyPage(
           { articles: [], count: point.count },
-          mapArticles(apiArticles),
+          apiArticlesToNewsArticles(apiArticles),
           0,
           FIRST_PAGE_LIMIT,
         );
@@ -215,7 +235,7 @@ export default function Home() {
         );
         const page = applyPage(
           { articles: panel.articles, count: panel.point.count },
-          mapArticles(apiArticles),
+          apiArticlesToNewsArticles(apiArticles),
           offset,
           limit,
         );
@@ -241,9 +261,9 @@ export default function Home() {
         (p) =>
           p.point.lat === point.lat && p.point.lng === point.lng && samePanelQuery(p.query, query),
       );
-      showStories();
+      showInspect();
       if (existing) {
-        setExpandedPanelId(existing.panelId);
+        setActiveId(existing.panelId);
         return;
       }
 
@@ -260,22 +280,75 @@ export default function Home() {
         createdAt: Date.now(),
       };
 
-      setPanelQueue((prev) => {
-        let next = [...prev, newEntry];
-        if (next.length > MAX_PANELS) {
-          const oldest = next
-            .filter((p) => p.panelId !== panelId)
-            .sort((a, b) => a.createdAt - b.createdAt)[0];
-          if (oldest) next = next.filter((p) => p.panelId !== oldest.panelId);
-        }
-        return next;
-      });
+      // The oldest place or link closes to make room (MAX_PANELS in all).
+      const evict = recentToEvict(panelQueue, linkQueue);
+      setPanelQueue((prev) => [...prev.filter((p) => p.panelId !== evict), newEntry]);
+      if (evict) setLinkQueue((prev) => prev.filter((l) => l.linkId !== evict));
 
-      setExpandedPanelId(panelId);
+      setActiveId(panelId);
       fetchPanelData(panelId, point, query);
     },
-    [panelQueue, activeTopic, timeWindow, fetchPanelData, showStories],
+    [panelQueue, linkQueue, activeTopic, timeWindow, fetchPanelData, showInspect],
   );
+
+  const updateLink = useCallback((linkId: string, updates: Partial<LinkEntry>) => {
+    setLinkQueue((prev) => prev.map((l) => (l.linkId === linkId ? { ...l, ...updates } : l)));
+  }, []);
+
+  // A link reads only its own query, fixed when it was opened, like a panel.
+  const fetchLinkData = useCallback(
+    async (linkId: string, link: CountryLink, query: PanelQuery) => {
+      try {
+        const api = await fetchLinkDetail({ a: link.a.iso, b: link.b.iso, query });
+        updateLink(linkId, {
+          detail: toLinkDetail(api),
+          detailLoading: false,
+          loadedAt: Date.now(),
+        });
+      } catch {
+        updateLink(linkId, { detailLoading: false, detailError: true });
+      }
+    },
+    [updateLink],
+  );
+
+  // An arc's click opens its link in the Inspect tab (or the one already open
+  // for the same pair, topic and window).
+  const handleLinkOpen = useCallback(
+    (link: CountryLink) => {
+      const query = panelQuery(activeTopic, timeWindow, Date.now());
+      const key = linkKey(link.a.iso, link.b.iso);
+      const existing = linkQueue.find(
+        (l) => linkKey(l.link.a.iso, l.link.b.iso) === key && samePanelQuery(l.query, query),
+      );
+      showInspect();
+      if (existing) {
+        setActiveId(existing.linkId);
+        return;
+      }
+      const createdAt = Date.now();
+      const linkId = `link-${key}-${createdAt}`;
+      const entry: LinkEntry = {
+        linkId,
+        link,
+        query,
+        detail: null,
+        detailLoading: true,
+        explanation: null,
+        explaining: false,
+        createdAt,
+      };
+      const evict = recentToEvict(panelQueue, linkQueue);
+      setLinkQueue((prev) => [...prev.filter((l) => l.linkId !== evict), entry]);
+      if (evict) setPanelQueue((prev) => prev.filter((p) => p.panelId !== evict));
+      setActiveId(linkId);
+      fetchLinkData(linkId, link, query);
+    },
+    [panelQueue, linkQueue, activeTopic, timeWindow, fetchLinkData, showInspect],
+  );
+
+  // Explain this link: one request per link at a time (useLinkExplain).
+  const handleExplain = useLinkExplain(updateLink);
 
   // A dot's click opens its panel. On a touch screen the first tap shows its
   // hover card instead, and a second tap (or the card's Open stories) opens it.
@@ -306,26 +379,28 @@ export default function Home() {
 
   const handleZoomChange = useCallback(() => {}, []);
 
+  // Closing or minimizing works the same for a place and a link (by id).
   const handleClosePanel = useCallback(
-    (panelId: string) => {
-      // Focus goes to the open place's pill, or to the tab when it was this one.
-      keepStoriesFocus(panelId === expandedPanelId ? null : expandedPanelId);
-      setPanelQueue((prev) => prev.filter((p) => p.panelId !== panelId));
-      setExpandedPanelId((prev) => (prev === panelId ? null : prev));
+    (id: string) => {
+      // Focus goes to the open pill, or to the tab when it was this one.
+      keepInspectFocus(id === activeId ? null : activeId);
+      setPanelQueue((prev) => prev.filter((p) => p.panelId !== id));
+      setLinkQueue((prev) => prev.filter((l) => l.linkId !== id));
+      setActiveId((prev) => (prev === id ? null : prev));
     },
-    [expandedPanelId, keepStoriesFocus],
+    [activeId, keepInspectFocus],
   );
 
   const handleMinimizePanel = useCallback(
-    (panelId: string) => {
-      keepStoriesFocus(panelId); // the place stays in Recent places
-      setExpandedPanelId(null);
+    (id: string) => {
+      keepInspectFocus(id); // it stays among the recent pills
+      setActiveId(null);
     },
-    [keepStoriesFocus],
+    [keepInspectFocus],
   );
 
-  const handleExpandPanel = useCallback((panelId: string) => {
-    setExpandedPanelId(panelId);
+  const handleSelectRecent = useCallback((id: string) => {
+    setActiveId(id);
   }, []);
 
   const handleFiltersChange = useCallback(
@@ -335,8 +410,16 @@ export default function Home() {
     [updatePanel],
   );
 
-  // Stories tab: the open places, then the active place's stories
-  const expandedPanel = panelQueue.find((p) => p.panelId === expandedPanelId) ?? null;
+  // Inspect tab: the recent places and links, then the one inspected
+  const expandedPanel = panelQueue.find((p) => p.panelId === activeId) ?? null;
+  const activeLink = linkQueue.find((l) => l.linkId === activeId) ?? null;
+  const inspectedLink = activeLink ? linkKey(activeLink.link.a.iso, activeLink.link.b.iso) : null;
+
+  // The arc pill names the hovered arc, else the inspected one, while it is drawn.
+  const drawn = (key: string | null) =>
+    key === null ? null : (links.find((l) => linkKey(l.a.iso, l.b.iso) === key) ?? null);
+  const pillLink =
+    drawn(hoveredLink && linkKey(hoveredLink.a.iso, hoveredLink.b.iso)) ?? drawn(inspectedLink);
 
   // Co-pilot: "Show stories here" takes the click path for the dot at an action's place.
   const showStoriesFor = useCallback(
@@ -346,15 +429,34 @@ export default function Home() {
     },
     [points, handlePointClick],
   );
-  const storiesTab = (
+  // Co-pilot: "Show links" turns the Links layer on when an answer's places
+  // are in two or more countries (by the globe's dots there) and it is off.
+  const showLinksFor = useCallback(
+    (actions: GlobeAction[]) =>
+      actionCountries(actions, points).length >= 2
+        ? { on: linksOn, turnOn: () => setLinksOn(true) }
+        : null,
+    [linksOn, points],
+  );
+
+  const inspectTab = (
     <>
       <RecentPlaces
         places={panelQueue}
-        activeId={expandedPanelId}
-        onSelect={handleExpandPanel}
+        links={linkQueue}
+        activeId={activeId}
+        onSelect={handleSelectRecent}
         onClose={handleClosePanel}
       />
-      {expandedPanel ? (
+      {activeLink ? (
+        <LinkInspector
+          key={activeLink.linkId}
+          entry={activeLink}
+          onClose={() => handleClosePanel(activeLink.linkId)}
+          onMinimize={() => handleMinimizePanel(activeLink.linkId)}
+          onExplain={() => handleExplain(activeLink)}
+        />
+      ) : expandedPanel ? (
         <NewsPanel
           key={expandedPanel.panelId}
           point={{ ...expandedPanel.point, articles: expandedPanel.articles }}
@@ -372,11 +474,17 @@ export default function Home() {
           }
         />
       ) : (
-        <p className="side-empty">
-          {panelQueue.length > 0
-            ? "Pick a place above, or click a dot on the globe."
-            : "Click a dot on the globe to see its stories here."}
-        </p>
+        <>
+          <p className="side-empty">
+            {panelQueue.length + linkQueue.length > 0
+              ? "Pick one above, or click a dot on the globe."
+              : "Click a dot on the globe to see its stories here."}
+          </p>
+          {/* With Links on, its links: open one without pointing at its arc. */}
+          {linksOn && (
+            <LinkList links={links} rank={linkRank} status={linksNote} onOpen={handleLinkOpen} />
+          )}
+        </>
       )}
     </>
   );
@@ -398,9 +506,14 @@ export default function Home() {
         }}
         reduced={reduced}
         lowPower={lowPower}
+        touch={touch}
         layer={globeLayer}
         holdHeatmap={replaying || loading}
         replaying={replaying}
+        links={links}
+        inspectedLink={inspectedLink}
+        onArcHover={setHoveredLink}
+        onArcClick={handleLinkOpen}
       />
 
       {/* Orbital rings around the globe */}
@@ -415,6 +528,9 @@ export default function Home() {
         docked={touch}
         reduced={reduced}
       />
+
+      {/* The hovered arc's pill, over the globe and under the chrome */}
+      <ArcPill link={pillLink} project={projectPoint} touch={touch} />
 
       {/* Top bar: brand, topics, status and About in one grid */}
       <TopBar
@@ -432,8 +548,8 @@ export default function Home() {
         onTabChange={side.setTab}
         open={side.open}
         onOpenChange={side.setOpen}
-        storiesCount={panelQueue.length}
-        storiesRef={storiesRef}
+        inspectCount={panelQueue.length + linkQueue.length}
+        inspectRef={inspectRef}
         copilot={
           <CoPilot
             messages={agentMessages}
@@ -451,9 +567,10 @@ export default function Home() {
             onCitationClick={handleCitationClick}
             onFlyTo={handleGlobeAction}
             showStoriesFor={showStoriesFor}
+            showLinksFor={showLinksFor}
           />
         }
-        stories={storiesTab}
+        inspect={inspectTab}
       />
 
       {/* Bottom row: layers and the timeline, centred on the page. After the side
@@ -463,7 +580,22 @@ export default function Home() {
           layer={globeLayer}
           onChange={setLayer}
           unavailable={lowPower ? { intensity: "Intensity is off in low-power mode" } : undefined}
+          links={linksOn}
+          onLinksChange={setLinksOn}
+          rank={linkRank}
+          onRankChange={setLinkRank}
+          linksStatus={linksNote}
         />
+        {/* Where the layers are hidden (phones), Links has a chip of its own. */}
+        {linksOn && (
+          <LinksChip
+            status={linksNote}
+            onOff={() => {
+              setLinksOn(false);
+              playRef.current?.focus(); // the chip goes: the focus moves on, not to the page
+            }}
+          />
+        )}
         <TimelineCapsule
           timeWindow={timeWindow}
           onChange={changeWindow}
@@ -471,12 +603,15 @@ export default function Home() {
           stories={points.reduce((sum, p) => sum + p.count, 0)}
           places={points.length}
           reduced={reduced}
+          playRef={playRef}
         />
       </BottomBar>
 
-      {/* The hover card's label for screen readers: always present, so a new label is read */}
+      {/* For screen readers, always present so each new message is read: the hover
+          card's label, and the Links status. Each in its own node, read when it changes. */}
       <p className="sr-only" aria-live="polite" data-testid="hover-announcer">
-        {cardPoint ? cardLabel(cardPoint) : ""}
+        <span>{cardPoint ? cardLabel(cardPoint) : ""}</span>
+        <span>{linksNote ?? ""}</span>
       </p>
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}
@@ -492,6 +627,7 @@ export default function Home() {
           revealed={revealed}
           onReveal={revealImage}
           docked={touch}
+          linkedCountries={linksOn ? linkedCountries(links, cardPoint.countryCode) : null}
           onOpen={() => {
             dismissCard();
             handlePointClick(cardPoint);

@@ -1,7 +1,10 @@
 import type { PanelQuery, Topic } from "@/types/news";
-import { windowBounds, type TimeWindow } from "@/lib/timeWindow";
+import { windowBounds, windowLabel, type TimeWindow } from "@/lib/timeWindow";
 
-/** Places open at once in the Stories tab (Recent places); a new one closes the oldest. */
+/**
+ * Places and links open at once in the Inspect tab (its recent pills); a new
+ * one closes the oldest.
+ */
 export const MAX_PANELS = 5;
 
 /**
@@ -34,4 +37,27 @@ export function samePanelQuery(a: PanelQuery, b: PanelQuery): boolean {
   if (a.topic !== b.topic || a.live !== b.live) return false;
   if (a.live) return a.hours === b.hours;
   return a.startTime === b.startTime && a.endTime === b.endTime;
+}
+
+/**
+ * The place or link to close so one more can open: the oldest of them once
+ * MAX_PANELS are open, else null.
+ */
+export function recentToEvict(
+  places: readonly { panelId: string; createdAt: number }[],
+  links: readonly { linkId: string; createdAt: number }[],
+): string | null {
+  if (places.length + links.length < MAX_PANELS) return null;
+  const all = [
+    ...places.map((p) => ({ id: p.panelId, createdAt: p.createdAt })),
+    ...links.map((l) => ({ id: l.linkId, createdAt: l.createdAt })),
+  ];
+  return all.reduce((oldest, r) => (r.createdAt < oldest.createdAt ? r : oldest)).id;
+}
+
+/** The window a panel or link was opened on, in words: "last 24 h", "last 7 days" or its range. */
+export function queryWindowWords(query: PanelQuery): string {
+  const w = queryWindow(query);
+  if (w.kind === "range") return windowLabel(w);
+  return w.hours === 168 ? "last 7 days" : `last ${w.hours} h`;
 }

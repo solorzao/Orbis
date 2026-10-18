@@ -98,18 +98,18 @@ describe("useSidePanel", () => {
     expect(result.current.open).toBe(false);
   });
 
-  it("showStories switches to Stories and opens the panel", () => {
+  it("showInspect switches to Inspect and opens the panel", () => {
     wide = false;
     const { result } = renderHook(() => useSidePanel());
-    act(() => result.current.showStories());
-    expect(result.current.tab).toBe("stories");
+    act(() => result.current.showInspect());
+    expect(result.current.tab).toBe("inspect");
     expect(result.current.open).toBe(true);
   });
 
   it("setTab switches tabs", () => {
     const { result } = renderHook(() => useSidePanel());
-    act(() => result.current.setTab("stories"));
-    expect(result.current.tab).toBe("stories");
+    act(() => result.current.setTab("inspect"));
+    expect(result.current.tab).toBe("inspect");
     act(() => result.current.setTab("copilot"));
     expect(result.current.tab).toBe("copilot");
   });
@@ -117,7 +117,7 @@ describe("useSidePanel", () => {
   it("reads the media query once", () => {
     const { result, rerender } = renderHook(() => useSidePanel());
     rerender();
-    act(() => result.current.setTab("stories"));
+    act(() => result.current.setTab("inspect"));
     resize(false);
     expect(window.matchMedia).toHaveBeenCalledTimes(1);
   });

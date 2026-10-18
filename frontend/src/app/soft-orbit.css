@@ -536,7 +536,7 @@ kbd {
   cursor: pointer;
 }
 
-/* Stories tab: recent places, then a place's stories (mockup .insp, .art, lines 357-372) */
+/* Inspect tab: recent places and links, then a place's stories (mockup .insp, .art, lines 357-372) */
 .places {
   display: flex;
   flex-wrap: wrap;
@@ -713,6 +713,97 @@ kbd {
 }
 .insp-more .pill:disabled {
   opacity: 0.6;
+}
+
+/* Link inspector (mockup inspectHTML, link branch; .readouts and .ro, lines 357-372) */
+.insp-kicker {
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.insp-kicker span + span::before {
+  content: "·";
+  margin-right: 8px;
+}
+.insp-amp {
+  color: var(--text-muted);
+  margin: 0 2px;
+}
+.insp-lead {
+  margin: 6px 0 0;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.readouts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.ro {
+  min-width: 0;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.ro > span {
+  display: block;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.ro b {
+  display: block;
+  font: var(--type-data-lg);
+  font-weight: 300;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ro b.ro-text {
+  font: var(--type-body-sm);
+}
+.pill-theme {
+  border-style: dashed;
+}
+.insp-list-lbl {
+  padding: 10px 12px 2px;
+}
+/* The links on the globe, in the empty Inspect tab: each row opens one. */
+.link-list {
+  margin: 0 8px;
+}
+.link-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.link-row:focus-visible {
+  outline-offset: -2px; /* inside the row: the list's label sits right above it */
+}
+.insp-note {
+  margin: 0 0 10px;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.link-explain .insp-ai {
+  margin-bottom: 10px;
+}
+.link-explain .aurora-btn .ai {
+  margin: 0;
+  color: inherit;
+  background: color-mix(in srgb, var(--accent-on) 18%, transparent);
+}
+.link-explain .aurora-btn {
+  cursor: pointer;
+}
+.link-explain .aurora-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+@media (max-width: 420px) {
+  .readouts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .skel {
   display: block;
@@ -1045,6 +1136,7 @@ button.cite:hover {
   border-radius: var(--radius-pill);
   font: var(--type-label);
   color: var(--text-muted);
+  cursor: pointer;
 }
 .layers .tg::before {
   content: "";
@@ -1060,6 +1152,113 @@ button.cite:hover {
   border: 0;
   background: linear-gradient(120deg, var(--accent-primary), var(--accent-lavender));
   box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+.layers .tg:hover {
+  color: var(--text-primary);
+}
+/*
+ * From 1180px the layers share the bottom row with the 640px capsule, centred
+ * on the page; just above 1180 the row's side tracks are about 222px, so the
+ * pill tightens there to leave the capsule its width and place.
+ */
+@media (1180px <= width < 1280px) {
+  .layers .seg button,
+  .layers .tg {
+    padding: 0 10px;
+  }
+  .layers .tg {
+    gap: 5px;
+  }
+  .layers .sep {
+    margin: 0;
+  }
+}
+/*
+ * The layers and, while Links is on, its rank switch: a pill of its own that
+ * floats 12px above the layers (beside them once they stack over the
+ * timeline, below 1180px), so the bottom row keeps its size.
+ */
+.layer-dock {
+  position: relative;
+}
+.link-rank {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px);
+}
+.link-rank .seg {
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.link-rank .seg button {
+  cursor: pointer;
+  white-space: nowrap;
+}
+/*
+ * Links' status when it draws nothing, quiet: above the rank switch (whose
+ * pill is 40px: 26px buttons, 6px padding, 1px border), 12px apart.
+ */
+.links-status {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px + 40px + 12px);
+  margin: 0;
+  height: 32px;
+  padding: 0 14px;
+  font: var(--type-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+/* Links' chip where the layers are hidden (phones): shown from 760px down. */
+.links-chip {
+  display: none;
+  padding: 0 14px;
+  gap: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.links-chip-status {
+  color: var(--text-secondary);
+}
+
+/*
+ * The pill that names a link at its arc's top (mockup .arc-pill); ArcPill
+ * places it. Opaque (the glass tint over the page colour), so an arc running
+ * behind it can't cross its words.
+ */
+.arc-pill {
+  position: fixed;
+  z-index: var(--z-reticle);
+  transform: translate(-50%, -50%);
+  pointer-events: none; /* the arc beneath stays hoverable and clickable */
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(var(--surface-glass), var(--surface-glass)), var(--bg-page);
+  border: 1px solid var(--border-default);
+  font: var(--type-label);
+  color: var(--text-primary);
+  white-space: nowrap;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--arc-highlight) 15%, transparent),
+    var(--elev-float);
+}
+.arc-pill .num {
+  font: var(--type-data-sm);
+  color: var(--accent-strong);
+}
+.arc-pill:not([data-placed]) {
+  visibility: hidden;
+}
+/* A touch screen can't hover an arc (as the hover card, useTouchOnly): no pill. */
+@media (hover: none) {
+  .arc-pill {
+    display: none;
+  }
 }
 
 /*
@@ -1409,6 +1608,10 @@ button.cite:hover {
 :is(.recon, .rc) .foot .pill {
   cursor: pointer;
 }
+:is(.recon, .rc) .foot .foot-links {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
 
 /*
  * Bottom row: layers | timeline | (surges, PR 14), one grid so the tracks
@@ -1437,7 +1640,7 @@ button.cite:hover {
   pointer-events: auto;
   min-width: 0;
 }
-.bottombar .layers {
+.bottombar .layer-dock {
   grid-column: 1;
   justify-self: start;
   margin-bottom: 4px; /* mockup: 24px from the bottom, the capsule 20px */
@@ -1448,8 +1651,11 @@ button.cite:hover {
 }
 /* Narrow: no chart, story count or layers; the play button, label and presets stay. */
 @media (max-width: 760px) {
-  .bottombar .layers {
+  .bottombar .layer-dock {
     display: none;
+  }
+  .bottombar .links-chip {
+    display: inline-flex;
   }
   .timeline {
     height: 64px;
@@ -1525,13 +1731,25 @@ button.cite:hover {
     row-gap: 12px; /* regions keep 12px apart */
     transition: bottom var(--dur-slow) var(--ease-out);
   }
-  .bottombar .layers,
+  .bottombar .layer-dock,
   .bottombar .timeline {
     grid-column: 1;
   }
-  .bottombar .layers {
+  .bottombar .layer-dock {
     justify-self: center;
     margin-bottom: 0;
+  }
+  /* The layers stack centred over the timeline: the rank switch and status go beside them. */
+  .link-rank {
+    left: calc(100% + 12px);
+    bottom: 50%;
+    transform: translateY(50%);
+  }
+  .links-status {
+    left: auto;
+    right: calc(100% + 12px);
+    bottom: 50%;
+    transform: translateY(50%);
   }
 }
 @media (max-width: 639px) {

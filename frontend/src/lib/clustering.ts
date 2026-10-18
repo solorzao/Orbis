@@ -1,5 +1,5 @@
 import { NewsArticle, GlobeLead, GlobePoint, Topic } from "@/types/news";
-import type { ApiGlobePoint } from "./api";
+import type { ApiGlobePoint, ApiNewsArticle } from "./api";
 
 // Canvas colours can't be CSS variables, so these copy the Soft Orbit tokens
 // (--topic-*, --sentiment-*); clustering.test.ts fails if they drift.
@@ -140,12 +140,15 @@ const API_TOPIC_MAP: Record<string, Topic> = {
   health: "Health",
 };
 
-function mapApiTopic(apiTopic: string): Topic {
+/** An article tag's topic pill (Climate is "environment"), or All for any other tag. */
+export function mapApiTopic(apiTopic: string): Topic {
   return API_TOPIC_MAP[apiTopic.toLowerCase()] ?? "All";
 }
 
 /** A place's topic mix by topic pill: tags outside the six are left out. */
-function mapTopicMix(mix: Record<string, number> | undefined): Partial<Record<Topic, number>> {
+export function mapTopicMix(
+  mix: Record<string, number> | undefined,
+): Partial<Record<Topic, number>> {
   const out: Partial<Record<Topic, number>> = {};
   for (const [tag, count] of Object.entries(mix ?? {})) {
     const topic = API_TOPIC_MAP[tag.toLowerCase()];
@@ -183,5 +186,23 @@ export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[]
     lead: mapLead(p.lead),
     topicMix: mapTopicMix(p.topic_mix),
     tone: p.tone ?? 0,
+  }));
+}
+
+/** Stories as the API sends them (/api/news/cluster, /api/links/detail), for the panels. */
+export function apiArticlesToNewsArticles(apiArticles: readonly ApiNewsArticle[]): NewsArticle[] {
+  return apiArticles.map((a) => ({
+    id: a.id,
+    title: a.title,
+    summary: a.summary ?? undefined,
+    sourceUrl: a.source_url,
+    sourceName: a.source_name,
+    publishedAt: a.published_at,
+    latitude: a.latitude,
+    longitude: a.longitude,
+    countryCode: a.country_code,
+    region: a.region,
+    topicTags: a.topic_tags,
+    sentimentScore: a.sentiment_score,
   }));
 }

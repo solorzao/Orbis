@@ -10,14 +10,14 @@ import {
 } from "@/hooks/useAgent";
 import { windowBounds, windowLabel, type TimeWindow } from "@/lib/timeWindow";
 import type { Topic } from "@/types/news";
-import AgentMessage from "./AgentMessage";
+import AgentMessage, { type LinksAction } from "./AgentMessage";
 
 /** Within this of the bottom, the log follows new messages. */
 const FOLLOW_SLACK_PX = 24;
 
 /** What the visitor sees, live: the co-pilot's context pills read it. */
 export interface ScreenContext {
-  /** The place open in the Stories tab, e.g. "Madrid, Spain". */
+  /** The place open in the Inspect tab, e.g. "Madrid, Spain". */
   place?: string;
   topic: Topic;
   window: TimeWindow;
@@ -68,8 +68,10 @@ interface CoPilotProps {
   onClear: () => void;
   onCitationClick: (citation: Citation) => void;
   onFlyTo: (action: GlobeAction) => void;
-  /** Opens the Stories tab at an action's place, or null when the globe has no dot there. */
+  /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
+  /** Show links for an answer's places (Links' state and how to turn it on), or null. */
+  showLinksFor?: (actions: GlobeAction[]) => LinksAction | null;
 }
 
 /**
@@ -89,6 +91,7 @@ export default function CoPilot({
   onCitationClick,
   onFlyTo,
   showStoriesFor,
+  showLinksFor,
 }: CoPilotProps) {
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -210,6 +213,7 @@ export default function CoPilot({
             onCitationClick={onCitationClick}
             onFlyTo={onFlyTo}
             showStoriesFor={showStoriesFor}
+            showLinksFor={showLinksFor}
           />
         ))}
       </div>

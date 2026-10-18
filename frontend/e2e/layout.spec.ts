@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { CAIRO, PARIS, hoverPlace, mockAllApiRoutes, withCairo } from "./fixtures";
+import { CAIRO, MOCK_LINKS_LIFT, PARIS, hoverPlace, mockAllApiRoutes, withCairo } from "./fixtures";
 
 const SIZES = [
   { width: 1920, height: 1080 },
@@ -37,15 +37,35 @@ function regionsAt(width: number, side: "side-panel" | "side-open" = "side-panel
 
 type Box = { id: string; x: number; y: number; w: number; h: number };
 
-async function boxes(page: Page, ids: string[]) {
-  const out: Box[] = [];
-  for (const id of ids) {
-    const el = page.getByTestId(id);
-    if (!(await el.isVisible())) continue;
-    const b = await el.boundingBox();
-    if (b) out.push({ id, x: b.x, y: b.y, w: b.width, h: b.height });
-  }
-  return out;
+/**
+ * The shown regions' boxes, as Playwright's isVisible and boundingBox report
+ * them (shown: a non-empty box, not visibility: hidden; one element per test
+ * id), measured in one call into the page. On a busy CI runner each call can
+ * take a second or more, and two per region pushed whole tests past 30 s.
+ */
+async function boxes(page: Page, ids: string[]): Promise<Box[]> {
+  return page.evaluate((ids) => {
+    const out: { id: string; x: number; y: number; w: number; h: number }[] = [];
+    for (const id of ids) {
+      const found = document.querySelectorAll(`[data-testid="${id}"]`);
+      if (found.length > 1) throw new Error(`${found.length} elements for test id ${id}`);
+      const el = found[0];
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0 || getComputedStyle(el).visibility === "hidden") continue;
+      out.push({ id, x: r.x, y: r.y, w: r.width, h: r.height });
+    }
+    return out;
+  }, ids);
+}
+
+/** Turn the Links layer on and wait until its arcs are drawn: its ready signal. */
+async function linksOn(page: Page) {
+  await page.getByRole("button", { name: "Links", exact: true }).click();
+  await expect(page.getByTestId("globe")).toHaveAttribute(
+    "data-arcs",
+    String(MOCK_LINKS_LIFT.length),
+  );
 }
 
 const GAP = 12;
@@ -186,7 +206,7 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     await expectRowAboveSheet();
 
     // A tab opens it (46vh where there is room), and the bottom row moves up with it.
-    await page.getByTestId("side-tab-stories").click();
+    await page.getByTestId("side-tab-inspect").click();
     await expect(side).toHaveAttribute("data-open", "true");
     box = (await side.boundingBox())!;
     expect(Math.abs(box.height - openSheetHeight(size))).toBeLessThan(1);
@@ -196,7 +216,7 @@ for (const size of SIZES.filter((s) => s.width < SHEET_BELOW)) {
     // And folds back to its tab bar, keeping focus on its button (no pill to move to).
     await page.getByTestId("side-collapse").click();
     await expect(side).toHaveAttribute("data-open", "false");
-    await expect(page.getByTestId("side-tab-stories")).toBeVisible();
+    await expect(page.getByTestId("side-tab-inspect")).toBeVisible();
     await expect(page.getByTestId("side-collapse")).toBeFocused();
   });
 }
@@ -222,10 +242,78 @@ for (const size of SIZES.filter((s) => s.width === 1440 || s.width === 1280)) {
   }
 }
 
+// While Links is on, its rank switch floats beside the layers (above them in the
+// bottom row, to their right once they stack over the capsule): a region of its
+// own that must not move the capsule or touch anything.
+for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
+  test(`the Links rank switch keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await settle(page, size);
+    const before = (await page.getByTestId("layer-switcher").boundingBox())!;
+    await linksOn(page);
+    await expect(page.getByTestId("link-rank")).toBeVisible();
+    const regions = [...regionsAt(size.width), "link-rank"];
+    const b = await expectApart(page, size.width, "Links on", regions);
+    // The layers keep their box, so the capsule keeps its place.
+    expect(b["layer-switcher"]).toMatchObject({ x: before.x, y: before.y, w: before.width });
+    expectCentred(b["timeline"], size.width, "Links on");
+    if (size.width < SHEET_BELOW) {
+      await page.getByTestId("side-collapse").click();
+      await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+      await expectApart(page, size.width, "Links on, sheet open", regions);
+    }
+  });
+}
+
+// With Links on in an empty window, its status floats with the rank switch (above it
+// from 1180px, left of the layers once they stack): regions that must keep apart too.
+for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
+  test(`the Links status keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await settle(page, size, (p) =>
+      p.route(
+        (url) => url.pathname === "/api/links",
+        (route) => route.fulfill({ json: [] }),
+      ),
+    );
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await expect(page.getByTestId("links-status")).toBeVisible();
+    const regions = [...regionsAt(size.width), "link-rank", "links-status"];
+    const b = await expectApart(page, size.width, "Links status", regions);
+    expectCentred(b["timeline"], size.width, "Links status");
+    if (size.width < SHEET_BELOW) {
+      await page.getByTestId("side-collapse").click();
+      await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+      await expectApart(page, size.width, "Links status, sheet open", regions);
+    }
+  });
+}
+
+// Where the layers are hidden, Links on brings a Links ✕ chip above the capsule.
+for (const size of SIZES.filter((s) => s.width <= NARROW_MAX)) {
+  test(`the Links chip keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({ page }) => {
+    // Turn Links on where the layers show, then narrow the window.
+    await settle(page, { width: 800, height: size.height });
+    await linksOn(page);
+    await page.setViewportSize(size);
+    const chip = page.getByTestId("links-chip");
+    await expect(chip).toBeVisible();
+    const regions = [...regionsAt(size.width), "links-chip"];
+    const b = await expectApart(page, size.width, "Links chip", regions);
+    expect(b["timeline"].y - (b["links-chip"].y + b["links-chip"].h)).toBeCloseTo(GAP, 0);
+    expect(b["links-chip"].x + b["links-chip"].w / 2).toBeCloseTo(size.width / 2, 0);
+    await page.getByTestId("side-collapse").click();
+    await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+    await expectApart(page, size.width, "Links chip, sheet open", regions);
+  });
+}
+
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {
   const size = { width: 900, height: 300 }; // 100vh - 260px would be 40px
   await settle(page, size);
-  await page.getByTestId("side-tab-stories").click();
+  await page.getByTestId("side-tab-inspect").click();
   const side = page.getByTestId("side-panel");
   await expect(side).toHaveAttribute("data-open", "true");
   const box = (await side.boundingBox())!;

@@ -143,3 +143,39 @@ export function hexToRgba(hex: string, alpha: number): string {
   const n = parseInt(hex.trim().replace("#", ""), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
+
+/** A CSS colour (hex, rgb() or rgba()) as [r, g, b, alpha], or null. */
+function channels(value: string): number[] | null {
+  const v = value.trim().toLowerCase();
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(v);
+  if (hex) {
+    const h = hex[1];
+    const pairs = h.length <= 4 ? [...h].map((c) => c + c) : (h.match(/../g) as RegExpMatchArray);
+    const [r, g, b, a = "ff"] = pairs;
+    return [r, g, b].map((x) => parseInt(x, 16)).concat(parseInt(a, 16) / 255);
+  }
+  const fn = /^rgba?\(([^)]*)\)$/.exec(v);
+  if (fn) {
+    const parts = fn[1]
+      .split(/[\s,/]+/)
+      .filter(Boolean)
+      .map(Number);
+    if (parts.length >= 3 && parts.every(Number.isFinite)) {
+      return [...parts.slice(0, 3), parts[3] ?? 1];
+    }
+  }
+  return null;
+}
+
+/**
+ * A CSS colour token as "rgba(r,g,b,a)" with whole-number channels, the one
+ * form three-globe reads alpha from (its arcs). The CSS build minifies
+ * rgba() tokens to 8-digit hex, which three.js parses as white. A value it
+ * can't read gives the fallback's.
+ */
+export function canvasColor(value: string, fallback: string): string {
+  const c = channels(value) ?? channels(fallback) ?? [255, 255, 255, 1];
+  const [r, g, b] = c.slice(0, 3).map((x) => Math.round(Math.min(255, Math.max(0, x))));
+  const a = Math.round(Math.min(1, Math.max(0, c[3])) * 1000) / 1000;
+  return `rgba(${r},${g},${b},${a})`;
+}
