@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FocusEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent } from "react";
 import { outletsLabel, type BreakingStory } from "@/lib/breaking";
 import { useWideScreen } from "@/hooks/useSidePanel";
 
@@ -48,18 +48,27 @@ export default function BreakingTicker({ stories, reduced, onOpen }: BreakingTic
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const wide = useWideScreen();
+  const sectionRef = useRef<HTMLElement>(null);
   const n = stories.length;
   const found = stories.findIndex((s) => s.headline === shown);
   const index = found >= 0 ? found : 0;
 
-  // Nothing to move on to, or hidden: a pointer or focus it had is gone
-  // without a mouseleave or blur (its buttons unmount), so the pause ends.
+  // Nothing to move on to, or hidden: a pointer it had may be gone without a
+  // mouseleave (the ticker unmounts), so the hover pause ends.
   const turns = n > 1 && wide;
-  if (!turns && (hovered || focused)) {
-    setHovered(false);
-    setFocused(false);
-  }
+  if (!turns && hovered) setHovered(false);
   const rotating = turns && !reduced && !hovered && !focused;
+
+  // The focus pause follows where the focus is once the stories (or the
+  // width) change: an arrow that unmounts takes it away without a blur, but
+  // the item, which stays, keeps it. Before paint, so the live region and the
+  // timer never act on a stale pause.
+  useLayoutEffect(() => {
+    const el = sectionRef.current;
+    // Focus fires no event when its element unmounts: the DOM is the only source.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFocused(el !== null && el.contains(document.activeElement));
+  }, [n, wide]);
 
   const show = (i: number) => setShown(stories[(i + n) % n]?.headline ?? null);
 
@@ -78,6 +87,7 @@ export default function BreakingTicker({ stories, reduced, onOpen }: BreakingTic
 
   return (
     <section
+      ref={sectionRef}
       className="pillbar breaking"
       data-testid="breaking-ticker"
       aria-label="Breaking stories"

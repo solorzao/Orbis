@@ -197,4 +197,26 @@ describe("BreakingTicker", () => {
     act(() => void vi.advanceTimersByTime(ROTATE_MS));
     expect(item()).toHaveTextContent("Riot police clear Paris square");
   });
+
+  it("stays paused while the item keeps the focus as the stories change", () => {
+    const { rerender, onOpen } = renderTicker();
+    act(() => item().focus());
+    // Down to one story: the arrows go, the item keeps the focus.
+    rerender(<BreakingTicker stories={[STORIES[0]]} reduced={false} onOpen={onOpen} />);
+    expect(item()).toHaveFocus();
+    rerender(<BreakingTicker stories={STORIES} reduced={false} onOpen={onOpen} />);
+    act(() => void vi.advanceTimersByTime(ROTATE_MS * 2));
+    expect(item()).toHaveTextContent(LONG);
+    expect(screen.getByTestId("breaking-live")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("doesn't stay paused by a focus the stories took away", () => {
+    const { rerender, onOpen } = renderTicker();
+    act(() => screen.getByRole("button", { name: "Next breaking story" }).focus());
+    // Down to one story: the arrows go, and the focus with them (no blur).
+    rerender(<BreakingTicker stories={[STORIES[0]]} reduced={false} onOpen={onOpen} />);
+    rerender(<BreakingTicker stories={STORIES} reduced={false} onOpen={onOpen} />);
+    act(() => void vi.advanceTimersByTime(ROTATE_MS));
+    expect(item()).toHaveTextContent("Riot police clear Paris square");
+  });
 });
