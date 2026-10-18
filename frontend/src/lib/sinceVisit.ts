@@ -3,6 +3,8 @@
  * it counts from as the server floors it, and what it says.
  */
 import { HOUR_MS, type TimeWindow } from "@/lib/timeWindow";
+import { dotInCell } from "@/lib/cells";
+import type { GlobePoint } from "@/types/news";
 
 const MIN_MS = 60_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -69,13 +71,26 @@ export function sinceSummary(
   return `${ago} since your visit: ${parts.join(", ")}.`;
 }
 
-/** Show: the time window from the last visit to now. */
+/** Show: the time window from the last visit, floored as the strip's counts are, to now. */
 export function sinceRange(lastVisit: number, now: number): TimeWindow {
   return {
     kind: "range",
-    startTime: new Date(lastVisit).toISOString(),
+    startTime: new Date(floorSince(lastVisit, now)).toISOString(),
     endTime: new Date(now).toISOString(),
   };
+}
+
+/**
+ * The dot that opens a top place: the globe's dot in its cell, else a
+ * stand-in counting its new stories (dotInCell).
+ */
+export function sinceDot(points: readonly GlobePoint[], place: SincePlace): GlobePoint {
+  return dotInCell(points, {
+    lat: place.lat,
+    lng: place.lng,
+    place: place.place,
+    count: place.new,
+  });
 }
 
 /** sessionStorage: the strip dismissed for this session. */

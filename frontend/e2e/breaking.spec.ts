@@ -4,6 +4,7 @@ import {
   gotoStillGlobe,
   isBreaking,
   mockAllApiRoutes,
+  sampleRings,
   withBreaking,
 } from "./fixtures";
 
@@ -74,15 +75,6 @@ test.describe("Breaking ticker", () => {
     await expect(ticker(page)).toHaveCount(0);
   });
 
-  test("rings the breaking places", async ({ page }) => {
-    await gotoStillGlobe(page, withBreaking);
-    await expect(ticker(page)).toBeVisible();
-    await expect(page.getByTestId("globe")).toHaveAttribute(
-      "data-rings",
-      String(MOCK_BREAKING.length),
-    );
-  });
-
   test("refetches for a topic pill", async ({ page }) => {
     const asked: (string | null)[] = [];
     await gotoStillGlobe(page, (p) =>
@@ -110,22 +102,55 @@ test.describe("Breaking ticker", () => {
 test.describe("Breaking rings and motion", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  for (const [what, lowPower, reduced, repeat] of [
-    ["pulse with full motion and full power", "0", false, "2500"],
-    ["hold still with reduced motion", "0", true, "0"],
-    ["hold still in low-power mode", "1", false, "0"],
+  /** Load the globe with three stories breaking, in low-power mode or not. */
+  async function load(page: Page, lowPower: "0" | "1", reduced: boolean) {
+    await page.addInitScript((v) => localStorage.setItem("orbis-low-power", v), lowPower);
+    if (reduced) await page.emulateMedia({ reducedMotion: "reduce" });
+    await mockAllApiRoutes(page);
+    await withBreaking(page);
+    await page.goto("/");
+    await expect(ticker(page)).toBeVisible();
+    // The globe is built (its ring settings applied) before anything counts its rings.
+    await expect(page.getByTestId("globe")).toHaveAttribute("data-ring-repeat", /^\d+$/);
+  }
+
+  test("the rings pulse at the breaking places with full motion and full power", async ({
+    page,
+  }) => {
+    await load(page, "0", false);
+    const globe = page.getByTestId("globe");
+    await expect(globe).toHaveAttribute("data-rings", String(MOCK_BREAKING.length));
+    await expect(globe).toHaveAttribute("data-ring-repeat", "2500");
+    expect(Math.max(...(await sampleRings(page)))).toBeGreaterThan(0);
+  });
+
+  for (const [what, lowPower, reduced] of [
+    ["reduced motion", "0", true],
+    ["low-power mode", "1", false],
   ] as const) {
-    test(`the rings ${what}`, async ({ page }) => {
-      await page.addInitScript((v) => localStorage.setItem("orbis-low-power", v), lowPower);
-      if (reduced) await page.emulateMedia({ reducedMotion: "reduce" });
-      await mockAllApiRoutes(page);
-      await withBreaking(page);
-      await page.goto("/");
+    test(`with ${what} no ring is drawn, not even once`, async ({ page }) => {
+      await load(page, lowPower, reduced);
       const globe = page.getByTestId("globe");
-      await expect(globe).toHaveAttribute("data-rings", String(MOCK_BREAKING.length));
-      await expect(globe).toHaveAttribute("data-ring-repeat", repeat);
+      await expect(globe).toHaveAttribute("data-ring-repeat", "0");
+      await expect(globe).toHaveAttribute("data-rings", "0");
+      expect(await sampleRings(page)).toEqual(new Array(8).fill(0));
     });
   }
+
+  test("turning low power off brings the rings back at once", async ({ page }) => {
+    await load(page, "1", false);
+    await expect(page.getByTestId("globe")).toHaveAttribute("data-rings", "0");
+    expect(await sampleRings(page, 3)).toEqual([0, 0, 0]);
+    // As another tab (or the settings) would: the stored preference changes.
+    await page.evaluate(() => {
+      localStorage.setItem("orbis-low-power", "0");
+      window.dispatchEvent(new StorageEvent("storage", { key: "orbis-low-power" }));
+    });
+    const globe = page.getByTestId("globe");
+    await expect(globe).toHaveAttribute("data-ring-repeat", "2500");
+    await expect(globe).toHaveAttribute("data-rings", String(MOCK_BREAKING.length));
+    expect(Math.max(...(await sampleRings(page)))).toBeGreaterThan(0);
+  });
 });
 
 test.describe("Breaking on narrow screens", () => {

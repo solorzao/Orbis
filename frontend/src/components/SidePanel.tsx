@@ -20,6 +20,8 @@ interface SidePanelProps {
   inspectCount?: number;
   /** The Inspect tab panel, where focus lands when a place's controls go (useKeepFocus). */
   inspectRef?: Ref<HTMLDivElement>;
+  /** The Co-pilot tab panel, where focus lands when its callout is dismissed. */
+  copilotRef?: Ref<HTMLDivElement>;
 }
 
 /** False when CSS hides the element (the reopen pill is hidden on the sheet). */
@@ -46,6 +48,7 @@ export default function SidePanel({
   inspect,
   inspectCount = 0,
   inspectRef,
+  copilotRef,
 }: SidePanelProps) {
   const id = useId();
   const tabId = (t: SideTab) => `${id}-tab-${t}`;
@@ -154,7 +157,7 @@ export default function SidePanel({
         {TABS.map((t) => (
           <div
             key={t.id}
-            ref={t.id === "inspect" ? inspectRef : undefined}
+            ref={t.id === "inspect" ? inspectRef : copilotRef}
             id={panelId(t.id)}
             role="tabpanel"
             aria-labelledby={tabId(t.id)}

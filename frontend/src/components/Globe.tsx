@@ -430,13 +430,17 @@ export default function Globe({
     }
   }, [reduced, lowPower, isLoaded]);
 
-  // The breaking places' rings
+  // The breaking places' rings, only while they may pulse: with a repeat
+  // period of 0 three-globe still draws one ring per place (and again on each
+  // refresh), so held still there are none. The ticker still lists the stories.
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe || !isLoaded) return;
-    globe.ringsData(alerts.map(({ lat, lng }) => ({ lat, lng })));
-    if (containerRef.current) containerRef.current.dataset.rings = String(alerts.length); // e2e
-  }, [alerts, isLoaded]);
+    const pulse = ringRepeatMs({ reduced, lowPower }) > 0;
+    const rings = pulse ? alerts.map(({ lat, lng }) => ({ lat, lng })) : [];
+    globe.ringsData(rings);
+    if (containerRef.current) containerRef.current.dataset.rings = String(rings.length); // e2e
+  }, [alerts, reduced, lowPower, isLoaded]);
 
   // The Links layer's arcs: the inspected one highlighted, flowing when motion
   // allows. New arc objects make three-globe build new meshes, so a drag

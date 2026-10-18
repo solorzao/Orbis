@@ -632,6 +632,10 @@ kbd {
   .since-callout {
     display: flex;
   }
+  /* The short sheet has room for one welcome: the callout, until it's dismissed. */
+  .copilot:has(.since-callout) .cp-empty {
+    display: none;
+  }
 }
 
 /* Inspect tab: recent places and links, then a place's stories (mockup .insp, .art, lines 357-372) */

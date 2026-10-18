@@ -65,6 +65,10 @@ describe("SinceStrip", () => {
     const toggle = screen.getByRole("button", { name: "Top 5" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("list", { name: "Places with the most new stories" })).toBeNull();
+    // What it controls exists, hidden while closed.
+    const controlled = document.getElementById(toggle.getAttribute("aria-controls")!);
+    expect(controlled).not.toBeNull();
+    expect(controlled).not.toBeVisible();
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");

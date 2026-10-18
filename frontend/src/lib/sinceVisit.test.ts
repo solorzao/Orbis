@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   floorSince,
   readSinceDismissed,
+  sinceDot,
   showSince,
   sinceAgo,
   sinceRange,
@@ -74,12 +75,27 @@ describe("sinceSummary", () => {
 });
 
 describe("sinceRange", () => {
-  it("is the window from the last visit to now", () => {
-    expect(sinceRange(NOW - 14 * H, NOW)).toEqual({
+  it("is the window from the last visit, floored as the strip's counts are, to now", () => {
+    const visit = NOW - 14 * H - 7 * MIN; // 02:30:21
+    expect(sinceRange(visit, NOW)).toEqual({
       kind: "range",
-      startTime: iso(NOW - 14 * H),
+      startTime: "2026-10-18T02:30:00.000Z",
       endTime: iso(NOW),
     });
+  });
+});
+
+describe("sinceDot", () => {
+  it("opens a top place by its cell's dot, or a stand-in counting its new stories", () => {
+    const place = { lat: 29.5, lng: -98.5, place: "Alamodome", new: 31, headline: "Airman dies" };
+    expect(sinceDot([], place)).toMatchObject({
+      lat: 29.5,
+      lng: -98.5,
+      locationName: "Alamodome",
+      count: 31,
+    });
+    const dot = { ...sinceDot([], place), id: "api-4", locationName: "San Antonio" };
+    expect(sinceDot([dot], place).id).toBe("api-4");
   });
 });
 

@@ -196,7 +196,8 @@ describe("CoPilot", () => {
 
     it("ask what's breaking while something is (the ticker is hidden on narrow screens)", () => {
       renderCoPilot({ context: NOWHERE, breaking: 3 });
-      expect(prompts()).toEqual(["What's the biggest story right now?", "What's breaking?"]);
+      // First, so a narrow tab bar never clips it.
+      expect(prompts()).toEqual(["What's breaking?", "What's the biggest story right now?"]);
       cleanup();
       renderCoPilot({ context: NOWHERE, breaking: 0 });
       expect(prompts()).toEqual(["What's the biggest story right now?"]);

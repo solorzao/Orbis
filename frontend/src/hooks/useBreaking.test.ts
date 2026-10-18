@@ -130,4 +130,37 @@ describe("useBreaking", () => {
     await act(async () => {});
     expect(result.current).toEqual([]);
   });
+
+  it("never shows the last topic's stories under a new topic", async () => {
+    const conflict = deferred();
+    mockFetch
+      .mockResolvedValueOnce([story("Riots in Paris")])
+      .mockReturnValueOnce(conflict.promise);
+    const { result, rerender } = render({ topic: "All", on: true });
+    await act(async () => {});
+    expect(headlines(result)).toEqual(["Riots in Paris"]);
+    rerender({ topic: "Conflict", on: true });
+    expect(result.current).toEqual([]); // not All's stories (or rings) meanwhile
+    await act(async () => conflict.resolve([story("Shelling resumes")]));
+    expect(headlines(result)).toEqual(["Shelling resumes"]);
+  });
+
+  it("doesn't poll while the page is hidden, and catches up when it shows", async () => {
+    mockFetch.mockResolvedValue([story("Riots in Paris")]);
+    render({ topic: "All", on: true });
+    await act(async () => {});
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BREAKING_REFRESH_MS * 3);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
 });

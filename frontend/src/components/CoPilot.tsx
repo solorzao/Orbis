@@ -42,7 +42,8 @@ function contextPills({ place, topic, window }: ScreenContext): ContextPill[] {
 
 /**
  * Quick prompts that follow what the co-pilot sees, and "What's breaking?"
- * while something is (the ticker that says so is hidden on narrow screens).
+ * while something is (the ticker that says so is hidden on narrow screens),
+ * first, so a narrow row never clips it.
  */
 function quickPrompts(place?: string, topic?: string, breaking = 0): string[] {
   const prompts = place
@@ -50,7 +51,7 @@ function quickPrompts(place?: string, topic?: string, breaking = 0): string[] {
     : topic
       ? [`What's happening in ${topic} today?`]
       : ["What's the biggest story right now?"];
-  return breaking > 0 ? [...prompts, "What's breaking?"] : prompts;
+  return breaking > 0 ? ["What's breaking?", ...prompts] : prompts;
 }
 
 /** What a question is sent with: the pills left in, a window as its bounds right now. */

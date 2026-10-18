@@ -1,9 +1,18 @@
 import { test, expect, type Page } from "@playwright/test";
-import { LAST_VISIT_KEY, MOCK_DELTA, gotoStillGlobe, isDelta, seedLastVisit } from "./fixtures";
+import {
+  LAST_VISIT_KEY,
+  MOCK_BREAKING,
+  MOCK_DELTA,
+  gotoStillGlobe,
+  isDelta,
+  seedLastVisit,
+  withBreaking,
+} from "./fixtures";
 import { utcTime, utcWeekday } from "../src/lib/timeWindow";
+import { floorSince } from "../src/lib/sinceVisit";
 
 const strip = (page: Page) => page.getByTestId("since-strip");
-const TEXT = "Welcome back. 14 h since your visit: 1,286 new stories, 4 breaking stories.";
+const TEXT = `Welcome back. 14 h since your visit: 1,286 new stories, ${MOCK_BREAKING.length} breaking stories.`;
 
 /** The `since` each delta request sent. */
 async function recordDelta(page: Page) {
@@ -24,7 +33,10 @@ test.describe("Since your last visit", () => {
       await seedLastVisit(p, 14);
       asked = await recordDelta(p);
     });
-    await expect(strip(page)).toHaveText(new RegExp(`^${TEXT.replace(/\./g, "\\.")}`));
+    // None breaking (the default mock): the strip leaves that part out.
+    await expect(strip(page).locator(".since-txt")).toHaveText(
+      "Welcome back. 14 h since your visit: 1,286 new stories.",
+    );
     // Floored to the quarter hour (within a day), as the server floors it.
     expect(asked).toHaveLength(1);
     const since = new Date(asked[0]);
@@ -37,9 +49,11 @@ test.describe("Since your last visit", () => {
   test("Show sets the timeline to the range since the visit", async ({ page }) => {
     await gotoStillGlobe(page, (p) => seedLastVisit(p, 14));
     await expect(strip(page)).toBeVisible();
-    const visit = Date.parse(
+    const stored = Date.parse(
       (await page.evaluate((k) => localStorage.getItem(k), LAST_VISIT_KEY))!,
     );
+    // From the visit as the strip's counts floor it: within a day, to the quarter hour.
+    const visit = floorSince(stored, Date.now());
     await strip(page).getByRole("button", { name: "Show" }).click();
     const label = page.getByTestId("timeline-label");
     await expect(label).toHaveText(new RegExp(`^${utcWeekday(visit)} ${utcTime(visit)} – .* UTC$`));
@@ -65,10 +79,22 @@ test.describe("Since your last visit", () => {
     ).toBeVisible();
   });
 
-  test("Dismiss hides it for the session", async ({ page }) => {
+  test("counts the breaking stories when there are some", async ({ page }) => {
+    await gotoStillGlobe(page, async (p) => {
+      await seedLastVisit(p, 14);
+      await withBreaking(p);
+    });
+    await expect(strip(page).locator(".since-txt")).toHaveText(TEXT);
+  });
+
+  test("Dismiss hides it for the session, the focus moving to the topics", async ({ page }) => {
     await gotoStillGlobe(page, (p) => seedLastVisit(p, 14));
-    await strip(page).getByRole("button", { name: "Dismiss" }).click();
+    await strip(page).getByRole("button", { name: "Dismiss" }).focus();
+    await page.keyboard.press("Enter");
     await expect(strip(page)).toHaveCount(0);
+    await expect(
+      page.getByTestId("topic-filter").getByRole("button", { name: "All" }),
+    ).toBeFocused();
     await page.reload();
     await expect(page.getByTestId("status-pill").getByText("Live")).toBeVisible();
     // The visit is 14 h back again (seeded), but the strip stays dismissed.
@@ -102,12 +128,21 @@ test.describe("Since your last visit", () => {
 test.describe("Since your last visit on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("is a callout card in the co-pilot", async ({ page }) => {
+  test("is a callout card in the co-pilot, in place of its intro", async ({ page }) => {
     await gotoStillGlobe(page, (p) => seedLastVisit(p, 14));
     await page.getByTestId("side-tab-copilot").click();
     const callout = page.getByTestId("since-callout");
     await expect(callout).toBeVisible();
     await expect(callout).toContainText("14 h since your visit: 1,286 new stories");
     await expect(strip(page)).toBeHidden();
+    // The short sheet has room for one: the welcome, not the intro.
+    await expect(page.getByText("Ask about the news")).toBeHidden();
+
+    // Dismissed, the focus stays in the co-pilot, and its intro comes back.
+    await callout.getByRole("button", { name: "Dismiss" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(callout).toHaveCount(0);
+    await expect(page.getByRole("tabpanel", { name: "Co-pilot" })).toBeFocused();
+    await expect(page.getByText("Ask about the news")).toBeVisible();
   });
 });

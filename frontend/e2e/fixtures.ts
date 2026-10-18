@@ -473,9 +473,59 @@ export const MOCK_BREAKING = [
 /** Whether a request is for the breaking stories. */
 export const isBreaking = (url: URL) => url.pathname === "/api/news/breaking";
 
-/** gotoStillGlobe/settle setup: three stories are breaking (by default none are). */
+/**
+ * gotoStillGlobe/settle setup: three stories are breaking (by default none
+ * are), and the delta counts them, as the server's does.
+ */
 export async function withBreaking(page: Page) {
   await page.route(isBreaking, (route) => route.fulfill({ json: MOCK_BREAKING }));
+  await page.route(isDelta, (route) =>
+    route.fulfill({ json: { ...MOCK_DELTA, breaking: MOCK_BREAKING.length } }),
+  );
+}
+
+/**
+ * The ring meshes alive in the globe's scene now. WebGL objects aren't in the
+ * DOM, so this finds the globe.gl instance through React's fiber for the
+ * globe's container (a ref holding an object with ringsData) and counts the
+ * children of three-globe's ring groups: one per ring on screen.
+ */
+export function ringCircles(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    type Hook = { memoizedState: unknown; next: Hook | null };
+    type Fiber = { memoizedState: Hook | null; return: Fiber | null };
+    type Obj = { __globeObjType?: string; children: unknown[] };
+    type GlobeLike = { ringsData: unknown; scene(): { traverse(f: (o: Obj) => void): void } };
+    const el = document.querySelector('[data-testid="globe"]') as unknown as Record<string, Fiber>;
+    const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+    let fiber: Fiber | null = key ? el[key] : null;
+    let globe: GlobeLike | null = null;
+    while (fiber && !globe) {
+      for (let h = fiber.memoizedState; h && !globe; h = h.next) {
+        const ref = h.memoizedState as { current?: GlobeLike } | null;
+        if (ref && typeof ref === "object" && typeof ref.current?.ringsData === "function") {
+          globe = ref.current;
+        }
+      }
+      fiber = fiber.return;
+    }
+    if (!globe) throw new Error("no globe instance found");
+    let n = 0;
+    globe.scene().traverse((o) => {
+      if (o.__globeObjType === "ring") n += o.children.length;
+    });
+    return n;
+  });
+}
+
+/** `ringCircles` sampled `times` times, `everyMs` apart. */
+export async function sampleRings(page: Page, times = 8, everyMs = 400): Promise<number[]> {
+  const samples: number[] = [];
+  for (let i = 0; i < times; i++) {
+    samples.push(await ringCircles(page));
+    await page.waitForTimeout(everyMs);
+  }
+  return samples;
 }
 
 // ── Since your last visit ───────────────────────────────────────────
@@ -484,7 +534,7 @@ export async function withBreaking(page: Page) {
 export const MOCK_DELTA = {
   new_stories: 1286,
   new_places: 212,
-  breaking: 4,
+  breaking: 0, // as the default breaking mock: none (withBreaking makes it 3)
   top: [
     {
       lat: 48.8566,

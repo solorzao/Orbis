@@ -71,8 +71,14 @@ export default function SinceStrip({
           </svg>
         </button>
       </div>
-      {open && (
-        <ul id={listId} className="since-top" aria-label="Places with the most new stories">
+      {delta.top.length > 0 && (
+        // Always there for Top 5's aria-controls; hidden while closed.
+        <ul
+          id={listId}
+          className="since-top"
+          aria-label="Places with the most new stories"
+          hidden={!open}
+        >
           {delta.top.map((p) => (
             <li key={`${p.lat}:${p.lng}`}>
               <button

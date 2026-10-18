@@ -19,9 +19,9 @@ import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { breakingDot, type BreakingStory } from "@/lib/breaking";
-import { dotInCell } from "@/lib/cells";
 import {
   readSinceDismissed,
+  sinceDot,
   sinceRange,
   writeSinceDismissed,
   type SincePlace,
@@ -109,6 +109,8 @@ export default function Home() {
   const { showInspect } = side;
   // Minimize and close remove the focused control: keep focus in the Inspect tab.
   const inspectRef = useRef<HTMLDivElement>(null);
+  const copilotRef = useRef<HTMLDivElement>(null);
+  const topicsRef = useRef<HTMLElement>(null);
   const keepInspectFocus = useKeepFocus(inspectRef);
 
   const globeControlsRef = useRef<GlobeControls | null>(null);
@@ -322,7 +324,7 @@ export default function Home() {
     [points, handlePointClick],
   );
 
-  // Show: the window from the last visit to now.
+  // Show: the window from the last visit (floored, as the strip counts it) to now.
   const handleSinceShow = useCallback(() => {
     if (lastVisit !== null) changeWindow(sinceRange(lastVisit, Date.now()));
   }, [lastVisit, changeWindow]);
@@ -331,14 +333,16 @@ export default function Home() {
   const handleSinceOpen = useCallback(
     (place: SincePlace) => {
       globeControlsRef.current?.flyTo(place.lat, place.lng, 1.5);
-      handlePointClick(
-        dotInCell(points, { lat: place.lat, lng: place.lng, place: place.place, count: place.new }),
-      );
+      handlePointClick(sinceDot(points, place));
     },
     [points, handlePointClick],
   );
 
-  const handleSinceDismiss = useCallback(() => {
+  // Dismiss takes its control away: focus goes on to the topic pills beside
+  // the strip, or stays in the co-pilot that held the callout.
+  const handleSinceDismiss = useCallback((variant: "strip" | "callout") => {
+    if (variant === "strip") topicsRef.current?.querySelector("button")?.focus();
+    else copilotRef.current?.focus();
     writeSinceDismissed();
     setSinceDismissed(true);
   }, []);
@@ -500,7 +504,7 @@ export default function Home() {
         delta={sinceDelta}
         onShow={handleSinceShow}
         onOpen={handleSinceOpen}
-        onDismiss={handleSinceDismiss}
+        onDismiss={() => handleSinceDismiss(variant)}
       />
     ) : null;
 
@@ -606,6 +610,7 @@ export default function Home() {
         isLoading={loading}
         isOffline={apiError}
         isReplay={replaying}
+        topicsRef={topicsRef}
       />
       {since("strip")}
 
@@ -617,6 +622,7 @@ export default function Home() {
         onOpenChange={side.setOpen}
         inspectCount={panelQueue.length + linkQueue.length}
         inspectRef={inspectRef}
+        copilotRef={copilotRef}
         copilot={
           <CoPilot
             messages={agentMessages}

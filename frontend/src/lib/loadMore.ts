@@ -32,9 +32,11 @@ export function appendPage<T extends { id: string }>(loaded: T[], page: T[]): T[
  * includes the first page.
  *
  * NewsPanel offers "Load more" while fewer stories are loaded than `count`.
- * A full page means the cell may hold more, so the dot's count stands; a
- * short or empty page means the list is exhausted, so the count becomes the
- * stories loaded, which hides the button.
+ * A full page means the cell may hold more, so the dot's count stands, but
+ * never at or below the stories loaded (a stand-in dot's count is only what
+ * a list knew of): one more keeps the button. A short or empty page means
+ * the list is exhausted, so the count becomes the stories loaded, which
+ * hides the button.
  */
 export function countAfterPage(
   count: number,
@@ -42,7 +44,7 @@ export function countAfterPage(
   received: number,
   limit: number,
 ): number {
-  return received < limit ? loaded : count;
+  return received < limit ? loaded : Math.max(count, loaded + 1);
 }
 
 /**

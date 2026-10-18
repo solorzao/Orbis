@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FocusEvent } from "react";
 import { outletsLabel, type BreakingStory } from "@/lib/breaking";
+import { useWideScreen } from "@/hooks/useSidePanel";
 
 /** How long each breaking story shows before the next. */
 export const ROTATE_MS = 6000;
@@ -39,16 +40,26 @@ function Chevron({ back }: { back?: boolean }) {
  * at a time with previous and next. It moves on every 6 s, but not while the
  * pointer or the focus is on it, nor with reduced motion; while it moves by
  * itself it is quiet to screen readers (a carousel's live region is off).
- * The story shown follows a refresh that still lists it.
+ * The story shown follows a refresh that still lists it. Below 1180px CSS
+ * hides it, and it runs no timer.
  */
 export default function BreakingTicker({ stories, reduced, onOpen }: BreakingTickerProps) {
   const [shown, setShown] = useState<string | null>(null);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
+  const wide = useWideScreen();
   const n = stories.length;
   const found = stories.findIndex((s) => s.headline === shown);
   const index = found >= 0 ? found : 0;
-  const rotating = !reduced && !hovered && !focused && n > 1;
+
+  // Nothing to move on to, or hidden: a pointer or focus it had is gone
+  // without a mouseleave or blur (its buttons unmount), so the pause ends.
+  const turns = n > 1 && wide;
+  if (!turns && (hovered || focused)) {
+    setHovered(false);
+    setFocused(false);
+  }
+  const rotating = turns && !reduced && !hovered && !focused;
 
   const show = (i: number) => setShown(stories[(i + n) % n]?.headline ?? null);
 
@@ -87,6 +98,13 @@ export default function BreakingTicker({ stories, reduced, onOpen }: BreakingTic
           type="button"
           className="breaking-item"
           data-testid="breaking-item"
+          // Its position too, which the count beside it shows outside the live region.
+          aria-label={[
+            story.headline,
+            story.place,
+            outletsLabel(story.outlets),
+            ...(n > 1 ? [`${index + 1} of ${n}`] : []),
+          ].join(", ")}
           title={story.headline}
           onClick={() => onOpen(story)}
         >

@@ -44,11 +44,17 @@ function renderTicker(over: Partial<Parameters<typeof BreakingTicker>[0]> = {}) 
   return { ...utils, onOpen };
 }
 
+// Wide enough to show it (soft-orbit.css hides it below 1180px).
+const widthIs = (w: number) =>
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: w });
+
 beforeEach(() => {
   vi.useFakeTimers();
+  widthIs(1440);
 });
 afterEach(() => {
   vi.useRealTimers();
+  widthIs(1024);
 });
 
 describe("BreakingTicker", () => {
@@ -161,5 +167,34 @@ describe("BreakingTicker", () => {
     rerender(<BreakingTicker stories={[STORIES[1], STORIES[0]]} reduced={false} onOpen={onOpen} />);
     expect(item()).toHaveTextContent("Riot police clear Paris square");
     expect(ticker()).toHaveTextContent("1 of 2");
+  });
+
+  it("says which story of how many in the item's name", () => {
+    renderTicker();
+    expect(item()).toHaveAccessibleName(
+      `${LONG}, Alamodome, Texas, United States, 17 outlets, 1 of 3`,
+    );
+    renderTicker({ stories: [STORIES[1]] });
+    expect(screen.getAllByTestId("breaking-item")[1]).toHaveAccessibleName(
+      "Riot police clear Paris square, Paris, France, 12 outlets",
+    );
+  });
+
+  it("runs no timer while CSS hides it (below 1180px)", () => {
+    widthIs(1024);
+    renderTicker();
+    act(() => void vi.advanceTimersByTime(ROTATE_MS * 3));
+    expect(item()).toHaveTextContent(LONG);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("doesn't stay paused by a hover the stories took away", () => {
+    const { rerender, onOpen } = renderTicker();
+    fireEvent.mouseEnter(ticker());
+    // Nothing breaking for a while: the ticker goes, and the pointer with it.
+    rerender(<BreakingTicker stories={[]} reduced={false} onOpen={onOpen} />);
+    rerender(<BreakingTicker stories={STORIES} reduced={false} onOpen={onOpen} />);
+    act(() => void vi.advanceTimersByTime(ROTATE_MS));
+    expect(item()).toHaveTextContent("Riot police clear Paris square");
   });
 });

@@ -1,5 +1,6 @@
 "use client";
 
+import type { Ref } from "react";
 import Link from "next/link";
 import { Topic } from "@/types/news";
 import TopicFilter from "@/components/TopicFilter";
@@ -13,6 +14,8 @@ interface TopBarProps {
   isOffline: boolean;
   /** The timeline's replay is playing (see StatusPill). */
   isReplay?: boolean;
+  /** The topic pills' nav (TopicFilter). */
+  topicsRef?: Ref<HTMLElement>;
 }
 
 /**
@@ -26,6 +29,7 @@ export default function TopBar({
   isLoading,
   isOffline,
   isReplay = false,
+  topicsRef,
 }: TopBarProps) {
   return (
     <header className="topbar">
@@ -59,7 +63,7 @@ export default function TopBar({
       </div>
 
       <div className="topbar-center">
-        <TopicFilter activeTopic={activeTopic} onTopicChange={onTopicChange} />
+        <TopicFilter activeTopic={activeTopic} onTopicChange={onTopicChange} navRef={topicsRef} />
       </div>
 
       <div className="topbar-right">
