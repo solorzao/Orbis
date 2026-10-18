@@ -236,6 +236,11 @@ class TestDisplayTheme:
             ("ECON_STOCKMARKET", "Economy: stock market"),
             ("ENV_CLIMATECHANGE", "Environment: climate change"),
             ("TAX_WEAPONS_MISSILE", "Weapons: missile"),
+            # Kept families' bare codes: a readable label, or nothing if they name nothing.
+            ("TAX_WEAPONS", "Weapons"),
+            ("TAX_FOODSTAPLES", "Food staples"),
+            ("TAX_FOODSTAPLES_RICE", "Food staples: rice"),
+            ("TAX_SPECIAL_ISSUES", ""),
             # Named-entity families: the bare name, never the family, which GDELT
             # gives by keyword (the BJP is tagged a terror group as often as a
             # party). In title case; short one-word names as acronyms.

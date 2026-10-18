@@ -248,7 +248,10 @@ DROPPED_THEME_PREFIXES = (
     "EPU_",
     "CRISISLEX_",
 )
-DROPPED_THEMES = frozenset({"GENERAL_GOVERNMENT", "LEADER", "MEDIA_MSM"})
+DROPPED_THEMES = frozenset(
+    # TAX_SPECIAL_ISSUES: a kept family's bare code that names no issue.
+    {"GENERAL_GOVERNMENT", "LEADER", "MEDIA_MSM", "TAX_SPECIAL_ISSUES"}
+)
 
 # Families whose prefix goes: World Bank, UN Guiding Principles, social, taxonomy.
 _THEME_PREFIXES = ("WB_", "UNGP_", "SOC_", "TAX_")
@@ -311,12 +314,14 @@ _THEME_FAMILIES = (
     ("HEALTH_", "Health"),
     ("WEAPONS_", "Weapons"),
     ("DISEASE_", "Disease"),
+    ("FOODSTAPLES_", "Food staples"),
 )
 # Words GDELT runs together.
 _THEME_WORDS = {
     "ARMEDCONFLICT": "armed conflict",
     "CLIMATECHANGE": "climate change",
     "EARNINGSREPORT": "earnings report",
+    "FOODSTAPLES": "food staples",
     "FOREIGNINVEST": "foreign investment",
     "FREESPEECH": "free speech",
     "FREETRADE": "free trade",

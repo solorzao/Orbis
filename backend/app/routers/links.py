@@ -174,7 +174,7 @@ async def get_link(
     tag = _globe_topic_tag(topic)
     window = _window(timespan, start_time, end_time)
 
-    cache_k = f"db:links:detail:v6:{a}:{b}:{window.key}:{tag or ''}"
+    cache_k = f"db:links:detail:v7:{a}:{b}:{window.key}:{tag or ''}"
     cached = await get_cached(cache_k)
     if cached is not None:
         return LinkDetail.model_validate(cached)
