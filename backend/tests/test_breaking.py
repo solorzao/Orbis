@@ -37,8 +37,11 @@ def _fetched(pool) -> tuple[str, list]:
 
 
 def _row(**overrides):
-    """A row of the breaking query: the event, its neighbourhood's counts, then its lead."""
+    """A row of the breaking query: the event, its neighbourhood's counts, the other
+    places' events alike to it, then its lead."""
     row = {
+        "id": "event-a",
+        "alike": [],
         "lat": 43.5,
         "lng": 5.5,
         "outlets": 10,
@@ -113,14 +116,14 @@ class TestBreakingQuery:
 
     @pytest.mark.asyncio
     async def test_neighbours_are_alike_stories_in_the_same_cell_exactly(self, pool):
-        """Exact cosine distances within a cell: no index, about the sum of n^2 pairs."""
+        """Exact similarity within a cell: no index, about the sum of n^2 pairs."""
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
-        hood = query[query.index("neighbourhoods AS (") : query.index("events AS (")]
+        hood = query[query.index("neighbourhoods AS (") : query.index("qualifying AS")]
         assert "FROM stories s JOIN stories t" in hood
         assert "ON t.lat_cell = s.lat_cell AND t.lng_cell = s.lng_cell" in hood
-        assert "AND 1 - (s.embedding <=> t.embedding) >= 0.6" in hood
+        assert "AND -(s.embedding <#> t.embedding) >= 0.6" in hood
         assert "LEFT JOIN LATERAL unnest(t.outlets) AS o(outlet) ON true" in hood
         assert "count(DISTINCT o.outlet) AS outlets" in hood
         assert "count(DISTINCT t.story) AS stories" in hood
@@ -129,41 +132,73 @@ class TestBreakingQuery:
         assert "halfvec" not in query
 
     @pytest.mark.asyncio
-    async def test_a_cells_event_is_its_most_covered_with_three_stories(self, pool):
-        """Chosen among the neighbourhoods big enough, so one wire feature run everywhere
-        (one story) can't hide the cell's event."""
+    async def test_vectors_are_read_once_normalised_and_compared_by_inner_product(self, pool):
+        """A 1536-d vector is stored out of line: each <=> on the table's column fetches it
+        again, so a hub's pairs would fetch thousands. Normalised into the materialised
+        CTEs, each is read once, and for unit vectors cosine is the inner product."""
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
-        events = query[query.index("events AS (") : query.index("prior AS (")]
-        assert "SELECT DISTINCT ON (lat_cell, lng_cell)" in events
-        assert "WHERE outlets >= 7 AND stories >= 3" in events
-        assert "ORDER BY lat_cell, lng_cell, outlets DESC, published_at DESC, id" in events
+        stories = query[query.index("stories AS MATERIALIZED (") : query.index("neighbourhoods AS")]
+        assert "l2_normalize(a.embedding) AS embedding" in stories
+        prior_rows = query[query.index("prior_rows AS MATERIALIZED (") : query.index("prior AS (")]
+        assert "l2_normalize(p.embedding) AS embedding" in prior_rows
+        assert "<=>" not in query
+
+    @pytest.mark.asyncio
+    async def test_up_to_three_events_a_cell_none_alike_to_a_better_one(self, pool):
+        """An ongoing story at a hub (Kyiv, Gaza) can't hide a new event there: each of a
+        cell's three best distinct events gets the prior check."""
+        await breaking.get_breaking(NOW)
+
+        query, _ = _fetched(pool)
+        qualifying = query[query.index("qualifying AS") : query.index("events AS (")]
+        assert "WHERE n.outlets >= 7 AND n.stories >= 3" in qualifying
+        events = query[query.index("events AS (") : query.index("prior_rows AS")]
+        assert (
+            "WHERE NOT EXISTS ( SELECT 1 FROM qualifying b "
+            "WHERE b.lat_cell = q.lat_cell AND b.lng_cell = q.lng_cell "
+            "AND (b.outlets, b.published_at, q.id) > (q.outlets, q.published_at, b.id) "
+            "AND -(b.embedding <#> q.embedding) >= 0.6 )"
+        ) in events
+        assert (
+            "row_number() OVER (PARTITION BY q.lat_cell, q.lng_cell "
+            "ORDER BY q.outlets DESC, q.published_at DESC, q.id) AS place_rank"
+        ) in events
+        assert "WHERE place_rank <= 3" in events
 
     @pytest.mark.asyncio
     async def test_coverage_must_be_mostly_new(self, pool):
         """Outlets on it in the 22 hours before, besides those on it now, are at most as
-        many as now."""
+        many as now. The cell keeps its best event that passes."""
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
-        prior = query[query.index("prior AS (") : query.index("breaking AS (")]
+        prior_rows = query[query.index("prior_rows AS MATERIALIZED (") : query.index("prior AS (")]
+        assert "WHERE p.published_at >= $2 AND p.published_at < $1" in prior_rows
+        assert (
+            "(FLOOR(p.latitude), FLOOR(p.longitude)) IN (SELECT lat_cell, lng_cell FROM events)"
+            in (prior_rows)
+        )
+        prior = query[query.index("prior AS (") : query.index("cell_breaking AS (")]
         assert "count(DISTINCT p.source_name) AS prior_outlets" in prior
+        assert "ON p.lat_cell = e.lat_cell AND p.lng_cell = e.lng_cell" in prior
         assert "NOT (p.source_name = ANY (e.outlet_list))" in prior
-        assert "AND 1 - (e.embedding <=> p.embedding) >= 0.6" in prior
-        assert "ON FLOOR(p.latitude) = e.lat_cell AND FLOOR(p.longitude) = e.lng_cell" in prior
-        assert "e.outlets >= 0.5 * (e.outlets + COALESCE(pr.prior_outlets, 0))" in query
+        assert "AND -(e.embedding <#> p.embedding) >= 0.6" in prior
+        cell = query[query.index("cell_breaking AS (") : query.index("alike AS (")]
+        assert "WHERE e.outlets >= 0.5 * (e.outlets + COALESCE(pr.prior_outlets, 0))" in cell
+        assert "SELECT DISTINCT ON (e.lat_cell, e.lng_cell)" in cell
+        assert "ORDER BY e.lat_cell, e.lng_cell, e.place_rank" in cell
 
     @pytest.mark.asyncio
-    async def test_one_event_under_two_places_keeps_the_most_covered(self, pool):
+    async def test_each_event_lists_the_other_cells_events_alike_to_it(self, pool):
+        """For the dedup across places, done greedily in rank order (get_breaking)."""
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
         assert (
-            "WHERE NOT EXISTS ( SELECT 1 FROM breaking o "
-            "WHERE (o.outlets, o.first_seen, -o.lat_cell, -o.lng_cell) "
-            "> (b.outlets, b.first_seen, -b.lat_cell, -b.lng_cell) "
-            "AND 1 - (o.embedding <=> b.embedding) >= 0.6 )"
+            "ARRAY( SELECT o.id FROM cell_breaking o "
+            "WHERE o.id <> d.id AND -(o.embedding <#> d.embedding) >= 0.6 ) AS alike"
         ) in query
 
     @pytest.mark.asyncio
@@ -178,7 +213,7 @@ class TestBreakingQuery:
         await breaking.get_breaking(NOW)
 
         query, _ = _fetched(pool)
-        final = query[query.rindex("SELECT d.lat_cell") : query.rindex("FROM distinct_events")]
+        final = query[query.rindex("SELECT d.id") : query.rindex("FROM cell_breaking d")]
         assert "embedding" not in final
         assert "SELECT *" not in query and ".*" not in query
 
@@ -218,6 +253,41 @@ class TestGetBreaking:
 
         assert story["headline"].startswith("Quake hits Kathmandu xxx")
         assert len(story["headline"]) <= 200
+
+    @pytest.mark.asyncio
+    async def test_the_headline_drops_the_outlets_name_and_keeps_its_case(self, pool):
+        headline = "WATCH: Principal shot at Aubagne school \u2013 Reuters"
+        pool.fetch.return_value = [_row(headline=headline)]
+
+        [story] = await breaking.get_breaking(NOW)
+
+        assert story["headline"] == "Principal shot at Aubagne school"
+
+    @pytest.mark.asyncio
+    async def test_one_event_under_several_places_is_deduped_greedily_in_rank_order(self, pool):
+        """A is alike to B, B to C, A not to C. B goes (A is kept); C stays, since the B
+        that was alike to it is gone. Rows come in rank order."""
+        pool.fetch.return_value = [
+            _row(id="a", alike=["b"], lat=48.5, outlets=12),
+            _row(id="b", alike=["a", "c"], lat=46.5, outlets=10),
+            _row(id="c", alike=["b"], lat=44.5, outlets=8),
+            _row(id="d", alike=None, lat=41.5, outlets=7),
+        ]
+
+        result = await breaking.get_breaking(NOW)
+
+        assert [s["lat"] for s in result] == [48.5, 44.5, 41.5]
+        assert all("alike" not in s and "id" not in s for s in result)
+
+    @pytest.mark.asyncio
+    async def test_a_tie_in_outlets_keeps_the_one_ranked_first(self, pool):
+        """Equal outlets: the query ranks the newer first_seen first, and that one stays."""
+        pool.fetch.return_value = [
+            _row(id="newer", alike=["older"], lat=48.5, outlets=8),
+            _row(id="older", alike=["newer"], lat=46.5, outlets=8),
+        ]
+
+        assert [s["lat"] for s in await breaking.get_breaking(NOW)] == [48.5]
 
     @pytest.mark.asyncio
     async def test_the_place_follows_the_articles_country(self, pool):
@@ -261,10 +331,16 @@ _INSERT = """
 _URLS = itertools.count()  # source_url is unique, across a test's inserts too
 
 
-def _vector(event: int, own: int, c: float) -> str:
-    """``c`` along event axis *event*, the rest along axis *own*: a unit vector, as text."""
+def _vector(event: int | dict[int, float], own: int, c: float) -> str:
+    """``c`` along the event's direction, the rest along axis *own*: a unit vector, as text.
+
+    *event* is an axis, or a unit direction over axes ({axis: weight}), so two events
+    can be as alike as their directions' dot product.
+    """
+    direction = {event: 1.0} if isinstance(event, int) else event
     v = [0.0] * DIMS
-    v[event] = c
+    for axis, weight in direction.items():
+        v[axis] = c * weight
     v[own] = math.sqrt(1 - c * c)
     return "[" + ",".join(f"{x:.6f}" for x in v) + "]"
 
@@ -551,3 +627,87 @@ class TestBreakingOnPostgres:
         result = await _db_breaking(pg)
 
         assert [(s["lat"], s["outlets"]) for s in result] == [(14.5, 9), (12.5, 7), (10.5, 7)]
+
+    @pytest.mark.asyncio
+    async def test_a_hubs_ongoing_story_doesnt_hide_a_new_event(self, pg):
+        """Kyiv: an ongoing story 20 outlets cover now and 40 others covered before (a third
+        new: not breaking), and a new event 10 outlets cover. The new event is listed."""
+        feed = _Feed()
+        feed.event(50.4, 30.5, 20, event=20, prefix="ongoing")
+        feed.event(50.4, 30.5, 40, event=20, prefix="ongoing before", minutes=300)
+        feed.event(50.4, 30.5, 10, event=21, prefix="new", minutes=5)
+        await feed.insert(pg)
+
+        [story] = await _db_breaking(pg)
+
+        assert (story["outlets"], story["headline"]) == (10, "zzbreak-new 0")
+
+    @pytest.mark.asyncio
+    async def test_earlier_coverage_of_other_stories_in_the_cell_doesnt_count(self, pg):
+        """30 outlets covered other things there in the 22 hours before: not this event."""
+        feed = _Feed()
+        feed.event(22.6, 88.4, 8, event=2, prefix="now")
+        for i in range(30):
+            feed.story(
+                22.6,
+                88.4,
+                f"other {i}",
+                outlet=f"other{i}.example",
+                event=100 + i,
+                minutes=300 + i,
+            )
+        await feed.insert(pg)
+
+        [story] = await _db_breaking(pg)
+
+        assert story["outlets"] == 8
+
+    @pytest.mark.asyncio
+    async def test_three_typographic_variants_of_one_headline_are_one_story(self, pg):
+        """A curly apostrophe, a full stop, a double space: one story key (titles.dedup_key)
+        for 8 outlets, so under MIN_STORIES. Keyed as three, it would be breaking."""
+        feed = _Feed()
+        apostrophe = "\N{RIGHT SINGLE QUOTATION MARK}"
+        a = feed.story(
+            27.7, 85.3, f"Kathmandu{apostrophe}s quake toll rises", outlet="k0.example", event=50
+        )
+        b = feed.story(
+            27.7, 85.3, "Kathmandu's quake toll rises.", outlet="k3.example", event=50, minutes=12
+        )
+        c = feed.story(
+            27.7, 85.3, "Kathmandu's  quake toll rises", outlet="k6.example", event=50, minutes=14
+        )
+        feed.copies(a, ["k1.example", "k2.example"])
+        feed.copies(b, ["k4.example", "k5.example"])
+        feed.copies(c, ["k7.example"])
+        await feed.insert(pg)
+
+        assert await _db_breaking(pg) == []
+
+    @pytest.mark.asyncio
+    async def test_a_chain_of_alike_places_keeps_the_far_end(self, pg):
+        """A is alike to B and B to C, but A not to C (0.648, 0.648, 0.227). Greedily by
+        outlets: A stays, B goes as A's, and C stays, since B is gone."""
+        a = {30: 1.0}
+        b = {30: 0.8, 31: 0.6}
+        c = {30: 0.28, 31: 0.96}
+        feed = _Feed()
+        feed.event(48.8, 2.3, 12, event=a, prefix="a")
+        feed.event(46.2, 2.2, 10, event=b, prefix="b")
+        feed.event(44.2, 2.2, 8, event=c, prefix="c")
+        await feed.insert(pg)
+
+        result = await _db_breaking(pg)
+
+        assert [(s["lat"], s["outlets"]) for s in result] == [(48.5, 12), (44.5, 8)]
+
+    @pytest.mark.asyncio
+    async def test_one_event_in_two_places_with_equal_outlets_keeps_the_newer(self, pg):
+        feed = _Feed()
+        feed.event(48.8, 2.3, 8, event=40, prefix="newer", minutes=20)
+        feed.event(46.2, 2.2, 8, event=40, prefix="older", minutes=50)
+        await feed.insert(pg)
+
+        result = await _db_breaking(pg)
+
+        assert [(s["lat"], s["outlets"]) for s in result] == [(48.5, 8)]

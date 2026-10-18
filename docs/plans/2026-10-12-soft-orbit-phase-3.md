@@ -486,14 +486,15 @@ Commit: `feat(api): surge detection per place`.
 
 **Endpoint:** `GET /api/news/breaking?topic=` returns `[{headline, place, lat, lng, outlets, stories, first_seen, topic, lead: GlobeLead}]`, at most 8, most outlets first, then the newest `first_seen`, then cell. It replaces `/api/news/surges`.
 
-- **Recent stories:** the last 2 hours' embedded articles (headline embeddings, text-embedding-3-small), one row per story (`story_key_sql`, its newest copy), each in its 1° cell with its outlet (`source_name`). Rows not yet embedded are skipped.
+- **Recent stories:** the last 2 hours' articles, one row per story (`story_key_sql`), placed and compared by its newest embedded copy (headline embeddings, text-embedding-3-small; a story with no embedded copy yet is skipped). Its outlets are every copy's, embedded or not, so twenty outlets running one AP headline word for word are twenty outlets. Story keys fold typography (`titles.dedup_key`: NFKC, straight quotes, one dash, HTML entities, one space, no trailing punctuation, no leading "WATCH:"/"UPDATE 2-" tag), so newsrooms' copies of one headline are one story.
 - **Candidate cells:** at least `MIN_OUTLETS` (7) distinct outlets.
-- **The event of a cell:** for each story, its neighbours are the cell's stories at least `SAME_STORY_SIM` (0.60, cosine, exact) alike. The event is the story whose neighbours have the most distinct outlets, newest on a tie.
-- **Breaking:** at least 7 outlets now, and at least as many as covered it in the 22 hours before (alike, same cell, other outlets): `MIN_NEW_SHARE` = 0.5.
-- **One event, one place:** when two cells' events are alike ("Paris" and "France"), the one more outlets cover is kept.
-- **Output:** `headline` is the event story's title as one clean line; `place` is its `display_place`; `stories` and `first_seen` come from the neighbours; `topic` is their dominant one; `lead` is the newest neighbour with an https image.
+- **Events in a cell:** for each story, its neighbours are the cell's stories at least `SAME_STORY_SIM` (0.60) alike: exact cosine, as the inner product of vectors normalised once into the query's materialised CTEs, since a 1536-d vector stored out of line would otherwise be fetched again for every pair. A neighbourhood is an event when it has at least 7 distinct outlets and at least `MIN_STORIES` (3) distinct stories, so one syndicated wire feature can't qualify on its own; and when no better event in the cell (more outlets, then newer) is alike to it.
+- **Breaking:** of a cell's three best events, the best that is mostly new: at least as many outlets now as covered it in the 22 hours before (alike, same cell, other outlets): `MIN_NEW_SHARE` = 0.5. A hub's ongoing story (Kyiv, Gaza) doesn't hide a new event there.
+- **One event, one place:** when two cells' events are alike ("Paris" and "France"), they are kept greedily in rank order: the one more outlets cover stays, and one alike only to a place already dropped stays too.
+- **Output:** `headline` is the event story's title as one clean line, with its case, the outlet's name and any leading tag dropped (`titles.display_title`); `place` is its `display_place`; `stories` and `first_seen` (the earliest copy) come from the neighbours; `topic` is their dominant one; `lead` is the newest neighbour with an https image.
 - **Topic filter:** `?topic=` keeps the events whose dominant topic it is. Candidates are never filtered by topic.
-- **Caching:** one uncapped list for every topic (`db:breaking:v1`, Redis 300 s), filtered and capped per request. Misses share one query with a 15 s timeout, nothing is cached on an error, and responses are edge-cached. It is in the `data` rate-limit group.
+- **Caching:** one uncapped list for every topic (`db:breaking:v1`), filtered and capped per request. Misses share one query with a 15 s timeout, nothing is cached on an error, and responses are edge-cached. It is in the `data` rate-limit group.
+- **Refresh:** each ingestion cycle invalidates `db:breaking*` and `db:delta*` again once the new rows are embedded (breaking stories count embedded rows only), then `app.warm` refills the list (after the links layer's windows). Its Redis entry lasts a cycle and more (`cycle_ttl`).
 - `SAME_STORY_SIM` is tuned against live output after deploy.
 
 Commit: `feat(api): breaking stories replace place surges`.

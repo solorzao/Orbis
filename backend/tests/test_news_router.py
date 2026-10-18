@@ -1379,16 +1379,17 @@ class TestGetBreaking:
         breaking_db.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_every_breaking_story_is_cached_once_for_five_minutes(
+    async def test_every_breaking_story_is_cached_once_until_the_next_warm(
         self, monkeypatch, breaking_db
     ):
-        """Uncapped and for every topic: each request then filters and caps it."""
+        """Uncapped and for every topic: each request then filters and caps it. Kept a
+        cycle and more (the warm refills it after each ingestion), not 300 s."""
         breaking_db.return_value = [_story(i) for i in range(9)]
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
             await _get(monkeypatch, "/api/news/breaking", topic="Climate")
 
         mock_set.assert_awaited_once_with(
-            "db:breaking:v1", [_json(_story(i)) for i in range(9)], 300
+            "db:breaking:v1", [_json(_story(i)) for i in range(9)], cycle_ttl(300)
         )
 
     @pytest.mark.asyncio
@@ -1398,7 +1399,19 @@ class TestGetBreaking:
             resp = await _get(monkeypatch, "/api/news/breaking")
 
         assert resp.json() == []
-        mock_set.assert_awaited_once_with("db:breaking:v1", [], 300)
+        mock_set.assert_awaited_once_with("db:breaking:v1", [], cycle_ttl(300))
+
+    @pytest.mark.asyncio
+    async def test_the_warmer_caches_what_the_first_request_would(self, monkeypatch, breaking_db):
+        """app.warm refills it after each ingestion cycle, with the request's key and bytes."""
+        import app.routers.news as news
+
+        with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
+            await _get(monkeypatch, "/api/news/breaking")
+            await news.warm_breaking()
+
+        requested, warmed = [c.args for c in mock_set.await_args_list]
+        assert requested == warmed == ("db:breaking:v1", [STORY_JSON], cycle_ttl(300))
 
     @pytest.mark.asyncio
     async def test_cached_stories_are_served_without_the_database(self, monkeypatch, breaking_db):
@@ -1584,6 +1597,16 @@ def delta_db(monkeypatch):
 
 
 class TestGetDelta:
+    @pytest.mark.asyncio
+    async def test_the_breaking_count_is_at_most_eight_as_the_ticker_lists(
+        self, monkeypatch, delta_db
+    ):
+        delta_db.breaking.return_value = [_story(i) for i in range(11)]
+
+        resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
+
+        assert resp.json()["breaking"] == 8
+
     @pytest.mark.asyncio
     async def test_new_stories_places_breaking_stories_and_the_top_places(
         self, monkeypatch, delta_db

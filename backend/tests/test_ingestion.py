@@ -404,6 +404,43 @@ class TestRunIngestionCycle:
             yield calls
 
     @pytest.mark.asyncio
+    async def test_breaking_and_deltas_are_invalidated_again_once_embedded(self, warm):
+        """Ingestion invalidates db:* before the embeddings; breaking stories count only
+        embedded rows, so one cached in between would miss the newest batch for a cycle.
+        Invalidated again inside the cycle, before the warm refills them."""
+        from app.services import ingestion
+
+        events: list[str] = []
+
+        def ingest():
+            events.append("ingest")
+            return 5
+
+        def invalidated(pattern):
+            events.append(f"invalidate {pattern} locked={ingestion._ingestion_lock.locked()}")
+
+        with (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion._backfill_iso_country_codes", new_callable=AsyncMock),
+            patch("app.services.ingestion._ingest_from_raw_gkg", AsyncMock(side_effect=ingest)),
+            patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion.generate_embeddings",
+                AsyncMock(side_effect=lambda: events.append("embed")),
+            ),
+            patch("app.services.ingestion.invalidate", AsyncMock(side_effect=invalidated)),
+        ):
+            assert await ingestion.run_ingestion_cycle() == 5
+
+        assert events == [
+            "ingest",
+            "embed",
+            "invalidate db:breaking* locked=True",
+            "invalidate db:delta* locked=True",
+        ]
+        assert warm == [False]  # the warm starts after, once the lock is released
+
+    @pytest.mark.asyncio
     async def test_warms_caches_once_the_lock_is_released(self, warm):
         from app.services.ingestion import run_ingestion_cycle
 

@@ -462,8 +462,9 @@ async def get_place_preview(
     return preview
 
 
-# How long breaking stories stay cached: stories arrive every 15 minutes, and
-# each ingestion clears db:* keys anyway. None breaking is an answer too.
+# How long breaking stories stay cached: at least until the next cycle's warm
+# (cycle_ttl). Each ingestion invalidates them, again once the new rows are
+# embedded, and app.warm refills them. None breaking is an answer too.
 _BREAKING_TTL = 300
 _BREAKING_KEY = "db:breaking:v1"
 
@@ -506,7 +507,9 @@ async def _load_breaking(cache_k: str) -> list[BreakingStory]:
     async with asyncio.timeout(_BREAKING_QUERY_TIMEOUT):
         rows = await get_breaking(_now())
     stories = [BreakingStory(**s) for s in rows]
-    await set_cached(cache_k, [s.model_dump(mode="json") for s in stories], _BREAKING_TTL)
+    await set_cached(
+        cache_k, [s.model_dump(mode="json") for s in stories], cycle_ttl(_BREAKING_TTL)
+    )
     return stories
 
 
@@ -514,6 +517,12 @@ def _landed(cache_k: str, task: asyncio.Task) -> None:
     """Forget a finished breaking query, so the next miss runs a new one."""
     if _breaking_in_flight.get(cache_k) is task:
         del _breaking_in_flight[cache_k]
+
+
+async def warm_breaking() -> None:
+    """Cache every breaking story, the list each topic's request filters (app.warm, after
+    each ingestion cycle): the ticker's and the delta's first request then hit it."""
+    await _cached_breaking()
 
 
 @router.get(
@@ -528,9 +537,13 @@ async def get_news_breaking(
     """Events many outlets have just started covering, most outlets first: at most 8.
 
     An event is a story and its alike stories (by headline embedding) in one
-    1° cell; it is breaking when at least 7 outlets cover it in the last 2
-    hours, and they are at least as many as covered it in the 22 hours
-    before. A topic keeps the events whose stories are mostly of it.
+    1° cell. It is breaking when, in the last 2 hours, at least 7 outlets
+    cover it (counting every copy's outlet, so wire copies count) across at
+    least 3 distinct stories (so one syndicated feature can't qualify), and
+    they are at least as many as covered it in the 22 hours before. Each
+    place lists its best breaking event, and an event filed under two
+    places is listed once. A topic keeps the events whose stories are
+    mostly of it.
     """
     tag = _globe_topic_tag(topic)
     stories = await _cached_breaking()
