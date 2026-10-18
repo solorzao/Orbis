@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { GlobeInstance } from "globe.gl";
-import { GlobePoint } from "@/types/news";
+import type { CountryLink, GlobePoint } from "@/types/news";
 import {
   GLOBE_OVERSCAN_PX,
   HEATMAP,
+  canvasColor,
   HOME_VIEW,
   driftLng,
   durationMs,
@@ -19,12 +20,14 @@ import {
   type GlobeGeometry,
 } from "@/lib/globeView";
 import type { ScreenPoint } from "@/lib/hoverCard";
+import { ARC_ALTITUDE_SCALE, arcDashTime, arcFlows, linkArcs, type GlobeArc } from "@/lib/links";
 import { webGpuReady } from "@/lib/webgpu";
 import type { GlobeLayer } from "@/components/LayerSwitcher";
 
 /** How high the dots stand off the globe (in globe radii). */
 const DOT_ALTITUDE = 0.01;
 const NO_DOTS: GlobePoint[] = [];
+const NO_LINKS: CountryLink[] = [];
 
 // Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
 // immutable: a changed file gets a new version (see public/geo/README.md).
@@ -34,8 +37,12 @@ export interface GlobeControls {
   flyTo: (lat: number, lng: number, altitude: number) => void;
   /** Where the globe sits on screen (for the orbital rings), or null once torn down. */
   getGeometry: () => GlobeGeometry | null;
-  /** Where a place's dot is on screen, or null on the globe's far side (the hover card's HUD). */
-  project: (lat: number, lng: number) => ScreenPoint | null;
+  /**
+   * Where a place's dot is on screen, or null on the globe's far side (the
+   * hover card's HUD). With an altitude (in globe radii), a point above it:
+   * the top of an arc, for its pill.
+   */
+  project: (lat: number, lng: number, altitude?: number) => ScreenPoint | null;
 }
 
 interface GlobeProps {
@@ -51,6 +58,8 @@ interface GlobeProps {
   reduced?: boolean;
   /** Low-power mode: the globe holds still. */
   lowPower?: boolean;
+  /** A touch-only screen: the arcs' dashes hold still. */
+  touch?: boolean;
   /** Dots (the default) or Intensity, a heatmap of the same places; dots hide under it. */
   layer?: GlobeLayer;
   /**
@@ -60,6 +69,13 @@ interface GlobeProps {
   holdHeatmap?: boolean;
   /** A replay is playing: on the main-thread path the dots show over the held heatmap. */
   replaying?: boolean;
+  /** The Links layer's links, drawn as arcs (none while it is off). */
+  links?: CountryLink[];
+  /** The inspected link's linkKey: its arc takes the highlight colour. */
+  inspectedLink?: string | null;
+  /** The link whose arc is under the pointer, or null when it leaves the arcs. */
+  onArcHover?: (link: CountryLink | null) => void;
+  onArcClick?: (link: CountryLink) => void;
 }
 
 interface LandFeature {
@@ -75,6 +91,11 @@ function readGlobeTokens() {
     land: token("--globe-land", "#6f78c9"),
     atmosphere: token("--globe-atmosphere", "#8fb4ff"),
     driftMs: durationMs(token("--dur-drift", "40000ms"), 40000),
+    arcs: {
+      coverage: canvasColor(token("--arc-coverage", ""), "rgba(180, 190, 255, 0.30)"),
+      highlight: canvasColor(token("--arc-highlight", ""), "#7fe6ff"),
+      flowMs: durationMs(token("--dur-arc-flow", "6000ms"), 6000),
+    },
   };
 }
 
@@ -87,13 +108,20 @@ export default function Globe({
   onReady,
   reduced = false,
   lowPower = false,
+  touch = false,
   layer = "dots",
   holdHeatmap = false,
   replaying = false,
+  links = NO_LINKS,
+  inspectedLink = null,
+  onArcHover,
+  onArcClick,
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  // The visitor is dragging the globe: the arcs' dashes pause until they let go.
+  const [dragging, setDragging] = useState(false);
 
   const onPointClickRef = useRef(onPointClick);
   onPointClickRef.current = onPointClick;
@@ -103,6 +131,15 @@ export default function Globe({
 
   const onEmptyClickRef = useRef(onEmptyClick);
   onEmptyClickRef.current = onEmptyClick;
+
+  const onArcHoverRef = useRef(onArcHover);
+  onArcHoverRef.current = onArcHover;
+
+  const onArcClickRef = useRef(onArcClick);
+  onArcClickRef.current = onArcClick;
+
+  // The tokens the scene was built with, for the effects that redraw it.
+  const tokensRef = useRef<ReturnType<typeof readGlobeTokens> | null>(null);
 
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
@@ -134,7 +171,8 @@ export default function Globe({
     if (!containerRef.current || globeRef.current) return;
     const container = containerRef.current;
     const tokens = readGlobeTokens();
-    // Set when globe.gl reports a dot click, for the empty-click check below.
+    tokensRef.current = tokens;
+    // Set when globe.gl reports a dot (or arc) click, for the empty-click check below.
     let pointClicked = false;
 
     const globe = new GlobeGL(container, { animateIn: false })
@@ -200,6 +238,27 @@ export default function Globe({
       .onPointClick((point: object) => {
         pointClicked = true;
         onPointClickRef.current(point as GlobePoint);
+      })
+      // Links (lib/links): co-coverage arcs, each an object from linkArcs
+      .arcsData([])
+      .arcStartLat("startLat")
+      .arcStartLng("startLng")
+      .arcEndLat("endLat")
+      .arcEndLng("endLng")
+      .arcColor("color")
+      .arcStroke("stroke")
+      .arcDashLength("dashLength")
+      .arcDashGap("dashGap")
+      .arcDashAnimateTime("dashAnimateTime")
+      .arcAltitudeAutoScale(ARC_ALTITUDE_SCALE)
+      .arcsTransitionDuration(0)
+      // No arcLabel: the arc pill (ArcPill) names the hovered link.
+      .onArcHover((arc: object | null) => {
+        onArcHoverRef.current?.((arc as GlobeArc | null)?.link ?? null);
+      })
+      .onArcClick((arc: object) => {
+        pointClicked = true;
+        onArcClickRef.current?.((arc as GlobeArc).link);
       })
       .onZoom((pov: { lat: number; lng: number; altitude: number }) => {
         // The drift moves the camera every frame without zooming; only a real
@@ -272,6 +331,16 @@ export default function Globe({
       driftStoppedRef.current = true;
     };
     container.addEventListener("pointerdown", stopDrift);
+    // A press on the globe may become a drag: the arcs pause until it ends, wherever.
+    // A release can also be lost: the window loses focus mid-drag, or the
+    // canvas loses its pointer capture.
+    const grab = () => setDragging(true);
+    const release = () => setDragging(false);
+    container.addEventListener("pointerdown", grab);
+    container.addEventListener("lostpointercapture", release);
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    window.addEventListener("blur", release);
     container.addEventListener("wheel", stopDrift, { passive: true });
     let driftFrame = 0;
     const driftStart = performance.now();
@@ -307,14 +376,14 @@ export default function Globe({
           R: projectedRadius(r.height, g.camera().fov, g.pointOfView().altitude),
         };
       },
-      project: (lat: number, lng: number) => {
+      project: (lat: number, lng: number, altitude?: number) => {
         const g = globeRef.current;
         if (!g) return null;
         // Facing the camera (mockup `facing`): a little past the limb counts as hidden.
-        const p = g.getCoords(lat, lng, 0);
+        const p = g.getCoords(lat, lng, altitude ?? 0);
         const c = g.camera().position;
         if (p.x * c.x + p.y * c.y + p.z * c.z <= g.getGlobeRadius() ** 2 * 1.02) return null;
-        const s = g.getScreenCoords(lat, lng, DOT_ALTITUDE);
+        const s = g.getScreenCoords(lat, lng, altitude ?? DOT_ALTITUDE);
         if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) return null;
         const r = container.getBoundingClientRect();
         return { x: r.left + s.x, y: r.top + s.y };
@@ -337,6 +406,11 @@ export default function Globe({
       container.removeEventListener("pointerup", checkEmptyClick);
       window.removeEventListener("resize", handleResize);
       container.removeEventListener("pointerdown", stopDrift);
+      container.removeEventListener("pointerdown", grab);
+      container.removeEventListener("lostpointercapture", release);
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      window.removeEventListener("blur", release);
       container.removeEventListener("wheel", stopDrift);
     };
   }, []);
@@ -360,6 +434,39 @@ export default function Globe({
       globeRef.current.ringRepeatPeriod(ringRepeatMs({ reduced, lowPower }));
     }
   }, [reduced, lowPower, isLoaded]);
+
+  // The Links layer's arcs: the inspected one highlighted, flowing when motion
+  // allows. New arc objects make three-globe build new meshes, so a drag
+  // doesn't come through here (see the next effect).
+  useEffect(() => {
+    const globe = globeRef.current;
+    const container = containerRef.current;
+    const tokens = tokensRef.current;
+    if (!globe || !isLoaded || !tokens) return;
+    const flow = arcFlows({ reduced, lowPower, touch });
+    const arcs = linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow });
+    globe.arcsData(arcs);
+    if (container) {
+      // read by the e2e tests: WebGL arcs can't be found in the DOM
+      container.dataset.arcs = String(arcs.length);
+      container.dataset.arcDashed = String(arcs.some((a) => a.dashGap > 0));
+      // how many times arcs were drawn: pausing them must not redraw any
+      container.dataset.arcsDrawn = String(Number(container.dataset.arcsDrawn ?? 0) + 1);
+    }
+  }, [links, inspectedLink, reduced, lowPower, touch, isLoaded]);
+
+  // A drag pauses the arcs' dashes in place: only the accessor changes, so
+  // three-globe keeps each mesh, its dash pattern and where its dashes are.
+  useEffect(() => {
+    const globe = globeRef.current;
+    const container = containerRef.current;
+    if (!globe || !isLoaded) return;
+    globe.arcDashAnimateTime(arcDashTime(dragging) as (arc: object) => number);
+    if (container) {
+      const flowing = arcFlows({ reduced, lowPower, touch, dragging }) && links.length > 0;
+      container.dataset.arcFlow = String(flowing);
+    }
+  }, [dragging, links, reduced, lowPower, touch, isLoaded]);
 
   // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {

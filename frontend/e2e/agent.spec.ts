@@ -52,8 +52,8 @@ test.describe("Agent Panel", () => {
     await expect(page.getByTestId("side-panel").getByTestId("agent-panel")).toBeVisible();
   });
 
-  test("the Co-pilot tab brings the agent back from Stories", async ({ page }) => {
-    await page.getByTestId("side-tab-stories").click();
+  test("the Co-pilot tab brings the agent back from Inspect", async ({ page }) => {
+    await page.getByTestId("side-tab-inspect").click();
     await expect(page.getByTestId("agent-panel")).not.toBeVisible();
     await page.getByTestId("side-tab-copilot").click();
     await expect(page.getByTestId("agent-panel")).toBeVisible();
@@ -63,8 +63,8 @@ test.describe("Agent Panel", () => {
     const copilot = page.getByTestId("side-tab-copilot");
     await copilot.focus();
     await page.keyboard.press("ArrowRight");
-    await expect(page.getByTestId("side-tab-stories")).toBeFocused();
-    await expect(page.getByTestId("side-tab-stories")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("side-tab-inspect")).toBeFocused();
+    await expect(page.getByTestId("side-tab-inspect")).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Home");
     await expect(copilot).toBeFocused();
     await expect(page.getByTestId("agent-panel")).toBeVisible();
@@ -183,7 +183,7 @@ test.describe("Agent Panel", () => {
     await expect(page.locator(".msg.user")).toHaveText("What's the biggest story right now?");
   });
 
-  test("an answer that lands while Stories is open is in view on coming back", async ({ page }) => {
+  test("an answer that lands while Inspect is open is in view on coming back", async ({ page }) => {
     let release = () => {};
     const released = new Promise<void>((resolve) => (release = resolve));
     const answer = Array.from({ length: 30 }, (_, i) => `Paragraph ${i + 1} on France.`).join(
@@ -200,7 +200,7 @@ test.describe("Agent Panel", () => {
 
     await openCopilot(page);
     await askQuestion(page, "Tell me everything about France");
-    await page.getByTestId("side-tab-stories").click();
+    await page.getByTestId("side-tab-inspect").click();
     release();
     await expect(page.getByText("Paragraph 30 on France.")).toBeAttached();
 
@@ -225,7 +225,7 @@ test.describe("Agent Panel", () => {
     await log.evaluate((el) => el.scrollTo({ top: 120 }));
     await expect.poll(() => log.evaluate((el) => el.scrollTop)).toBe(120);
 
-    await page.getByTestId("side-tab-stories").click();
+    await page.getByTestId("side-tab-inspect").click();
     await page.getByTestId("side-tab-copilot").click();
     await expect.poll(() => log.evaluate((el) => el.scrollTop)).toBe(120);
   });
@@ -337,7 +337,7 @@ test.describe("Co-pilot console", () => {
     await expect(page.getByTestId("side-tab-copilot")).toHaveAttribute("aria-selected", "true");
 
     await actions.getByRole("button", { name: "Show stories here" }).click();
-    await expect(page.getByTestId("side-tab-stories")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("side-tab-inspect")).toHaveAttribute("aria-selected", "true");
     await expect(
       page.getByTestId("news-panel").getByRole("heading", { name: "Paris, France" }),
     ).toBeVisible();

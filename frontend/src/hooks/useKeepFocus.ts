@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type RefObject } from "react";
 
 /**
  * Keeps focus in a region when a change removes the control that had it,
- * such as a place minimized or closed in the Stories tab. Call the returned
+ * such as a place minimized or closed in the Inspect tab. Call the returned
  * function in the same handler as the change, with the place whose pill
  * should take focus (an element with `data-place` set to its id). Once that
  * change renders, if focus was lost (it is on the body), it moves to that

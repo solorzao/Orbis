@@ -347,6 +347,38 @@ describe("CoPilot", () => {
       expect(showStoriesFor).toHaveBeenCalledTimes(1);
     });
 
+    it("offer Show links when the answer's places span countries; it turns Links on", () => {
+      const turnOn = vi.fn();
+      const showLinksFor = vi.fn(() => ({ on: false, turnOn }));
+      renderCoPilot({ messages: answer({ globeActions: actions }), showLinksFor });
+      expect(showLinksFor).toHaveBeenCalledWith(actions);
+      const pills = within(screen.getByRole("group", { name: "Suggested actions" })).getAllByRole(
+        "button",
+      );
+      expect(pills.map((p) => p.textContent)).toEqual(["Fly to Lagos", "Fly there", "Show links"]);
+      expect(pills[2]).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(pills[2]);
+      expect(turnOn).toHaveBeenCalled();
+    });
+
+    it("keep Show links once Links is on, pressed and inert, so focus stays on it", () => {
+      const turnOn = vi.fn();
+      renderCoPilot({
+        messages: answer({ globeActions: actions }),
+        showLinksFor: () => ({ on: true, turnOn }),
+      });
+      const pill = screen.getByRole("button", { name: "Show links" });
+      expect(pill).toHaveAttribute("aria-pressed", "true");
+      expect(pill).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(pill);
+      expect(turnOn).not.toHaveBeenCalled();
+    });
+
+    it("leave out Show links when it does not apply", () => {
+      renderCoPilot({ messages: answer({ globeActions: actions }), showLinksFor: () => null });
+      expect(screen.queryByRole("button", { name: "Show links" })).toBeNull();
+    });
+
     it("wait for the answer to finish", () => {
       renderCoPilot({ messages: answer({ globeActions: actions, status: "streaming" }) });
       expect(screen.queryByRole("group", { name: "Suggested actions" })).toBeNull();
@@ -409,7 +441,7 @@ describe("CoPilot", () => {
       const box = layOut(screen.getByTestId("agent-log"));
       resized();
 
-      box.clientHeight = 0; // Stories tab: the log is display: none
+      box.clientHeight = 0; // Inspect tab: the log is display: none
       resized();
       box.scrollHeight = 1600;
       rerender(<CoPilot {...props} messages={longer("A long answer.")} />);

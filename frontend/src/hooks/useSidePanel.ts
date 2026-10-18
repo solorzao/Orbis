@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 
-export type SideTab = "copilot" | "stories";
+export type SideTab = "copilot" | "inspect";
 
 /** From this width the side panel floats on the right; below it, it is a bottom sheet. */
 export const SIDE_WIDE_QUERY = "(min-width: 1180px)";
@@ -47,11 +47,11 @@ export function useSidePanel() {
 
   const setOpen = useCallback((open: boolean) => setChosen(open), []);
 
-  /** A dot was clicked: show its stories. */
-  const showStories = useCallback(() => {
-    setTab("stories");
+  /** A dot or an arc was clicked: inspect it. */
+  const showInspect = useCallback(() => {
+    setTab("inspect");
     setChosen(true);
   }, []);
 
-  return { tab, setTab, open: chosen ?? wide, setOpen, showStories };
+  return { tab, setTab, open: chosen ?? wide, setOpen, showInspect };
 }

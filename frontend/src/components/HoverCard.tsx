@@ -143,6 +143,8 @@ interface HoverCardProps {
   onReveal: (url: string) => void;
   /** On a touch screen: docked above the bottom row, with an Open stories pill. */
   docked?: boolean;
+  /** While Links is on: how many countries the place's country is linked to. */
+  linkedCountries?: number | null;
   onOpen?: () => void;
   onPointerEnter?: () => void;
   onPointerLeave?: () => void;
@@ -166,6 +168,7 @@ export default function HoverCard({
   revealed,
   onReveal,
   docked = false,
+  linkedCountries = null,
   onOpen,
   onPointerEnter,
   onPointerLeave,
@@ -266,6 +269,11 @@ export default function HoverCard({
           </button>
         ) : (
           <span>Click to open</span>
+        )}
+        {!!linkedCountries && (
+          <span className="foot-links">
+            {linkedCountries} linked {linkedCountries === 1 ? "country" : "countries"}
+          </span>
         )}
       </div>
     </article>

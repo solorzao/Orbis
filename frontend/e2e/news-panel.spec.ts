@@ -10,7 +10,7 @@ import {
   LONDON,
 } from "./fixtures";
 
-const recentPlaces = (page: Page) => page.getByRole("group", { name: "Recent places" });
+const recentPlaces = (page: Page) => page.getByRole("group", { name: "Recent places and links" });
 
 test.describe("News Panel", () => {
   test("panel is not visible on initial load", async ({ page }) => {
@@ -21,12 +21,12 @@ test.describe("News Panel", () => {
   });
 });
 
-test.describe("Stories tab", () => {
+test.describe("Inspect tab: a place", () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  test("clicking a dot opens the side panel on Stories with the place's stories", async ({
+  test("clicking a dot opens the side panel on Inspect with the place's stories", async ({
     page,
   }) => {
     await gotoStillGlobe(page);
@@ -38,7 +38,7 @@ test.describe("Stories tab", () => {
 
     const side = page.getByTestId("side-panel");
     await expect(side).toBeVisible();
-    await expect(page.getByTestId("side-tab-stories")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("side-tab-inspect")).toHaveAttribute("aria-selected", "true");
     const panel = side.getByTestId("news-panel");
     await expect(panel).toBeVisible();
     await expect(panel.getByText("3 stories")).toBeVisible();
@@ -114,7 +114,7 @@ test.describe("Stories tab", () => {
     await expect(page.getByText("Click a dot on the globe to see its stories here.")).toBeVisible();
   });
 
-  test("minimize, Escape and close keep keyboard focus in the Stories tab", async ({ page }) => {
+  test("minimize, Escape and close keep keyboard focus in the Inspect tab", async ({ page }) => {
     await gotoStillGlobe(page);
     await clickPlace(page, PARIS);
     await clickPlace(page, LONDON);
@@ -140,10 +140,10 @@ test.describe("Stories tab", () => {
     await page.keyboard.press("Enter");
     await expect(london).toBeFocused();
 
-    // Closing the open place leaves no pill to take it: the Stories panel does.
+    // Closing the open place leaves no pill to take it: the Inspect panel does.
     await panel.getByRole("button", { name: "Close panel" }).focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("tabpanel", { name: "Stories" })).toBeFocused();
+    await expect(page.getByRole("tabpanel", { name: "Inspect" })).toBeFocused();
   });
 
   test("a long unbroken headline wraps instead of scrolling the panel sideways", async ({
@@ -157,7 +157,7 @@ test.describe("Stories tab", () => {
       );
     });
     await clickPlace(page, PARIS);
-    const stories = page.getByRole("tabpanel", { name: "Stories" });
+    const stories = page.getByRole("tabpanel", { name: "Inspect" });
     await expect(stories.getByRole("article")).toHaveCount(3);
     const overflow = await stories.evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);

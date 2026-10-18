@@ -6,6 +6,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 import { GLOBE_OVERSCAN_PX, HOME_VIEW } from "../src/lib/globeView";
+import { arcApex } from "../src/lib/links";
 
 // ── Mock data ───────────────────────────────────────────────────────
 
@@ -248,6 +249,172 @@ export const MOCK_TOPICS = [
   { topic: "Health", count: 14 },
 ];
 
+// ── Links (co-coverage arcs) ────────────────────────────────────────
+
+/** Label points as the backend has them (country_centroids.py). */
+export const COUNTRIES = {
+  CA: { iso: "CA", name: "Canada", lat: 57.75, lng: -101.57 },
+  CN: { iso: "CN", name: "China", lat: 36.61, lng: 103.87 },
+  EG: { iso: "EG", name: "Egypt", lat: 26.51, lng: 29.84 },
+  FR: { iso: "FR", name: "France", lat: 46.61, lng: 2.34 },
+  GB: { iso: "GB", name: "United Kingdom", lat: 53.88, lng: -2.66 },
+  IL: { iso: "IL", name: "Israel", lat: 30.95, lng: 34.88 },
+  IR: { iso: "IR", name: "Iran", lat: 32.52, lng: 54.29 },
+  RU: { iso: "RU", name: "Russia", lat: 61.69, lng: 99.22 },
+  SA: { iso: "SA", name: "Saudi Arabia", lat: 24.12, lng: 44.52 },
+  UA: { iso: "UA", name: "Ukraine", lat: 49.15, lng: 31.23 },
+  US: { iso: "US", name: "United States", lat: 39.5, lng: -99.06 },
+  YE: { iso: "YE", name: "Yemen", lat: 15.91, lng: 47.54 },
+} as const;
+
+type Iso = keyof typeof COUNTRIES;
+
+/** A link as /api/links sends it: its ends in code order. */
+function mockLink(x: Iso, y: Iso, n: number, lift: number, topic: string, tone: number, from: Iso) {
+  const [a, b] = [x, y].sort() as [Iso, Iso];
+  return { a: COUNTRIES[a], b: COUNTRIES[b], n, lift, topic, tone, from };
+}
+
+/** /api/links?rank=lift: the surprising pairs first. */
+export const MOCK_LINKS_LIFT = [
+  mockLink("SA", "YE", 46, 6.2, "conflict", -0.52, "SA"),
+  mockLink("EG", "IL", 23, 5.1, "conflict", -0.41, "IL"),
+  mockLink("RU", "UA", 64, 3.4, "conflict", -0.55, "UA"),
+  mockLink("FR", "GB", 18, 2.6, "economy", 0.06, "GB"),
+  mockLink("FR", "UA", 15, 2.2, "conflict", -0.35, "FR"),
+  mockLink("IR", "US", 41, 1.8, "politics", -0.32, "US"),
+];
+
+/** /api/links?rank=count: the most covered pairs first (hubs included). */
+export const MOCK_LINKS_COUNT = [
+  mockLink("RU", "US", 69, 1.2, "politics", -0.28, "US"),
+  mockLink("RU", "UA", 64, 3.4, "conflict", -0.55, "UA"),
+  mockLink("GB", "US", 62, 1.1, "politics", -0.08, "US"),
+  mockLink("SA", "YE", 46, 6.2, "conflict", -0.52, "SA"),
+  mockLink("IR", "US", 41, 1.8, "politics", -0.32, "US"),
+  mockLink("CA", "US", 38, 1.3, "economy", -0.12, "CA"),
+  mockLink("CN", "US", 35, 1.1, "economy", -0.1, "US"),
+];
+
+/** /api/links as the backend answers it, by ?rank= (lift by default). */
+export function mockLinks(url: string) {
+  return new URL(url).searchParams.get("rank") === "count" ? MOCK_LINKS_COUNT : MOCK_LINKS_LIFT;
+}
+
+/** Whether a request is for the arcs (/api/links), not a link's detail or explanation. */
+export const isLinksList = (url: URL) => url.pathname === "/api/links";
+
+/** A story that links two countries, as /api/links/detail lists it. */
+function linkStory(
+  id: string,
+  title: string,
+  source: string,
+  region: string,
+  cc: Iso,
+  mins: number,
+  tone: number,
+) {
+  return {
+    id,
+    title,
+    summary: null,
+    source_url: `https://example.com/${id}`,
+    source_name: source,
+    source_language: "en",
+    published_at: ago(mins),
+    ingested_at: ago(mins),
+    latitude: COUNTRIES[cc].lat,
+    longitude: COUNTRIES[cc].lng,
+    country_code: cc,
+    region,
+    topic_tags: ["politics"],
+    sentiment_score: tone,
+    entities: {},
+  };
+}
+
+/** /api/links/detail for Iran and the United States, in code order (IR, US). */
+export const MOCK_LINK_DETAIL = {
+  a: COUNTRIES.IR,
+  b: COUNTRIES.US,
+  n: 41,
+  lift: 1.8,
+  topic_mix: { politics: 24, conflict: 12, economy: 5 },
+  tone: -0.32,
+  shared: [
+    { name: "IAEA", type: "org", n: 9 },
+    { name: "State Department", type: "org", n: 6 },
+    { name: "Revolutionary Guard", type: "org", n: 4 },
+  ],
+  themes: ["nuclear talks", "sanctions", "diplomacy"],
+  articles: [
+    linkStory(
+      "link-001",
+      "US and Iran resume indirect nuclear talks in Oman",
+      "Reuters",
+      "Washington, United States",
+      "US",
+      18,
+      -0.1,
+    ),
+    linkStory(
+      "link-002",
+      "Tehran rejects new sanctions as talks stall",
+      "Al Jazeera",
+      "Tehran, Iran",
+      "IR",
+      64,
+      -0.48,
+    ),
+    linkStory(
+      "link-003",
+      "Oil climbs as Washington weighs Iran waivers",
+      "Bloomberg",
+      "New York, United States",
+      "US",
+      150,
+      0.12,
+    ),
+  ],
+};
+
+/** /api/links/detail as the backend answers it: Iran and the US, else a pair's arc numbers. */
+export function mockLinkDetail(url: string) {
+  const params = new URL(url).searchParams;
+  const [a, b] = [params.get("a"), params.get("b")].map((c) => (c ?? "").toUpperCase()).sort();
+  if (a === "IR" && b === "US") return MOCK_LINK_DETAIL;
+  const link = [...MOCK_LINKS_LIFT, ...MOCK_LINKS_COUNT].find(
+    (l) => l.a.iso === a && l.b.iso === b,
+  );
+  return {
+    a: COUNTRIES[a as Iso],
+    b: COUNTRIES[b as Iso],
+    n: link?.n ?? 0,
+    lift: link?.lift ?? 0,
+    topic_mix: link ? { [link.topic]: link.n } : {},
+    tone: link?.tone ?? 0,
+    shared: [],
+    themes: [],
+    articles: [],
+  };
+}
+
+/** /api/links/explain's answer for Iran and the United States. */
+export const MOCK_LINK_EXPLAIN = {
+  text: "Coverage links the two over renewed indirect nuclear talks and new sanctions, with US outlets writing most of the stories.",
+};
+
+/** Mock the Links layer's endpoints: the arcs, a link's detail and its explanation. */
+export async function mockLinkRoutes(page: Page) {
+  await page.route(isLinksList, (route) =>
+    route.fulfill({ json: mockLinks(route.request().url()) }),
+  );
+  await page.route("**/api/links/detail*", (route) =>
+    route.fulfill({ json: mockLinkDetail(route.request().url()) }),
+  );
+  await page.route("**/api/links/explain", (route) => route.fulfill({ json: MOCK_LINK_EXPLAIN }));
+}
+
 // ── SSE helper for agent mock ───────────────────────────────────────
 
 export function buildAgentSSE(options: {
@@ -329,6 +496,9 @@ export async function mockAllApiRoutes(page: Page) {
       json: { summary: "A mock filtered summary.", article_count: 2 },
     }),
   );
+
+  // The Links layer
+  await mockLinkRoutes(page);
 }
 
 /**
@@ -452,6 +622,70 @@ export async function clickPlace(page: Page, place: MockPlace) {
   }
   throw new Error(
     `No dot for ${place.location_name} (tried around ${Math.round(x)}, ${Math.round(y)})`,
+  );
+}
+
+// ── Hovering and clicking an arc ────────────────────────────────────
+
+type MockLink = (typeof MOCK_LINKS_LIFT)[number];
+
+/**
+ * Where the top of a link's arc is on screen while the globe rests at
+ * HOME_VIEW: the midpoint of the curve three-globe draws from the link's
+ * origin (lib/links arcApex).
+ */
+function arcTop(page: Page, link: MockLink) {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("arcs need a fixed viewport");
+  const [start, end] = link.from === link.b.iso ? [link.b, link.a] : [link.a, link.b];
+  const apex = arcApex(start, end);
+  return homeViewScreenPoint(apex.lat, apex.lng, viewport, apex.altitude);
+}
+
+/**
+ * Click the top of a link's arc, as a visitor would, until its inspector
+ * opens. As with clickPlace, the pointer rests first (globe.gl finds the arc
+ * under it on its next frame) and nearby pixels are tried: the arc is thin.
+ */
+export async function clickArc(page: Page, link: MockLink, heading: string) {
+  const { x, y } = arcTop(page, link);
+  const opened = page
+    .getByTestId("link-inspector")
+    .getByRole("heading", { name: heading, exact: true });
+  for (const [dx, dy] of NEARBY) {
+    await page.mouse.move(x + dx, y + dy);
+    await page.waitForTimeout(150);
+    await page.mouse.down();
+    await page.mouse.up();
+    const shown = await opened
+      .waitFor({ state: "visible", timeout: 1000 })
+      .then(() => true)
+      .catch(() => false);
+    if (shown) return;
+  }
+  throw new Error(
+    `No arc for ${link.a.iso}-${link.b.iso} (around ${Math.round(x)}, ${Math.round(y)})`,
+  );
+}
+
+/**
+ * Rest the pointer on the top of a link's arc (lib/links arcApex, the curve
+ * three-globe draws) until its pill shows. The arc is a thin tube, so nearby
+ * pixels are tried too. Returns the pill.
+ */
+export async function hoverArc(page: Page, link: MockLink) {
+  const { x, y } = arcTop(page, link);
+  const pill = page.locator('[data-testid="arc-pill"][data-placed="true"]');
+  for (const [dx, dy] of NEARBY) {
+    await page.mouse.move(x + dx, y + dy);
+    const shown = await pill
+      .waitFor({ state: "visible", timeout: 1000 })
+      .then(() => true)
+      .catch(() => false);
+    if (shown) return { pill, x, y };
+  }
+  throw new Error(
+    `No arc pill for ${link.a.iso}-${link.b.iso} (around ${Math.round(x)}, ${Math.round(y)})`,
   );
 }
 

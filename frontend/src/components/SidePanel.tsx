@@ -5,7 +5,7 @@ import type { SideTab } from "@/hooks/useSidePanel";
 
 const TABS: { id: SideTab; label: string }[] = [
   { id: "copilot", label: "Co-pilot" },
-  { id: "stories", label: "Stories" },
+  { id: "inspect", label: "Inspect" },
 ];
 
 interface SidePanelProps {
@@ -15,11 +15,11 @@ interface SidePanelProps {
   open: boolean | null;
   onOpenChange: (open: boolean) => void;
   copilot: ReactNode;
-  stories: ReactNode;
-  /** Places open in the Stories tab, shown as a badge on the collapsed pill. */
-  storiesCount?: number;
-  /** The Stories tab panel, where focus lands when a place's controls go (useKeepFocus). */
-  storiesRef?: Ref<HTMLDivElement>;
+  inspect: ReactNode;
+  /** Places and links open in the Inspect tab, shown as a badge on the collapsed pill. */
+  inspectCount?: number;
+  /** The Inspect tab panel, where focus lands when a place's controls go (useKeepFocus). */
+  inspectRef?: Ref<HTMLDivElement>;
 }
 
 /** False when CSS hides the element (the reopen pill is hidden on the sheet). */
@@ -28,7 +28,7 @@ function isShown(el: HTMLElement): boolean {
 }
 
 /**
- * Co-pilot and Stories in one glass panel (mockup `.side`). From 1180px it
+ * Co-pilot and Inspect (a place's stories, or a link) in one glass panel (mockup `.side`). From 1180px it
  * floats on the right and collapses to a pill at the same corner; below that
  * it is a bottom sheet that collapses to its tab bar (soft-orbit.css).
  *
@@ -43,14 +43,14 @@ export default function SidePanel({
   open,
   onOpenChange,
   copilot,
-  stories,
-  storiesCount = 0,
-  storiesRef,
+  inspect,
+  inspectCount = 0,
+  inspectRef,
 }: SidePanelProps) {
   const id = useId();
   const tabId = (t: SideTab) => `${id}-tab-${t}`;
   const panelId = (t: SideTab) => `${id}-panel-${t}`;
-  const content: Record<SideTab, ReactNode> = { copilot, stories };
+  const content: Record<SideTab, ReactNode> = { copilot, inspect };
 
   const tabRefs = useRef<Partial<Record<SideTab, HTMLButtonElement | null>>>({});
   const pillRef = useRef<HTMLButtonElement>(null);
@@ -88,14 +88,14 @@ export default function SidePanel({
     tabRefs.current[next]?.focus();
   };
 
-  const places = `${storiesCount} ${storiesCount === 1 ? "place" : "places"} in Stories`;
+  const opened = `${inspectCount} open in Inspect`;
   const active = TABS.find((t) => t.id === tab)!.label;
 
   return (
     <>
       <section
         className="glass side"
-        aria-label="Co-pilot and stories"
+        aria-label="Co-pilot and inspector"
         data-testid="side-panel"
         data-open={open ?? undefined}
       >
@@ -154,7 +154,7 @@ export default function SidePanel({
         {TABS.map((t) => (
           <div
             key={t.id}
-            ref={t.id === "stories" ? storiesRef : undefined}
+            ref={t.id === "inspect" ? inspectRef : undefined}
             id={panelId(t.id)}
             role="tabpanel"
             aria-labelledby={tabId(t.id)}
@@ -173,14 +173,14 @@ export default function SidePanel({
         className="pillbar pill lg side-open"
         data-testid="side-open"
         hidden={open !== false}
-        aria-label={storiesCount > 0 ? `Open ${active}, ${places}` : `Open ${active}`}
+        aria-label={inspectCount > 0 ? `Open ${active}, ${opened}` : `Open ${active}`}
         onClick={() => {
           focusAfter.current = "tab";
           onOpenChange(true);
         }}
       >
         {active}
-        {storiesCount > 0 && <span className="num">{storiesCount}</span>}
+        {inspectCount > 0 && <span className="num">{inspectCount}</span>}
       </button>
     </>
   );

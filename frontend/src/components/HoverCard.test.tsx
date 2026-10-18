@@ -153,6 +153,30 @@ describe("HoverCard", () => {
     expect(within(card).queryByRole("button", { name: "Open stories" })).toBeNull();
   });
 
+  it("says how many countries the place's country is linked to, while Links is on", () => {
+    const { card, rerender } = renderCard({ linkedCountries: 3 });
+    const foot = card.querySelector(".foot")!;
+    expect(foot).toHaveTextContent("Click to open3 linked countries");
+    expect(within(card).getByText("3 linked countries")).toHaveClass("foot-links");
+
+    const props = {
+      point: point(),
+      timeWindow: LIVE,
+      now: NOW,
+      preview: PREVIEW,
+      previewLoading: false,
+      revealed: new Set<string>(),
+      onReveal: () => {},
+    };
+    rerender(<HoverCard {...props} linkedCountries={1} />);
+    expect(within(card).getByText("1 linked country")).toBeInTheDocument();
+    // Links off (null), or a country with no links: nothing.
+    rerender(<HoverCard {...props} linkedCountries={null} />);
+    expect(card.querySelector(".foot-links")).toBeNull();
+    rerender(<HoverCard {...props} linkedCountries={0} />);
+    expect(card.querySelector(".foot-links")).toBeNull();
+  });
+
   it("is a compact card for a place without a lead story", () => {
     const { card } = renderCard({ point: point({ lead: undefined, topicMix: {} }) });
     expect(within(card).getByText("Paris, France")).toBeInTheDocument();

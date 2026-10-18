@@ -51,8 +51,16 @@ interface AgentMessageProps {
   activeTools?: readonly string[];
   onCitationClick?: (citation: Citation) => void;
   onFlyTo?: (action: GlobeAction) => void;
-  /** Opens the Stories tab at an action's place, or null when the globe has no dot there. */
+  /** Opens the Inspect tab at an action's place, or null when the globe has no dot there. */
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
+  /** Show links for an answer's places (Links' state and how to turn it on), or null. */
+  showLinksFor?: (actions: GlobeAction[]) => LinksAction | null;
+}
+
+/** The Show links pill: pressed (and inert) while Links is on. */
+export interface LinksAction {
+  on: boolean;
+  turnOn: () => void;
 }
 
 /**
@@ -67,6 +75,7 @@ function AgentMessage({
   onCitationClick,
   onFlyTo,
   showStoriesFor,
+  showLinksFor,
 }: AgentMessageProps) {
   if (message.role === "user") return <div className="msg user">{message.content}</div>;
 
@@ -114,6 +123,7 @@ function AgentMessage({
 
   const actions = streaming ? [] : (message.globeActions ?? []).slice(0, 3);
   const openStories = actions.length > 0 ? (showStoriesFor?.(actions[0]) ?? null) : null;
+  const showLinks = actions.length > 0 ? (showLinksFor?.(actions) ?? null) : null;
 
   return (
     <div className="msg bot" aria-busy={streaming}>
@@ -168,6 +178,18 @@ function AgentMessage({
           {openStories && (
             <button type="button" className="pill" onClick={openStories}>
               Show stories here
+            </button>
+          )}
+          {showLinks && (
+            // Stays once Links is on, pressed: so the focus has somewhere to stay.
+            <button
+              type="button"
+              className="pill"
+              aria-pressed={showLinks.on}
+              aria-disabled={showLinks.on || undefined}
+              onClick={showLinks.on ? undefined : showLinks.turnOn}
+            >
+              Show links
             </button>
           )}
         </div>
