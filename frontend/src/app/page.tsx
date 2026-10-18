@@ -19,6 +19,13 @@ import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { breakingDot, type BreakingStory } from "@/lib/breaking";
+import { dotInCell } from "@/lib/cells";
+import {
+  readSinceDismissed,
+  sinceRange,
+  writeSinceDismissed,
+  type SincePlace,
+} from "@/lib/sinceVisit";
 import {
   actionCountries,
   linkKey,
@@ -32,6 +39,8 @@ import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
 import { useLinkExplain } from "@/hooks/useLinkExplain";
 import { useBreaking } from "@/hooks/useBreaking";
+import { useLastVisit } from "@/hooks/useLastVisit";
+import { useDelta } from "@/hooks/useDelta";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
@@ -55,6 +64,7 @@ import HoverCard from "@/components/HoverCard";
 import ArcPill from "@/components/ArcPill";
 import LinksChip from "@/components/LinksChip";
 import BreakingTicker from "@/components/BreakingTicker";
+import SinceStrip from "@/components/SinceStrip";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -82,6 +92,11 @@ export default function Home() {
   // What is breaking now, for the topic: only for a live window (a range or a
   // replay looks back), polled every 5 minutes. The ticker and the rings show it.
   const breaking = useBreaking(activeTopic, timeWindow.kind === "live" && !replaying);
+  // Since your last visit: the visit before this one (localStorage), what
+  // changed since (asked when it was 1 h to 7 days ago), and Dismiss (the session).
+  const lastVisit = useLastVisit();
+  const sinceDelta = useDelta(lastVisit);
+  const [sinceDismissed, setSinceDismissed] = useState(readSinceDismissed);
 
   // What the Inspect tab holds: places (their stories) and links, up to
   // MAX_PANELS together, and the one shown (a panelId or a linkId).
@@ -307,6 +322,27 @@ export default function Home() {
     [points, handlePointClick],
   );
 
+  // Show: the window from the last visit to now.
+  const handleSinceShow = useCallback(() => {
+    if (lastVisit !== null) changeWindow(sinceRange(lastVisit, Date.now()));
+  }, [lastVisit, changeWindow]);
+
+  // A place new since the visit: fly there and open it, as a breaking story.
+  const handleSinceOpen = useCallback(
+    (place: SincePlace) => {
+      globeControlsRef.current?.flyTo(place.lat, place.lng, 1.5);
+      handlePointClick(
+        dotInCell(points, { lat: place.lat, lng: place.lng, place: place.place, count: place.new }),
+      );
+    },
+    [points, handlePointClick],
+  );
+
+  const handleSinceDismiss = useCallback(() => {
+    writeSinceDismissed();
+    setSinceDismissed(true);
+  }, []);
+
   const updateLink = useCallback((linkId: string, updates: Partial<LinkEntry>) => {
     setLinkQueue((prev) => prev.map((l) => (l.linkId === linkId ? { ...l, ...updates } : l)));
   }, []);
@@ -455,6 +491,19 @@ export default function Home() {
     [linksOn, points],
   );
 
+  // "Since your last visit": under the brand from 1180px, a co-pilot callout below.
+  const since = (variant: "strip" | "callout") =>
+    sinceDelta && lastVisit !== null && !sinceDismissed ? (
+      <SinceStrip
+        variant={variant}
+        lastVisit={lastVisit}
+        delta={sinceDelta}
+        onShow={handleSinceShow}
+        onOpen={handleSinceOpen}
+        onDismiss={handleSinceDismiss}
+      />
+    ) : null;
+
   const inspectTab = (
     <>
       <RecentPlaces
@@ -558,6 +607,7 @@ export default function Home() {
         isOffline={apiError}
         isReplay={replaying}
       />
+      {since("strip")}
 
       {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
       <SidePanel
@@ -586,6 +636,7 @@ export default function Home() {
             showStoriesFor={showStoriesFor}
             showLinksFor={showLinksFor}
             breaking={breaking.length}
+            callout={since("callout")}
           />
         }
         inspect={inspectTab}
@@ -622,6 +673,7 @@ export default function Home() {
           places={points.length}
           reduced={reduced}
           playRef={playRef}
+          lastVisit={lastVisit}
         />
         <BreakingTicker stories={breaking} reduced={reduced} onOpen={handleBreakingOpen} />
       </BottomBar>

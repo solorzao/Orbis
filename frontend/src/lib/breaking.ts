@@ -3,8 +3,7 @@
  * started covering. The ticker names them and the globe rings their places.
  */
 import type { ApiBreakingStory } from "@/lib/api";
-import { TOPIC_COLORS } from "@/lib/clustering";
-import { cellKey } from "@/lib/cells";
+import { cellPoint, dotInCell } from "@/lib/cells";
 import type { GlobePoint } from "@/types/news";
 
 /**
@@ -40,35 +39,17 @@ export function outletsLabel(n: number): string {
   return `${n} ${n === 1 ? "outlet" : "outlets"}`;
 }
 
-/**
- * A stand-in dot for a breaking story's place when the globe has none there
- * (it shows the window's busiest 500 places, and a story breaking somewhere
- * quiet may not be one). It opens like a dot: the panel lists the cell's
- * stories by its lat/lng, and corrects the count from the event's stories
- * once a short page shows the cell's. No topic colour: a breaking story's
- * topic can be mislabelled.
- */
+/** A breaking story's place, as a stand-in dot (cells cellPoint). */
 export function breakingPoint(story: BreakingStory): GlobePoint {
-  return {
-    id: `breaking-${cellKey(story.lat, story.lng)}`,
-    lat: story.lat,
-    lng: story.lng,
-    size: 1,
-    color: TOPIC_COLORS.All,
-    articles: [],
-    isCluster: story.stories > 1,
-    count: story.stories,
-    locationName: story.place,
-    topic: "All",
-  };
+  return cellPoint({ lat: story.lat, lng: story.lng, place: story.place, count: story.stories });
 }
 
-/**
- * The dot a breaking story opens: the globe's dot in the story's own 1° cell
- * (its lat/lng is that cell's centre), else a stand-in (breakingPoint). Not
- * pointAt's nearest dot within 1.5 degrees: that is another place's.
- */
+/** The dot a breaking story opens: its cell's, else a stand-in (cells dotInCell). */
 export function breakingDot(points: readonly GlobePoint[], story: BreakingStory): GlobePoint {
-  const cell = cellKey(story.lat, story.lng);
-  return points.find((p) => cellKey(p.lat, p.lng) === cell) ?? breakingPoint(story);
+  return dotInCell(points, {
+    lat: story.lat,
+    lng: story.lng,
+    place: story.place,
+    count: story.stories,
+  });
 }

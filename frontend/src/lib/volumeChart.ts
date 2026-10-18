@@ -50,6 +50,11 @@ export function xForTime(t: number, start: number, end: number, width: number): 
   return ((t - start) / (end - start)) * width;
 }
 
+/** Where a time sits on the chart (the last-visit marker), or null when it is off the chart. */
+export function markerX(t: number, start: number, end: number, width: number): number | null {
+  return t < start || t > end ? null : xForTime(t, start, end, width);
+}
+
 /** The whole hour nearest to `x`, kept within [start, end]. */
 export function timeForX(x: number, start: number, end: number, width: number): number {
   const hours = Math.round(((x / width) * (end - start)) / HOUR_MS);

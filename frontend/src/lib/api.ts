@@ -164,6 +164,36 @@ export function fetchBreaking({
   return apiFetch<ApiBreakingStory[]>("/api/news/breaking", params, signal);
 }
 
+/** One of the places with the most new stories since a visit (/api/news/delta). */
+export interface ApiDeltaPlace {
+  lat: number;
+  lng: number;
+  place: string;
+  new: number;
+  lead: ApiGlobeLead;
+}
+
+/** What changed since a visit (/api/news/delta). */
+export interface ApiDelta {
+  new_stories: number;
+  new_places: number;
+  /** Breaking now, as /api/news/breaking lists them (every topic, at most 8). */
+  breaking: number;
+  /** Up to 5, most new stories first. */
+  top: ApiDeltaPlace[];
+}
+
+/** What changed since `since` (an ISO time, floored as the server floors it: floorSince). */
+export function fetchDelta({
+  since,
+  signal,
+}: {
+  since: string;
+  signal?: AbortSignal;
+}): Promise<ApiDelta> {
+  return apiFetch<ApiDelta>("/api/news/delta", { since }, signal);
+}
+
 export interface PlacePreviewQuery {
   lat: number;
   lng: number;

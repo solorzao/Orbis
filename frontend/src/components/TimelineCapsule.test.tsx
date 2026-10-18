@@ -115,6 +115,20 @@ describe("TimelineCapsule", () => {
     ]);
   });
 
+  it("marks the last visit on the chart, when it falls within the 7 days", async () => {
+    const { rerender } = await renderCapsule();
+    expect(screen.queryByTestId("last-visit-marker")).toBeNull();
+
+    const props = { timeWindow: DEFAULT_WINDOW, onChange: vi.fn(), stories: 1234, places: 56 };
+    rerender(<TimelineCapsule {...props} lastVisit={NOW - 14 * H} />);
+    const marker = screen.getByTestId("last-visit-marker");
+    expect(marker.querySelector("title")).toHaveTextContent("Your last visit");
+    expect(marker.querySelector("line")).toHaveAttribute("stroke-dasharray", "2 3");
+
+    rerender(<TimelineCapsule {...props} lastVisit={CHART_START - H} />);
+    expect(screen.queryByTestId("last-visit-marker")).toBeNull();
+  });
+
   it("draws only complete hours: the current one would read as a false dip", async () => {
     // 400px for 169 slots; the current hour (12:00, 31 stories so far) is the last.
     await renderCapsule();

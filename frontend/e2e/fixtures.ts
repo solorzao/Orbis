@@ -478,6 +478,55 @@ export async function withBreaking(page: Page) {
   await page.route(isBreaking, (route) => route.fulfill({ json: MOCK_BREAKING }));
 }
 
+// ── Since your last visit ───────────────────────────────────────────
+
+/** /api/news/delta: what changed since the visit, with the top places. */
+export const MOCK_DELTA = {
+  new_stories: 1286,
+  new_places: 212,
+  breaking: 4,
+  top: [
+    {
+      lat: 48.8566,
+      lng: 2.3522,
+      place: "Paris, France",
+      new: 64,
+      lead: breakingLead("Riot police clear a Paris square", "Reuters", 14, "politics"),
+    },
+    {
+      lat: 29.5,
+      lng: -98.5,
+      place: "Alamodome, Texas, United States",
+      new: 31,
+      lead: breakingLead("Airman dies after rappelling accident", "AP", 31, "economy"),
+    },
+    {
+      lat: 51.5074,
+      lng: -0.1278,
+      place: "London, United Kingdom",
+      new: 27,
+      lead: breakingLead("UK parliament debates trade deal", "BBC News", 80, "politics"),
+    },
+  ],
+};
+
+/** Whether a request asks what changed since a visit. */
+export const isDelta = (url: URL) => url.pathname === "/api/news/delta";
+
+/** localStorage, as useLastVisit keeps it. */
+export const LAST_VISIT_KEY = "orbis-last-visit";
+
+/**
+ * A last visit `hours` ago, seeded before each page load (as a returning
+ * visitor's browser has it; the page writes its own visit on leaving).
+ */
+export async function seedLastVisit(page: Page, hours: number) {
+  await page.addInitScript(
+    ([key, h]) => localStorage.setItem(key, new Date(Date.now() - h * 3_600_000).toISOString()),
+    [LAST_VISIT_KEY, hours] as const,
+  );
+}
+
 // ── SSE helper for agent mock ───────────────────────────────────────
 
 export function buildAgentSSE(options: {
@@ -565,6 +614,9 @@ export async function mockAllApiRoutes(page: Page) {
 
   // Breaking stories: none, as often (withBreaking adds some)
   await page.route(isBreaking, (route) => route.fulfill({ json: [] }));
+
+  // What changed since a visit (asked only when seedLastVisit made one)
+  await page.route(isDelta, (route) => route.fulfill({ json: MOCK_DELTA }));
 }
 
 /**

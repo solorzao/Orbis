@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   cleanLabel,
   type AgentMessage as AgentMessageType,
@@ -80,6 +80,8 @@ interface CoPilotProps {
   showLinksFor?: (actions: GlobeAction[]) => LinksAction | null;
   /** How many stories are breaking now (useBreaking). */
   breaking?: number;
+  /** A card under the context pills: "Since your last visit" on narrow screens. */
+  callout?: ReactNode;
 }
 
 /**
@@ -101,6 +103,7 @@ export default function CoPilot({
   showStoriesFor,
   showLinksFor,
   breaking = 0,
+  callout,
 }: CoPilotProps) {
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -200,6 +203,8 @@ export default function CoPilot({
           </span>
         ))}
       </div>
+
+      {callout}
 
       {isDisabled && (
         <p className="callout" role="status">

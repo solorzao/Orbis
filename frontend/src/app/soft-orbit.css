@@ -536,6 +536,104 @@ kbd {
   cursor: pointer;
 }
 
+/*
+ * "Since your last visit" (mockup .since): under the brand from 1180px (top 80,
+ * left 24), a callout card in the co-pilot below that. Top 5 opens a short
+ * list of places under the text.
+ */
+.since {
+  position: fixed;
+  top: 80px;
+  left: 24px;
+  z-index: var(--z-panel);
+  max-width: 360px;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 10px 10px 10px 16px;
+  border-radius: var(--radius-lg);
+}
+.since-txt {
+  flex: 1 1 200px;
+  margin: 0;
+  font: var(--type-body-sm);
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+.since-txt b {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.since-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.since-actions .pill {
+  cursor: pointer;
+}
+.since-x {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  cursor: pointer;
+}
+.since-top {
+  flex-basis: 100%;
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.since-place {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.since-place:hover {
+  background: var(--surface-hover);
+}
+.since-name,
+.since-hl {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.since-name {
+  font: var(--type-label);
+  color: var(--text-primary);
+}
+.since-place .num {
+  font: var(--type-data-sm);
+  color: var(--accent-strong);
+}
+.since-hl {
+  grid-column: 1 / -1;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.since-callout {
+  display: none; /* the strip shows from 1180px */
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+.since-callout .since-txt {
+  flex-basis: 100%;
+}
+@media (width < 1180px) {
+  .since {
+    display: none; /* no room under the brand: the co-pilot's callout instead */
+  }
+  .since-callout {
+    display: flex;
+  }
+}
+
 /* Inspect tab: recent places and links, then a place's stories (mockup .insp, .art, lines 357-372) */
 .places {
   display: flex;

@@ -8,6 +8,7 @@ import {
   fetchPlacePreview,
   fetchLinks,
   fetchBreaking,
+  fetchDelta,
   fetchLinkDetail,
   explainLink,
   isExplainFallback,
@@ -221,6 +222,21 @@ describe("fetchPlacePreview", () => {
     expect(url.searchParams.get("start_time")).toBe("2026-10-06T00:00:00.000Z");
     expect(url.searchParams.get("end_time")).toBe("2026-10-07T00:00:00.000Z");
     expect(url.searchParams.get("topic")).toBe("Climate");
+  });
+});
+
+describe("fetchDelta", () => {
+  it("asks what changed since a visit", async () => {
+    mockFetch.mockReturnValue(
+      jsonResponse({ new_stories: 0, new_places: 0, breaking: 0, top: [] }),
+    );
+    const controller = new AbortController();
+    await fetchDelta({ since: "2026-10-18T02:30:00.000Z", signal: controller.signal });
+    const [called, init] = mockFetch.mock.calls[0];
+    const url = new URL(called);
+    expect(url.pathname).toBe("/api/news/delta");
+    expect(url.searchParams.get("since")).toBe("2026-10-18T02:30:00.000Z");
+    expect(init.signal).toBe(controller.signal);
   });
 });
 

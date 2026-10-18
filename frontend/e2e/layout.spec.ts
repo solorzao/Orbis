@@ -5,6 +5,7 @@ import {
   PARIS,
   hoverPlace,
   mockAllApiRoutes,
+  seedLastVisit,
   withBreaking,
   withCairo,
 } from "./fixtures";
@@ -333,6 +334,19 @@ for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
     // Right-aligned in its track, as the layers are left-aligned in theirs.
     const ticker = b["breaking-ticker"];
     expect(size.width - (ticker.x + ticker.w), "ticker at the right edge").toBeCloseTo(24, 0);
+  });
+}
+
+// "Since your last visit" sits under the brand from 1180px: clear of the brand,
+// the topics and the side panel (and the rest of the chrome).
+for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
+  test(`the since strip keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({ page }) => {
+    await settle(page, size, (p) => seedLastVisit(p, 14));
+    await expect(page.getByTestId("since-strip")).toBeVisible();
+    const regions = [...regionsAt(size.width), "since-strip"];
+    const b = await expectApart(page, size.width, "since strip", regions);
+    expect(b["since-strip"].x, "since strip at the brand's left edge").toBeCloseTo(24, 0);
+    expect(b["since-strip"].y, "since strip under the brand").toBeCloseTo(80, 0);
   });
 }
 
