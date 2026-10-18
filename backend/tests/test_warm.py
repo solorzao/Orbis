@@ -35,11 +35,13 @@ def test_the_first_visit_is_warmed_globe_first_then_the_links_layer_then_breakin
     assert warm.WARM_TIMEOUT == 30
 
 
-def test_a_cycles_entries_last_until_the_next_cycles_warm():
-    """Ingestion invalidates db:* each cycle; until then, a warmed entry must not expire."""
+def test_a_cycles_entries_last_until_the_next_cycle_ends():
+    """Ingestion invalidates db:* at the end of each cycle (minutes long, mostly
+    embeddings) and the warm refills it; a warmed entry must outlive the wait for
+    the next cycle plus that cycle itself."""
     interval = settings.ingestion_interval_seconds
-    assert cycle_ttl(300) == interval + 300 > interval  # globe, volume
-    assert cycle_ttl(600) == interval + 300  # links
+    assert cycle_ttl(300) == interval + 600 > interval  # globe, volume
+    assert cycle_ttl(600) == interval + 600  # links
     assert cycle_ttl(interval + 900) == interval + 900  # longer already: kept
 
 
