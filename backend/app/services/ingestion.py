@@ -66,11 +66,14 @@ async def _ingest_from_raw_gkg() -> int:
         if not title:
             continue
 
-        # Deduplicate: strip outlet suffix so syndicated copies collapse
+        # Deduplicate: strip outlet suffix so syndicated copies collapse. A title with
+        # no headline left ("LIVE:") can't be told from another: each is kept (its
+        # story_key falls back to its URL).
         norm = dedup_key(title)
-        if norm in seen_titles:
-            continue
-        seen_titles.add(norm)
+        if norm:
+            if norm in seen_titles:
+                continue
+            seen_titles.add(norm)
 
         # Placeholders — overwritten by batch ML classification below
         topic_tags = ["general"]

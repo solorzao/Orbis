@@ -142,6 +142,39 @@ class TestIngestFromRawGkg:
             assert row["image_url"] == "https://example.com/img.jpg"
 
     @pytest.mark.asyncio
+    async def test_titles_with_no_headline_left_are_each_kept(self):
+        """A tag-only title ("LIVE:") folds to an empty key: no headline to tell copies
+        apart, so each is its own article (story_key falls back to its URL), not a copy of
+        the first. Copies of a real headline still collapse."""
+        from app.services.ingestion import _ingest_from_raw_gkg
+
+        articles = [
+            _make_gkg_article(url="https://example.com/live-1", title="LIVE:"),
+            _make_gkg_article(url="https://example.com/live-2", title="WATCH:"),
+            _make_gkg_article(url="https://example.com/a", title="Quake hits Kathmandu - AP"),
+            _make_gkg_article(url="https://example.com/b", title="Quake hits Kathmandu | BBC"),
+        ]
+        patches = _common_patches(articles, ml_enabled=False)
+
+        with (
+            patches["fetch_raw_gkg"],
+            patches["scrape_titles"],
+            patches["upsert_articles"] as mock_upsert,
+            patches["invalidate"],
+            patches["get_pool"],
+            patches["populate_graph"],
+            patches["ml_enabled"],
+        ):
+            await _ingest_from_raw_gkg()
+
+        urls = [row["source_url"] for row in mock_upsert.call_args[0][0]]
+        assert urls == [
+            "https://example.com/live-1",
+            "https://example.com/live-2",
+            "https://example.com/a",
+        ]
+
+    @pytest.mark.asyncio
     async def test_carries_country_fips_through(self):
         from app.services.ingestion import _ingest_from_raw_gkg
 
@@ -421,7 +454,6 @@ class TestRunIngestionCycle:
 
         with (
             patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
-            patch("app.services.ingestion._backfill_iso_country_codes", new_callable=AsyncMock),
             patch("app.services.ingestion._ingest_from_raw_gkg", AsyncMock(side_effect=ingest)),
             patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
             patch(
