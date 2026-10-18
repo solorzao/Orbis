@@ -1614,7 +1614,7 @@ button.cite:hover {
 }
 
 /*
- * Bottom row: layers | timeline | (surges, PR 14), one grid so the tracks
+ * Bottom row: layers | timeline | breaking ticker, one grid so the tracks
  * can't overlap. The side tracks never shrink below their content (as in the
  * top bar: a plain 1fr would let the layers, whose min-width is 0, spill into
  * the capsule); only the middle one does. The row spans the width whether the
@@ -1648,6 +1648,92 @@ button.cite:hover {
 .bottombar .timeline {
   grid-column: 2;
   width: 100%;
+}
+.bottombar .breaking {
+  grid-column: 3;
+  justify-self: end;
+  margin-bottom: 4px; /* as the layers: 24px from the bottom */
+}
+
+/*
+ * Breaking ticker (mockup .surges, ported as .breaking), the bottom row's
+ * right track: what is breaking now, one story at a time. Three short lines
+ * (label and count; the headline, ellipsised; place and outlets) so that it
+ * fits the track at 1180px, about 222px. It is never wider than the track's
+ * share of the row ((100vw - 736px) / 2: the row's 24px edges and gaps and
+ * the 640px capsule), so the capsule keeps its width and stays centred.
+ */
+.breaking {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "lab count"
+    "live nav";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  width: min(360px, calc((100vw - 736px) / 2));
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-lg);
+}
+.breaking-lab {
+  grid-area: lab;
+  font: var(--type-label);
+  color: var(--signal-warning);
+}
+.breaking-count {
+  grid-area: count;
+  justify-self: end;
+  padding-right: 6px;
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+}
+.breaking-live {
+  grid-area: live;
+  min-width: 0;
+}
+.breaking-item {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.breaking-head,
+.breaking-place {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.breaking-head {
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+}
+.breaking-item:hover .breaking-head {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.breaking-meta {
+  display: flex;
+  min-width: 0;
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+.breaking-outlets {
+  flex: none;
+  white-space: nowrap;
+}
+.breaking-nav {
+  grid-area: nav;
+  display: inline-flex;
+  gap: 4px;
+}
+.breaking-nav .iconbtn {
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
 }
 /* Narrow: no chart, story count or layers; the play button, label and presets stay. */
 @media (max-width: 760px) {
@@ -1734,6 +1820,10 @@ button.cite:hover {
   .bottombar .layer-dock,
   .bottombar .timeline {
     grid-column: 1;
+  }
+  /* No room beside the capsule: the co-pilot offers "What's breaking?" instead. */
+  .bottombar .breaking {
+    display: none;
   }
   .bottombar .layer-dock {
     justify-self: center;

@@ -1,5 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
-import { CAIRO, MOCK_LINKS_LIFT, PARIS, hoverPlace, mockAllApiRoutes, withCairo } from "./fixtures";
+import {
+  CAIRO,
+  MOCK_LINKS_LIFT,
+  PARIS,
+  hoverPlace,
+  mockAllApiRoutes,
+  withBreaking,
+  withCairo,
+} from "./fixtures";
 
 const SIZES = [
   { width: 1920, height: 1080 },
@@ -307,6 +315,24 @@ for (const size of SIZES.filter((s) => s.width <= NARROW_MAX)) {
     await page.getByTestId("side-collapse").click();
     await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
     await expectApart(page, size.width, "Links chip, sheet open", regions);
+  });
+}
+
+// The breaking ticker is the bottom row's right track from 1180px: clear of the
+// capsule (which stays centred), the side panel above it and the viewport edge.
+for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
+  test(`the breaking ticker keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await settle(page, size, withBreaking);
+    await expect(page.getByTestId("breaking-ticker")).toBeVisible();
+    const regions = [...regionsAt(size.width), "breaking-ticker"];
+    const b = await expectApart(page, size.width, "breaking ticker", regions);
+    expectCentred(b["timeline"], size.width, "breaking ticker");
+    expect(b["timeline"].w, "capsule at its full width").toBeCloseTo(640, 0);
+    // Right-aligned in its track, as the layers are left-aligned in theirs.
+    const ticker = b["breaking-ticker"];
+    expect(size.width - (ticker.x + ticker.w), "ticker at the right edge").toBeCloseTo(24, 0);
   });
 }
 

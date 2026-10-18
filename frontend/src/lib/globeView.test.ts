@@ -10,6 +10,7 @@ import {
   heatmapPoints,
   hexToRgba,
   canvasColor,
+  ringFade,
   recomputeHeatmap,
   showDots,
   projectedRadius,
@@ -215,5 +216,14 @@ describe("showDots", () => {
 
   it("leaves WebGPU replays to the heatmap, which recomputes each day", () => {
     expect(showDots("intensity", { replaying: true, cpuPath: false })).toBe(false);
+  });
+});
+
+describe("ringFade", () => {
+  it("fades a breaking ring from 60% to clear as it spreads, in the token's colour", () => {
+    const fade = ringFade("#f5c27a");
+    expect(fade(0)).toBe("rgba(245,194,122,0.6)");
+    expect(fade(0.5)).toBe("rgba(245,194,122,0.3)");
+    expect(fade(1)).toBe("rgba(245,194,122,0)");
   });
 });

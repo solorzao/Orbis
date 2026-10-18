@@ -129,6 +129,41 @@ export function fetchGlobeNews({
   return apiFetch<ApiGlobePoint[]>("/api/news", params, signal);
 }
 
+/**
+ * An event many outlets have just started covering (/api/news/breaking): its
+ * most covered story's headline, its place (the 1° cell's centre, as the
+ * cell's dot has it) and how many outlets and stories are on it.
+ */
+export interface ApiBreakingStory {
+  headline: string;
+  place: string;
+  lat: number;
+  lng: number;
+  outlets: number;
+  stories: number;
+  /** The earliest story, clamped to the 2-hour window's start: not when it broke. */
+  first_seen: string;
+  /** The stories' most common topic tag ("general" if none); not always right. */
+  topic: string;
+  lead: ApiGlobeLead;
+}
+
+/**
+ * What is breaking now, at most 8, most outlets first; for one topic pill, or
+ * every topic. The server keeps one list for every topic and filters it.
+ */
+export function fetchBreaking({
+  topic,
+  signal,
+}: {
+  topic: Topic;
+  signal?: AbortSignal;
+}): Promise<ApiBreakingStory[]> {
+  const params: Record<string, string> = {};
+  if (topic !== "All") params.topic = topic;
+  return apiFetch<ApiBreakingStory[]>("/api/news/breaking", params, signal);
+}
+
 export interface PlacePreviewQuery {
   lat: number;
   lng: number;

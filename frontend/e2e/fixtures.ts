@@ -415,6 +415,69 @@ export async function mockLinkRoutes(page: Page) {
   await page.route("**/api/links/explain", (route) => route.fulfill({ json: MOCK_LINK_EXPLAIN }));
 }
 
+// ── Breaking stories ────────────────────────────────────────────────
+
+/** A breaking story's lead, as /api/news/breaking sends it. */
+const breakingLead = (title: string, source: string, minutes: number, topic: string) => ({
+  title,
+  source_name: source,
+  published_at: ago(minutes),
+  image_url: null,
+  topic,
+  sensitive: false,
+});
+
+/**
+ * /api/news/breaking with three stories, most outlets first: one at Paris (a
+ * dot on the globe), one somewhere with no dot (San Antonio), and one more.
+ * The San Antonio one is real data's shape: a long headline, a mislabelled
+ * topic, first_seen at the window's start.
+ */
+export const MOCK_BREAKING = [
+  {
+    headline: "Riot police clear a Paris square after a night of protests over pension reform",
+    place: "Paris, France",
+    lat: 48.8566,
+    lng: 2.3522,
+    outlets: 23,
+    stories: 6,
+    first_seen: ago(120),
+    topic: "politics",
+    lead: breakingLead("Riot police clear a Paris square", "Reuters", 14, "politics"),
+  },
+  {
+    headline:
+      "A U.S. Military Airman Tragically Dies After Rappelling Accident at UTSA-Navy Game in San Antonio",
+    place: "Alamodome, Texas, United States",
+    lat: 29.5,
+    lng: -98.5,
+    outlets: 17,
+    stories: 7,
+    first_seen: ago(120),
+    topic: "economy",
+    lead: breakingLead("Airman dies after rappelling accident", "AP", 31, "economy"),
+  },
+  {
+    headline: "Port strike halts container traffic in Rotterdam",
+    place: "Rotterdam, Netherlands",
+    lat: 51.5,
+    lng: 4.5,
+    outlets: 9,
+    stories: 3,
+    first_seen: ago(95),
+    topic: "economy",
+    lead: breakingLead("Port strike halts Rotterdam", "NOS", 40, "economy"),
+  },
+];
+
+/** Whether a request is for the breaking stories. */
+export const isBreaking = (url: URL) => url.pathname === "/api/news/breaking";
+
+/** gotoStillGlobe/settle setup: three stories are breaking (by default none are). */
+export async function withBreaking(page: Page) {
+  await page.route(isBreaking, (route) => route.fulfill({ json: MOCK_BREAKING }));
+}
+
 // ── SSE helper for agent mock ───────────────────────────────────────
 
 export function buildAgentSSE(options: {
@@ -499,6 +562,9 @@ export async function mockAllApiRoutes(page: Page) {
 
   // The Links layer
   await mockLinkRoutes(page);
+
+  // Breaking stories: none, as often (withBreaking adds some)
+  await page.route(isBreaking, (route) => route.fulfill({ json: [] }));
 }
 
 /**

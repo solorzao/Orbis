@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, within } from "@testing-library/react";
 import CoPilot, { type ScreenContext } from "./CoPilot";
 import type { AgentMessage, Citation, GlobeAction } from "@/hooks/useAgent";
 
@@ -191,6 +191,14 @@ describe("CoPilot", () => {
 
     it("ask for the biggest story with neither", () => {
       renderCoPilot({ context: NOWHERE });
+      expect(prompts()).toEqual(["What's the biggest story right now?"]);
+    });
+
+    it("ask what's breaking while something is (the ticker is hidden on narrow screens)", () => {
+      renderCoPilot({ context: NOWHERE, breaking: 3 });
+      expect(prompts()).toEqual(["What's the biggest story right now?", "What's breaking?"]);
+      cleanup();
+      renderCoPilot({ context: NOWHERE, breaking: 0 });
       expect(prompts()).toEqual(["What's the biggest story right now?"]);
     });
 
