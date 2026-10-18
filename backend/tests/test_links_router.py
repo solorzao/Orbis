@@ -16,7 +16,7 @@ NOW = datetime(2026, 10, 12, 15, 37, tzinfo=timezone.utc)
 
 
 def _pair(a="IR", b="US", n=10, **extra) -> dict:
-    row = {"a": a, "b": b, "n": n, "n_a": 20, "n_b": 50, "total": 100, "tone": -0.3}
+    row = {"a": a, "b": b, "n": n, "n_a": 20, "n_b": 50, "total": 100, "outlets": 4, "tone": -0.3}
     row.update({"from_iso": "US", **{tag: 0 for tag in TOPIC_TAGS}, **extra})
     return row
 
@@ -65,6 +65,7 @@ class TestGetLinks:
         assert link["b"]["iso"] == "US"
         assert link["from"] == "US"
         assert (link["n"], link["lift"], link["tone"], link["topic"]) == (10, 1.0, -0.3, "general")
+        assert link["outlets"] == 4  # distinct sites; under 3 and it would not be listed
 
     @pytest.mark.asyncio
     async def test_live_window_is_the_last_hours_up_to_now(self, monkeypatch, db):
@@ -138,10 +139,10 @@ class TestGetLinks:
                 )
 
         (key1, value1, ttl1), (key2, _, _) = [c.args for c in mock_set.await_args_list]
-        assert key1 == "db:links:v2:live:24:politics:count:40"
+        assert key1 == "db:links:v3:live:24:politics:count:40"
         assert ttl1 == cycle_ttl(600) > settings.ingestion_interval_seconds
         assert value1[0]["from"] == "US"
-        assert key2 == "db:links:v2:2026101008-2026101108::lift:12"
+        assert key2 == "db:links:v3:2026101008-2026101108::lift:12"
 
     @pytest.mark.asyncio
     async def test_an_empty_answer_is_cached_for_a_minute(self, monkeypatch, db):
@@ -171,7 +172,7 @@ class TestGetLinks:
             c.args for c in mock_set.await_args_list
         ]
         hours = timespan.removesuffix("h")
-        assert warmed_key == requested_key == f"db:links:v2:live:{hours}::lift:40"
+        assert warmed_key == requested_key == f"db:links:v3:live:{hours}::lift:40"
         assert (warmed, warmed_ttl) == (requested, ttl)
         # Warmed after one cycle, it lasts until the next cycle's warm.
         assert warmed_ttl > settings.ingestion_interval_seconds
@@ -192,6 +193,7 @@ class TestGetLinks:
                 "topic": "conflict",
                 "tone": -0.4,
                 "from": "IR",
+                "outlets": 5,
             }
         ]
         with patch("app.routers.links.get_cached", new_callable=AsyncMock, return_value=cached):
@@ -228,6 +230,7 @@ def _detail(articles: list[dict]) -> dict:
         "b": {"iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06},
         "n": 12,
         "lift": 3.4,
+        "outlets": 7,
         "topic_mix": {tag: 0 for tag in TOPIC_TAGS} | {"conflict": 9},
         "tone": -0.41,
         "shared": [{"name": "Abbas Araghchi", "type": "person", "n": 4}],
@@ -257,7 +260,7 @@ class TestGetLinkDetail:
         assert resp.status_code == 200
         body = resp.json()
         assert (body["a"]["iso"], body["b"]["iso"]) == ("IR", "US")
-        assert (body["n"], body["lift"]) == (12, 3.4)
+        assert (body["n"], body["lift"], body["outlets"]) == (12, 3.4, 7)
         assert body["topic_mix"]["conflict"] == 9
         assert body["shared"] == [{"name": "Abbas Araghchi", "type": "person", "n": 4}]
         assert body["themes"] == ["Armed conflict", "Sanctions"]
@@ -298,7 +301,7 @@ class TestGetLinkDetail:
                 )
 
         key, value, ttl = mock_set.await_args.args
-        assert key == "db:links:detail:v7:IR:US:live:24:conflict"
+        assert key == "db:links:detail:v9:IR:US:live:24:conflict"
         assert ttl == 600
         assert len(value["articles"]) == 10
 
@@ -313,7 +316,7 @@ class TestGetLinkDetail:
         assert (resp.json()["a"]["iso"], resp.json()["b"]["iso"]) == ("IR", "US")
         assert detail_db.await_args_list[0].args[:2] == ("IR", "US")
         keys = {c.args[0] for c in mock_set.await_args_list}
-        assert keys == {"db:links:detail:v7:IR:US:live:24:"}
+        assert keys == {"db:links:detail:v9:IR:US:live:24:"}
 
     @pytest.mark.asyncio
     async def test_serves_the_cached_detail(self, monkeypatch, detail_db):

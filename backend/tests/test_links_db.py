@@ -53,10 +53,25 @@ async def conn():
 EARHART = "zzlinks-Amelia Earhart expedition heads to South Pacific"
 GULF = "zzlinks-Gulf talks stall"
 OUTLETS = ["", " | AP News", " - WTOP", " - KSL.com", " | Fox News", " - The Spokesman-Review"]
+# The site each of OUTLETS' titles comes from (its source_name).
+SITES = ["wire.test", "apnews.test", "wtop.test", "ksl.test", "foxnews.test", "spokesman.test"]
 
 
-def _story(title, country, mentions, topic="general", tone=0.0, keyless=False, **gkg) -> dict:
-    """An article; *keyless* if written before ingestion stored story_key."""
+def _story(
+    title,
+    country,
+    mentions,
+    topic="general",
+    tone=0.0,
+    keyless=False,
+    outlet="zzlinks.test",
+    **gkg,
+) -> dict:
+    """An article; *keyless* if written before ingestion stored story_key.
+
+    *outlet* is its source_name: one site for all unless a test says
+    otherwise, so a pair is a link only when its test gives it three.
+    """
     return {
         "title": title,
         "country_code": country,
@@ -64,6 +79,7 @@ def _story(title, country, mentions, topic="general", tone=0.0, keyless=False, *
         "topic_tags": [topic],
         "sentiment_score": tone,
         "keyless": keyless,
+        "outlet": outlet,
         **gkg,
     }
 
@@ -71,13 +87,13 @@ def _story(title, country, mentions, topic="general", tone=0.0, keyless=False, *
 def _window_stories() -> list[dict]:
     """16 stories in 30 rows, 15 of them linking two countries.
 
-    KI-UM: one story, syndicated 10 times (7 copies placed in UM, 3 in KI).
-    IR-US: 7 stories. 4 from the US (politics, tone 0.5); 2 from Iran
-    (conflict, tone -0.5), one of them syndicated 5 times; and "Gulf talks",
-    whose two copies differ: one from Iran naming the US (politics, 0.9),
-    one from the US naming Iran and Israel (conflict, -0.3), so IL-US has
-    that one story.
-    DE-FR: 4 stories; CN-US: 3; plus a US story naming only the US (no link).
+    KI-UM: one story, syndicated 10 times (7 copies placed in UM, 3 in KI)
+    by 6 sites. IR-US: 7 stories. 4 from the US (politics, tone 0.5); 2 from
+    Iran (conflict, tone -0.5), one of them syndicated 5 times; and "Gulf
+    talks", whose two copies differ: one from Iran naming the US (politics,
+    0.9), one from the US naming Iran and Israel (conflict, -0.3), so IL-US
+    has that one story, from one site. DE-FR: 4 stories from 4 sites; CN-US:
+    3 from 3; plus a US story naming only the US (no link).
     """
     rows = [
         _story(
@@ -86,6 +102,7 @@ def _window_stories() -> list[dict]:
             ["KI", "UM"],
             topic="environment",
             tone=-0.2,
+            outlet=SITES[i % len(SITES)],
             persons=["Amelia Earhart"],
             themes=[
                 "MARITIME",
@@ -97,9 +114,17 @@ def _window_stories() -> list[dict]:
         )
         for i in range(10)
     ]
+    us_iran_sites = ["reuters.test", "apnews.test", "bbc.test", "aljazeera.test"]
     rows += [
-        _story(f"zzlinks-US and Iran story {i}", "US", ["US", "IR"], "politics", 0.5)
-        for i in range(4)
+        _story(
+            f"zzlinks-US and Iran story {i}",
+            "US",
+            ["US", "IR"],
+            "politics",
+            0.5,
+            outlet=site,
+        )
+        for i, site in enumerate(us_iran_sites)
     ]
     rows += [
         _story(
@@ -108,6 +133,7 @@ def _window_stories() -> list[dict]:
             ["IR", "US"],
             "conflict",
             -0.5,
+            outlet=SITES[i],
             persons=["Abbas Araghchi"],
         )
         for i in range(5)
@@ -119,15 +145,24 @@ def _window_stories() -> list[dict]:
             ["IR", "US"],
             "conflict",
             -0.5,
+            outlet="presstv.test",
             persons=["Abbas Araghchi"],
         )
     )
     rows += [
-        _story(GULF + " - Reuters", "IR", ["IR", "US"], "politics", 0.9),
-        _story(GULF + " | AP News", "US", ["US", "IR", "IL"], "conflict", -0.3),
+        _story(GULF + " - Reuters", "IR", ["IR", "US"], "politics", 0.9, outlet="reuters.test"),
+        _story(
+            GULF + " | AP News", "US", ["US", "IR", "IL"], "conflict", -0.3, outlet="apnews.test"
+        ),
     ]
-    rows += [_story(f"zzlinks-France and Germany {i}", "FR", ["FR", "DE"]) for i in range(4)]
-    rows += [_story(f"zzlinks-US and China {i}", "US", ["US", "CN"]) for i in range(3)]
+    rows += [
+        _story(f"zzlinks-France and Germany {i}", "FR", ["FR", "DE"], outlet=site)
+        for i, site in enumerate(["lemonde.test", "dw.test", "france24.test", "spiegel.test"])
+    ]
+    rows += [
+        _story(f"zzlinks-US and China {i}", "US", ["US", "CN"], outlet=site)
+        for i, site in enumerate(["scmp.test", "nytimes.test", "xinhua.test"])
+    ]
     rows.append(_story("zzlinks-US only", "US", ["US"]))
     return rows
 
@@ -143,7 +178,7 @@ async def _insert(conn, stories: list[dict], start: datetime = START) -> None:
                 country_code, topic_tags, sentiment_score, mentioned_countries, persons, themes,
                 story_key
             )
-            VALUES ($1, $2, 'zzlinks.test', $3, 0, 0,
+            VALUES ($1, $2, $11, $3, 0, 0,
                     ST_SetSRID(ST_MakePoint(0, 0), 4326)::geography, $4, $5, $6, $7, $8, $9, $10)
             """,
             s["title"],
@@ -156,6 +191,7 @@ async def _insert(conn, stories: list[dict], start: datetime = START) -> None:
             s.get("persons", []),
             s.get("themes", []),
             None if s["keyless"] else story_key(s["title"], url),
+            s["outlet"],
         )
 
 
@@ -226,9 +262,10 @@ class TestDistinctStories:
             ("IR", "US", 7),
             ("DE", "FR", 4),
             ("CN", "US", 3),
-            ("KI", "UM", 1),  # lift 15
-            ("IL", "US", 1),  # lift 1.5
+            ("KI", "UM", 1),  # its ten copies come from six sites
+            # IL-US: one copy, so one outlet, under MIN_LINK_OUTLETS.
         ]
+        assert _by_pair(rows)["IL", "US"]["outlets"] == 1
 
     @pytest.mark.asyncio
     async def test_topic_tone_and_origin_are_per_story(self):
@@ -286,6 +323,7 @@ class TestDistinctStories:
             assert detail["lift"] == round(lift(row["n"], row["n_a"], row["n_b"], row["total"]), 2)
             assert detail["tone"] == round(row["tone"], 2)
             assert detail["topic_mix"] == {tag: row[tag] for tag in TOPIC_TAGS}
+            assert detail["outlets"] == row["outlets"]
 
     @pytest.mark.asyncio
     async def test_detail_names_and_themes_count_stories(self):
@@ -357,3 +395,48 @@ async def test_a_syndicated_story_takes_one_place_in_the_inspector(conn):
 
     headlines = await links.get_link_headlines("IN", "NP", start, end, None, 25)
     assert [dedup_key(t) for t in headlines] == newest_first
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_one_outlet_does_not_make_a_link(conn):
+    """srilankamirror.com tagged the BVI on every page: six unrelated stories, one site."""
+    start = datetime(2001, 4, 10, tzinfo=timezone.utc)
+    site = "srilankamirror.com"
+    titles = ["Port compensation", "Cinema weapons find", "France protests", "Stress among wives"]
+    stories = [_story(f"zzlinks-{t}", "LK", ["LK", "VG"], outlet=site) for t in titles]
+    stories += [_story(f"zzlinks-More news {i}", "LK", ["LK", "VG"], outlet=site) for i in range(2)]
+    stories.append(_story("zzlinks-Port compensation", "LK", ["LK", "VG"], outlet=""))  # no site
+    await _insert(conn, stories, start)
+    end = start + timedelta(days=1)
+
+    [row] = await links.get_link_pairs(start, end, None)
+    assert (row["a"], row["b"], row["n"], row["outlets"]) == ("LK", "VG", 6, 1)
+    assert rank_links([row], "lift", 40) == rank_links([row], "count", 40) == []
+    # The inspector still answers for it, and says why it is not listed.
+    detail = await links.get_link_detail("LK", "VG", start, end, None)
+    assert (detail["n"], detail["outlets"]) == (6, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_three_outlets_make_a_link(conn):
+    """Outlets count over every copy: five stories from one site, one syndicated to two more."""
+    start = datetime(2001, 5, 10, tzinfo=timezone.utc)
+    stories = [
+        _story(f"zzlinks-Island story {i}", "LK", ["LK", "VG"], outlet="a.zzlinks.test")
+        for i in range(5)
+    ]
+    stories += [
+        _story("zzlinks-Island deal - Reuters", "VG", ["VG", "LK"], outlet="b.zzlinks.test"),
+        _story("zzlinks-Island deal | AP News", "VG", ["VG", "LK"], outlet="c.zzlinks.test"),
+    ]
+    await _insert(conn, stories, start)
+    end = start + timedelta(days=1)
+
+    [row] = await links.get_link_pairs(start, end, None)
+    assert (row["n"], row["outlets"]) == (6, 3)
+    [by_lift] = rank_links([row], "lift", 40)
+    assert (by_lift["a"]["iso"], by_lift["b"]["iso"], by_lift["outlets"]) == ("LK", "VG", 3)
+    detail = await links.get_link_detail("LK", "VG", start, end, None)
+    assert (detail["n"], detail["outlets"]) == (6, 3)
