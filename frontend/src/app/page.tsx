@@ -18,6 +18,14 @@ import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/pa
 import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, pointAt } from "@/lib/cells";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
+import { breakingDot, type BreakingStory } from "@/lib/breaking";
+import {
+  readSinceDismissed,
+  sinceDot,
+  sinceRange,
+  writeSinceDismissed,
+  type SincePlace,
+} from "@/lib/sinceVisit";
 import {
   actionCountries,
   linkKey,
@@ -30,6 +38,9 @@ import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
 import { useLinkExplain } from "@/hooks/useLinkExplain";
+import { useBreaking } from "@/hooks/useBreaking";
+import { useLastVisit } from "@/hooks/useLastVisit";
+import { useDelta } from "@/hooks/useDelta";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel } from "@/hooks/useSidePanel";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
@@ -52,6 +63,8 @@ import GlobeHud from "@/components/GlobeHud";
 import HoverCard from "@/components/HoverCard";
 import ArcPill from "@/components/ArcPill";
 import LinksChip from "@/components/LinksChip";
+import BreakingTicker from "@/components/BreakingTicker";
+import SinceStrip from "@/components/SinceStrip";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -76,6 +89,14 @@ export default function Home() {
   const [hoveredLink, setHoveredLink] = useState<CountryLink | null>(null);
   // The timeline's replay: the status pill says Replay rather than flashing each step's load.
   const [replaying, setReplaying] = useState(false);
+  // What is breaking now, for the topic: only for a live window (a range or a
+  // replay looks back), polled every 5 minutes. The ticker and the rings show it.
+  const breaking = useBreaking(activeTopic, timeWindow.kind === "live" && !replaying);
+  // Since your last visit: the visit before this one (localStorage), what
+  // changed since (asked when it was 1 h to 7 days ago), and Dismiss (the session).
+  const lastVisit = useLastVisit();
+  const sinceDelta = useDelta(lastVisit);
+  const [sinceDismissed, setSinceDismissed] = useState(readSinceDismissed);
 
   // What the Inspect tab holds: places (their stories) and links, up to
   // MAX_PANELS together, and the one shown (a panelId or a linkId).
@@ -88,6 +109,8 @@ export default function Home() {
   const { showInspect } = side;
   // Minimize and close remove the focused control: keep focus in the Inspect tab.
   const inspectRef = useRef<HTMLDivElement>(null);
+  const copilotRef = useRef<HTMLDivElement>(null);
+  const topicsRef = useRef<HTMLElement>(null);
   const keepInspectFocus = useKeepFocus(inspectRef);
 
   const globeControlsRef = useRef<GlobeControls | null>(null);
@@ -291,6 +314,39 @@ export default function Home() {
     [panelQueue, linkQueue, activeTopic, timeWindow, fetchPanelData, showInspect],
   );
 
+  // A breaking story: fly to its place and open it in Inspect, by its cell's
+  // dot, or a stand-in when the globe has none there (breakingDot).
+  const handleBreakingOpen = useCallback(
+    (story: BreakingStory) => {
+      globeControlsRef.current?.flyTo(story.lat, story.lng, 1.5);
+      handlePointClick(breakingDot(points, story));
+    },
+    [points, handlePointClick],
+  );
+
+  // Show: the window from the last visit (floored, as the strip counts it) to now.
+  const handleSinceShow = useCallback(() => {
+    if (lastVisit !== null) changeWindow(sinceRange(lastVisit, Date.now()));
+  }, [lastVisit, changeWindow]);
+
+  // A place new since the visit: fly there and open it, as a breaking story.
+  const handleSinceOpen = useCallback(
+    (place: SincePlace) => {
+      globeControlsRef.current?.flyTo(place.lat, place.lng, 1.5);
+      handlePointClick(sinceDot(points, place));
+    },
+    [points, handlePointClick],
+  );
+
+  // Dismiss takes its control away: focus goes on to the topic pills beside
+  // the strip, or stays in the co-pilot that held the callout.
+  const handleSinceDismiss = useCallback((variant: "strip" | "callout") => {
+    if (variant === "strip") topicsRef.current?.querySelector("button")?.focus();
+    else copilotRef.current?.focus();
+    writeSinceDismissed();
+    setSinceDismissed(true);
+  }, []);
+
   const updateLink = useCallback((linkId: string, updates: Partial<LinkEntry>) => {
     setLinkQueue((prev) => prev.map((l) => (l.linkId === linkId ? { ...l, ...updates } : l)));
   }, []);
@@ -439,6 +495,19 @@ export default function Home() {
     [linksOn, points],
   );
 
+  // "Since your last visit": under the brand from 1180px, a co-pilot callout below.
+  const since = (variant: "strip" | "callout") =>
+    sinceDelta && lastVisit !== null && !sinceDismissed ? (
+      <SinceStrip
+        variant={variant}
+        lastVisit={lastVisit}
+        delta={sinceDelta}
+        onShow={handleSinceShow}
+        onOpen={handleSinceOpen}
+        onDismiss={() => handleSinceDismiss(variant)}
+      />
+    ) : null;
+
   const inspectTab = (
     <>
       <RecentPlaces
@@ -511,6 +580,7 @@ export default function Home() {
         holdHeatmap={replaying || loading}
         replaying={replaying}
         links={links}
+        alerts={breaking}
         inspectedLink={inspectedLink}
         onArcHover={setHoveredLink}
         onArcClick={handleLinkOpen}
@@ -540,7 +610,9 @@ export default function Home() {
         isLoading={loading}
         isOffline={apiError}
         isReplay={replaying}
+        topicsRef={topicsRef}
       />
+      {since("strip")}
 
       {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
       <SidePanel
@@ -550,6 +622,7 @@ export default function Home() {
         onOpenChange={side.setOpen}
         inspectCount={panelQueue.length + linkQueue.length}
         inspectRef={inspectRef}
+        copilotRef={copilotRef}
         copilot={
           <CoPilot
             messages={agentMessages}
@@ -568,6 +641,8 @@ export default function Home() {
             onFlyTo={handleGlobeAction}
             showStoriesFor={showStoriesFor}
             showLinksFor={showLinksFor}
+            breaking={breaking.length}
+            callout={since("callout")}
           />
         }
         inspect={inspectTab}
@@ -604,7 +679,9 @@ export default function Home() {
           places={points.length}
           reduced={reduced}
           playRef={playRef}
+          lastVisit={lastVisit}
         />
+        <BreakingTicker stories={breaking} reduced={reduced} onOpen={handleBreakingOpen} />
       </BottomBar>
 
       {/* For screen readers, always present so each new message is read: the hover

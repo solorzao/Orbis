@@ -5,6 +5,7 @@ import {
   chartPoints,
   dayTicks,
   linePath,
+  markerX,
   placeDayLabels,
   rangeForDrag,
   smooth,
@@ -249,5 +250,21 @@ describe("placeDayLabels", () => {
         expect(l.x + halfWidth(l.tick.label)).toBeLessThanOrEqual(W);
       }
     }
+  });
+});
+
+describe("markerX", () => {
+  const start = Date.UTC(2026, 9, 11, 12);
+  const end = start + 169 * 3_600_000;
+
+  it("places a time on the chart, as the window band is placed", () => {
+    expect(markerX(start, start, end, 676)).toBe(0);
+    expect(markerX(start + 14 * 3_600_000, start, end, 676)).toBeCloseTo(56);
+    expect(markerX(end, start, end, 676)).toBe(676);
+  });
+
+  it("is null for a time off the chart (the last visit more than 7 days ago)", () => {
+    expect(markerX(start - 1, start, end, 676)).toBeNull();
+    expect(markerX(end + 1, start, end, 676)).toBeNull();
   });
 });

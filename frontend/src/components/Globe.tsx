@@ -16,6 +16,7 @@ import {
   recomputeHeatmap,
   showDots,
   projectedRadius,
+  ringFade,
   ringRepeatMs,
   type GlobeGeometry,
 } from "@/lib/globeView";
@@ -28,6 +29,7 @@ import type { GlobeLayer } from "@/components/LayerSwitcher";
 const DOT_ALTITUDE = 0.01;
 const NO_DOTS: GlobePoint[] = [];
 const NO_LINKS: CountryLink[] = [];
+const NO_ALERTS: readonly { lat: number; lng: number }[] = [];
 
 // Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
 // immutable: a changed file gets a new version (see public/geo/README.md).
@@ -71,6 +73,8 @@ interface GlobeProps {
   replaying?: boolean;
   /** The Links layer's links, drawn as arcs (none while it is off). */
   links?: CountryLink[];
+  /** Places breaking now (useBreaking): only they pulse, in --signal-warning. */
+  alerts?: readonly { lat: number; lng: number }[];
   /** The inspected link's linkKey: its arc takes the highlight colour. */
   inspectedLink?: string | null;
   /** The link whose arc is under the pointer, or null when it leaves the arcs. */
@@ -91,6 +95,7 @@ function readGlobeTokens() {
     land: token("--globe-land", "#6f78c9"),
     atmosphere: token("--globe-atmosphere", "#8fb4ff"),
     driftMs: durationMs(token("--dur-drift", "40000ms"), 40000),
+    warning: canvasColor(token("--signal-warning", ""), "#f5c27a"),
     arcs: {
       coverage: canvasColor(token("--arc-coverage", ""), "rgba(180, 190, 255, 0.30)"),
       highlight: canvasColor(token("--arc-highlight", ""), "#7fe6ff"),
@@ -113,6 +118,7 @@ export default function Globe({
   holdHeatmap = false,
   replaying = false,
   links = NO_LINKS,
+  alerts = NO_ALERTS,
   inspectedLink = null,
   onArcHover,
   onArcClick,
@@ -202,23 +208,12 @@ export default function Globe({
       .pointColor("color")
       .pointAltitude(DOT_ALTITUDE)
       .pointResolution(12)
-      // Pulsing rings under each dot
+      // Rings pulse at the places breaking now, alerts only (mockup): fading
+      // --signal-warning, spreading wider than a dot (mockup initGlobe).
       .ringsData([])
       .ringLat("lat")
       .ringLng("lng")
-      .ringColor((d: object) => {
-        const p = d as GlobePoint;
-        // Return a function that fades opacity as ring expands (t: 0→1)
-        return (t: number) => {
-          const c = p.color || "#3b82f6";
-          const opacity = Math.max(0, 0.4 * (1 - t));
-          // Convert hex to rgba
-          const r = parseInt(c.slice(1, 3), 16);
-          const g = parseInt(c.slice(3, 5), 16);
-          const b = parseInt(c.slice(5, 7), 16);
-          return `rgba(${r},${g},${b},${opacity})`;
-        };
-      })
+      .ringColor(() => ringFade(tokens.warning))
       // Intensity (mockup initGlobe): a heatmap weighted by each place's story count
       .heatmapPointLat("lat")
       .heatmapPointLng("lng")
@@ -228,8 +223,8 @@ export default function Globe({
       .heatmapColorSaturation(HEATMAP.colorSaturation)
       .heatmapBaseAltitude(HEATMAP.baseAltitude)
       .heatmapTopAltitude(HEATMAP.topAltitude)
-      .ringMaxRadius(2)
-      .ringPropagationSpeed(1.2)
+      .ringMaxRadius(4.5)
+      .ringPropagationSpeed(1.4)
       .ringRepeatPeriod(ringRepeatMs(motionRef.current))
       // No pointLabel: the hover card (HoverCard, GlobeHud) replaces the tooltip.
       .onPointHover((point: object | null) => {
@@ -270,9 +265,7 @@ export default function Globe({
         if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
         zoomTimerRef.current = setTimeout(() => {
           if (globeRef.current && dotsShownRef.current) {
-            const pts = [...pointsRef.current];
-            globeRef.current.pointsData(pts);
-            globeRef.current.ringsData(pts);
+            globeRef.current.pointsData([...pointsRef.current]);
           }
         }, 150);
       });
@@ -431,9 +424,23 @@ export default function Globe({
   // Ring pulses stop with reduced motion or in low-power mode (both can change after load)
   useEffect(() => {
     if (globeRef.current && isLoaded) {
-      globeRef.current.ringRepeatPeriod(ringRepeatMs({ reduced, lowPower }));
+      const repeat = ringRepeatMs({ reduced, lowPower });
+      globeRef.current.ringRepeatPeriod(repeat);
+      if (containerRef.current) containerRef.current.dataset.ringRepeat = String(repeat); // e2e
     }
   }, [reduced, lowPower, isLoaded]);
+
+  // The breaking places' rings, only while they may pulse: with a repeat
+  // period of 0 three-globe still draws one ring per place (and again on each
+  // refresh), so held still there are none. The ticker still lists the stories.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe || !isLoaded) return;
+    const pulse = ringRepeatMs({ reduced, lowPower }) > 0;
+    const rings = pulse ? alerts.map(({ lat, lng }) => ({ lat, lng })) : [];
+    globe.ringsData(rings);
+    if (containerRef.current) containerRef.current.dataset.rings = String(rings.length); // e2e
+  }, [alerts, reduced, lowPower, isLoaded]);
 
   // The Links layer's arcs: the inspected one highlighted, flowing when motion
   // allows. New arc objects make three-globe build new meshes, so a drag
@@ -478,7 +485,6 @@ export default function Globe({
       // Over the heatmap, the dots sit above its highest bump so the heat can't wash them out.
       globe.pointAltitude(overHeatmap ? HEATMAP.topAltitude + 0.005 : DOT_ALTITUDE);
       globe.pointsData(dots);
-      globe.ringsData(dots);
       if (container) container.dataset.dots = String(dots.length); // read by the e2e tests
     };
     if (layer === "dots") {

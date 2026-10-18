@@ -1,4 +1,5 @@
 import type { GlobePoint } from "@/types/news";
+import { TOPIC_COLORS } from "@/lib/clustering";
 
 /** The globe's grid: dots stand for 1° cells (backend grid.cell_index, cell_size=1.0). */
 const CELL_DEG = 1;
@@ -44,4 +45,45 @@ export function pointAt(
     }
   }
   return nearest;
+}
+
+/** A place in a 1° cell, from a list the globe's dots may not include. */
+export interface CellPlace {
+  /** The cell's centre, as its dot would have it. */
+  lat: number;
+  lng: number;
+  place: string;
+  /** Its stories, as far as the list knows. */
+  count: number;
+}
+
+/**
+ * A stand-in dot for a cell the globe has none for (it shows the window's
+ * busiest 500 places; a story breaking somewhere quiet may not be one). It
+ * opens like a dot: the panel lists the cell's stories by its lat/lng and
+ * corrects the count once a short page shows the cell's. No topic colour.
+ */
+export function cellPoint(cell: CellPlace): GlobePoint {
+  return {
+    id: `cell-${cellKey(cell.lat, cell.lng)}`,
+    lat: cell.lat,
+    lng: cell.lng,
+    size: 1,
+    color: TOPIC_COLORS.All,
+    articles: [],
+    isCluster: cell.count > 1,
+    count: cell.count,
+    locationName: cell.place,
+    topic: "All",
+  };
+}
+
+/**
+ * The dot that opens a place from a list (breaking stories, the places new
+ * since a visit): the globe's dot in the place's own cell, else a stand-in.
+ * Not pointAt's nearest dot within NEAR_DEG: that would be another place's.
+ */
+export function dotInCell(points: readonly GlobePoint[], cell: CellPlace): GlobePoint {
+  const key = cellKey(cell.lat, cell.lng);
+  return points.find((p) => cellKey(p.lat, p.lng) === key) ?? cellPoint(cell);
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { cellKey, pointAt } from "./cells";
+import { cellKey, cellPoint, dotInCell, pointAt } from "./cells";
+import { TOPIC_COLORS } from "./clustering";
 import type { GlobePoint } from "@/types/news";
 
 /** A dot at a 1° cell's centre, as /api/news returns them. */
@@ -50,5 +51,43 @@ describe("cellKey", () => {
     expect(cellKey(48.5, 2.5)).toBe("48:2");
     expect(cellKey(48.99, 2.01)).toBe("48:2");
     expect(cellKey(-0.5, -74.5)).toBe("-1:-75");
+  });
+});
+
+describe("dotInCell", () => {
+  const dot = (lat: number, lng: number, name: string): GlobePoint => ({
+    id: name,
+    lat,
+    lng,
+    size: 1,
+    color: "#fff",
+    articles: [],
+    isCluster: true,
+    count: 40,
+    topic: "Politics",
+    locationName: name,
+  });
+  const cell = { lat: 29.5, lng: -98.5, place: "San Antonio, Texas", count: 7 };
+
+  it("is the globe's dot in the cell", () => {
+    const points = [dot(30.2, -97.7, "Austin"), dot(29.5, -98.5, "San Antonio")];
+    expect(dotInCell(points, cell).locationName).toBe("San Antonio");
+  });
+
+  it("is never a neighbouring cell's dot (pointAt's nearest would be): a stand-in instead", () => {
+    expect(dotInCell([dot(30.2, -97.7, "Austin")], cell)).toEqual(cellPoint(cell));
+  });
+
+  it("stands in with the cell's place and count, and no topic colour", () => {
+    expect(cellPoint(cell)).toMatchObject({
+      lat: 29.5,
+      lng: -98.5,
+      locationName: "San Antonio, Texas",
+      count: 7,
+      topic: "All",
+      color: TOPIC_COLORS.All,
+      articles: [],
+    });
+    expect(cellPoint(cell).id).toBe(cellPoint({ ...cell, count: 3 }).id); // one id per cell
   });
 });

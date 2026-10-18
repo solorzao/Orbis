@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback, type CSSProperties } from "react";
+import { useRef, useState, useEffect, useCallback, type CSSProperties, type Ref } from "react";
 import { Topic } from "@/types/news";
 
 const TOPICS: Topic[] = [
@@ -18,13 +18,15 @@ type Fade = "none" | "left" | "right" | "both";
 interface TopicFilterProps {
   activeTopic: Topic;
   onTopicChange: (topic: Topic) => void;
+  /** The pills' nav, where focus can land when a control near it goes. */
+  navRef?: Ref<HTMLElement>;
 }
 
 /**
  * Topic pills in the top bar's centre track. When the track is narrower than
  * the pills, they scroll inside the glass and fade at the clipped edge.
  */
-export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterProps) {
+export default function TopicFilter({ activeTopic, onTopicChange, navRef }: TopicFilterProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [fade, setFade] = useState<Fade>("none");
 
@@ -48,7 +50,12 @@ export default function TopicFilter({ activeTopic, onTopicChange }: TopicFilterP
   }, [checkScroll]);
 
   return (
-    <nav className="pillbar topics" aria-label="Topic filter" data-testid="topic-filter">
+    <nav
+      ref={navRef}
+      className="pillbar topics"
+      aria-label="Topic filter"
+      data-testid="topic-filter"
+    >
       <div ref={scrollRef} className="topics-scroll" data-fade={fade} onScroll={checkScroll}>
         {TOPICS.map((topic) => (
           <button

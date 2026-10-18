@@ -415,6 +415,168 @@ export async function mockLinkRoutes(page: Page) {
   await page.route("**/api/links/explain", (route) => route.fulfill({ json: MOCK_LINK_EXPLAIN }));
 }
 
+// ── Breaking stories ────────────────────────────────────────────────
+
+/** A breaking story's lead, as /api/news/breaking sends it. */
+const breakingLead = (title: string, source: string, minutes: number, topic: string) => ({
+  title,
+  source_name: source,
+  published_at: ago(minutes),
+  image_url: null,
+  topic,
+  sensitive: false,
+});
+
+/**
+ * /api/news/breaking with three stories, most outlets first: one at Paris (a
+ * dot on the globe), one somewhere with no dot (San Antonio), and one more.
+ * The San Antonio one is real data's shape: a long headline, a mislabelled
+ * topic, first_seen at the window's start.
+ */
+export const MOCK_BREAKING = [
+  {
+    headline: "Riot police clear a Paris square after a night of protests over pension reform",
+    place: "Paris, France",
+    lat: 48.8566,
+    lng: 2.3522,
+    outlets: 23,
+    stories: 6,
+    first_seen: ago(120),
+    topic: "politics",
+    lead: breakingLead("Riot police clear a Paris square", "Reuters", 14, "politics"),
+  },
+  {
+    headline:
+      "A U.S. Military Airman Tragically Dies After Rappelling Accident at UTSA-Navy Game in San Antonio",
+    place: "Alamodome, Texas, United States",
+    lat: 29.5,
+    lng: -98.5,
+    outlets: 17,
+    stories: 7,
+    first_seen: ago(120),
+    topic: "economy",
+    lead: breakingLead("Airman dies after rappelling accident", "AP", 31, "economy"),
+  },
+  {
+    headline: "Port strike halts container traffic in Rotterdam",
+    place: "Rotterdam, Netherlands",
+    lat: 51.5,
+    lng: 4.5,
+    outlets: 9,
+    stories: 3,
+    first_seen: ago(95),
+    topic: "economy",
+    lead: breakingLead("Port strike halts Rotterdam", "NOS", 40, "economy"),
+  },
+];
+
+/** Whether a request is for the breaking stories. */
+export const isBreaking = (url: URL) => url.pathname === "/api/news/breaking";
+
+/**
+ * gotoStillGlobe/settle setup: three stories are breaking (by default none
+ * are), and the delta counts them, as the server's does.
+ */
+export async function withBreaking(page: Page) {
+  await page.route(isBreaking, (route) => route.fulfill({ json: MOCK_BREAKING }));
+  await page.route(isDelta, (route) =>
+    route.fulfill({ json: { ...MOCK_DELTA, breaking: MOCK_BREAKING.length } }),
+  );
+}
+
+/**
+ * The ring meshes alive in the globe's scene now. WebGL objects aren't in the
+ * DOM, so this finds the globe.gl instance through React's fiber for the
+ * globe's container (a ref holding an object with ringsData) and counts the
+ * children of three-globe's ring groups: one per ring on screen.
+ */
+export function ringCircles(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    type Hook = { memoizedState: unknown; next: Hook | null };
+    type Fiber = { memoizedState: Hook | null; return: Fiber | null };
+    type Obj = { __globeObjType?: string; children: unknown[] };
+    type GlobeLike = { ringsData: unknown; scene(): { traverse(f: (o: Obj) => void): void } };
+    const el = document.querySelector('[data-testid="globe"]') as unknown as Record<string, Fiber>;
+    const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+    let fiber: Fiber | null = key ? el[key] : null;
+    let globe: GlobeLike | null = null;
+    while (fiber && !globe) {
+      for (let h = fiber.memoizedState; h && !globe; h = h.next) {
+        const ref = h.memoizedState as { current?: GlobeLike } | null;
+        if (ref && typeof ref === "object" && typeof ref.current?.ringsData === "function") {
+          globe = ref.current;
+        }
+      }
+      fiber = fiber.return;
+    }
+    if (!globe) throw new Error("no globe instance found");
+    let n = 0;
+    globe.scene().traverse((o) => {
+      if (o.__globeObjType === "ring") n += o.children.length;
+    });
+    return n;
+  });
+}
+
+/** `ringCircles` sampled `times` times, `everyMs` apart. */
+export async function sampleRings(page: Page, times = 8, everyMs = 400): Promise<number[]> {
+  const samples: number[] = [];
+  for (let i = 0; i < times; i++) {
+    samples.push(await ringCircles(page));
+    await page.waitForTimeout(everyMs);
+  }
+  return samples;
+}
+
+// ── Since your last visit ───────────────────────────────────────────
+
+/** /api/news/delta: what changed since the visit, with the top places. */
+export const MOCK_DELTA = {
+  new_stories: 1286,
+  new_places: 212,
+  breaking: 0, // as the default breaking mock: none (withBreaking makes it 3)
+  top: [
+    {
+      lat: 48.8566,
+      lng: 2.3522,
+      place: "Paris, France",
+      new: 64,
+      lead: breakingLead("Riot police clear a Paris square", "Reuters", 14, "politics"),
+    },
+    {
+      lat: 29.5,
+      lng: -98.5,
+      place: "Alamodome, Texas, United States",
+      new: 31,
+      lead: breakingLead("Airman dies after rappelling accident", "AP", 31, "economy"),
+    },
+    {
+      lat: 51.5074,
+      lng: -0.1278,
+      place: "London, United Kingdom",
+      new: 27,
+      lead: breakingLead("UK parliament debates trade deal", "BBC News", 80, "politics"),
+    },
+  ],
+};
+
+/** Whether a request asks what changed since a visit. */
+export const isDelta = (url: URL) => url.pathname === "/api/news/delta";
+
+/** localStorage, as useLastVisit keeps it. */
+export const LAST_VISIT_KEY = "orbis-last-visit";
+
+/**
+ * A last visit `hours` ago, seeded before each page load (as a returning
+ * visitor's browser has it; the page writes its own visit on leaving).
+ */
+export async function seedLastVisit(page: Page, hours: number) {
+  await page.addInitScript(
+    ([key, h]) => localStorage.setItem(key, new Date(Date.now() - h * 3_600_000).toISOString()),
+    [LAST_VISIT_KEY, hours] as const,
+  );
+}
+
 // ── SSE helper for agent mock ───────────────────────────────────────
 
 export function buildAgentSSE(options: {
@@ -499,6 +661,12 @@ export async function mockAllApiRoutes(page: Page) {
 
   // The Links layer
   await mockLinkRoutes(page);
+
+  // Breaking stories: none, as often (withBreaking adds some)
+  await page.route(isBreaking, (route) => route.fulfill({ json: [] }));
+
+  // What changed since a visit (asked only when seedLastVisit made one)
+  await page.route(isDelta, (route) => route.fulfill({ json: MOCK_DELTA }));
 }
 
 /**

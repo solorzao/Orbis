@@ -129,6 +129,71 @@ export function fetchGlobeNews({
   return apiFetch<ApiGlobePoint[]>("/api/news", params, signal);
 }
 
+/**
+ * An event many outlets have just started covering (/api/news/breaking): its
+ * most covered story's headline, its place (the 1° cell's centre, as the
+ * cell's dot has it) and how many outlets and stories are on it.
+ */
+export interface ApiBreakingStory {
+  headline: string;
+  place: string;
+  lat: number;
+  lng: number;
+  outlets: number;
+  stories: number;
+  /** The earliest story, clamped to the 2-hour window's start: not when it broke. */
+  first_seen: string;
+  /** The stories' most common topic tag ("general" if none); not always right. */
+  topic: string;
+  lead: ApiGlobeLead;
+}
+
+/**
+ * What is breaking now, at most 8, most outlets first; for one topic pill, or
+ * every topic. The server keeps one list for every topic and filters it.
+ */
+export function fetchBreaking({
+  topic,
+  signal,
+}: {
+  topic: Topic;
+  signal?: AbortSignal;
+}): Promise<ApiBreakingStory[]> {
+  const params: Record<string, string> = {};
+  if (topic !== "All") params.topic = topic;
+  return apiFetch<ApiBreakingStory[]>("/api/news/breaking", params, signal);
+}
+
+/** One of the places with the most new stories since a visit (/api/news/delta). */
+export interface ApiDeltaPlace {
+  lat: number;
+  lng: number;
+  place: string;
+  new: number;
+  lead: ApiGlobeLead;
+}
+
+/** What changed since a visit (/api/news/delta). */
+export interface ApiDelta {
+  new_stories: number;
+  new_places: number;
+  /** Breaking now, as /api/news/breaking lists them (every topic, at most 8). */
+  breaking: number;
+  /** Up to 5, most new stories first. */
+  top: ApiDeltaPlace[];
+}
+
+/** What changed since `since` (an ISO time, floored as the server floors it: floorSince). */
+export function fetchDelta({
+  since,
+  signal,
+}: {
+  since: string;
+  signal?: AbortSignal;
+}): Promise<ApiDelta> {
+  return apiFetch<ApiDelta>("/api/news/delta", { since }, signal);
+}
+
 export interface PlacePreviewQuery {
   lat: number;
   lng: number;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   cleanLabel,
   type AgentMessage as AgentMessageType,
@@ -40,11 +40,18 @@ function contextPills({ place, topic, window }: ScreenContext): ContextPill[] {
   return pills;
 }
 
-/** Quick prompts that follow what the co-pilot sees. */
-function quickPrompts(place?: string, topic?: string): string[] {
-  if (place) return [`Brief me on ${place}`, `What's driving coverage in ${place}?`];
-  if (topic) return [`What's happening in ${topic} today?`];
-  return ["What's the biggest story right now?"];
+/**
+ * Quick prompts that follow what the co-pilot sees, and "What's breaking?"
+ * while something is (the ticker that says so is hidden on narrow screens),
+ * first, so a narrow row never clips it.
+ */
+function quickPrompts(place?: string, topic?: string, breaking = 0): string[] {
+  const prompts = place
+    ? [`Brief me on ${place}`, `What's driving coverage in ${place}?`]
+    : topic
+      ? [`What's happening in ${topic} today?`]
+      : ["What's the biggest story right now?"];
+  return breaking > 0 ? ["What's breaking?", ...prompts] : prompts;
 }
 
 /** What a question is sent with: the pills left in, a window as its bounds right now. */
@@ -72,6 +79,10 @@ interface CoPilotProps {
   showStoriesFor?: (action: GlobeAction) => (() => void) | null;
   /** Show links for an answer's places (Links' state and how to turn it on), or null. */
   showLinksFor?: (actions: GlobeAction[]) => LinksAction | null;
+  /** How many stories are breaking now (useBreaking). */
+  breaking?: number;
+  /** A card under the context pills: "Since your last visit" on narrow screens. */
+  callout?: ReactNode;
 }
 
 /**
@@ -92,6 +103,8 @@ export default function CoPilot({
   onFlyTo,
   showStoriesFor,
   showLinksFor,
+  breaking = 0,
+  callout,
 }: CoPilotProps) {
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -192,6 +205,8 @@ export default function CoPilot({
         ))}
       </div>
 
+      {callout}
+
       {isDisabled && (
         <p className="callout" role="status">
           The agent is temporarily unavailable. Please try again later.
@@ -219,7 +234,7 @@ export default function CoPilot({
       </div>
 
       <div className="quick" role="group" aria-label="Suggested questions">
-        {quickPrompts(place, topic).map((prompt) => (
+        {quickPrompts(place, topic, breaking).map((prompt) => (
           <button
             key={prompt}
             type="button"

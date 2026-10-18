@@ -536,6 +536,108 @@ kbd {
   cursor: pointer;
 }
 
+/*
+ * "Since your last visit" (mockup .since): under the brand from 1180px (top 80,
+ * left 24), a callout card in the co-pilot below that. Top 5 opens a short
+ * list of places under the text.
+ */
+.since {
+  position: fixed;
+  top: 80px;
+  left: 24px;
+  z-index: var(--z-panel);
+  max-width: 360px;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 10px 10px 10px 16px;
+  border-radius: var(--radius-lg);
+}
+.since-txt {
+  flex: 1 1 200px;
+  margin: 0;
+  font: var(--type-body-sm);
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+.since-txt b {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.since-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.since-actions .pill {
+  cursor: pointer;
+}
+.since-x {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  cursor: pointer;
+}
+.since-top {
+  flex-basis: 100%;
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.since-place {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.since-place:hover {
+  background: var(--surface-hover);
+}
+.since-name,
+.since-hl {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.since-name {
+  font: var(--type-label);
+  color: var(--text-primary);
+}
+.since-place .num {
+  font: var(--type-data-sm);
+  color: var(--accent-strong);
+}
+.since-hl {
+  grid-column: 1 / -1;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.since-callout {
+  display: none; /* the strip shows from 1180px */
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+.since-callout .since-txt {
+  flex-basis: 100%;
+}
+@media (width < 1180px) {
+  .since {
+    display: none; /* no room under the brand: the co-pilot's callout instead */
+  }
+  .since-callout {
+    display: flex;
+  }
+  /* The short sheet has room for one welcome: the callout, until it's dismissed. */
+  .copilot:has(.since-callout) .cp-empty {
+    display: none;
+  }
+}
+
 /* Inspect tab: recent places and links, then a place's stories (mockup .insp, .art, lines 357-372) */
 .places {
   display: flex;
@@ -1614,7 +1716,7 @@ button.cite:hover {
 }
 
 /*
- * Bottom row: layers | timeline | (surges, PR 14), one grid so the tracks
+ * Bottom row: layers | timeline | breaking ticker, one grid so the tracks
  * can't overlap. The side tracks never shrink below their content (as in the
  * top bar: a plain 1fr would let the layers, whose min-width is 0, spill into
  * the capsule); only the middle one does. The row spans the width whether the
@@ -1648,6 +1750,92 @@ button.cite:hover {
 .bottombar .timeline {
   grid-column: 2;
   width: 100%;
+}
+.bottombar .breaking {
+  grid-column: 3;
+  justify-self: end;
+  margin-bottom: 4px; /* as the layers: 24px from the bottom */
+}
+
+/*
+ * Breaking ticker (mockup .surges, ported as .breaking), the bottom row's
+ * right track: what is breaking now, one story at a time. Three short lines
+ * (label and count; the headline, ellipsised; place and outlets) so that it
+ * fits the track at 1180px, about 222px. It is never wider than the track's
+ * share of the row ((100vw - 736px) / 2: the row's 24px edges and gaps and
+ * the 640px capsule), so the capsule keeps its width and stays centred.
+ */
+.breaking {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "lab count"
+    "live nav";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  width: min(360px, calc((100vw - 736px) / 2));
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-lg);
+}
+.breaking-lab {
+  grid-area: lab;
+  font: var(--type-label);
+  color: var(--signal-warning);
+}
+.breaking-count {
+  grid-area: count;
+  justify-self: end;
+  padding-right: 6px;
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+}
+.breaking-live {
+  grid-area: live;
+  min-width: 0;
+}
+.breaking-item {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.breaking-head,
+.breaking-place {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.breaking-head {
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+}
+.breaking-item:hover .breaking-head {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.breaking-meta {
+  display: flex;
+  min-width: 0;
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+.breaking-outlets {
+  flex: none;
+  white-space: nowrap;
+}
+.breaking-nav {
+  grid-area: nav;
+  display: inline-flex;
+  gap: 4px;
+}
+.breaking-nav .iconbtn {
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
 }
 /* Narrow: no chart, story count or layers; the play button, label and presets stay. */
 @media (max-width: 760px) {
@@ -1734,6 +1922,10 @@ button.cite:hover {
   .bottombar .layer-dock,
   .bottombar .timeline {
     grid-column: 1;
+  }
+  /* No room beside the capsule: the co-pilot offers "What's breaking?" instead. */
+  .bottombar .breaking {
+    display: none;
   }
   .bottombar .layer-dock {
     justify-self: center;

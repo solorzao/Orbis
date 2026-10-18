@@ -28,6 +28,7 @@ import {
   chartPoints,
   dayTicks,
   linePath,
+  markerX,
   placeDayLabels,
   rangeForDrag,
   smooth,
@@ -85,6 +86,8 @@ interface TimelineCapsuleProps {
   reduced?: boolean;
   /** The replay button, for focus that has nowhere else to go (the Links chip). */
   playRef?: Ref<HTMLButtonElement>;
+  /** The previous visit (ms): a dashed lavender line marks it on the chart (mockup). */
+  lastVisit?: number | null;
 }
 
 /**
@@ -103,6 +106,7 @@ export default function TimelineCapsule({
   places,
   reduced = false,
   playRef,
+  lastVisit = null,
 }: TimelineCapsuleProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const now = useSyncExternalStore(subscribeMinute, minuteNow, noNowOnServer);
@@ -219,6 +223,8 @@ export default function TimelineCapsule({
   const sweep = replay.playing && !reduced && span !== null;
   const x = (t: number) =>
     domain ? Math.min(width, Math.max(0, xForTime(t, domain.start, domain.end, width))) : 0;
+  const lastVisitX =
+    domain && lastVisit !== null ? markerX(lastVisit, domain.start, domain.end, width) : null;
 
   // Keyboard: the window's start and end as hour indices into the chart.
   const slots = domain ? Math.round((domain.end - domain.start) / HOUR_MS) : 0;
@@ -311,6 +317,21 @@ export default function TimelineCapsule({
               strokeWidth={1.6}
             />
           </g>
+          {lastVisitX !== null && (
+            <g className="last-visit" data-testid="last-visit-marker">
+              <line
+                x1={lastVisitX}
+                x2={lastVisitX}
+                y1={TOP}
+                y2={BASE}
+                stroke="var(--accent-lavender)"
+                strokeDasharray="2 3"
+              />
+              <circle cx={lastVisitX} cy={TOP} r={2.5} fill="var(--accent-lavender)">
+                <title>Your last visit</title>
+              </circle>
+            </g>
+          )}
           {span && (
             <g
               // A new key per day restarts the sweep from that day's start.

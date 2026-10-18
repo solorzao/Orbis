@@ -179,3 +179,12 @@ export function canvasColor(value: string, fallback: string): string {
   const a = Math.round(Math.min(1, Math.max(0, c[3])) * 1000) / 1000;
   return `rgba(${r},${g},${b},${a})`;
 }
+
+/**
+ * A breaking ring's colour as it spreads (t from 0 to 1, three-globe's ring
+ * interpolator): the token's colour, from 60% opaque to clear (mockup).
+ */
+export function ringFade(color: string): (t: number) => string {
+  const [r, g, b] = channels(color) ?? [245, 194, 122];
+  return (t) => `rgba(${r},${g},${b},${Math.round(Math.max(0, 0.6 * (1 - t)) * 1000) / 1000})`;
+}

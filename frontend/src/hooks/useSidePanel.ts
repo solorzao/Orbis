@@ -36,6 +36,15 @@ function getWide(): boolean {
 const onServer = () => null;
 
 /**
+ * Whether the screen is wide (from 1180px), where the panel floats on the
+ * right and the bottom row has room for the breaking ticker. False on the
+ * server and before hydration.
+ */
+export function useWideScreen(): boolean {
+  return useSyncExternalStore(subscribeWide, getWide, () => false);
+}
+
+/**
  * State for the side panel (tokens.md principle 2: the co-pilot is open by
  * default on wide screens). Until the visitor opens or collapses it, the
  * panel follows the width. `open` is null only before hydration.

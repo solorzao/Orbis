@@ -29,6 +29,18 @@ describe("countAfterPage", () => {
     expect(buttonShown(30, 120)).toBe(true);
   });
 
+  it("keeps Load more after a full page even when the count was too small (a stand-in dot)", () => {
+    // A breaking story's stand-in counts the event's 7 stories; its cell had more.
+    expect(countAfterPage(7, 20, 20, 20)).toBe(21);
+    expect(buttonShown(20, countAfterPage(7, 20, 20, 20))).toBe(true);
+  });
+
+  it("leaves a dot's own count alone when a full page loads exactly that many", () => {
+    // A real dot of 10 stories: a full first page of 10 is all of them, not "11 stories".
+    expect(countAfterPage(10, 10, 10, 10)).toBe(10);
+    expect(buttonShown(10, countAfterPage(10, 10, 10, 10))).toBe(false);
+  });
+
   it("drops the count to what is loaded after a short page, hiding Load more", () => {
     expect(countAfterPage(120, 45, 15, LOAD_MORE_LIMIT)).toBe(45);
     expect(buttonShown(45, 45)).toBe(false);
