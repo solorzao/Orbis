@@ -777,6 +777,9 @@ kbd {
   text-align: left;
   cursor: pointer;
 }
+.link-row:focus-visible {
+  outline-offset: -2px; /* inside the row: the list's label sits right above it */
+}
 .insp-note {
   margin: 0 0 10px;
   font: var(--type-body-sm);
