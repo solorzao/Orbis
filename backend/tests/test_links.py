@@ -26,7 +26,9 @@ def _sql(query: str) -> str:
 STORY = f"{story_key_sql('a')} AS story"
 
 
-def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, outlets=4, **extra) -> dict:
+def _pair(
+    a="IR", b="US", n=10, n_a=20, n_b=50, total=100, outlets=4, top_exclusive_stories=1, **extra
+) -> dict:
     """A row as the links query returns it."""
     row = {
         "a": a,
@@ -36,6 +38,7 @@ def _pair(a="IR", b="US", n=10, n_a=20, n_b=50, total=100, outlets=4, **extra) -
         "n_b": n_b,
         "total": total,
         "outlets": outlets,
+        "top_exclusive_stories": top_exclusive_stories,
         "tone": -0.3123,
         "from_iso": b,
         **{tag: 0 for tag in TOPIC_TAGS},
@@ -115,6 +118,21 @@ class TestLinksQuery:
         assert "COALESCE(po.outlets, 0) AS outlets" in flat
         assert "LEFT JOIN pair_outlets po ON po.a = g.a AND po.b = g.b" in flat
 
+    def test_counts_the_stories_each_outlet_carried_alone(self):
+        """A wire site's stories are everywhere; a mis-tagging site's are nowhere else."""
+        flat = _sql(links_query(START, END, None)[0])
+        # A story's first and last site, in the story pass: equal when it had one site.
+        assert "min(l.outlet) FILTER (WHERE l.outlet <> '') AS first_outlet" in flat
+        assert "max(l.outlet) FILTER (WHERE l.outlet <> '') AS last_outlet" in flat
+        # Per pair, the most stories one site carried alone, from the story rows.
+        assert (
+            "exclusive AS ( SELECT a, b, max(stories) AS top_exclusive_stories FROM ( "
+            "SELECT a, b, first_outlet, count(*) AS stories FROM stories "
+            "WHERE first_outlet = last_outlet GROUP BY 1, 2, 3 ) t GROUP BY a, b )"
+        ) in flat
+        assert "COALESCE(ex.top_exclusive_stories, 0) AS top_exclusive_stories" in flat
+        assert "LEFT JOIN exclusive ex ON ex.a = g.a AND ex.b = g.b" in flat
+
     def test_counts_each_topic_and_the_totals_for_lift_in_stories(self):
         flat = _sql(links_query(START, END, None)[0])
         for tag in TOPIC_TAGS:
@@ -164,6 +182,23 @@ class TestRanking:
         ranked = rank_links(rows, rank=rank, limit=40)
         assert [(r["a"]["iso"], r["b"]["iso"], r["outlets"]) for r in ranked] == [("IR", "US", 3)]
         assert links.MIN_LINK_OUTLETS == 3
+
+    @pytest.mark.parametrize("rank", ["lift", "count"])
+    def test_no_outlet_may_carry_more_than_half_the_stories_alone(self, rank):
+        """LK-VG, live: 4 of 6 stories on srilankamirror.com and nowhere else."""
+        rows = [
+            _pair("LK", "VG", n=6, outlets=3, top_exclusive_stories=4),  # 4+1+1: 0.67
+            _pair("FR", "US", n=6, outlets=3, top_exclusive_stories=2),  # 2+2+2: 0.33
+            _pair("IR", "US", n=6, outlets=3, top_exclusive_stories=3),  # exactly half: listed
+            _pair("GB", "US", n=6, outlets=5, top_exclusive_stories=0),  # wire stories, reposted
+        ]
+        ranked = rank_links(rows, rank=rank, limit=40)
+        assert sorted((r["a"]["iso"], r["b"]["iso"], r["top_exclusive_share"]) for r in ranked) == [
+            ("FR", "US", 0.33),
+            ("GB", "US", 0.0),
+            ("IR", "US", 0.5),
+        ]
+        assert links.MAX_EXCLUSIVE_SHARE == 0.5
 
     def test_lift_needs_five_stories(self):
         rows = [_pair("FR", "US", n=4, n_a=4, n_b=4), _pair("IR", "US", n=5)]
@@ -561,8 +596,18 @@ class TestDetailQueries:
             "(SELECT count(DISTINCT o) FROM stories, unnest(stories.outlets) AS o) AS outlets"
             in flat
         )
+        # The most stories one site carried alone, as the links query counts them.
+        assert (
+            "min(outlet) FILTER (WHERE linked AND outlet <> '') AS first_outlet, "
+            "max(outlet) FILTER (WHERE linked AND outlet <> '') AS last_outlet"
+        ) in flat
+        assert (
+            "(SELECT max(c) FROM ( SELECT count(*) AS c FROM stories "
+            "WHERE first_outlet = last_outlet GROUP BY first_outlet ) per_outlet) "
+            "AS top_exclusive_stories"
+        ) in flat
         # linking is read once (by stories, which PostgreSQL materialises, being read
-        # twice): no pairs to unnest, so no MATERIALIZED needed for each article's key.
+        # more than once): no pairs to unnest, so no MATERIALIZED for each article's key.
         assert flat.startswith("WITH linking AS ( SELECT")
         for tag in TOPIC_TAGS:
             assert f"bool_or(linked AND topic_tags && '{{{tag}}}') AS {tag}" in flat
@@ -589,6 +634,7 @@ class TestGetLinkDetail:
     @pytest.mark.asyncio
     async def test_assembles_the_pair(self):
         stats = {"n": 6, "n_a": 8, "n_b": 30, "total": 200, "tone": -0.456, "outlets": 2}
+        stats["top_exclusive_stories"] = 4
         stats.update({tag: 0 for tag in TOPIC_TAGS}, conflict=5, politics=2)
         pool = _detail_pool(
             stats,
@@ -603,6 +649,7 @@ class TestGetLinkDetail:
         assert (detail["n"], detail["lift"], detail["tone"]) == (6, 5.0, -0.46)
         # Below MIN_LINK_OUTLETS: /api/links would not list it, but the inspector answers.
         assert detail["outlets"] == 2
+        assert detail["top_exclusive_share"] == 0.67  # 4 of 6 alone: over MAX_EXCLUSIVE_SHARE too
         assert detail["topic_mix"] == {
             "politics": 2,
             "conflict": 5,
@@ -618,10 +665,12 @@ class TestGetLinkDetail:
     @pytest.mark.asyncio
     async def test_a_pair_without_stories_is_empty(self):
         stats = {"n": 0, "n_a": 0, "n_b": 0, "total": 0, "tone": None, "outlets": 0}
+        stats["top_exclusive_stories"] = None  # no outlets: max() of nothing
         stats.update({tag: 0 for tag in TOPIC_TAGS})
         pool = _detail_pool(stats, [], [], [])
         with patch("app.services.links.get_pool", new_callable=AsyncMock, return_value=pool):
             detail = await links.get_link_detail("IR", "US", START, END, "health")
 
         assert (detail["n"], detail["lift"], detail["tone"]) == (0, 0.0, 0.0)
+        assert detail["top_exclusive_share"] == 0.0
         assert detail["shared"] == [] and detail["themes"] == [] and detail["articles"] == []

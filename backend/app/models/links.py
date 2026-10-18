@@ -31,6 +31,10 @@ class Link(BaseModel):
     tone: float = Field(..., description="Mean sentiment of the stories, -1 to 1")
     from_: str = Field(..., alias="from", description="The country most of them come from")
     outlets: int = Field(..., description="Sites the stories' copies come from (3 or more)")
+    top_exclusive_share: float = Field(
+        ...,
+        description="Share of the stories one site carried and no other did, at most (0.5 or less)",
+    )
 
 
 class LinkEntity(BaseModel):
@@ -49,6 +53,11 @@ class LinkDetail(BaseModel):
     n: int
     lift: float
     outlets: int = Field(..., description="Sites the stories' copies come from; /api/links needs 3")
+    top_exclusive_share: float = Field(
+        ...,
+        description="Share of the stories one site carried and no other did, at most; "
+        "/api/links needs 0.5 or less",
+    )
     topic_mix: dict[str, int] = Field(..., description="Stories per topic tag (may count twice)")
     tone: float
     shared: list[LinkEntity] = Field(..., description="Names in 2 or more of the stories, top 8")
