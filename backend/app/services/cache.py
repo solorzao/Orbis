@@ -14,6 +14,19 @@ logger = logging.getLogger(__name__)
 
 _redis_client: aioredis.Redis | None = None
 
+# Allowance for a cycle and the cache warm after it (app.warm) to finish.
+_WARM_ALLOWANCE = 300
+
+
+def cycle_ttl(ttl: int) -> int:
+    """A TTL for a db:* key the cache warm refills: at least until the next cycle's warm.
+
+    Ingestion invalidates db:* every cycle and app.warm refills the busiest
+    keys after it, so a shorter TTL only lets a warmed entry expire before
+    anyone asks for it. Entries change only when a cycle runs.
+    """
+    return max(ttl, settings.ingestion_interval_seconds + _WARM_ALLOWANCE)
+
 
 async def get_redis() -> aioredis.Redis | None:
     """Return the shared Redis connection, or None if unavailable."""

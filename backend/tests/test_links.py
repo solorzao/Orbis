@@ -236,6 +236,11 @@ class TestDisplayTheme:
             ("ECON_STOCKMARKET", "Economy: stock market"),
             ("ENV_CLIMATECHANGE", "Environment: climate change"),
             ("TAX_WEAPONS_MISSILE", "Weapons: missile"),
+            # Kept families' bare codes: a readable label, or nothing if they name nothing.
+            ("TAX_WEAPONS", "Weapons"),
+            ("TAX_FOODSTAPLES", "Food staples"),
+            ("TAX_FOODSTAPLES_RICE", "Food staples: rice"),
+            ("TAX_SPECIAL_ISSUES", ""),
             # Named-entity families: the bare name, never the family, which GDELT
             # gives by keyword (the BJP is tagged a terror group as often as a
             # party). In title case; short one-word names as acronyms.
@@ -278,6 +283,11 @@ class TestDisplayTheme:
             ("UNGP_FORESTS_RIVERS_OCEANS", "Forests rivers oceans"),
             # Generic or administrative: dropped.
             ("TAX_FNCACT_OFFICIALS", ""),
+            # GKG lists a family's own code beside its members ("TAX_FNCACT;
+            # TAX_FNCACT_PRESIDENT"): seen live as "Fncact", "Ethnicity".
+            ("TAX_FNCACT", ""),
+            ("TAX_ETHNICITY", ""),
+            ("TAX_WORLDLANGUAGES", ""),
             ("TAX_FNCACT_PRESIDENT", ""),
             ("TAX_WORLDLANGUAGES_ALABAMA", ""),
             ("TAX_ETHNICITY_AMERICAN", ""),
@@ -308,6 +318,11 @@ class TestDisplayTheme:
 
     def test_any_case(self):
         assert links.display_theme("econ_inflation") == "Economy: inflation"
+
+    @pytest.mark.parametrize("prefix", links.DROPPED_THEME_PREFIXES)
+    def test_a_dropped_family_is_dropped_bare_too(self, prefix):
+        assert links.display_theme(prefix + "ANYTHING") == ""
+        assert links.display_theme(prefix.rstrip("_")) == ""
 
     def test_top_five_distinct_labels_by_stories(self):
         rows = [  # as detail_themes_query returns them: in most stories first
@@ -415,11 +430,14 @@ class TestDetailQueries:
             f"WHERE NOT theme ^@ ANY (${first}::text[]) "
             f"AND theme <> ALL (${first + 1}::text[]) GROUP BY theme"
         ) in flat
-        assert args[first - 1 :] == [
-            list(links.DROPPED_THEME_PREFIXES),
-            sorted(links.DROPPED_THEMES),
-            25,
-        ]
+        prefixes, exact, limit = args[first - 1 :]
+        assert (prefixes, limit) == (list(links.DROPPED_THEME_PREFIXES), 25)
+        # The bare family codes too, and the named families' (shown as nothing).
+        bare = {p.rstrip("_") for p in links.DROPPED_THEME_PREFIXES}
+        named = {"TAX_TERROR_GROUP", "TAX_POLITICAL_PARTY", "TAX_AIDGROUPS"}
+        assert exact == sorted(links.DROPPED_THEMES | bare | named)
+        assert {"TAX_FNCACT", "TAX_ETHNICITY", "TAX_WORLDLANGUAGES"} <= set(exact)
+        assert all(links.display_theme(code) == "" for code in exact)
         assert max(int(n) for n in re.findall(r"\$(\d+)", sql)) == len(args)
         assert "TAX_FNCACT_" not in sql and "'{" not in sql
 

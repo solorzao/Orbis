@@ -34,7 +34,7 @@ from app.services.ai_summary import (
     summarise_cluster,
     summarise_selection,
 )
-from app.services.cache import get_cached, set_cached
+from app.services.cache import cycle_ttl, get_cached, set_cached
 from app.services.database import (
     get_articles_in_bounds,
     get_cell_entities,
@@ -170,11 +170,19 @@ async def get_globe_data(
     Each point also carries what the hover card shows first: its lead story,
     topic mix and tone (see get_globe_points).
     """
-    hours = _parse_timespan(timespan)
-    start_dt = _parse_iso(start_time)
-    end_dt = _parse_iso(end_time)
-    tag = _globe_topic_tag(topic)
+    return await cached_globe(
+        _parse_timespan(timespan), start_time, end_time, limit, _globe_topic_tag(topic)
+    )
 
+
+async def cached_globe(
+    hours: int, start_time: str | None, end_time: str | None, limit: int, tag: str | None
+) -> list[GlobeDataPoint]:
+    """/api/news' answer: cached, else computed and cached.
+
+    The request and its cache warmer both come here, so a warmed entry has
+    the key and the bytes a request would have stored.
+    """
     # v2: points carry the hover card's lead, topic mix and tone.
     cache_k = f"db:globe:v2:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
     cached = await get_cached(cache_k)
@@ -185,16 +193,26 @@ async def get_globe_data(
         timespan_hours=hours,
         cell_size=1.0,
         limit=limit,
-        start_time=start_dt,
-        end_time=end_dt,
+        start_time=_parse_iso(start_time),
+        end_time=_parse_iso(end_time),
         topic=tag,
     )
     points = [GlobeDataPoint(**r) for r in rows]
 
-    ttl = settings.db_cache_ttl if points else _EMPTY_GLOBE_TTL
+    ttl = cycle_ttl(settings.db_cache_ttl) if points else _EMPTY_GLOBE_TTL
     await set_cached(cache_k, [p.model_dump(mode="json") for p in points], ttl)
 
     return points
+
+
+# The frontend's first visit: DEFAULT_WINDOW (24 hours), GLOBE_LIMIT, all topics.
+_FIRST_VISIT_GLOBE_HOURS = 24
+_FIRST_VISIT_GLOBE_LIMIT = 500
+
+
+async def warm_globe() -> None:
+    """Cache the globe the first visit asks for (app.warm, after each ingestion cycle)."""
+    await cached_globe(_FIRST_VISIT_GLOBE_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, None)
 
 
 # Grid cell size must match get_globe_points() call in get_globe_data().
@@ -596,6 +614,11 @@ async def get_story_volume(
     days: int = Query(7, ge=1, le=7, description="Days back from now (1-7)"),
 ) -> list[HourlyVolume]:
     """Return stories per UTC hour for the timeline: every hour, zeros included."""
+    return await cached_volume(days)
+
+
+async def cached_volume(days: int) -> list[HourlyVolume]:
+    """/api/news/volume's answer: cached, else computed and cached (as cached_globe)."""
     cache_k = f"db:volume:{days}"
     cached = await get_cached(cache_k)
     if cached:
@@ -604,9 +627,18 @@ async def get_story_volume(
     result = [HourlyVolume(**r) for r in await get_hourly_volume(days)]
     if result:
         await set_cached(
-            cache_k, [v.model_dump(mode="json") for v in result], settings.db_cache_ttl
+            cache_k, [v.model_dump(mode="json") for v in result], cycle_ttl(settings.db_cache_ttl)
         )
     return result
+
+
+# The timeline's sparkline: the frontend's CHART_DAYS.
+_FIRST_VISIT_VOLUME_DAYS = 7
+
+
+async def warm_volume() -> None:
+    """Cache the timeline the first visit asks for (app.warm, after each ingestion cycle)."""
+    await cached_volume(_FIRST_VISIT_VOLUME_DAYS)
 
 
 @router.get("/topics", response_model=list[TopicCount], dependencies=[Depends(edge_cached)])
