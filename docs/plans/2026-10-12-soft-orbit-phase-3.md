@@ -5,7 +5,7 @@
 **Goal:** Add the three "quick win" surfaces on top of the live Soft Orbit UI:
 - the city hover card;
 - co-coverage arcs with a link inspector;
-- surge alerts with a "since your last visit" strip.
+- breaking-story alerts (first built as place surges; see PR 14) with a "since your last visit" strip.
 
 None of them generates AI text on hover, and each lands in a slot Phase 2 reserved.
 
@@ -456,11 +456,13 @@ Tests for both. Commit: `feat(ui): link hints in the hover card and co-pilot`.
 
 ---
 
-## PR 14: Surge alerts and "since your last visit"
+## PR 14: Breaking stories and "since your last visit"
 
 Branch: `claude/p3-surges`.
 
-### Task 14.1: Surges (backend)
+14a (#75, Tasks 14.1 and 14.2) shipped place surges. Live, they flagged busy places rather than events: a hub's afternoon (59 outlets at the White House, on everything), one local outlet's crawl batch, a few local papers. They also missed events at busy places (the Paris unrest: 23 outlets on one event, under a baseline of 19 outlets a block). What told them apart was how many outlets were on one event. So surges were replaced by **breaking stories** (Task 14.1b, branch `claude/breaking-stories`), and 14b (Tasks 14.3 and 14.4) consumes `/api/news/breaking`. Task 14.1 is kept as the record of what 14a built.
+
+### Task 14.1: Surges (backend, replaced by 14.1b)
 
 **Endpoint:** `GET /api/news/surges?topic=` returns `[{lat, lng, place, recent, baseline, ratio, topic, lead: GlobeLead}]`, at most 8.
 - **Counting:** per 1° cell:
@@ -480,36 +482,54 @@ Branch: `claude/p3-surges`.
 
 Commit: `feat(api): surge detection per place`.
 
+### Task 14.1b: Breaking stories (backend)
+
+**Endpoint:** `GET /api/news/breaking?topic=` returns `[{headline, place, lat, lng, outlets, stories, first_seen, topic, lead: GlobeLead}]`, at most 8, most outlets first, then the newest `first_seen`, then cell. It replaces `/api/news/surges`.
+
+- **Recent stories:** the last 2 hours' embedded articles (headline embeddings, text-embedding-3-small), one row per story (`story_key_sql`, its newest copy), each in its 1° cell with its outlet (`source_name`). Rows not yet embedded are skipped.
+- **Candidate cells:** at least `MIN_OUTLETS` (7) distinct outlets.
+- **The event of a cell:** for each story, its neighbours are the cell's stories at least `SAME_STORY_SIM` (0.60, cosine, exact) alike. The event is the story whose neighbours have the most distinct outlets, newest on a tie.
+- **Breaking:** at least 7 outlets now, and at least as many as covered it in the 22 hours before (alike, same cell, other outlets): `MIN_NEW_SHARE` = 0.5.
+- **One event, one place:** when two cells' events are alike ("Paris" and "France"), the one more outlets cover is kept.
+- **Output:** `headline` is the event story's title as one clean line; `place` is its `display_place`; `stories` and `first_seen` come from the neighbours; `topic` is their dominant one; `lead` is the newest neighbour with an https image.
+- **Topic filter:** `?topic=` keeps the events whose dominant topic it is. Candidates are never filtered by topic.
+- **Caching:** one uncapped list for every topic (`db:breaking:v1`, Redis 300 s), filtered and capped per request. Misses share one query with a 15 s timeout, nothing is cached on an error, and responses are edge-cached. It is in the `data` rate-limit group.
+- `SAME_STORY_SIM` is tuned against live output after deploy.
+
+Commit: `feat(api): breaking stories replace place surges`.
+
 ### Task 14.2: "Since your last visit" (backend)
 
-**Endpoint:** `GET /api/news/delta?since=ISO` returns `{"new_stories": int, "new_places": int, "surging": int, "top": [{lat, lng, place, new, lead: GlobeLead}]}`.
-- **`since`:** clamped to the last 7 days; in the future or invalid gives 422.
+**Endpoint:** `GET /api/news/delta?since=ISO` returns `{"new_stories": int, "new_places": int, "breaking": int, "top": [{lat, lng, place, new, lead: GlobeLead}]}`.
+- **`since`:** clamped to the last 7 days; invalid or more than 15 minutes ahead gives 422 (up to 15 minutes ahead counts as now).
 - **`top`:** the 5 cells with the most new distinct stories since then.
-- **`surging`:** the count from 14.1's query.
-- **Caching:** Redis keyed on `since` floored to 15 minutes, for 300 s.
+- **`breaking`:** the count `/api/news/breaking` lists for every topic, at most 8, so the strip and the ticker agree (14a called it `surging`).
+- **Caching:** Redis (`db:delta:v2`) keyed on `since` floored in UTC: to the quarter hour within 24 hours, the hour within 72 hours, 6 hours beyond. That's about 160 starts a week. 300 s.
 
 Tests for clamping, counting and validation, plus a local SQL run. Commit: `feat(api): what changed since a visit`.
 
-### Task 14.3: Surge ticker and surge rings
+### Task 14.3: Breaking ticker and breaking rings
 
-**Files:** `frontend/src/components/SurgeTicker.tsx` (+ test), `frontend/src/hooks/useSurges.ts` (+ test), `frontend/src/components/BottomBar.tsx` (third track), `frontend/src/components/Globe.tsx` (rings), `frontend/src/app/soft-orbit.css` (port `.surges`).
+**Files:** `frontend/src/components/BreakingTicker.tsx` (+ test), `frontend/src/hooks/useBreaking.ts` (+ test), `frontend/src/components/BottomBar.tsx` (third track), `frontend/src/components/Globe.tsx` (rings), `frontend/src/app/soft-orbit.css` (port the mockup's `.surges` as `.breaking`).
+
+**Data:** `GET /api/news/breaking?topic=` (Task 14.1b): `[{headline, place, lat, lng, outlets, stories, first_seen, topic, lead}]`, at most 8, already in order.
 
 **Ticker:**
-- **Layout:** the bottom row's third track is a `.pillbar.surges` reading `Surges · Kinshasa 2.6× · lead headline · 1 of 4`, with previous and next icon buttons. It sits right-aligned in the right track. At ≥ 1180 that track is clear of the side panel vertically, as the bottom row is now.
+- **Layout:** the bottom row's third track is a `.pillbar.breaking` reading `Breaking · headline · place · 12 outlets · 1 of 4`, with previous and next icon buttons. The headline is ellipsised to one line and its full text is the title tooltip. It sits right-aligned in the right track. At ≥ 1180 that track is clear of the side panel vertically, as the bottom row is now.
 - **Rotation:** every 6 s. It pauses while hovered or focused, and doesn't auto-rotate with reduced motion.
-- **Click:** an item flies the globe there (`flyTo`) and opens Inspect for that cell (`pointAt`, then `handlePointClick`).
-- **Empty:** the ticker is hidden when there are no surges.
-- **Narrow screens:** below 1180 it is hidden. The co-pilot gains a "What's surging?" quick prompt when there are surges, so the information is still reachable.
+- **Click:** an item flies the globe to its `lat`/`lng` (`flyTo`) and opens Inspect for that cell (`pointAt`, then `handlePointClick`).
+- **Empty:** the ticker is hidden when nothing is breaking.
+- **Narrow screens:** below 1180 it is hidden. The co-pilot gains a "What's breaking?" quick prompt when something is, so the information is still reachable.
 
-**Rings:** `ringsData` becomes the surging cells only, coloured `--signal-warning`, pulsing (motion-gated as now). Today every dot pulses; the mockup pulses alerts only.
+**Rings:** `ringsData` becomes the breaking stories' places only (`lat`/`lng`), coloured `--signal-warning`, pulsing (motion-gated as now). Today every dot pulses; the mockup pulses alerts only.
 
-**Polling:** surges are fetched every 5 minutes (aborted on unmount), refetched on a topic change, and only for live windows. During a replay or a dragged range the ticker hides.
+**Polling:** breaking stories are fetched every 5 minutes (aborted on unmount), refetched on a topic change (the topic pill's `topic`), and only for live windows. During a replay or a dragged range the ticker hides.
 
 **Tests:**
-- Unit: rotation timing with fake timers, pausing, reduced motion, formatting `20×+`.
-- e2e: with mocked surges the ticker shows, next and previous work, and a click opens Inspect for that place. `layout.spec` adds `surge-ticker` at the wide sizes, checked for overlap and spacing.
+- Unit: rotation timing with fake timers, pausing, reduced motion, the outlet count, a long headline ellipsised.
+- e2e: with mocked breaking stories the ticker shows, next and previous work, and a click opens Inspect for that place. `layout.spec` adds `breaking-ticker` at the wide sizes, checked for overlap and spacing.
 
-Commit: `feat(ui): surge ticker and rings`.
+Commit: `feat(ui): breaking ticker and rings`.
 
 ### Task 14.4: "Since your last visit" strip and last-visit marker
 
@@ -521,8 +541,10 @@ Commit: `feat(ui): surge ticker and rings`.
 - Storage access is wrapped in try/catch.
 - The strip only shows when the previous visit was at least 1 hour and at most 7 days ago. Missing or unreadable storage counts as a first visit and shows nothing.
 
+**Delta request:** `GET /api/news/delta?since=` with the last visit floored client-side in UTC with the server's tiers before it is sent: to the quarter hour within 24 hours of now, the hour within 72 hours, 6 hours beyond (and at most 7 days back). The server floors the same way, so this changes no answer. It makes visits in one bucket send one URL, so the edge cache shares them as well as Redis.
+
 **Strip:**
-- **Text:** a `.pillbar.since` under the brand at ≥ 1180 (top 80, left 24) reading "Welcome back. 14 h since your visit: 1,286 new stories, 4 surging places."
+- **Text:** a `.pillbar.since` under the brand at ≥ 1180 (top 80, left 24) reading "Welcome back. 14 h since your visit: 1,286 new stories, 4 breaking stories." (the delta's `new_stories` and `breaking`; the breaking part is left out at 0).
 - **Buttons:**
   - **Show** sets the time window to the range `[lastVisit, now]`.
   - **Top 5** expands a small list of the top cells (place, new count, lead headline). Clicking one flies there and opens it.
@@ -532,16 +554,16 @@ Commit: `feat(ui): surge ticker and rings`.
 **Timeline:** draws the mockup's dashed lavender last-visit line with its "Your last visit" title (`volumeChart` gains a helper that gives its x position), whenever the last visit falls inside the 7 days.
 
 **Tests:**
-- Unit: storage edge cases (missing, garbage, blocked), the 1 h and 7 d bounds, Show setting the range, dismiss.
+- Unit: storage edge cases (missing, garbage, blocked), the 1 h and 7 d bounds, Show setting the range, dismiss, and `since` flooring at each tier's boundary (24 h and 72 h).
 - e2e: seed a last visit 14 h ago through `addInitScript`; the strip shows with mocked delta numbers, Show changes the timeline label to the range, and the marker exists. `layout.spec` adds `since-strip` at the wide sizes, against the brand, topics and side panel.
 
 Commit: `feat(ui): since your last visit`.
 
 ### Task 14.5: PR 14
 
-1. Run every check and do the visual check (seed a last visit; mock surges).
-2. The controller times the surges and delta SQL on production.
-3. Open the PR `feat: surge alerts and since your last visit (PR 14)`.
+1. Run every check and do the visual check (seed a last visit; mock breaking stories).
+2. The controller times the breaking and delta SQL on production, and checks the live breaking stories against the labelled events before tuning `SAME_STORY_SIM`.
+3. Open the PR `feat: breaking stories and since your last visit (PR 14)`.
 
 ---
 

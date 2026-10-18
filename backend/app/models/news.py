@@ -150,19 +150,19 @@ class GlobeDataPoint(BaseModel):
     tone: float = 0.0  # mean sentiment_score of the cell's stories, -1..1
 
 
-class Surge(BaseModel):
-    """A place whose coverage is surging (/api/news/surges): see services/surges.py."""
+class BreakingStory(BaseModel):
+    """An event many outlets have just started covering (/api/news/breaking):
+    see services/breaking.py."""
 
-    lat: float  # the 1° cell's centre, as its globe dot has it
+    headline: str  # the event's most covered story's title, one clean line
+    place: str  # display_place of that story's region and country_code
+    lat: float  # its 1° cell's centre, as the cell's globe dot has it
     lng: float
-    place: str  # display_place of the lead's region and country_code
-    recent: int  # distinct stories in the last 2 hours
-    # Distinct stories before the last 2 hours, per 2-hour block of data held
-    # (from the oldest story kept, up to 83 blocks at 7 days' retention).
-    baseline: float
-    ratio: float  # recent / max(baseline, 0.5); the frontend shows "20×+" above 20
-    topic: str  # the topic filter's tag, else the most common of the six ("general" if none)
-    lead: GlobeLead  # the newest recent story, preferring an https image
+    outlets: int  # distinct outlets on the event in the last 2 hours
+    stories: int  # distinct stories about it among them
+    first_seen: datetime  # the earliest of those stories
+    topic: str  # the most common of the six among those stories ("general" if none)
+    lead: GlobeLead  # the newest of them with an https image, else the newest
 
 
 class DeltaPlace(BaseModel):
@@ -180,7 +180,7 @@ class Delta(BaseModel):
 
     new_stories: int  # distinct stories since the visit
     new_places: int  # 1° cells with any of them
-    surging: int  # places surging now, as /api/news/surges lists them (at most 8)
+    breaking: int  # breaking stories now, as /api/news/breaking lists them (at most 8)
     top: list[DeltaPlace]  # up to 5, most new stories first
 
 

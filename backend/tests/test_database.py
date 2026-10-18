@@ -561,7 +561,7 @@ class TestGetGlobePoints:
         [point] = await database.get_globe_points(cell_size=1.0)
 
         assert point["topic"] == colour
-        # The rule is public: surges colour their places by it too.
+        # The rule is public: breaking stories take their topic by it too.
         assert database.dominant_topic({"economy": 2, "health": 2}, lead_tags) == colour
         assert "dominant_topic" in database.__all__
 
