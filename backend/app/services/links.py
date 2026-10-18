@@ -45,9 +45,11 @@ MIN_LIFT_STORIES = 5
 # A pair needs this many sites behind its copies, so one site that tags a
 # country on every page (srilankamirror.com and the BVI) is not a link.
 MIN_LINK_OUTLETS = 3
-# Nor may one site have carried more than this share of its stories: with
-# two genuine stories beside its four, srilankamirror.com still made LK-VG.
-MAX_OUTLET_SHARE = 0.5
+# Nor may one site have carried more than this share of its stories alone
+# (stories no other site carried): with two genuine stories beside its four,
+# srilankamirror.com still made LK-VG. Stories alone, so a wire service's
+# own site, whose stories are reposted everywhere, does not count against.
+MAX_EXCLUSIVE_SHARE = 0.5
 
 # An article's story, in queries that alias articles as a.
 _STORY = story_key_sql("a")
@@ -112,12 +114,13 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
     half, for a story's copies and then for the pair's stories.
 
     ``outlets`` is how many sites (non-empty source names) the pair's
-    copies come from, and ``top_outlet_stories`` how many of its stories
-    the busiest of them carried (a story counts once under each site that
-    carried it). The story pass gathers each story's copies' sites (usually
-    one, repeats and all, so that level can still hash); ``outlet_stories``
-    then counts each site's stories per pair, from those story rows, not
-    from the articles again, and ``pair_outlets`` the sites and the most.
+    copies come from, and ``top_exclusive_stories`` the most of its
+    stories that one site carried alone (no other site carried them). The
+    story pass gathers each story's copies' sites (usually one, repeats and
+    all, so that level can still hash) and its first and last site, equal
+    when it had only one. ``pair_outlets`` counts the sites per pair and
+    ``exclusive`` the stories each site had alone, both from those story
+    rows, not from the articles again.
     """
     conditions, args = _window(start, end, topic)
     story_topics = ",\n".join(
@@ -131,6 +134,8 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
                    sum(l.sentiment_score) / count(l.sentiment_score) AS tone,
                    2 * count(*) FILTER (WHERE l.country_code < m) >= count(*) AS from_a,
                    array_agg(l.outlet) FILTER (WHERE l.outlet <> '') AS outlets,
+                   min(l.outlet) FILTER (WHERE l.outlet <> '') AS first_outlet,
+                   max(l.outlet) FILTER (WHERE l.outlet <> '') AS last_outlet,
                    {story_topics}
             FROM linking l, unnest(l.others) AS m
             GROUP BY 1, 2, 3
@@ -143,17 +148,22 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
             ) t
             GROUP BY c
         ),
-        outlet_stories AS (
-            SELECT a, b, o, count(*) AS stories
-            FROM (
-                SELECT s.a, s.b, o, s.story FROM stories s, unnest(s.outlets) AS o
-                GROUP BY 1, 2, 3, 4
-            ) t
-            GROUP BY 1, 2, 3
-        ),
         pair_outlets AS (
-            SELECT a, b, count(*) AS outlets, max(stories) AS top_outlet_stories
-            FROM outlet_stories
+            SELECT a, b, count(*) AS outlets
+            FROM (
+                SELECT s.a, s.b, o FROM stories s, unnest(s.outlets) AS o
+                GROUP BY 1, 2, 3
+            ) t
+            GROUP BY a, b
+        ),
+        exclusive AS (
+            SELECT a, b, max(stories) AS top_exclusive_stories
+            FROM (
+                SELECT a, b, first_outlet, count(*) AS stories
+                FROM stories
+                WHERE first_outlet = last_outlet
+                GROUP BY 1, 2, 3
+            ) t
             GROUP BY a, b
         ),
         grouped AS (
@@ -169,11 +179,12 @@ def links_query(start: datetime, end: datetime, topic: str | None) -> tuple[Any,
                ta.n AS n_a, tb.n AS n_b,
                (SELECT count(*) FROM (SELECT story FROM stories GROUP BY story) s) AS total,
                COALESCE(po.outlets, 0) AS outlets,
-               COALESCE(po.top_outlet_stories, 0) AS top_outlet_stories
+               COALESCE(ex.top_exclusive_stories, 0) AS top_exclusive_stories
         FROM grouped g
         JOIN touched ta ON ta.c = g.a
         JOIN touched tb ON tb.c = g.b
         LEFT JOIN pair_outlets po ON po.a = g.a AND po.b = g.b
+        LEFT JOIN exclusive ex ON ex.a = g.a AND ex.b = g.b
     """
     return query, *args
 
@@ -196,9 +207,9 @@ def lift(n: int, n_a: int, n_b: int, total: int) -> float:
     return n * total / (n_a * n_b) if n_a and n_b else 0.0
 
 
-def outlet_share(top_outlet_stories: int | None, n: int) -> float:
-    """The share of a pair's n stories its busiest site carried, 0 to 1."""
-    return (top_outlet_stories or 0) / n if n else 0.0
+def exclusive_share(top_exclusive_stories: int | None, n: int) -> float:
+    """The share of a pair's n stories that one site, the busiest so, carried alone: 0 to 1."""
+    return (top_exclusive_stories or 0) / n if n else 0.0
 
 
 def _country(iso: str) -> dict:
@@ -212,10 +223,9 @@ def rank_links(rows: list[dict], rank: Rank, limit: int, topic: str | None = Non
     ``lift`` ranks pairs with MIN_LIFT_STORIES stories or more by lift, then
     stories; ``count`` ranks every pair by stories, then lift. Pairs with a
     country that has no label point, fewer than MIN_LINK_OUTLETS sites
-    behind them, or one site behind more than MAX_OUTLET_SHARE of their
-    stories, are dropped first: so a one-story pair never shows, its site
-    having carried all of it. *topic* is the window's topic filter: every
-    link is then of that topic.
+    behind them, or one site that carried more than MAX_EXCLUSIVE_SHARE of
+    their stories alone, are dropped first. *topic* is the window's topic
+    filter: every link is then of that topic.
     """
     usable = [r for r in rows if centroid(r["a"]) and centroid(r["b"])]
     if dropped := len(rows) - len(usable):
@@ -224,7 +234,7 @@ def rank_links(rows: list[dict], rank: Rank, limit: int, topic: str | None = Non
         r
         for r in usable
         if r["outlets"] >= MIN_LINK_OUTLETS
-        and outlet_share(r["top_outlet_stories"], r["n"]) <= MAX_OUTLET_SHARE
+        and exclusive_share(r["top_exclusive_stories"], r["n"]) <= MAX_EXCLUSIVE_SHARE
     ]
     scored = [(lift(r["n"], r["n_a"], r["n_b"], r["total"]), r) for r in usable]
     if rank == "lift":
@@ -251,7 +261,9 @@ def rank_links(rows: list[dict], rank: Rank, limit: int, topic: str | None = Non
                 "tone": round(row["tone"] or 0.0, 2),
                 "from": row["from_iso"],
                 "outlets": row["outlets"],
-                "top_outlet_share": round(outlet_share(row["top_outlet_stories"], row["n"]), 2),
+                "top_exclusive_share": round(
+                    exclusive_share(row["top_exclusive_stories"], row["n"]), 2
+                ),
             }
         )
     return links
@@ -415,9 +427,9 @@ def detail_stats_query(
     links the pair, or touches a country, if any of its copies does. Its
     tone and topics are those of the copies that link the pair, and
     ``outlets`` is the sites those copies come from and
-    ``top_outlet_stories`` the stories the busiest of them carried, as the
-    links query counts them (over the pair's stories alone: the other
-    stories' site lists are empty).
+    ``top_exclusive_stories`` the most stories one of them carried alone,
+    as the links query counts them (over the pair's stories alone: the
+    other stories have no sites gathered).
     """
     conditions, args = _window(start, end, topic)
     args += [a, b]
@@ -436,6 +448,8 @@ def detail_stats_query(
                    sum(sentiment_score) FILTER (WHERE linked)
                    / count(sentiment_score) FILTER (WHERE linked) AS tone,
                    array_agg(outlet) FILTER (WHERE linked AND outlet <> '') AS outlets,
+                   min(outlet) FILTER (WHERE linked AND outlet <> '') AS first_outlet,
+                   max(outlet) FILTER (WHERE linked AND outlet <> '') AS last_outlet,
                    {story_topics}
             FROM (
                 SELECT story, country_code, others, topic_tags, sentiment_score, outlet,
@@ -452,10 +466,10 @@ def detail_stats_query(
                avg(tone) AS tone,
                (SELECT count(DISTINCT o) FROM stories, unnest(stories.outlets) AS o) AS outlets,
                (SELECT max(c) FROM (
-                   SELECT count(DISTINCT stories.story) AS c
-                   FROM stories, unnest(stories.outlets) AS o
-                   GROUP BY o
-               ) per_outlet) AS top_outlet_stories,
+                   SELECT count(*) AS c FROM stories
+                   WHERE first_outlet = last_outlet
+                   GROUP BY first_outlet
+               ) per_outlet) AS top_exclusive_stories,
                {topic_counts}
         FROM stories
     """
@@ -691,7 +705,7 @@ async def get_link_detail(
     ``articles`` are raw rows, each story's newest copy, newest first (up to
     ARTICLE_FETCH_LIMIT); the rest is ready to show. Any pair answers, also
     one /api/links does not list: ``outlets`` under MIN_LINK_OUTLETS, or
-    ``top_outlet_share`` over MAX_OUTLET_SHARE, says why (the frontend only
+    ``top_exclusive_share`` over MAX_EXCLUSIVE_SHARE, says why (the frontend only
     opens listed links).
     """
     pool = await get_pool()
@@ -707,7 +721,9 @@ async def get_link_detail(
         "n": stats["n"],
         "lift": round(lift(stats["n"], stats["n_a"], stats["n_b"], stats["total"]), 2),
         "outlets": stats["outlets"],
-        "top_outlet_share": round(outlet_share(stats["top_outlet_stories"], stats["n"]), 2),
+        "top_exclusive_share": round(
+            exclusive_share(stats["top_exclusive_stories"], stats["n"]), 2
+        ),
         "topic_mix": {tag: stats[tag] for tag in TOPIC_TAGS},
         "tone": round(stats["tone"] or 0.0, 2),
         "shared": clean_entities([dict(r) for r in names]),
