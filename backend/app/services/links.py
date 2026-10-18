@@ -325,6 +325,9 @@ _NAME_OVERRIDES = {
     "DAESH": "Daesh",
     "SINN_FEIN": "Sinn Féin",
     "UNICEF": "UNICEF",
+    "NAFTA": "NAFTA",
+    # A free trade agreement among the free trade agreements: no name to add.
+    "FREE_TRADE_AGREEMENT": "",
 }
 # Lower case inside a name ("Save the Children"); acronyms kept in one.
 _NAME_SMALL_WORDS = frozenset(
@@ -342,6 +345,9 @@ _THEME_FAMILIES = (
     ("DISEASE_", "Disease"),
     ("FOODSTAPLES_", "Food staples"),
 )
+# Named groups inside a family, run together in GDELT's codes:
+# "ECON_FREETRADEAGREEMENTS_NAFTA" -> "Economy: free trade agreements: NAFTA".
+_THEME_SUBFAMILIES = {"FREETRADEAGREEMENTS": "free trade agreements"}
 # Words GDELT runs together.
 _THEME_WORDS = {
     "ARMEDCONFLICT": "armed conflict",
@@ -357,6 +363,7 @@ _THEME_WORDS = {
     "OILPRICE": "oil prices",
     "PRICECONTROL": "price controls",
     "STOCKMARKET": "stock market",
+    "USSECURITYAGENCIES": "US security agencies",
 }
 
 
@@ -581,23 +588,48 @@ def display_theme(theme: str) -> str:
             return _name_words(code[len(family) + 1 :])
     for prefix, family in _THEME_FAMILIES:
         if code.startswith(prefix):
-            words = _theme_words(code[len(prefix) :])
+            rest = code[len(prefix) :]
+            for subfamily, words in _THEME_SUBFAMILIES.items():
+                if rest == subfamily or rest.startswith(f"{subfamily}_"):
+                    name = _name_words(rest[len(subfamily) + 1 :])
+                    return f"{family}: {words}: {name}" if name else f"{family}: {words}"
+            words = _theme_words(rest)
             return f"{family}: {words}" if words else family
     words = _theme_words(code)
     return words[:1].upper() + words[1:]
 
 
+def _within(label: str, broader: str) -> bool:
+    """Whether *label* reads as *broader* or a narrower label of it, in whole words.
+
+    "Economy: free trade agreements: NAFTA" is within "Economy: free trade";
+    "Crimea annexation" is not within "Crime".
+    """
+    a, b = label.casefold(), broader.casefold()
+    return a == b or (a.startswith(b) and a[len(b)] in " :")
+
+
 def top_themes(rows: list[dict]) -> list[str]:
-    """The first MAX_THEMES themes as shown, without the ones that read the same."""
+    """The first MAX_THEMES themes as shown, each said once.
+
+    A label within one already shown is dropped ("Economy: free trade"
+    over "Economy: free trade agreements: NAFTA"); a broader label takes
+    the place of the first narrower one shown and drops the rest.
+    """
     themes: list[str] = []
-    seen: set[str] = set()
     for row in rows:
         shown = display_theme(row.get("theme"))
-        if shown and shown.casefold() not in seen:
-            seen.add(shown.casefold())
+        if not shown or any(_within(shown, t) for t in themes):
+            continue
+        narrower = [i for i, t in enumerate(themes) if _within(t, shown)]
+        if narrower:
+            themes[narrower[0]] = shown
+            for i in reversed(narrower[1:]):
+                del themes[i]
+        else:
             themes.append(shown)
-            if len(themes) == MAX_THEMES:
-                break
+        if len(themes) == MAX_THEMES:
+            break
     return themes
 
 

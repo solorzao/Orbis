@@ -262,6 +262,19 @@ class TestDisplayTheme:
             ("NATURAL_DISASTER_EARTHQUAKE", "Natural disaster"),
             ("ECON_INFLATION", "Economy: inflation"),
             ("ECON_STOCKMARKET", "Economy: stock market"),
+            # Run together in GDELT's codes (seen live as "Economy: freetradeagreements
+            # european free trade association" and "Ussecurityagencies").
+            ("ECON_FREETRADE", "Economy: free trade"),
+            ("TAX_ECON_FREETRADEAGREEMENTS", "Economy: free trade agreements"),
+            (
+                "TAX_ECON_FREETRADEAGREEMENTS_EUROPEAN_FREE_TRADE_ASSOCIATION",
+                "Economy: free trade agreements: European Free Trade Association",
+            ),
+            ("TAX_ECON_FREETRADEAGREEMENTS_NAFTA", "Economy: free trade agreements: NAFTA"),
+            ("TAX_ECON_FREETRADEAGREEMENTS_MERCOSUR", "Economy: free trade agreements: Mercosur"),
+            ("TAX_ECON_FREETRADEAGREEMENTS_FREE_TRADE_AGREEMENT", "Economy: free trade agreements"),
+            ("SOC_USSECURITYAGENCIES", "US security agencies"),
+            ("TAX_ECON_PRICE", "Economy: price"),
             ("ENV_CLIMATECHANGE", "Environment: climate change"),
             ("TAX_WEAPONS_MISSILE", "Weapons: missile"),
             # Kept families' bare codes: a readable label, or nothing if they name nothing.
@@ -384,6 +397,34 @@ class TestDisplayTheme:
             {"theme": "TAX_TERROR_GROUP_AL_QAEDA", "n": 1},
         ]
         assert links.top_themes(rows) == ["Bharatiya Janata Party", "Sinn Féin", "Al Qaeda"]
+
+    def test_a_narrower_label_of_one_shown_is_dropped(self):
+        """ER-ET, live: "Economy: free trade" beside its free trade agreements."""
+        rows = [
+            {"theme": "ECON_FREETRADE", "n": 9},
+            {"theme": "KILL", "n": 8},
+            {"theme": "TAX_ECON_FREETRADEAGREEMENTS_EUROPEAN_FREE_TRADE_ASSOCIATION", "n": 7},
+            {"theme": "TAX_ECON_FREETRADEAGREEMENTS", "n": 6},
+            {"theme": "SOC_USSECURITYAGENCIES", "n": 5},
+        ]
+        assert links.top_themes(rows) == ["Economy: free trade", "Killings", "US security agencies"]
+
+    def test_a_broader_label_takes_the_place_of_the_narrower_ones(self):
+        rows = [
+            {"theme": "TAX_ECON_FREETRADEAGREEMENTS_NAFTA", "n": 9},
+            {"theme": "KILL", "n": 8},
+            {"theme": "TAX_ECON_FREETRADEAGREEMENTS_MERCOSUR", "n": 7},  # a sibling: shown
+            {"theme": "ECON_FREETRADE", "n": 6},  # broader than both
+            {"theme": "ARMEDCONFLICT", "n": 5},
+        ]
+        assert links.top_themes(rows) == ["Economy: free trade", "Killings", "Armed conflict"]
+
+    def test_narrower_means_whole_words(self):
+        rows = [
+            {"theme": "SOC_GENERALCRIME", "n": 9},  # "Crime"
+            {"theme": "CRIMEA_ANNEXATION", "n": 8},  # made up: "Crimea annexation"
+        ]
+        assert links.top_themes(rows) == ["Crime", "Crimea annexation"]
 
 
 class TestCleanEntities:
