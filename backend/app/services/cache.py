@@ -14,16 +14,17 @@ logger = logging.getLogger(__name__)
 
 _redis_client: aioredis.Redis | None = None
 
-# Allowance for a cycle and the cache warm after it (app.warm) to finish.
-_WARM_ALLOWANCE = 300
+# Allowance for a cycle (minutes, mostly embeddings; it invalidates db:* as it
+# ends) and the cache warm after it (app.warm) to finish.
+_WARM_ALLOWANCE = 600
 
 
 def cycle_ttl(ttl: int) -> int:
-    """A TTL for a db:* key the cache warm refills: at least until the next cycle's warm.
+    """A TTL for a db:* key the cache warm refills: at least until the next cycle ends.
 
-    Ingestion invalidates db:* every cycle and app.warm refills the busiest
-    keys after it, so a shorter TTL only lets a warmed entry expire before
-    anyone asks for it. Entries change only when a cycle runs.
+    Ingestion invalidates db:* as each cycle ends and app.warm refills the
+    busiest keys after it, so a shorter TTL only lets a warmed entry expire
+    before anyone asks for it. Entries change only when a cycle runs.
     """
     return max(ttl, settings.ingestion_interval_seconds + _WARM_ALLOWANCE)
 

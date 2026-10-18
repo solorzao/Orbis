@@ -128,7 +128,8 @@ class TestIngestFromRawGkg:
             count = await _ingest_from_raw_gkg()
             assert count == 1
             mock_upsert.assert_called_once()
-            mock_invalidate.assert_called_once_with("db:*")
+            # The cycle invalidates once it has finished, not ingestion halfway through.
+            mock_invalidate.assert_not_called()
 
             # Verify upsert row format
             rows = mock_upsert.call_args[0][0]
@@ -436,23 +437,23 @@ class TestRunIngestionCycle:
         ):
             yield calls
 
-    @pytest.mark.asyncio
-    async def test_breaking_and_deltas_are_invalidated_again_once_embedded(self, warm):
-        """Ingestion invalidates db:* before the embeddings; breaking stories count only
-        embedded rows, so one cached in between would miss the newest batch for a cycle.
-        Invalidated again inside the cycle, before the warm refills them."""
+    @staticmethod
+    def _cycle_events(ingest_side_effect):
+        """Patches recording a cycle's steps, and the list they record into."""
         from app.services import ingestion
 
         events: list[str] = []
 
         def ingest():
             events.append("ingest")
-            return 5
+            if isinstance(ingest_side_effect, Exception):
+                raise ingest_side_effect
+            return ingest_side_effect
 
         def invalidated(pattern):
             events.append(f"invalidate {pattern} locked={ingestion._ingestion_lock.locked()}")
 
-        with (
+        patches = (
             patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
             patch("app.services.ingestion._ingest_from_raw_gkg", AsyncMock(side_effect=ingest)),
             patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
@@ -461,16 +462,35 @@ class TestRunIngestionCycle:
                 AsyncMock(side_effect=lambda: events.append("embed")),
             ),
             patch("app.services.ingestion.invalidate", AsyncMock(side_effect=invalidated)),
-        ):
+        )
+        return patches, events
+
+    @pytest.mark.asyncio
+    async def test_caches_are_invalidated_once_at_the_end_of_the_cycle(self, warm):
+        """Not halfway through: while the new rows are embedded (minutes), visitors
+        get the last cycle's cached answers, not a cold query on a busy database.
+        Breaking stories count embedded rows only, so nothing is cached without
+        the newest batch."""
+        from app.services import ingestion
+
+        patches, events = self._cycle_events(5)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
             assert await ingestion.run_ingestion_cycle() == 5
 
-        assert events == [
-            "ingest",
-            "embed",
-            "invalidate db:breaking* locked=True",
-            "invalidate db:delta* locked=True",
-        ]
+        assert events == ["ingest", "embed", "invalidate db:* locked=True"]
         assert warm == [False]  # the warm starts after, once the lock is released
+
+    @pytest.mark.asyncio
+    async def test_a_failed_cycle_still_invalidates(self, warm):
+        """It may have upserted rows before it failed."""
+        from app.services import ingestion
+
+        patches, events = self._cycle_events(Exception("boom"))
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            assert await ingestion.run_ingestion_cycle() == 0
+
+        assert events == ["ingest", "invalidate db:* locked=True"]
+        assert warm == [False]
 
     @pytest.mark.asyncio
     async def test_warms_caches_once_the_lock_is_released(self, warm):

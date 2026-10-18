@@ -160,7 +160,6 @@ async def _ingest_from_raw_gkg() -> int:
             graph_articles.append(db_rec)
     await populate_graph(graph_articles)
 
-    await invalidate("db:*")
     logger.info("GKG ingestion: upserted %d articles with city-level coords.", count)
     return count
 
@@ -225,10 +224,14 @@ async def run_ingestion_cycle() -> int:
     Downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
     Then purges articles outside the retention window and embeds the new
-    rows. Breaking stories (and so deltas) count embedded rows only, so their
-    caches are invalidated again once the rows are embedded: one cached
-    between the upsert's invalidation and then would miss the newest batch.
-    Once the cycle has released its lock, the caches it invalidated are
+    rows. The API caches (db:*) are invalidated once, at the end, even if a
+    step failed: until then visitors get the last cycle's answers rather than
+    a cold query while the embeddings keep the database busy, and breaking
+    stories, which count embedded rows only, are not refilled before the
+    newest batch is embedded. (A breaking list computed mid-cycle, when its
+    key was missing, can still land just after the invalidation and stay
+    until its TTL; the warm joins that in-flight query rather than redoing
+    it.) Once the cycle has released its lock, those caches are
     refilled in the background, so neither the next cycle nor a visitor
     waits on that.
 
@@ -248,11 +251,10 @@ async def run_ingestion_cycle() -> int:
             count = await _ingest_from_raw_gkg()
             await _purge_old_articles()
             await generate_embeddings()
-            await invalidate("db:breaking*")
-            await invalidate("db:delta*")
             logger.info("Ingestion cycle complete: %d articles.", count)
         except Exception:
             logger.error("Ingestion cycle failed.", exc_info=True)
             count = 0
+        await invalidate("db:*")  # logs and carries on if Redis fails
     _start_cache_warm()
     return count

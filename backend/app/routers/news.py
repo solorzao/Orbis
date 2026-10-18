@@ -462,9 +462,9 @@ async def get_place_preview(
     return preview
 
 
-# How long breaking stories stay cached: at least until the next cycle's warm
-# (cycle_ttl). Each ingestion invalidates them, again once the new rows are
-# embedded, and app.warm refills them. None breaking is an answer too.
+# How long breaking stories stay cached: at least until the next cycle ends
+# (cycle_ttl). Each ingestion invalidates them once its new rows are embedded,
+# and app.warm refills them. None breaking is an answer too.
 _BREAKING_TTL = 300
 _BREAKING_KEY = "db:breaking:v1"
 
