@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.routers.http_cache import EDGE_CACHE_CONTROL
-from app.services import search, thread_reads
+from app.services import entities, search, thread_reads
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+MIGRATIONS = Path(__file__).resolve().parents[2] / "database" / "migrations"
 
 
 def _candidate(type_, name, n, sim=0.5):
@@ -64,21 +66,31 @@ class TestSearchService:
         assert result["threads"] == []
 
     @pytest.mark.asyncio
-    async def test_candidates_by_prefix_or_trigram_with_bounded_counts(self):
+    async def test_candidates_by_prefix_or_trigram_counted_from_thread_members(self):
         pool = _Pool([])
         await _search(pool, "Abbas")
         sql, args = next(c for c in pool.calls if "FROM kg_nodes" in c[0])
         flat = " ".join(sql.split())
-        assert "type IN ('PERSON', 'ORG')" in flat
-        assert "name ILIKE $2 OR name % $1" in flat
+        # The literal type predicate lets every plan use the partial trigram index
+        # of people and organisations (migration 016), never the headlines'.
+        assert "WHERE type IN ('PERSON', 'ORG') AND (name ILIKE $2 OR name % $1)" in flat
         assert "LIMIT 20" in flat
-        # Mentions this week per candidate, through the recency index, counted up to
-        # 100: entries newer than the last vacuum can each cost a heap fetch, so a
-        # heavy name's count stays short on this type-ahead read ("100+" in the UI).
-        counted = "FROM kg_edges e WHERE e.source_node_id = c.id AND e.created_at >= $3 LIMIT $4"
-        assert counted in flat
+        # Each candidate's stories this week from thread members, as the dossier
+        # counts them, reading at most 100 members ("100+" in the UI).
+        mentions = " ".join(entities.member_mentions_sql("c.name", "$3", "$4").split())
+        assert f"SELECT c.type, c.name, c.sim, {mentions} AS n FROM c" in flat
+        assert "kg_edges" not in flat
         assert search.SEARCH_COUNT_CAP == 100
         assert args == ("Abbas", "Abbas%", NOW - timedelta(days=7), search.SEARCH_COUNT_CAP)
+
+    def test_the_partial_index_is_on_the_predicate_the_queries_name(self):
+        migration = (MIGRATIONS / "016_kg_entity_name_trgm.sql").read_text(encoding="utf-8")
+        assert (
+            "ON kg_nodes USING gin (name gin_trgm_ops) WHERE type IN ('PERSON', 'ORG');"
+            in " ".join(migration.split())
+        )
+        assert "type IN ('PERSON', 'ORG')" in " ".join(search._CANDIDATES_SQL.split())
+        assert "n.type IN ('PERSON', 'ORG')" in " ".join(entities._RESOLVE_SQL.split())
 
     @pytest.mark.asyncio
     async def test_an_injection_looking_q_is_only_text(self):

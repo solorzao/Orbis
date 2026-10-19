@@ -65,6 +65,47 @@ def test_table_migration_fails_fast_on_locks_and_leaves_articles_alone(name):
     assert not re.search(r"REFERENCES\s+articles\b", sql, re.IGNORECASE)
 
 
+# Migrations that build indexes on tables ingestion writes every cycle: each
+# CONCURRENTLY, after dropping an INVALID leftover of a failed build, and with
+# no lock_timeout (as 008 and 010, which tests/test_retrieval.py covers).
+CONCURRENT_INDEX_MIGRATIONS = {"016_kg_entity_name_trgm.sql": ["idx_kg_nodes_entity_name_trgm"]}
+
+
+def _sql_lines(name: str) -> list[str]:
+    return [line.strip() for line in _sql_without_comments(name).splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize(
+    ("name", "indexes"),
+    CONCURRENT_INDEX_MIGRATIONS.items(),
+    ids=list(CONCURRENT_INDEX_MIGRATIONS),
+)
+def test_concurrent_index_migration_never_blocks_ingestion(name, indexes):
+    lines = _sql_lines(name)
+    sql = "\n".join(lines)
+    # A plain CREATE INDEX blocks writes for the whole build. CONCURRENTLY takes
+    # SHARE UPDATE EXCLUSIVE only, and can't run in a transaction block.
+    creates = [line for line in lines if line.startswith("CREATE")]
+    assert creates
+    assert all(line.startswith("CREATE INDEX CONCURRENTLY IF NOT EXISTS ") for line in creates)
+    assert not re.search(r"\bBEGIN\b", sql, re.IGNORECASE)
+    # A timeout mid-build would leave an INVALID index behind.
+    assert "lock_timeout" not in sql
+    assert not re.search(r"\barticles\b", sql, re.IGNORECASE)
+    for index in indexes:
+        # A rerun drops only a failed (INVALID) build, never a valid index.
+        [check] = [i for i, line in enumerate(lines) if f"c.relname = '{index}'" in line]
+        flag = re.fullmatch(r"\) AS (\w+) \\gset", lines[check + 1]).group(1)
+        assert "AND NOT i.indisvalid" in lines[check]
+        drop = lines.index(f"\\if :{flag}")
+        assert lines[drop + 1 : drop + 3] == [f"DROP INDEX CONCURRENTLY {index};", "\\endif"]
+        create = lines.index(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {index}")
+        assert check < drop < create
+        assert [line for line in lines if index in line and line.startswith("DROP")] == [
+            f"DROP INDEX CONCURRENTLY {index};"
+        ]
+
+
 # Migrations that only set a table's autovacuum parameters: SHARE UPDATE
 # EXCLUSIVE (no conflict with reads or writes), no data change, no rewrite.
 SETTINGS_MIGRATIONS = {"014_kg_edges_autovacuum.sql": "kg_edges"}

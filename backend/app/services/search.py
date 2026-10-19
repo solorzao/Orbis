@@ -2,8 +2,9 @@
 
 Places are searched client-side, over the globe's loaded points. Every read
 is bounded: at most 20 candidate names (by prefix or trigram similarity, on
-the trigram index of kg_nodes.name), each counted over at most
-SEARCH_COUNT_CAP of its edges in the week, through idx_kg_edges_source_recent.
+idx_kg_nodes_entity_name_trgm, the trigram index of people and organisations
+only), each counted from at most SEARCH_COUNT_CAP of its thread members this
+week, through idx_thread_members_entities: the narrow rows the dossier reads.
 """
 
 from __future__ import annotations
@@ -11,20 +12,23 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.services.database import get_pool
-from app.services.entities import MENTION_COUNT_CAP, like_escape, recent_mentions_sql
+from app.services.entities import MENTION_COUNT_CAP, like_escape, member_mentions_sql
 from app.services.thread_reads import LIST_HOURS, LISTED_SQL
 
-# A name's mentions this week are counted up to this, so ``n`` is capped
-# (the UI shows "100+"): on this type-ahead read a heavy name must not cost
-# a heap fetch per mention. Ranking still holds, ties broken by similarity.
+# A name's coverage this week is read from at most this many members, so
+# ``n`` is capped (the UI shows "100+") and a heavy name costs no more on this
+# type-ahead read. Ranking still holds, ties broken by similarity.
 SEARCH_COUNT_CAP = MENTION_COUNT_CAP
 
 _WINDOW = timedelta(days=7)
 _PER_GROUP = 5
 
 # Up to 20 people and organisations whose name starts with q or resembles it
-# (pg_trgm's %), the closest first; then each one's mentions this week,
-# counted up to the cap by a range scan of the recency index.
+# (pg_trgm's %), the closest first; then each one's stories this week, as the
+# dossier counts them (member_mentions_sql). The literal type predicate lets
+# every plan use idx_kg_nodes_entity_name_trgm (migration 016), never the
+# full trigram index, where headlines (ARTICLE nodes) sharing q's words would
+# each cost a heap read to be dropped.
 _CANDIDATES_SQL = f"""
     WITH c AS (
         SELECT id, type, name, similarity(name, $1) AS sim
@@ -33,7 +37,7 @@ _CANDIDATES_SQL = f"""
         ORDER BY sim DESC, name
         LIMIT 20
     )
-    SELECT c.type, c.name, c.sim, {recent_mentions_sql("c.id", "$3", "$4")} AS n
+    SELECT c.type, c.name, c.sim, {member_mentions_sql("c.name", "$3", "$4")} AS n
     FROM c
 """
 
@@ -54,10 +58,10 @@ _THREAD_WINDOW = timedelta(hours=max(LIST_HOURS))
 async def search(q: str, now: datetime) -> dict:
     """People, organisations and threads matching *q* (2-80 characters, trimmed).
 
-    People and organisations are ranked by mentions in the last 7 days, then
-    by how close the name is, up to five of each; a name not mentioned this
-    week is left out. Threads are up to five listed threads (as the thread
-    list selects them), the fastest first.
+    People and organisations are ranked by stories in the last 7 days (up to
+    SEARCH_COUNT_CAP), then by how close the name is, up to five of each; a
+    name in no story this week is left out. Threads are up to five listed
+    threads (as the thread list selects them), the fastest first.
     """
     pool = await get_pool()
     week_ago = now - _WINDOW
