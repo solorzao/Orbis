@@ -43,13 +43,15 @@ CREATE INDEX IF NOT EXISTS idx_threads_last_seen ON threads (last_seen DESC);
 -- The comparison index: one narrow row per *active* thread, with its unit
 -- centroid inline (1 KB halfvec, STORAGE PLAIN) under an HNSW inner-product
 -- index. Rows are deleted when a thread goes inactive, so the index only
--- ever holds the threads a new story can join.
+-- ever holds the threads a new story can join. Every join rewrites a row and
+-- every deactivation deletes one, each leaving a dead index entry, so this
+-- small table is vacuumed after 5% of it changes rather than the default 20%.
 CREATE TABLE IF NOT EXISTS thread_centroids (
     thread_id BIGINT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
     last_seen TIMESTAMPTZ NOT NULL,
     n_stories INT NOT NULL DEFAULT 1,
     centroid  HALFVEC(512) NOT NULL
-);
+) WITH (autovacuum_vacuum_scale_factor = 0.05);
 ALTER TABLE thread_centroids ALTER COLUMN centroid SET STORAGE PLAIN;
 CREATE INDEX IF NOT EXISTS idx_thread_centroids_hnsw
     ON thread_centroids USING hnsw (centroid halfvec_ip_ops);
@@ -65,7 +67,7 @@ CREATE TABLE IF NOT EXISTS thread_members (
     region          TEXT NOT NULL DEFAULT '',
     country_code    TEXT NOT NULL DEFAULT '',
     topic           TEXT NOT NULL DEFAULT '',
-    entities        TEXT[] NOT NULL DEFAULT '{}', -- persons and orgs, capped at 10
+    entities        TEXT[] NOT NULL DEFAULT '{}', -- up to 8 persons, then up to 8 orgs
     tone            REAL,
     has_https_image BOOLEAN NOT NULL DEFAULT false,
     similarity      REAL NOT NULL                -- to the thread when joined

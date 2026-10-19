@@ -152,3 +152,18 @@ async def test_members_are_found_by_entity(conn):
 async def test_threads_leave_room_for_hot_updates(conn):
     options = await conn.fetchval("SELECT reloptions FROM pg_class WHERE relname = 'threads'")
     assert "fillfactor=80" in (options or [])
+
+
+@pytest.mark.asyncio
+async def test_centroids_stay_inline_and_are_vacuumed_early(conn):
+    """PLAIN storage keeps the 1 KB centroid in the row (no TOAST fetch per comparison);
+    joins and deactivations churn the index, so vacuum runs after 5% changes."""
+    storage = await conn.fetchval(
+        "SELECT attstorage FROM pg_attribute"
+        " WHERE attrelid = 'thread_centroids'::regclass AND attname = 'centroid'"
+    )
+    options = await conn.fetchval(
+        "SELECT reloptions FROM pg_class WHERE relname = 'thread_centroids'"
+    )
+    assert storage == "p"
+    assert "autovacuum_vacuum_scale_factor=0.05" in (options or [])

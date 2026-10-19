@@ -110,7 +110,7 @@ The migration file is the source of truth (it's committed in this PR); read its 
   - Rows are deleted when a thread goes inactive, so the index holds only joinable threads and needs no filter.
 - **`thread_members`:** one row per assigned article.
   - **Keys:** `article_id` is the primary key (no FK); `thread_id` is an FK to `threads`, with cascade.
-  - **Denormalised article fields:** `story_key`, `source_name`, `published_at`, lat/lng, `region`, `country_code`, `topic`, `entities` (persons and orgs, capped at 10), `tone`, `has_https_image`.
+  - **Denormalised article fields:** `story_key`, `source_name`, `published_at`, lat/lng, `region`, `country_code`, `topic`, `entities` (up to 8 persons, then up to 8 orgs; per-type caps so person-heavy articles keep their orgs), `tone`, `has_https_image`.
   - **From assignment:** `similarity`.
   - **Indexes:** `(thread_id, published_at)`, `(story_key)`, `(published_at)`, and GIN `(entities)` (entity dossiers and the board's shared-entity edges).
 
@@ -144,7 +144,7 @@ Branch: `claude/p4-threads-api`.
 - `GENERIC_ENTITY_SHARE = 0.01`: an entity in more than 1% of active threads (e.g. "Donald Trump", "United States") doesn't count as shared;
 - `MIN_TITLE_WORDS = 4`: shorter titles ("Police arrest man") neither join nor seed a thread;
 - `DECAY = 0.97`: each join multiplies `centroid_sum` by this before adding, so long-running threads forget old members;
-- `CANDIDATES = 5`;
+- `CANDIDATES = 15`: enough that a thread sharing a specific entity at 0.62–0.80 isn't crowded out by higher-similarity threads with no shared entity;
 - `TIME_BUDGET_S = 60`: the step stops starting new articles after this, and the rest wait for the backlog.
 
 **Input.** `generate_embeddings()` changes to return the ids it embedded this cycle (it returns a count today; update its callers and tests). `run_ingestion_cycle` calls `assign_threads(pool, ids)` right after it, inside the lock, inside its own `try/except` that logs a warning. A failed assignment never fails the cycle.
@@ -154,20 +154,23 @@ Branch: `claude/p4-threads-api`.
 **Algorithm**, per cycle:
 1. **Load** the input articles' fields in one query by primary key: the unit prefix `l2_normalize(subvector(embedding, 1, 512))::halfvec(512)`, `persons`, `orgs`, title, `story_key`, `source_name`, `published_at`, lat/lng, `region`, `country_code`, first topic tag, `sentiment_score`, and whether `image_url LIKE 'https://%'`.
    - Order by `published_at, id`; a GDELT batch shares one timestamp, so the id tie-break makes it deterministic.
-   - Drop titles shorter than `MIN_TITLE_WORDS` (`titles.dedup_key(title).split()`).
+   - Drop titles shorter than `MIN_TITLE_WORDS`, counting raw words (`len(title.split())`), which is **the same rule as the backlog's SQL**. A title that passed one and failed the other would come back every cycle and starve the backlog.
 2. **Generic entities,** once per cycle: entities in more than `GENERIC_ENTITY_SHARE` of active threads' `top_entities` (one `unnest`/`GROUP BY` over the active threads). Exclude them from overlap tests.
 3. **Score against existing threads in one batched query:**
    ```sql
    SELECT a.ord, c.thread_id, -(c.centroid <#> a.v) AS sim
-   FROM unnest($1::int[], $2::halfvec(512)[]) AS a(ord, v)
+   FROM unnest($1::int[], $2::text[]) AS a(ord, t)
    CROSS JOIN LATERAL (
      SELECT thread_id, centroid FROM thread_centroids
-     ORDER BY centroid <#> a.v LIMIT $3
+     ORDER BY centroid <#> a.t::halfvec(512) LIMIT $3
    ) c
    ```
+   - asyncpg has no `halfvec` codec, so vectors travel as text (`'[…]'`) and are cast inside the LATERAL, as the existing embedding code does. Select `a.t::halfvec(512)` once as `v` where needed.
+   - Run it under `SET LOCAL hnsw.ef_search = 100`, so dead index entries left by updates can't crowd live candidates out of the top `CANDIDATES`.
+   - A DB test asserts that this exact text-parameter form uses `idx_thread_centroids_hnsw` (`EXPLAIN` with `enable_seqscan = off`).
    This uses the HNSW index. `thread_centroids` holds only active threads, so no filter is needed. Fetch the candidates' `top_entities` for the overlap test in one more query by id.
 4. **Process in order** (Python, one short transaction per article):
-   - **Copies:** if a member with the same `story_key` exists (`idx_thread_members_story`, including members added earlier this cycle), join that thread with `similarity = 1.0` and **don't** add the vector again. A story counts once in the centroid, so syndication can't overweight it.
+   - **Copies:** if a member with the same `story_key` exists (`idx_thread_members_story`, including members added earlier this cycle), join that thread with `similarity = 1.0` and **don't** add the vector again. A story counts once in the centroid, so syndication can't overweight it. Copies still bump `last_seen` on both `threads` and `thread_centroids`, so a thread receiving only copies stays active and listed. Step 5 also recomputes `last_seen = max(published_at)` from members.
    - **Otherwise, choose** the best candidate with `sim >= JOIN_SIM`, or with a specific shared entity and `sim >= JOIN_SIM_WITH_ENTITY`. Candidates are the batch's existing threads plus the threads started earlier this cycle (score those few with one small query by id).
    - **Join:**
      - `INSERT INTO thread_members (...) ON CONFLICT (article_id) DO NOTHING`;
@@ -217,7 +220,7 @@ With no foreign keys to `articles`, this is the only path that removes members.
   - deactivation (a singleton after 24 h, others after 72 h);
   - retention deletes members by `published_at` and old threads;
   - backlog starvation: 600 short titles plus 1 good article still assigns the good one;
-  - `assign_threads` never sequentially scans `articles`: assert `seq_scan` didn't grow for `articles` in `pg_stat_xact_user_tables`.
+  - `assign_threads` never sequentially scans `articles`. CI's near-empty table makes the planner prefer seq scans, so assert on the plans with `SET LOCAL enable_seqscan = off` (the index paths exist and are used), not on `pg_stat` counters.
 
 ### Task 15b.2: the read API (`app/routers/threads.py`, `app/models/threads.py`)
 
@@ -388,7 +391,8 @@ Branch: `claude/p4-entities-api`. It merges after 15b.
 - **Resolution:** `type` is `person` or `org`; `name` matches exactly (case-insensitive) a `kg_nodes.name` of that type, else 404. Use the stored spelling from then on.
 - **Data:** members whose `entities @> ARRAY[name]` with `published_at` in the window (GIN `idx_thread_members_entities` plus the narrow member rows). No `kg_edges` heap fetches, and no `articles` heap except the 10 headlines below.
   - **Why not the knowledge graph:** a heavy entity's 2,000 `kg_edges` rows plus 2,000 `articles` primary-key lookups spread over a week is about 3–4K random page reads, which is 25–35 s cold at P4's 120 IOPS.
-  - **Bound:** `MAX_MENTIONS = 2000` newest members, with `capped: true` when hit.
+  - **Bound:** `MAX_MENTIONS = 2000` newest members for places, timeline, co-mentions and headlines, with `capped: true` when hit. The `d7` count still reads every match from the GIN index; that's narrow member rows, about 2–3 s cold for the heaviest names, and cached.
+  - **Untyped:** `entities` doesn't record person or org, so a person and an org with the same name share a dossier. That's rare; note it, don't solve it.
 - **Response:**
   - `name`, `type`;
   - `counts: {h24, d7}`: distinct stories from members;
@@ -409,7 +413,7 @@ Branch: `claude/p4-entities-api`. It merges after 15b.
     - the window bounds;
     - a heavy entity (3,000 members) is capped at 2,000;
     - the query plan uses `idx_thread_members_entities`;
-    - `articles` is read only for the 10 headline ids (assert via `pg_stat_xact_user_tables` that `articles`' `seq_scan` didn't grow).
+    - `articles` is read only for the 10 headline ids (assert on the plan with `SET LOCAL enable_seqscan = off`: a primary-key lookup, never a seq scan).
 - **After deploy:** the controller times a heavy entity (the busiest person in `/api/news/preview`'s entities), cold and warm.
 - **Reusable WIP:** an earlier start (local commit 0f563cd on `claude/p4-entities-api`, built on the knowledge graph) has the search service and helpers (`like_escape`, `trend`, `timeline`, …). Reuse what fits; the dossier's data source changes as above.
 
