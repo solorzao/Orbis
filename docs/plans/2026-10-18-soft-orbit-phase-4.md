@@ -10,8 +10,11 @@
 
 **Architecture:**
 - Each feature is a backend read path over **narrow** data, paired with a Soft Orbit surface.
-- **Threads** are assigned at ingestion from the stored headline embeddings, against the centroids of recently active threads. Membership lives in its own narrow table (`thread_members`), which carries every field threads need, so no thread read touches the wide `articles` rows and no article row is rewritten.
-- **Entities** read the knowledge graph's `MENTIONED_IN` edges through their recency indexes (migration 010) and join articles by primary key only.
+- **Threads** are assigned at ingestion from the stored headline embeddings.
+  - Each new story is compared with the active threads' unit centroids through an HNSW inner-product index on a narrow `thread_centroids` table, which holds only active threads.
+  - Membership lives in its own narrow table (`thread_members`) carrying every field threads and entities read, so no read touches the wide `articles` rows and no article row is rewritten.
+  - Nothing references `articles` by foreign key.
+- **Entities** read `thread_members` through a GIN index on its `entities` column (every assigned article is a member: joined or the seed of its own thread). The knowledge graph is used only to resolve and search names.
 - **The board** lives in the browser (`localStorage`). The server only computes edges and an optional memo.
 
 **Tech Stack:**
@@ -52,7 +55,7 @@
   - DB tests are opt-in via `ORBIS_TEST_DATABASE_URL`, and CI runs them against Postgres.
   - Use the per-file `pytestmark = skipif` plus a local rolled-back `conn` fixture, as `tests/test_story_keys_db.py` does, with `zz…` marker titles.
 - **Frontend checks:** `cd frontend && npm run lint && npx vitest run && npm run build && npx prettier --check --end-of-line auto <changed files>`, then the FULL `CI=1 npx playwright test` before pushing.
-- **Migrations:** new migrations must be safe while the old backend still serves. The Deploy workflow runs migrations first and the backend waits for them (#77). Add new tables only; never `ALTER` `articles` in this phase.
+- **Migrations:** new migrations must be safe while the old backend still serves. The Deploy workflow runs migrations first and the backend waits for them (#77). Add new tables only; never `ALTER` `articles` in this phase, and never reference it by foreign key. A `REFERENCES articles` constraint locks `articles` while the migration runs and fires a trigger for every article the purge deletes; purge dependent rows by `published_at` in ingestion instead. A migration that hits its 5 s `lock_timeout` fails safely: rerun the Deploy workflow.
 - **Copy:** never imply causation or wrongdoing. Use "covered together", "appears in the same coverage as", "same developing story". Never "linked to".
 
 ---
@@ -61,24 +64,25 @@
 
 | PR | What | Depends on |
 |---|---|---|
-| 15a | Migration 013: `threads`, `thread_members` (plus this plan) | none |
+| 15a | Migration 013: `threads`, `thread_centroids`, `thread_members` (plus this plan) | none |
 | 15b | Thread assignment at ingestion; `/api/threads`, `/api/threads/{id}`; "part of thread" on cluster articles | 15a deployed |
 | 15c | Thread synopses (Haiku 5.5, background, budgeted) | 15b |
 | 16 | Threads UI: Threads toggle, rail, thread detail, aurora arcs, spread replay, "part of thread" chip | 15b (15c for synopses) |
-| 17a | Entity API: `/api/search`, `/api/entities/{type}/{name}` | none |
+| 17a | Entity API: `/api/search`, `/api/entities/{type}/{name}` | 15b (dossiers read `thread_members`) |
 | 17b | Entity tracker UI: Track search (places, people, orgs, threads), dossier, globe focus mode, live entity pills | 17a; thread results need 15b |
 | 18a | Board API: `/api/board/resolve`, `/api/board/links`, `/api/board/analyze` | 15b, 17a |
 | 18b | Investigation board UI: pins everywhere, board view, typed edges, globe mirror, memo, export, share | 16, 17b, 18a |
 
 **Parallelism:**
 - 15a, then 15b, then 15c is the critical path.
-- 17a can run alongside 15b.
+- 17a's search can be built alongside 15b. Its dossier reads `thread_members`, so 17a merges after 15b.
 - 16 and 17b can run alongside each other once their backends land.
 - 18 comes last.
+- **Entity ramp:** dossiers only see articles assigned since 15b deployed, so a full 7-day dossier needs 7 days of assignment. Say so in 17a's PR, and show "since {date}" in the dossier until then.
 
-**Owner decisions before 15b deploys:**
-- **Alerts.** Add an Azure Monitor alert on the PG server's `disk_iops_consumed_percentage` and `cpu_credits_remaining`. The parent plan's risk list asks for this before PR 15. It's a configuration change, so the owner approves it first.
-- **The open links-7d disk decision** (a P10 disk, a covering index, or a pairs side table) also affects Phase 4's load. Phase 4 is designed not to depend on it.
+**Owner decisions (2026-10-18):**
+- **Alerts:** approved. Azure Monitor alerts on the PG server's disk bandwidth and IOPS (above 80% for 15 minutes) and CPU credits (below 60) are emailed to the owner (#87, Terraform `infra/monitoring.tf`).
+- **Links 7d:** left as it is (the warm cache hides it). Phase 4 doesn't depend on it.
 
 ---
 
@@ -88,69 +92,36 @@ Branch: `claude/p4-threads-schema` (this plan is committed here too).
 
 ### Task 15a.1: `database/migrations/013_threads.sql`
 
-```sql
--- 013_threads.sql
--- Story threads: the same developing story across outlets and places
--- (Phase 4, PR 15). Ingestion assigns each newly embedded article to the
--- best-matching active thread, or starts one (app/services/threads.py).
--- thread_members carries every field threads read (story, outlet, time,
--- place, entities, tone), so thread queries never scan the wide articles
--- heap and no articles row is rewritten. New tables only: safe while the
--- previous backend still serves.
-SET lock_timeout = '5s';
+The migration file is the source of truth (it's committed in this PR); read its comments. It has three tables. None references `articles`.
 
-CREATE TABLE IF NOT EXISTS threads (
-    id              BIGSERIAL PRIMARY KEY,
-    -- Sum of members' unit 512-d embedding prefixes; compare with
-    -- l2_normalize(centroid_sum). A sum, so joining is centroid_sum + v.
-    centroid_sum    VECTOR(512) NOT NULL,
-    first_seen      TIMESTAMPTZ NOT NULL,
-    last_seen       TIMESTAMPTZ NOT NULL,
-    n_articles      INT NOT NULL DEFAULT 0,
-    n_stories       INT NOT NULL DEFAULT 0,
-    n_sources       INT NOT NULL DEFAULT 0,
-    velocity        INT NOT NULL DEFAULT 0,      -- distinct stories in the last 6 h
-    countries       TEXT[] NOT NULL DEFAULT '{}',
-    places          JSONB NOT NULL DEFAULT '[]', -- first report per 1° cell, in order
-    top_entities    TEXT[] NOT NULL DEFAULT '{}',
-    topic           TEXT NOT NULL DEFAULT '',
-    lead_article_id UUID REFERENCES articles(id) ON DELETE SET NULL,
-    title           TEXT,                        -- AI title (PR 15c); NULL until then
-    synopsis        TEXT,
-    summarized_at   TIMESTAMPTZ,
-    summarized_n    INT NOT NULL DEFAULT 0,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_threads_last_seen ON threads (last_seen DESC);
-
-CREATE TABLE IF NOT EXISTS thread_members (
-    article_id   UUID PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
-    thread_id    BIGINT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    story_key    BIGINT,
-    source_name  TEXT NOT NULL DEFAULT '',
-    published_at TIMESTAMPTZ NOT NULL,
-    latitude     DOUBLE PRECISION NOT NULL,
-    longitude    DOUBLE PRECISION NOT NULL,
-    region       TEXT NOT NULL DEFAULT '',
-    country_code TEXT NOT NULL DEFAULT '',
-    topic        TEXT NOT NULL DEFAULT '',
-    entities     TEXT[] NOT NULL DEFAULT '{}',   -- persons ∪ orgs, capped at 10
-    tone         REAL,
-    similarity   REAL NOT NULL                   -- to the thread when joined
-);
-CREATE INDEX IF NOT EXISTS idx_thread_members_thread ON thread_members (thread_id, published_at);
-CREATE INDEX IF NOT EXISTS idx_thread_members_story ON thread_members (story_key);
-CREATE INDEX IF NOT EXISTS idx_thread_members_published ON thread_members (published_at);
-```
+- **`threads`** (`fillfactor = 80`, so the per-cycle velocity and count updates can stay HOT):
+  - `centroid_sum VECTOR(512)`: the decayed sum of the unit 512-d prefixes of the thread's distinct stories;
+  - `first_seen`, `last_seen`;
+  - counts: `n_articles`, `n_stories`, `n_sources`, `velocity`;
+  - `countries`;
+  - `places` JSONB: the first report per 1° cell, in order;
+  - `top_entities`, `topic`;
+  - `lead_article_id` (no FK) and `lead_title`;
+  - the AI `title`/`synopsis` with `summarized_at`/`summarized_n`;
+  - `aggregated_at`.
+- **`thread_centroids`:** the comparison index.
+  - One narrow row per **active** thread: `thread_id` (FK to `threads`, cascade), `last_seen`, `n_stories`, and `centroid HALFVEC(512)`, the unit centroid stored inline (`STORAGE PLAIN`).
+  - An HNSW `halfvec_ip_ops` index on `centroid`; compare with `<#>` (negative inner product, which equals cosine for unit vectors).
+  - Rows are deleted when a thread goes inactive, so the index holds only joinable threads and needs no filter.
+- **`thread_members`:** one row per assigned article.
+  - **Keys:** `article_id` is the primary key (no FK); `thread_id` is an FK to `threads`, with cascade.
+  - **Denormalised article fields:** `story_key`, `source_name`, `published_at`, lat/lng, `region`, `country_code`, `topic`, `entities` (persons and orgs, capped at 10), `tone`, `has_https_image`.
+  - **From assignment:** `similarity`.
+  - **Indexes:** `(thread_id, published_at)`, `(story_key)`, `(published_at)`, and GIN `(entities)` (entity dossiers and the board's shared-entity edges).
 
 **Steps:**
-1. Add `"013_threads.sql"` to `backend/tests/test_migrations.py`.
-   - `COLUMN_MIGRATIONS` covers `ADD COLUMN` only, so add a small new test instead: migration 013 sets `lock_timeout` before its first `CREATE` and never mentions `ALTER TABLE articles`.
-   - Run it and watch it fail, then pass.
-2. Add an opt-in DB test, `tests/test_threads_schema_db.py`:
-   - both tables exist with the columns above;
-   - deleting an article cascades to its `thread_members` row;
-   - deleting a thread cascades to its members.
+1. **Static test** in `backend/tests/test_migrations.py` (`TABLE_MIGRATIONS`): 013 sets `lock_timeout` before its first `CREATE`, and never alters, indexes or references `articles`. Watch it fail, then pass.
+2. **Opt-in DB tests** in `tests/test_threads_schema_db.py`:
+   - each table has exactly its planned columns;
+   - no constraint on the three tables references `articles` (`pg_constraint`);
+   - deleting a thread removes its members and its centroid row;
+   - the HNSW index serves `ORDER BY centroid <#> $1`, and the GIN index serves `entities @> ARRAY[...]` (`EXPLAIN` with `enable_seqscan = off`);
+   - `threads` has `fillfactor=80`.
 3. Run the checks.
 4. Commit `feat(db): migration 013 adds threads and thread_members` together with this plan (`docs(plans): Soft Orbit Phase 4`).
 
@@ -166,77 +137,96 @@ Branch: `claude/p4-threads-api`.
 
 **Constants**, named, with a docstring note that they're calibrated on live data after deploy:
 - `PREFIX_DIMS = 512` (text-embedding-3-small's Matryoshka prefix);
-- `ACTIVE_HOURS = 72`;
+- `ACTIVE_HOURS = 72`: a thread with 2 or more stories stays joinable this long after its last story;
+- `SINGLETON_HOURS = 24`: a one-story thread stays joinable this long;
 - `JOIN_SIM = 0.80`: join on similarity alone;
-- `JOIN_SIM_WITH_ENTITY = 0.62`: join when the article shares a person, org or name with the thread's `top_entities`;
+- `JOIN_SIM_WITH_ENTITY = 0.62`: join when the story shares a **specific** person or org with the thread;
+- `GENERIC_ENTITY_SHARE = 0.01`: an entity in more than 1% of active threads (e.g. "Donald Trump", "United States") doesn't count as shared;
 - `MIN_TITLE_WORDS = 4`: shorter titles ("Police arrest man") neither join nor seed a thread;
-- `CANDIDATES = 5`.
+- `DECAY = 0.97`: each join multiplies `centroid_sum` by this before adding, so long-running threads forget old members;
+- `CANDIDATES = 5`;
+- `TIME_BUDGET_S = 60`: the step stops starting new articles after this, and the rest wait for the backlog.
 
-**`assign_threads(pool, article_ids: list[UUID]) -> int`.** Called by `run_ingestion_cycle` right after `generate_embeddings()`, inside the lock, with the ids that step embedded, plus a bounded backlog (below). For each article, in `published_at` order:
-1. Skip it if it's already a member, has no embedding, or its title has fewer than `MIN_TITLE_WORDS` words (`titles.dedup_key(title).split()`).
-2. **Copies:** if a member with the same `story_key` exists (`idx_thread_members_story`), join that thread with `similarity = 1.0`. Copies always share a thread.
-3. **Otherwise score the active threads in SQL:**
+**Input.** `generate_embeddings()` changes to return the ids it embedded this cycle (it returns a count today; update its callers and tests). `run_ingestion_cycle` calls `assign_threads(pool, ids)` right after it, inside the lock, inside its own `try/except` that logs a warning. A failed assignment never fails the cycle.
+
+**Backlog.** Also take articles from the last 6 h (`idx_articles_published_at`) that have an embedding, no member row (`NOT EXISTS` on the `thread_members` primary key) and a title of at least `MIN_TITLE_WORDS` words, filtered in SQL with `array_length(regexp_split_to_array(btrim(title), '\s+'), 1) >= $n`. Take them newest first, at most 500. Short titles are filtered in SQL so they can never fill the cap.
+
+**Algorithm**, per cycle:
+1. **Load** the input articles' fields in one query by primary key: the unit prefix `l2_normalize(subvector(embedding, 1, 512))::halfvec(512)`, `persons`, `orgs`, title, `story_key`, `source_name`, `published_at`, lat/lng, `region`, `country_code`, first topic tag, `sentiment_score`, and whether `image_url LIKE 'https://%'`.
+   - Order by `published_at, id`; a GDELT batch shares one timestamp, so the id tie-break makes it deterministic.
+   - Drop titles shorter than `MIN_TITLE_WORDS` (`titles.dedup_key(title).split()`).
+2. **Generic entities,** once per cycle: entities in more than `GENERIC_ENTITY_SHARE` of active threads' `top_entities` (one `unnest`/`GROUP BY` over the active threads). Exclude them from overlap tests.
+3. **Score against existing threads in one batched query:**
    ```sql
-   WITH a AS (
-     SELECT l2_normalize(subvector(embedding, 1, 512)) AS v,
-            persons || orgs || names AS ents, published_at
-     FROM articles WHERE id = $1
-   )
-   SELECT t.id,
-          -(l2_normalize(t.centroid_sum) <#> a.v) AS sim,
-          t.top_entities && a.ents AS overlap
-   FROM threads t, a
-   WHERE t.last_seen > a.published_at - make_interval(hours => $2)
-   ORDER BY l2_normalize(t.centroid_sum) <#> a.v
-   LIMIT $3
+   SELECT a.ord, c.thread_id, -(c.centroid <#> a.v) AS sim
+   FROM unnest($1::int[], $2::halfvec(512)[]) AS a(ord, v)
+   CROSS JOIN LATERAL (
+     SELECT thread_id, centroid FROM thread_centroids
+     ORDER BY centroid <#> a.v LIMIT $3
+   ) c
    ```
-   Brute force over the active threads (a few thousand rows of 512 dimensions): no ANN index needed.
-4. **Choose:** the best candidate with `sim >= JOIN_SIM`, or with `overlap AND sim >= JOIN_SIM_WITH_ENTITY`. Otherwise `INSERT` a new thread with `centroid_sum = v` and `first_seen = last_seen = published_at`.
-5. **Join:**
-   - `INSERT INTO thread_members` with the denormalised fields from the article: `story_key`, `source_name`, `published_at`, lat/lng, `region`, `country_code`, first topic tag, `(persons || orgs)[1:10]`, `sentiment_score`, `similarity`;
-   - `UPDATE threads SET centroid_sum = centroid_sum + v, last_seen = greatest(last_seen, published_at)`.
-   - Do the insert and update in one transaction per article.
-6. **Recompute aggregates once at the end,** for every touched thread, from `thread_members` only (one `UPDATE … FROM (SELECT … GROUP BY thread_id)`):
+   This uses the HNSW index. `thread_centroids` holds only active threads, so no filter is needed. Fetch the candidates' `top_entities` for the overlap test in one more query by id.
+4. **Process in order** (Python, one short transaction per article):
+   - **Copies:** if a member with the same `story_key` exists (`idx_thread_members_story`, including members added earlier this cycle), join that thread with `similarity = 1.0` and **don't** add the vector again. A story counts once in the centroid, so syndication can't overweight it.
+   - **Otherwise, choose** the best candidate with `sim >= JOIN_SIM`, or with a specific shared entity and `sim >= JOIN_SIM_WITH_ENTITY`. Candidates are the batch's existing threads plus the threads started earlier this cycle (score those few with one small query by id).
+   - **Join:**
+     - `INSERT INTO thread_members (...) ON CONFLICT (article_id) DO NOTHING`;
+     - only if a row was inserted: `centroid_sum = centroid_sum * DECAY + v`, computed in Python from the fetched sum (pgvector has no scalar multiply), plus `last_seen = greatest(last_seen, published_at)`;
+     - upsert the thread's `thread_centroids` row with `l2_normalize(centroid_sum)::halfvec` and `last_seen`.
+   - **New thread:** insert `threads` (`centroid_sum = v`, `first_seen = last_seen = published_at`, `lead_title` from `titles.display_title`), its `thread_centroids` row, and the member row (`similarity = 1.0`).
+   - **Budget:** stop starting new articles once `TIME_BUDGET_S` has passed. The rest come back through the backlog next cycle.
+5. **Recompute aggregates once at the end,** for every thread touched this cycle plus any with `last_seen > aggregated_at` (repairing a failed earlier cycle), from `thread_members` only, in one `UPDATE … FROM (SELECT … GROUP BY thread_id)`:
    - `n_articles`;
-   - `n_stories` = `count(DISTINCT story_key)`, with a NULL key counting its own article;
+   - `n_stories` = `count(DISTINCT coalesce(story_key, ...))`, with a NULL key counting its own article;
    - `n_sources` = distinct non-empty sources;
    - `countries` = distinct non-empty;
-   - `places` = per 1° cell (`floor(lat)`, `floor(lng)`), the earliest member's `region`/`country_code`/lat/lng, `first_seen = min(published_at)`, `n` distinct stories, ordered by `first_seen`, capped at 30;
-   - `top_entities` = the 8 most frequent across members, counted per story;
+   - `places` = per 1° cell (`floor(lat)`, `floor(lng)`), the earliest member's `region`/`country_code`/lat/lng, `first_seen = min(published_at)`, and `n` distinct stories, ordered by `first_seen`, capped at 30;
+   - `top_entities` = the 8 most frequent persons and orgs across members, counted per story;
    - `topic` = the dominant topic;
-   - `lead_article_id` = the newest member with an https image, else the newest.
-7. **Velocity, once per cycle** for every thread with `last_seen` within `ACTIVE_HOURS`: distinct stories in the last 6 h, using `idx_thread_members_published`.
+   - `lead_article_id` and `lead_title` = the newest member with `has_https_image`, else the newest (the title comes from the member's article by primary key, one read per touched thread);
+   - `aggregated_at = now()`;
+   - also update `thread_centroids.n_stories`.
+6. **Velocity** (distinct stories in the last 6 h): one query from `thread_members` over the last 6 h (`idx_thread_members_published`). Update only threads whose value changes (`IS DISTINCT FROM`), resetting stale non-zero values to 0.
+7. **Deactivate:** `DELETE FROM thread_centroids` for threads whose `last_seen` is older than `ACTIVE_HOURS`, or older than `SINGLETON_HOURS` when `n_stories = 1`.
+8. **Log** "Threads: N assigned (J joined, S started, C copies) in X s; A active."
 
-**Bounded backlog:** articles from the last 6 h (`published_at > now() - interval '6 hours'`, `idx_articles_published_at`) that have an embedding and no member row, at most 500. Never scan wider.
+**Retention**, in `_purge_old_articles`, before the articles delete:
+- `DELETE FROM thread_members WHERE published_at < now() - make_interval(days => $retention)` (indexed);
+- `DELETE FROM threads WHERE last_seen < now() - make_interval(days => $retention)` (cascades to its centroid row).
 
-**Failure isolation:** `run_ingestion_cycle` wraps the call in `try/except` and logs a warning, so a failed assignment never fails the cycle. Log "Threads: N assigned (J joined, S started) in X s."
-
-**Retention:** `_purge_old_articles` also runs `DELETE FROM threads WHERE last_seen < now() - make_interval(days => $retention)`. Members cascade with their articles.
+With no foreign keys to `articles`, this is the only path that removes members.
 
 **Tests:**
 - Unit tests, with fake pools:
-  - ordering;
+  - input order and the id tie-break;
   - the short-title skip;
-  - copies joining via `story_key`;
+  - copies join via `story_key` without adding a vector;
   - the choose rule at each threshold edge;
-  - the new thread's fields;
-  - failure isolation in the cycle.
-- DB tests, with hand-built unit vectors (`subvector` and `l2_normalize` need pgvector 0.7 or later, as CI's image has):
-  - an article with cosine 0.85 to a thread joins it;
-  - 0.70 with a shared entity joins; 0.70 without one starts a new thread;
-  - a copy with the same `story_key` joins;
-  - the aggregates (`n_stories` counts copies once, `n_sources`, the `places` order, `top_entities`, velocity);
-  - retention deletes old threads;
-  - `assign_threads` reads `articles` only for the given ids (assert via the fixture's row counts, not timing).
+  - generic entities ignored;
+  - joins with threads started earlier the same cycle;
+  - `ON CONFLICT` with no centroid change;
+  - the time budget leaving the rest to the backlog;
+  - failure isolation in the cycle;
+  - `generate_embeddings` returning ids.
+- DB tests, with hand-built unit vectors (`subvector`, `l2_normalize` and halfvec HNSW need pgvector 0.7 or later, as CI's image has):
+  - cosine 0.85 joins; 0.70 with a specific shared person joins; 0.70 with only a generic one starts a new thread;
+  - a copy joins without changing the centroid;
+  - decay: a thread fed one topic, then another, follows the new one;
+  - the aggregates (`n_stories` counts copies once, `n_sources`, the `places` order, `top_entities`, lead and `lead_title`);
+  - velocity updates only changed rows;
+  - deactivation (a singleton after 24 h, others after 72 h);
+  - retention deletes members by `published_at` and old threads;
+  - backlog starvation: 600 short titles plus 1 good article still assigns the good one;
+  - `assign_threads` never sequentially scans `articles`: assert `seq_scan` didn't grow for `articles` in `pg_stat_xact_user_tables`.
 
 ### Task 15b.2: the read API (`app/routers/threads.py`, `app/models/threads.py`)
 
-**`GET /api/threads?timespan=24h|168h|6h|1h&topic=&limit=20`:**
+**`GET /api/threads?timespan=24h|168h|6h|1h&topic=&limit=20`** (`limit` is 1–50, since it's part of the cache key):
 - **Selection:** threads with `last_seen` in the window, `n_stories >= 3` and `n_sources >= 3` (outlets beat stories), and the topic filter on `threads.topic` when given.
 - **Order:** `velocity` desc, then `n_stories` desc, then `id`.
 - **Each item:**
   - `id`;
-  - `title` (the AI title, else `titles.display_title` of the lead article's title);
+  - `title` (the AI title, else `lead_title`);
   - `synopsis` (null until 15c);
   - `status`:
     - `emerging` if `first_seen` is within 6 h;
@@ -246,11 +236,11 @@ Branch: `claude/p4-threads-api`.
   - `places` (up to 20, in first-report order, each `{lat, lng, place: display_place(region, country_code), country_code, first_seen, n}`);
   - `topic`;
   - `lead` (`globe_lead` shape, via one primary-key lookup per listed thread).
-- Reads only `threads` and at most `limit` article rows.
+- Reads only `threads` and at most `limit` article rows (for each lead's image and source). A lead id that no longer resolves gives `lead: null`.
 
 **`GET /api/threads/{id}`** returns the list item, plus:
 - `entities` (top 12 `{name, n}` counted per story, from members);
-- `spread` (every place in first-report order: the full `places`);
+- `spread` (every place in first-report order: the full `places`, which is capped at 30);
 - `timeline` (hourly buckets `{hour, n, tone}` from members);
 - `articles`: the newest 20 distinct stories (`?offset=`), each `{title (display_title), source_name, published_at, source_url, place}` via a primary-key join;
 - **404** for an unknown id.
@@ -289,7 +279,7 @@ Branch: `claude/p4-thread-synopses`.
 
 - **When it runs:** after each cycle's cache warm, as its own background task tracked in `ingestion._background_tasks`. It's cancelled by the next cycle and by shutdown, the same as the warm.
 - **Picking threads:**
-  - **eligible:** `n_stories >= 5` and (`array_length(countries) >= 2` or `n_sources >= 5`), and (`summarized_n = 0` or `n_stories >= 1.5 * summarized_n`);
+  - **eligible:** `n_stories >= 5` and (`cardinality(countries) >= 2` or `n_sources >= 5`), and (`summarized_n = 0` or `n_stories >= 1.5 * summarized_n`), and the thread is active (it has a `thread_centroids` row);
   - **order:** `velocity` desc;
   - **limit:** `SYNOPSES_PER_CYCLE = 6`.
 - **Prompt:** built only from server data, from the thread's 15 newest distinct stories (members joined to articles by primary key): headline (`display_title`, through `sanitise_text`, injection-filtered **after** cleaning, as #67 does) and source name. The system prompt says:
@@ -298,6 +288,12 @@ Branch: `claude/p4-thread-synopses`.
   - no speculation about causes, no "linked to";
   - return JSON `{"title": …, "synopsis": …}`.
 - **Call:** `ai_summary._call_claude` (Haiku 5.5, `effort: low`) with a budget share like the cluster summaries. Parse the JSON strictly; on failure or `SummaryUnavailable`, skip the thread and leave it for the next cycle.
+- **Validate before storing:**
+  - strip invisible characters (`strip_invisible`) and control characters;
+  - the title must be 1–80 characters and at most 10 words;
+  - the synopsis must be 40–600 characters;
+  - neither may match `has_injection_pattern` or contain "linked to".
+  - On failure, skip the thread.
 - **Write:** `UPDATE threads SET title, synopsis, summarized_at = now(), summarized_n = n_stories`.
 - **Afterwards:** invalidate `db:threads*` and call `warm_threads()`, so the list shows synopses without waiting a cycle.
 - **Cost:** about 1.5K input and 200 output tokens per call is about $0.00025. At 6 per cycle that's at most about $0.14 a day, inside `LLM_DAILY_BUDGET_USD` ($1). The budget check stops it first if the cap is near.
@@ -370,7 +366,9 @@ In the place panel (`NewsPanel`), an article whose cluster row carries `thread` 
 
 ## PR 17a: Entity API
 
-Branch: `claude/p4-entities-api`. It reads the knowledge graph: `kg_nodes` PERSON and ORG (`idx_kg_nodes_name_trgm`) and `kg_edges` `MENTIONED_IN` (`idx_kg_edges_source_recent`), with articles joined by primary key only.
+Branch: `claude/p4-entities-api`. It merges after 15b.
+- **Names** come from the knowledge graph: `kg_nodes` PERSON and ORG (`idx_kg_nodes_name_trgm`), with recent mention counts from `kg_edges` (`idx_kg_edges_source_recent`, index-only counts).
+- **Dossiers** read `thread_members` through its GIN `entities` index, joining articles by primary key only for the 10 headlines.
 
 ### Task 17a.1: `GET /api/search?q=` (`app/routers/search.py`, `app/services/search.py`)
 
@@ -380,34 +378,40 @@ Branch: `claude/p4-entities-api`. It reads the knowledge graph: `kg_nodes` PERSO
   - rank by mentions in the last 7 days (a count of `MENTIONED_IN` edges per candidate through `idx_kg_edges_source_recent`, bounded to 20 candidates), then similarity;
   - return up to 5 each, as `{type: "person"|"org", name, n}`;
   - drop candidates with 0 mentions in the window.
-- **Threads:** up to 5 listed threads (as 15b's list filter) whose title or lead headline matches `ILIKE '%' || $q || '%'`, as `{id, title}`. Empty until 15b ships, which is fine: guard with `to_regclass('threads')` or just a try that returns `[]`.
+- **Threads:** up to 5 listed threads (as 15b's list filter) whose `title` or `lead_title` matches `ILIKE '%' || like_escape($q) || '%'`, as `{id, title}`. This reads only `threads`.
 - **Places:** not searched server-side. The client searches the places it has loaded (17b).
 - **Caching:** Redis 5 min keyed on the lowercased q, plus `edge_cached`. Rate group `data`.
 - **Tests:** validation, ranking, the 0-mention drop, an injection-looking q treated as text, the cache key.
 
 ### Task 17a.2: `GET /api/entities/{type}/{name}?timespan=168h|24h` (`app/routers/entities.py`, `app/services/entities.py`)
 
-- **Resolution:** `type` is `person` or `org`; `name` matches exactly (case-insensitive) a `kg_nodes.name` of that type, else 404. The node id resolves once and is cached.
-- **Mentions:** `MENTIONED_IN` edges from that node within the window, newest first, capped at `MAX_MENTIONS = 2000` (via the recency index). Their `article_id`s join articles by primary key for lat/lng, region, country_code, published_at, sentiment, story_key, source_name and title. If capped, the response says `capped: true` with the cap.
+- **Resolution:** `type` is `person` or `org`; `name` matches exactly (case-insensitive) a `kg_nodes.name` of that type, else 404. Use the stored spelling from then on.
+- **Data:** members whose `entities @> ARRAY[name]` with `published_at` in the window (GIN `idx_thread_members_entities` plus the narrow member rows). No `kg_edges` heap fetches, and no `articles` heap except the 10 headlines below.
+  - **Why not the knowledge graph:** a heavy entity's 2,000 `kg_edges` rows plus 2,000 `articles` primary-key lookups spread over a week is about 3–4K random page reads, which is 25–35 s cold at P4's 120 IOPS.
+  - **Bound:** `MAX_MENTIONS = 2000` newest members, with `capped: true` when hit.
 - **Response:**
   - `name`, `type`;
-  - `counts: {h24, d7}` (edge counts via the index; distinct stories when cheap, else mentions, documented);
+  - `counts: {h24, d7}`: distinct stories from members;
   - `trend`: the last 24 h against the 24 h before, as a ratio, null when the earlier count is 0;
   - `countries` (distinct, count);
-  - `places`: top 12 cells by distinct stories, as `{lat, lng, place, country_code, n, tone}`;
+  - `places`: the top 12 1° cells by distinct stories, as `{lat, lng, place: display_place, country_code, n, tone}`;
   - `timeline`: daily buckets for 168h, hourly for 24h;
-  - `co_mentions`: the top 15 `{type, name, n}` via `retrieval._CO_MENTIONS_SQL`, reused through a shared function;
-  - `headlines`: the 10 newest distinct stories, `{title (display_title), source_name, published_at, source_url, place}`.
+  - `co_mentions`: the top 15 `{name, n}` from the same member rows (`unnest(entities)`, counted per story, excluding the entity itself). This replaces the knowledge graph's co-mention query here; `retrieval.co_mentions` stays for the agent;
+  - `headlines`: the 10 newest distinct stories, joined to articles by primary key for `source_url` and title (`display_title`), as `{title, source_name, published_at, source_url, place}`;
+  - `since`: the earliest member timestamp overall (the ramp).
+- **Ramp:** members exist only for articles assigned since 15b deployed. Until 7 days have passed, the response's `since` tells the UI to say "since {date}".
 - **Caching:** Redis `db:entity:v1:{type}:{lower(name)}:{timespan}` with `cycle_ttl` and single-flight, plus `edge_cached`. Rate group `data`.
 - **Copy rules:** the response never says "linked". The UI copy is "Appears in the same coverage as".
 - **Tests:**
   - unit: shapes, the cap flag, trend math, validation, 404;
-  - DB, with kg fixtures built through `populate_graph` on `zz` articles:
-    - places count stories, not copies;
-    - co-mentions;
+  - DB, with `thread_members` fixture rows plus `kg_nodes` for resolution:
+    - places, counts and co-mentions count stories, not copies;
     - the window bounds;
-    - a heavy entity (3,000 edges) is capped at 2,000 and the query reads only the capped ids.
+    - a heavy entity (3,000 members) is capped at 2,000;
+    - the query plan uses `idx_thread_members_entities`;
+    - `articles` is read only for the 10 headline ids (assert via `pg_stat_xact_user_tables` that `articles`' `seq_scan` didn't grow).
 - **After deploy:** the controller times a heavy entity (the busiest person in `/api/news/preview`'s entities), cold and warm.
+- **Reusable WIP:** an earlier start (local commit 0f563cd on `claude/p4-entities-api`, built on the knowledge graph) has the search service and helpers (`like_escape`, `trend`, `timeline`, …). Reuse what fits; the dossier's data source changes as above.
 
 **Commit:** `feat(api): search and entity dossiers`.
 
@@ -441,6 +445,7 @@ Branch: `claude/p4-entity-ui`.
   - "Latest headlines" (http(s) only);
   - "Stop tracking".
   - When `capped`, a note: "Based on the latest 2,000 mentions."
+  - While the ramp lasts (`since` is less than 7 days ago), the 7-day readout and timeline say "since {date}".
 - **Focus mode:** dots not among the entity's places dim (opacity tokens); the entity's places pulse once and are sized by `n`; arcs run from the mention-weighted centre to the top places (the `--connection-*` style). "Stop tracking" or Escape exits.
 - **Live pills:**
   - the hover card's entity pills (`HoverCard.tsx` ~245–253) and the link inspector's shared-entity pills (`LinkInspector.tsx` ~171–189) become buttons named "Track {name}";
@@ -485,9 +490,9 @@ Returns `{item, snapshot: {title, place?, lat?, lng?, time?, url?} | null}` per 
 
 Returns the edges between pins, all from bounded primary-key or index lookups:
 - **`same_thread`:** articles and threads through `thread_members`;
-- **`shared_entity`:** labelled with the shared names (up to 3), from `thread_members.entities`, or `articles.persons || orgs` by primary key, for articles and threads; and between an entity pin and an article or thread that mentions it;
+- **`shared_entity`:** labelled with the shared names (up to 3), from `thread_members.entities` (articles by `article_id`; threads by their `top_entities`); and between an entity pin and an article or thread that mentions it (GIN `idx_thread_members_entities`);
 - **`same_place`:** the same 1° cell;
-- **`co_covered`:** place, article or link pins whose countries form a pair currently listed by `/api/links` (read the cached 168h list; no new query).
+- **`co_covered`:** place, article or link pins whose countries form a pair currently listed by `/api/links` (read the cached 168h list; no new query). Skip these edges, rather than recompute them, when that cache entry is absent.
 
 Each edge is `{a, b, kind, label}`. "Close in time" is computed client-side from snapshots. Cache by the sorted item set for 10 minutes.
 

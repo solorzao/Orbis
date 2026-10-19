@@ -60,3 +60,6 @@ def test_table_migration_fails_fast_on_locks_and_leaves_articles_alone(name):
     assert lock.start() < sql.index("CREATE")
     assert not re.search(r"ALTER\s+TABLE\s+(IF\s+EXISTS\s+)?articles\b", sql, re.IGNORECASE)
     assert not re.search(r"CREATE\s+INDEX[^;]*\bON\s+articles\b", sql, re.IGNORECASE)
+    # A foreign key to articles would lock it while the migration runs and fire
+    # a trigger for every article the purge deletes.
+    assert not re.search(r"REFERENCES\s+articles\b", sql, re.IGNORECASE)
