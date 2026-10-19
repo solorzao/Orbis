@@ -19,6 +19,7 @@ from app.services.embeddings import generate_embeddings
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
 from app.services.ml_models import analyze_sentiment_ml, classify_topics_ml
+from app.services.threads import assign_threads, purge_threads
 from app.services.titles import dedup_key
 from app.services.topic_classifier import classify_topic
 
@@ -171,8 +172,16 @@ _cycle_started_at: float | None = None
 
 
 async def _purge_old_articles() -> None:
-    """Delete articles older than the retention window."""
+    """Delete articles older than the retention window, thread rows first.
+
+    Nothing references articles, so this is the only path that removes thread
+    members (by their own published_at) and threads last seen before it.
+    """
     pool = await get_pool()
+    try:
+        await purge_threads(pool, settings.retention_days)
+    except Exception:
+        logger.warning("Thread purge failed; continuing.", exc_info=True)
     status = await pool.execute(
         "DELETE FROM articles WHERE published_at < NOW() - make_interval(days => $1)",
         settings.retention_days,
@@ -182,6 +191,17 @@ async def _purge_old_articles() -> None:
     if count:
         logger.info("Purged %d articles older than %d days.", count, settings.retention_days)
     await purge_orphaned_nodes()
+
+
+async def _assign_threads(article_ids: list) -> None:
+    """Assign the newly embedded articles (and the recent backlog) to story threads.
+
+    A failure is a warning: it never fails the cycle, and the backlog retries.
+    """
+    try:
+        await assign_threads(await get_pool(), article_ids)
+    except Exception:
+        logger.warning("Thread assignment failed; continuing.", exc_info=True)
 
 
 # The cycle's background tasks, held so they are not garbage-collected mid-run.
@@ -223,8 +243,9 @@ async def run_ingestion_cycle() -> int:
 
     Downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
-    Then purges articles outside the retention window and embeds the new
-    rows. The API caches (db:*) are invalidated once, at the end, even if a
+    Then purges articles outside the retention window, embeds the new rows
+    and assigns them to story threads (a failure there is only a warning).
+    The API caches (db:*) are invalidated once, at the end, even if a
     step failed: until then visitors get the last cycle's answers rather than
     a cold query while the embeddings keep the database busy, and breaking
     stories, which count embedded rows only, are not refilled before the
@@ -250,7 +271,8 @@ async def run_ingestion_cycle() -> int:
             logger.info("Ingestion cycle starting …")
             count = await _ingest_from_raw_gkg()
             await _purge_old_articles()
-            await generate_embeddings()
+            embedded = await generate_embeddings()
+            await _assign_threads(embedded)
             logger.info("Ingestion cycle complete: %d articles.", count)
         except Exception:
             logger.error("Ingestion cycle failed.", exc_info=True)

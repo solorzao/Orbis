@@ -426,6 +426,12 @@ class TestTitlesAndGkgFields:
 
 class TestRunIngestionCycle:
     @pytest.fixture(autouse=True)
+    def assign(self):
+        """Thread assignment, stubbed: it has its own tests (test_threads*.py)."""
+        with patch("app.services.ingestion.assign_threads", new_callable=AsyncMock) as assign:
+            yield assign
+
+    @pytest.fixture(autouse=True)
     def warm(self):
         """The cache warm the cycle starts, recording whether the lock was held."""
         from app.services import ingestion
@@ -459,9 +465,13 @@ class TestRunIngestionCycle:
             patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
             patch(
                 "app.services.ingestion.generate_embeddings",
-                AsyncMock(side_effect=lambda: events.append("embed")),
+                AsyncMock(side_effect=lambda: events.append("embed") or []),
             ),
             patch("app.services.ingestion.invalidate", AsyncMock(side_effect=invalidated)),
+            patch(
+                "app.services.ingestion.assign_threads",
+                AsyncMock(side_effect=lambda *_args: events.append("threads")),
+            ),
         )
         return patches, events
 
@@ -474,10 +484,10 @@ class TestRunIngestionCycle:
         from app.services import ingestion
 
         patches, events = self._cycle_events(5)
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             assert await ingestion.run_ingestion_cycle() == 5
 
-        assert events == ["ingest", "embed", "invalidate db:* locked=True"]
+        assert events == ["ingest", "embed", "threads", "invalidate db:* locked=True"]
         assert warm == [False]  # the warm starts after, once the lock is released
 
     @pytest.mark.asyncio
@@ -486,7 +496,7 @@ class TestRunIngestionCycle:
         from app.services import ingestion
 
         patches, events = self._cycle_events(Exception("boom"))
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             assert await ingestion.run_ingestion_cycle() == 0
 
         assert events == ["ingest", "invalidate db:* locked=True"]
@@ -606,17 +616,19 @@ class TestRunIngestionCycle:
     async def test_steps_run_in_order(self):
         from app.services.ingestion import run_ingestion_cycle
 
-        calls: list[str] = []
+        calls: list = []
+        embedded = [uuid.uuid4(), uuid.uuid4()]
+        pool = object()
 
         def _record(name, result=None):
-            async def _step(*_args):
-                calls.append(name)
+            async def _step(*args):
+                calls.append(name if not args else (name, *args))
                 return result
 
             return _step
 
         with (
-            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion.get_pool", AsyncMock(return_value=pool)),
             patch(
                 "app.services.ingestion._ingest_from_raw_gkg",
                 side_effect=_record("ingest", 5),
@@ -627,12 +639,88 @@ class TestRunIngestionCycle:
             ),
             patch(
                 "app.services.ingestion.generate_embeddings",
-                side_effect=_record("embed", 0),
+                side_effect=_record("embed", embedded),
             ),
+            patch("app.services.ingestion.assign_threads", side_effect=_record("threads")),
         ):
             assert await run_ingestion_cycle() == 5
 
-        assert calls == ["ingest", "purge", "embed"]
+        # The ids embedded this cycle go to thread assignment, inside the lock.
+        assert calls == ["ingest", "purge", "embed", ("threads", pool, embedded)]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_thread_assignment_is_a_warning_not_a_failed_cycle(self, assign, caplog):
+        from app.services import ingestion
+
+        assign.side_effect = RuntimeError("boom")
+        patches, events = self._cycle_events(5)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
+        ):
+            assert await ingestion.run_ingestion_cycle() == 5
+
+        assign.assert_awaited_once()
+        assert events == ["ingest", "embed", "invalidate db:* locked=True"]
+        [record] = [r for r in caplog.records if "Thread assignment failed" in r.getMessage()]
+        assert record.levelno == logging.WARNING
+        assert "Ingestion cycle failed" not in caplog.text
+
+
+class TestPurgeOldArticles:
+    @staticmethod
+    def _pool(calls):
+        class Pool:
+            async def execute(self, sql, *args):
+                calls.append(("articles", args))
+                return "DELETE 3"
+
+        return Pool()
+
+    @pytest.mark.asyncio
+    async def test_thread_rows_are_purged_before_the_articles(self):
+        """Nothing references articles, so this is the only path that removes members."""
+        from app.services.ingestion import _purge_old_articles
+
+        calls: list = []
+        pool = self._pool(calls)
+        with (
+            patch("app.services.ingestion.get_pool", AsyncMock(return_value=pool)),
+            patch(
+                "app.services.ingestion.purge_threads",
+                AsyncMock(side_effect=lambda *args: calls.append(("threads", args))),
+            ),
+            patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
+        ):
+            await _purge_old_articles()
+
+        assert calls == [
+            ("threads", (pool, settings.retention_days)),
+            ("articles", (settings.retention_days,)),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_thread_purge_still_purges_the_articles(self, caplog):
+        from app.services.ingestion import _purge_old_articles
+
+        calls: list = []
+        with (
+            patch("app.services.ingestion.get_pool", AsyncMock(return_value=self._pool(calls))),
+            patch(
+                "app.services.ingestion.purge_threads",
+                AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
+            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
+        ):
+            await _purge_old_articles()
+
+        assert calls == [("articles", (settings.retention_days,))]
+        assert "Thread purge failed" in caplog.text
 
 
 class TestStartCacheWarm:
@@ -705,6 +793,7 @@ class TestStartCacheWarm:
             patch("app.services.ingestion._ingest_from_raw_gkg", side_effect=ingest),
             patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
             patch("app.services.ingestion.generate_embeddings", new_callable=AsyncMock),
+            patch("app.services.ingestion.assign_threads", new_callable=AsyncMock),
         ):
             ingestion._start_cache_warm()
             [old_warm] = ingestion._background_tasks

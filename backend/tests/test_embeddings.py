@@ -53,7 +53,7 @@ def _bad_request() -> openai.BadRequestError:
     )
 
 
-async def _run(client: AsyncMock, pool: AsyncMock, **settings_overrides) -> int:
+async def _run(client: AsyncMock, pool: AsyncMock, **settings_overrides) -> list:
     """Run ``generate_embeddings`` against mocks, with optional settings overrides."""
     from app.config import settings
     from app.services.embeddings import generate_embeddings
@@ -107,9 +107,9 @@ class TestGenerateEmbeddings:
                 return_value=mock_pool,
             ),
         ):
-            count = await generate_embeddings()
+            ids = await generate_embeddings()
 
-        assert count == 2
+        assert ids == article_ids  # the ids it embedded, for thread assignment
         mock_client.embeddings.create.assert_called_once()
         call_kwargs = mock_client.embeddings.create.call_args
         assert call_kwargs.kwargs["input"] == [
@@ -124,9 +124,9 @@ class TestGenerateEmbeddings:
         pool = _pool(rows)
         client = _client()
 
-        count = await _run(client, pool, embedding_batch_size=2)
+        ids = await _run(client, pool, embedding_batch_size=2)
 
-        assert count == 4
+        assert ids == [r["id"] for r in rows]
         pool.fetch.assert_awaited_once()
         assert client.embeddings.create.await_count == 2
         written = [u[1] for call in pool.executemany.await_args_list for u in call.args[1]]
@@ -137,9 +137,9 @@ class TestGenerateEmbeddings:
         pool = _pool(_rows(5))
         client = _client()
 
-        count = await _run(client, pool, embedding_max_per_cycle=5, embedding_batch_size=2)
+        ids = await _run(client, pool, embedding_max_per_cycle=5, embedding_batch_size=2)
 
-        assert count == 5
+        assert len(ids) == 5
         pool.fetch.assert_awaited_once()
         assert pool.fetch.await_args.args[1] == 5
         sizes = [len(call.kwargs["input"]) for call in client.embeddings.create.await_args_list]
@@ -150,21 +150,22 @@ class TestGenerateEmbeddings:
         pool = _pool(_rows(2))
         client = _client(return_value=_response(0))
 
-        count = await _run(client, pool)
+        ids = await _run(client, pool)
 
-        assert count == 0
+        assert ids == []
         client.embeddings.create.assert_awaited_once()
         pool.executemany.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_generate_embeddings_returns_partial_total_on_unexpected_error(self):
-        pool = _pool(_rows(6))
+    async def test_generate_embeddings_returns_the_ids_embedded_before_an_unexpected_error(self):
+        rows = _rows(6)
+        pool = _pool(rows)
         client = _client(side_effect=[_response(2), RuntimeError("boom"), _response(2)])
 
-        count = await _run(client, pool, embedding_batch_size=2)
+        ids = await _run(client, pool, embedding_batch_size=2)
 
         # The error in the middle chunk stops the run; the last chunk is never sent.
-        assert count == 2
+        assert ids == [r["id"] for r in rows[:2]]
         assert client.embeddings.create.await_count == 2
         pool.executemany.assert_awaited_once()
 
@@ -174,9 +175,9 @@ class TestGenerateEmbeddings:
         pool = _pool(rows)
         client = _client(side_effect=[_bad_request(), _response(2)])
 
-        count = await _run(client, pool, embedding_batch_size=2)
+        ids = await _run(client, pool, embedding_batch_size=2)
 
-        assert count == 2
+        assert ids == [r["id"] for r in rows[2:]]
         pool.executemany.assert_awaited_once()
         written = [u[1] for u in pool.executemany.await_args.args[1]]
         assert written == [r["id"] for r in rows[2:]]
@@ -200,9 +201,9 @@ class TestGenerateEmbeddings:
             "app.services.embeddings._get_openai_client",
             return_value=None,
         ):
-            count = await generate_embeddings()
+            ids = await generate_embeddings()
 
-        assert count == 0
+        assert ids == []
 
 
 class TestGetOpenAIClient:
