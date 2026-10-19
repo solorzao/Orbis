@@ -12,8 +12,10 @@ from starlette.responses import JSONResponse
 from app.config import settings
 from app.middleware.security import SecurityMiddleware
 from app.routers.agent import router as agent_router
+from app.routers.entities import router as entities_router
 from app.routers.links import router as links_router
 from app.routers.news import router as news_router
+from app.routers.search import router as search_router
 from app.routers.threads import router as threads_router
 from app.services.cache import close_redis, get_redis
 from app.services.database import close_pool, get_pool
@@ -55,6 +57,8 @@ app.include_router(news_router)
 app.include_router(links_router)
 app.include_router(threads_router)
 app.include_router(agent_router)
+app.include_router(search_router)
+app.include_router(entities_router)
 
 
 # ---------------------------------------------------------------------------
