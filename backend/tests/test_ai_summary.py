@@ -74,6 +74,17 @@ async def test_a_json_schema_constrains_the_reply_when_given(client):
 
 
 @pytest.mark.asyncio
+async def test_a_per_request_timeout_is_passed_when_given(client):
+    client.messages.create.return_value = _response([("text", "Summary.")])
+
+    await ai_summary._call_claude("Headlines: ...", timeout=30)
+    assert client.messages.create.call_args.kwargs["timeout"] == 30
+
+    await ai_summary._call_claude("Headlines: ...")  # the visitor-facing callers
+    assert "timeout" not in client.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
 async def test_refusal_returns_fallback(client):
     client.messages.create.return_value = _response([("thinking", "")], stop_reason="refusal")
 

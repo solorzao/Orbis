@@ -59,13 +59,14 @@ async def _thread(
     summarized_n=0,
     velocity=0,
     active=True,
+    last_seen=NOW - HOUR,
 ) -> int:
     thread_id = await conn.fetchval(
         "INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources,"
         " countries, summarized_n, velocity, lead_title)"
         " VALUES (array_fill(0.01, ARRAY[512])::vector, $1, $1, $2, $3, $4, $5, $6, 'Zz lead')"
         " RETURNING id",
-        NOW - HOUR,
+        last_seen,
         n_stories,
         n_sources,
         list(countries),
@@ -83,7 +84,8 @@ async def _thread(
 
 
 async def _eligible(conn) -> list[int]:
-    return [r["id"] for r in await conn.fetch(thread_synopsis.ELIGIBLE_SQL)]
+    rows = await conn.fetch(thread_synopsis.ELIGIBLE_SQL, NOW - thread_synopsis.ACTIVE_WINDOW)
+    return [r["id"] for r in rows]
 
 
 @pytest.mark.asyncio
@@ -93,7 +95,9 @@ async def test_eligibility(conn):
     await _thread(conn, n_stories=4)  # too few stories
     await _thread(conn, countries=("FR",), n_sources=4)  # one country, four outlets
     await _thread(conn, countries=(), n_sources=4)
+    await _thread(conn, n_sources=2)  # two countries, but never listed: 2 outlets
     await _thread(conn, active=False)  # inactive
+    await _thread(conn, last_seen=NOW - 73 * HOUR)  # out of the active window
 
     assert set(await _eligible(conn)) == {two_countries, five_outlets}
 
@@ -114,6 +118,31 @@ async def test_the_fastest_six_go_first(conn):
     eligible = await _eligible(conn)
 
     assert [by_velocity[i] for i in eligible] == [9, 8, 7, 5, 4, 3]
+
+
+@pytest.mark.asyncio
+async def test_eligibility_reads_listed_threads_by_the_partial_index(conn):
+    """Not every active thread: mostly single-story ones, never listed."""
+    await conn.execute(
+        "INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources)"
+        " SELECT array_fill(0.01, ARRAY[512])::vector, $1::timestamptz,"
+        " $1::timestamptz - i * interval '10 minutes',"
+        " CASE WHEN i <= 3 THEN 6 ELSE 1 END, CASE WHEN i <= 3 THEN 6 ELSE 1 END"
+        " FROM generate_series(1, 300) AS i",
+        NOW,
+    )
+    await conn.execute("ANALYZE threads")
+    await conn.execute("SET LOCAL enable_seqscan = off")
+
+    plan = "\n".join(
+        r[0]
+        for r in await conn.fetch(
+            "EXPLAIN " + thread_synopsis.ELIGIBLE_SQL, NOW - thread_synopsis.ACTIVE_WINDOW
+        )
+    )
+
+    assert "idx_threads_listed" in plan
+    assert "Seq Scan on thread_centroids" not in plan
 
 
 @pytest.mark.asyncio
@@ -144,7 +173,7 @@ async def test_a_synopsis_is_written_with_the_story_count_it_covers(conn):
         patch("app.services.thread_synopsis.invalidate", new_callable=AsyncMock),
         patch("app.routers.threads.warm_threads", new_callable=AsyncMock),
     ):
-        assert await thread_synopsis.summarise_threads() == 1
+        assert await thread_synopsis.summarise_threads(now=NOW) == 1
 
     prompt = call.await_args.args[0]
     assert prompt == (

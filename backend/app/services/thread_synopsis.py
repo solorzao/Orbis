@@ -2,12 +2,13 @@
 
 After each ingestion cycle's cache warm, in a background task of its own
 (cancelled by the next cycle and at shutdown), up to SYNOPSES_PER_CYCLE
-active threads with enough coverage get a title and synopsis from Claude
-Haiku, written from their 15 newest distinct stories' headlines alone. A
-thread is summarised again once it has grown by half. Each call draws on
-SYNOPSIS_SHARE of the daily Claude budget, so synopses pause before any
-visitor-facing feature does. A reply that isn't the expected JSON, or that
-fails validation, is dropped and the thread waits for the next cycle.
+active, listed threads with enough coverage get a title and synopsis from
+Claude Haiku, written from their 15 newest distinct stories' headlines
+alone. A thread is summarised again once it has grown by half. Each call
+draws on SYNOPSIS_SHARE of the daily Claude budget, so synopses pause before
+any visitor-facing feature does, and each attempt is capped at
+CALL_TIMEOUT_S. A reply that isn't the expected JSON, or that fails
+validation, is dropped and the thread waits for the next cycle.
 
 Cost, estimated: about 600 input tokens a call (the system prompt and 15
 headlines) and up to about 300 output (the JSON plus low-effort thinking),
@@ -20,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
@@ -27,7 +29,8 @@ from app.services import llm_budget
 from app.services.ai_summary import SummaryUnavailable, _call_claude
 from app.services.cache import invalidate
 from app.services.database import get_pool
-from app.services.thread_reads import ARTICLES_SQL
+from app.services.thread_reads import ARTICLES_SQL, LISTED_SQL
+from app.services.threads import ACTIVE_HOURS
 from app.services.titles import display_title
 
 logger = logging.getLogger("orbis.thread_synopsis")
@@ -40,7 +43,17 @@ MIN_COUNTRIES = 2  # ... or MIN_SOURCES outlets
 MIN_SOURCES = 5
 REGROWTH = 1.5  # summarised again at 1.5 times the stories the last synopsis covered
 
+# Eligible threads were last seen in the active window (a thread with 2+
+# stories goes inactive after ACTIVE_HOURS without one).
+ACTIVE_WINDOW = timedelta(hours=ACTIVE_HOURS)
+# Seconds each attempt of a call may take (the SDK default is 10 minutes, and a
+# cycle 15): a call the next cycle cancels mid-flight is billed but never
+# recorded, so it must be short.
+CALL_TIMEOUT_S = 30
+
 MAX_TITLE_CHARS = 80
+# The prompt asks for 8 words or fewer; 10 is deliberate leniency, so a title a
+# word or two over isn't thrown away with its synopsis.
 MAX_TITLE_WORDS = 10
 MIN_SYNOPSIS_CHARS = 40
 MAX_SYNOPSIS_CHARS = 600
@@ -71,11 +84,16 @@ SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# Active threads (a thread_centroids row) only, driven from that small table.
+# Listed threads (the list's own predicate, as literals, so idx_threads_listed
+# serves it) seen in the active window, that are still active (a
+# thread_centroids row, by primary key): never every active thread, most of
+# them single-story ones no list shows.
 ELIGIBLE_SQL = f"""
     SELECT t.id, t.n_stories
-    FROM thread_centroids c JOIN threads t ON t.id = c.thread_id
-    WHERE t.n_stories >= {MIN_STORIES}
+    FROM threads t
+    WHERE t.last_seen >= $1 AND {LISTED_SQL}
+      AND EXISTS (SELECT 1 FROM thread_centroids c WHERE c.thread_id = t.id)
+      AND t.n_stories >= {MIN_STORIES}
       AND (cardinality(t.countries) >= {MIN_COUNTRIES} OR t.n_sources >= {MIN_SOURCES})
       AND (t.summarized_n = 0 OR t.n_stories >= {REGROWTH} * t.summarized_n)
     ORDER BY t.velocity DESC, t.id
@@ -148,14 +166,15 @@ def parse_synopsis(reply: str) -> tuple[str, str] | None:
     return title, synopsis
 
 
-async def summarise_threads() -> int:
+async def summarise_threads(now: datetime | None = None) -> int:
     """Write synopses for this cycle's eligible threads; return how many were written.
 
     Then, if any were, invalidate the threads cache and rewarm its first list, so
-    the list shows them without waiting for the next cycle.
+    the list shows them without waiting for the next cycle. *now* is for tests.
     """
+    now = now or datetime.now(timezone.utc)
     pool = await get_pool()
-    threads = await pool.fetch(ELIGIBLE_SQL)
+    threads = await pool.fetch(ELIGIBLE_SQL, now - ACTIVE_WINDOW)
     written = 0
     for thread in threads:
         thread_id = thread["id"]
@@ -169,6 +188,7 @@ async def summarise_threads() -> int:
                 system=SYSTEM_PROMPT,
                 budget_share=llm_budget.SYNOPSIS_SHARE,
                 json_schema=SCHEMA,
+                timeout=CALL_TIMEOUT_S,
             )
         except SummaryUnavailable as exc:
             logger.info("Thread %s: no synopsis this cycle (%s)", thread_id, exc)
