@@ -29,7 +29,7 @@ def _get_openai_client() -> Any | None:
         return None
 
 
-async def generate_embeddings() -> int:
+async def generate_embeddings() -> list[Any]:
     """Embed the backlog of articles that lack a vector and store results in PostgreSQL.
 
     Fetches up to ``embedding_max_per_cycle`` unembedded articles, newest
@@ -37,15 +37,16 @@ async def generate_embeddings() -> int:
     ``embedding_batch_size``. A batch OpenAI rejects as a bad request is
     skipped; any other error stops the run.
 
-    Returns the number of articles successfully embedded.
+    Returns the ids of the articles it embedded, in the order embedded (the
+    ingestion cycle assigns them to story threads).
     """
     client = _get_openai_client()
     if client is None:
-        return 0
+        return []
 
     from openai import BadRequestError
 
-    total = 0
+    embedded: list[Any] = []
     try:
         pool = await get_pool()
         rows = await pool.fetch(
@@ -74,14 +75,14 @@ async def generate_embeddings() -> int:
                         "UPDATE articles SET embedding = $1::vector WHERE id = $2",
                         updates,
                     )
-                    total += len(updates)
+                    embedded.extend(article_id for _, article_id in updates)
             except BadRequestError as exc:
                 logger.warning(
                     "OpenAI rejected a batch of %d titles; skipping it: %s", len(chunk), exc
                 )
-        if total:
-            logger.info("Generated embeddings for %d articles.", total)
-        return total
+        if embedded:
+            logger.info("Generated embeddings for %d articles.", len(embedded))
+        return embedded
     except Exception:
-        logger.error("Embedding generation failed after %d articles.", total, exc_info=True)
-        return total
+        logger.error("Embedding generation failed after %d articles.", len(embedded), exc_info=True)
+        return embedded

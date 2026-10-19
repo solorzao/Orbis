@@ -216,6 +216,10 @@ async def get_articles_in_bounds(
     Ties on ``published_at`` (a whole GDELT batch shares one) break on ``id``,
     in the dedup and the final order, so offset paging over repeated calls
     neither repeats nor skips articles.
+
+    After the limit, each row names its story thread (``thread_*`` columns,
+    read by thread_reads.article_thread) by primary-key lookups, when
+    /api/threads would list it: 3 or more stories from 3 or more outlets.
     """
     conditions, params = _cell_box(min_lat, min_lng, max_lat, max_lng)
     params.append(limit)
@@ -232,17 +236,25 @@ async def get_articles_in_bounds(
     pool = await get_pool()
     rows = await pool.fetch(
         f"""
-        SELECT * FROM (
-            SELECT DISTINCT ON (lower(title))
-                   id, title, summary, source_url, source_name, source_language,
-                   published_at, ingested_at, latitude, longitude, country_code,
-                   region, topic_tags, sentiment_score, entities, image_url
-            FROM articles
-            WHERE {" AND ".join(conditions)}
-            ORDER BY lower(title), published_at DESC, id
-        ) deduped
-        ORDER BY published_at DESC, id
-        LIMIT $9
+        SELECT d.*, t.id AS thread_id, t.title AS thread_title,
+               t.lead_title AS thread_lead_title, t.places AS thread_places
+        FROM (
+            SELECT * FROM (
+                SELECT DISTINCT ON (lower(title))
+                       id, title, summary, source_url, source_name, source_language,
+                       published_at, ingested_at, latitude, longitude, country_code,
+                       region, topic_tags, sentiment_score, entities, image_url
+                FROM articles
+                WHERE {" AND ".join(conditions)}
+                ORDER BY lower(title), published_at DESC, id
+            ) deduped
+            ORDER BY published_at DESC, id
+            LIMIT $9
+        ) d
+        LEFT JOIN thread_members m ON m.article_id = d.id
+        -- thread_reads.MIN_STORIES and MIN_SOURCES (it imports this module)
+        LEFT JOIN threads t ON t.id = m.thread_id AND t.n_stories >= 3 AND t.n_sources >= 3
+        ORDER BY d.published_at DESC, d.id
         """,
         *params,
     )

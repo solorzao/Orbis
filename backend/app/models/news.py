@@ -87,6 +87,14 @@ def https_only_image_url(url: str | None) -> str | None:
 HttpsOnlyImageUrl = Annotated[str | None, BeforeValidator(https_only_image_url)]
 
 
+class ArticleThread(BaseModel):
+    """The story thread an article is part of, when /api/threads would list it."""
+
+    id: int
+    title: str  # the thread's AI title, else its lead story's headline
+    places: list[str] = Field(default_factory=list)  # its first three place names
+
+
 class NewsArticle(BaseModel):
     """A single geolocated news article."""
 
@@ -106,6 +114,7 @@ class NewsArticle(BaseModel):
     sentiment_score: float = 0.0
     entities: dict = Field(default_factory=dict)
     image_url: HttpsImageUrl = None
+    thread: ArticleThread | None = None  # cluster articles only (/api/news/cluster)
 
 
 class NewsCluster(BaseModel):

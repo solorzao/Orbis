@@ -753,6 +753,64 @@ class TestGetTopics:
             assert result[0].count == 50
 
 
+def test_row_to_article_names_its_listed_thread():
+    import json
+
+    row = {
+        "id": "1",
+        "title": "t",
+        "source_url": "https://s",
+        "source_name": "s",
+        "latitude": 1.0,
+        "longitude": 2.0,
+        "thread_id": 7,
+        "thread_title": None,
+        "thread_lead_title": "Strikes spread across France",
+        "thread_places": json.dumps(
+            [
+                {"region": "Paris, Ile-de-France, France", "country_code": "FR"},
+                {"region": "Lyon, Rhone-Alpes, France", "country_code": "FR"},
+            ]
+        ),
+    }
+
+    thread = _row_to_article(row).thread
+
+    assert thread.model_dump() == {
+        "id": 7,
+        "title": "Strikes spread across France",
+        "places": ["Paris, Ile-de-France, France", "Lyon, Rhone-Alpes, France"],
+    }
+    assert _row_to_article({**row, "thread_id": None}).thread is None
+    assert _row_to_article(_make_db_row()).thread is None
+
+
+@pytest.mark.asyncio
+async def test_cluster_articles_carry_their_thread(monkeypatch):
+    import json
+
+    row = {
+        **_make_db_row("Strikes spread"),
+        "thread_id": 7,
+        "thread_title": "French strikes widen",
+        "thread_lead_title": "Strikes spread",
+        "thread_places": json.dumps([{"region": "Paris, Ile-de-France, France"}]),
+    }
+    with patch(
+        "app.routers.news.get_articles_in_bounds", new_callable=AsyncMock, return_value=[row]
+    ):
+        async with _api_client(monkeypatch) as client:
+            resp = await client.get("/api/news/cluster", params={"lat": 40.5, "lng": -74.5})
+
+    assert resp.status_code == 200
+    [article] = resp.json()
+    assert article["thread"] == {
+        "id": 7,
+        "title": "French strikes widen",
+        "places": ["Paris, Ile-de-France, France"],
+    }
+
+
 def test_row_to_article_includes_image_url():
     row = {
         "id": "1",

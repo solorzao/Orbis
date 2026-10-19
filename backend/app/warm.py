@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable
 
 from app.routers.links import warm_links_7d, warm_links_24h
 from app.routers.news import warm_breaking, warm_globe, warm_volume
+from app.routers.threads import warm_threads
 from app.services.cache import get_redis
 
 logger = logging.getLogger("orbis.warm")
@@ -26,14 +27,15 @@ Warmer = Callable[[], Awaitable[object]]
 
 # Run in order: the first visit's globe and timeline (24 hours, all topics),
 # then the links layer's default windows, then breaking stories (one list for
-# every topic: the ticker's, and the delta's count). Another endpoint's warmer
-# joins here.
+# every topic: the ticker's, and the delta's count), then the threads rail's
+# default list (24 hours, all topics, 20). Another endpoint's warmer joins here.
 WARMERS: tuple[Warmer, ...] = (
     warm_globe,
     warm_volume,
     warm_links_24h,
     warm_links_7d,
     warm_breaking,
+    warm_threads,
 )
 
 # Seconds each warmer may take.

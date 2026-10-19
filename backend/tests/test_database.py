@@ -338,7 +338,31 @@ class TestGetArticlesInBounds:
         columns = _selected_columns(pool.fetch.call_args.args[0])
         assert "embedding" not in columns
         assert "*" not in columns
-        assert columns == set(NewsArticle.model_fields)
+        assert columns == set(NewsArticle.model_fields) - {"thread"}  # thread: joined after
+
+    @pytest.mark.asyncio
+    async def test_the_page_names_its_listed_threads_by_primary_key(self, pool):
+        """After the limit, so at most a page of member lookups; only a thread that
+        /api/threads would list (3 stories, 3 outlets) is named."""
+        await database.get_articles_in_bounds(*CELL)
+
+        from app.services.thread_reads import MIN_SOURCES, MIN_STORIES
+
+        query, _ = _fetched(pool)
+        member = "LEFT JOIN thread_members m ON m.article_id = d.id"
+        thread = (
+            "LEFT JOIN threads t ON t.id = m.thread_id"
+            f" AND t.n_stories >= {MIN_STORIES} AND t.n_sources >= {MIN_SOURCES}"
+        )
+        assert query.index("LIMIT $9") < query.index(member) < query.index(thread)
+        assert query.endswith("ORDER BY d.published_at DESC, d.id")
+        for column in (
+            "t.id AS thread_id",
+            "t.title AS thread_title",
+            "t.lead_title AS thread_lead_title",
+            "t.places AS thread_places",
+        ):
+            assert column in query
 
     @pytest.mark.asyncio
     async def test_duplicates_and_ties_resolve_the_same_way_every_call(self, pool):
