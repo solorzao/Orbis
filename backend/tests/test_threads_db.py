@@ -188,7 +188,7 @@ async def test_assignment_never_scans_the_articles_heap(conn):
 
     plans = {
         "backlog": await _plan(
-            conn, threads.BACKLOG_SQL, NOW - 6 * HOUR, threads.MIN_TITLE_WORDS, 500
+            conn, threads.BACKLOG_SQL, NOW - 6 * HOUR, threads.MIN_TITLE_WORDS, 500, [uuid.uuid4()]
         ),
         "load": await _plan(conn, threads.LOAD_SQL, [uuid.uuid4()]),
         "lead titles": await _plan(conn, threads.LEAD_TITLES_SQL, [1, 2]),
@@ -207,7 +207,8 @@ async def test_the_aggregate_step_finds_unaggregated_threads_by_the_partial_inde
     """Most threads are aggregated; the few a failed cycle left are found by index."""
     await conn.execute(
         "INSERT INTO threads (centroid_sum, first_seen, last_seen, aggregated_at)"
-        " SELECT array_fill(0.01, ARRAY[512])::vector, $1, $1, CASE WHEN i > 3 THEN $1 END"
+        " SELECT array_fill(0.01, ARRAY[512])::vector, $1::timestamptz, $1::timestamptz,"
+        " CASE WHEN i > 3 THEN $1::timestamptz END"
         " FROM generate_series(1, 300) AS i",
         NOW - HOUR,
     )

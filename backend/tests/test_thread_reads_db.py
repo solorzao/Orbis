@@ -284,7 +284,8 @@ async def test_the_list_reads_listed_threads_and_articles_by_primary_key_only(co
     """The partial idx_threads_listed: a week's single-story threads are never read."""
     await conn.execute(  # a week of mostly single-story threads, and a few listed
         "INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources, topic)"
-        " SELECT array_fill(0.01, ARRAY[512])::vector, $1, $1 - i * interval '30 minutes',"
+        " SELECT array_fill(0.01, ARRAY[512])::vector, $1::timestamptz,"
+        " $1::timestamptz - i * interval '30 minutes',"
         " CASE WHEN i <= 3 THEN 3 ELSE 1 END, CASE WHEN i <= 3 THEN 3 ELSE 1 END, 'conflict'"
         " FROM generate_series(1, 300) AS i",
         NOW,
