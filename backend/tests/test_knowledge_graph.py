@@ -360,6 +360,16 @@ class TestUpsertNode:
         assert args == ["PERSON", "Alice Smith"]
 
     @pytest.mark.asyncio
+    async def test_a_node_gone_before_its_edge_is_a_clear_error(self):
+        from app.services.knowledge_graph import upsert_node
+
+        conn = AsyncMock()
+        # Deleted in between, by an orphan purge from an overlapping backend.
+        conn.fetchval = AsyncMock(side_effect=[None, None])
+        with pytest.raises(RuntimeError, match=r"PERSON node 'Alice Smith'"):
+            await upsert_node(conn, "PERSON", "Alice Smith", {})
+
+    @pytest.mark.asyncio
     async def test_every_node_of_an_article_goes_through_it(self):
         from app.services import knowledge_graph
 

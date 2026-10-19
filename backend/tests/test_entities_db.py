@@ -481,19 +481,20 @@ async def test_search_reads_only_listed_threads(conn):
 async def test_search_counts_stories_among_the_capped_members_and_ranks_the_capped_first(
     conn,
 ):
-    for name in ("Zz Cap Many", "Zz Cap Copies", "Zz Cap Under"):
+    for name in ("Zz Cap Many Stories", "Zz Cap Few", "Zz Cap Under"):
         await _node(conn, "PERSON", name)
-    await _bulk_members(conn, 150, "ARRAY['Zz Cap Many']")  # 150 stories
-    await _bulk_members(conn, 100, "ARRAY['Zz Cap Copies']", story="g % 40")  # 40 stories
+    await _bulk_members(conn, 150, "ARRAY['Zz Cap Many Stories']")  # 150 stories
+    await _bulk_members(conn, 100, "ARRAY['Zz Cap Few']", story="g % 40")  # 40 stories
     await _bulk_members(conn, 99, "ARRAY['Zz Cap Under']")  # 99 stories, under the cap
     now = datetime.now(timezone.utc)
     result = await search.search("zz cap", now)
 
     assert search.SEARCH_COUNT_CAP == 100
     assert result["people"] == [
-        # The cap's worth of members read: n is their distinct stories, "{n}+".
-        {"type": "person", "name": "Zz Cap Many", "n": 100, "capped": True},
-        {"type": "person", "name": "Zz Cap Copies", "n": 40, "capped": True},
+        # The cap's worth of members read: n is their distinct stories, "{n}+",
+        # a sample, so the capped rank by how close the name is.
+        {"type": "person", "name": "Zz Cap Few", "n": 40, "capped": True},
+        {"type": "person", "name": "Zz Cap Many Stories", "n": 100, "capped": True},
         # Under the cap: every member read, n is the dossier's d7.
         {"type": "person", "name": "Zz Cap Under", "n": 99, "capped": False},
     ]

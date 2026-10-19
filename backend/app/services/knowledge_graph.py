@@ -50,8 +50,9 @@ _KEEP_NODE_SQL = _node_upsert_sql("DO NOTHING")
 # not with @> (deep containment, where an array or object value could be
 # "contained" yet replaced by ||), so a row is rewritten exactly when || would
 # change it. Today's values are all flat scalars (strings, numbers, nulls).
-# An unchanged row is still locked by DO UPDATE (its tuple header marks the
-# lock) but gets no new version, so no index entries.
+# An unchanged row is still locked by DO UPDATE: that dirties its page and
+# writes a lock WAL record. Far less than a new version and its index
+# entries, but not nothing.
 _MERGE_NODE_SQL = _node_upsert_sql(
     "DO UPDATE SET metadata = kg_nodes.metadata || EXCLUDED.metadata "
     "WHERE kg_nodes.metadata || EXCLUDED.metadata IS DISTINCT FROM kg_nodes.metadata"
@@ -70,6 +71,12 @@ async def upsert_node(conn: Any, node_type: str, name: str, metadata: dict) -> A
     node_id = await conn.fetchval(sql, node_type, name, json.dumps(metadata))
     if node_id is None:  # committed by another writer after this statement began
         node_id = await conn.fetchval(_NODE_ID_SQL, node_type, name)
+    if node_id is None:
+        # DO NOTHING doesn't row-lock the existing node (DO UPDATE did), so an
+        # orphan purge from an overlapping backend, as during a deploy, could
+        # delete it between the two reads. Rare and accepted; say which node
+        # rather than fail on the edge's NULL id.
+        raise RuntimeError(f"{node_type} node {name!r} vanished before its edge was written")
     return node_id
 
 

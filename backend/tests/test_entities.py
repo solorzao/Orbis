@@ -331,7 +331,11 @@ class TestResolveEntity:
         # cached under the lowercased name is the same whichever case asks.
         mentions = " ".join(entities.member_mentions_sql("n.name", "$3", "$4").split())
         assert f"FROM kg_nodes n CROSS JOIN LATERAL {mentions} m WHERE" in flat
-        assert "ORDER BY m.capped DESC, m.stories DESC, n.name LIMIT 1" in flat
+        # Capped variants' stories are a sample, so among them, by name.
+        assert (
+            "ORDER BY m.capped DESC, CASE WHEN m.capped THEN 0 ELSE m.stories END DESC, n.name"
+            " LIMIT 1"
+        ) in flat
         assert "kg_edges" not in flat
         assert args == [
             "PERSON",

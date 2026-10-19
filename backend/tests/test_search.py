@@ -70,22 +70,25 @@ class TestSearchService:
         assert result["threads"] == []
 
     @pytest.mark.asyncio
-    async def test_names_at_the_member_cap_come_first_with_their_stories(self):
+    async def test_names_at_the_member_cap_come_first_the_closest_first(self):
         pool = _Pool(
             [
                 _candidate("PERSON", "Donald Trump Jr", 99, 0.6),  # 99 stories, under the cap
-                _candidate("PERSON", "Melania Trump", 40, 0.5, capped=True),  # 100+ members
-                _candidate("PERSON", "Donald Trump", 85, 0.4, capped=True),
+                _candidate("PERSON", "Barron Trump", 12, 0.5),
+                _candidate("PERSON", "Melania Trump", 90, 0.43, capped=True),  # 100+ members
+                _candidate("PERSON", "Donald Trump", 40, 0.46, capped=True),
             ]
         )
         result = await _search(pool, "trump")
 
         # At the cap, a name has 100+ members this week: more coverage than any
-        # name under it, whatever its stories among the 100 read ("{n}+" in the UI).
+        # name under it. Its n is a sample (whichever 100 members the scan met
+        # first), so capped names rank by how close the name is; the rest by n.
         assert result["people"] == [
-            {"type": "person", "name": "Donald Trump", "n": 85, "capped": True},
-            {"type": "person", "name": "Melania Trump", "n": 40, "capped": True},
+            {"type": "person", "name": "Donald Trump", "n": 40, "capped": True},
+            {"type": "person", "name": "Melania Trump", "n": 90, "capped": True},
             {"type": "person", "name": "Donald Trump Jr", "n": 99, "capped": False},
+            {"type": "person", "name": "Barron Trump", "n": 12, "capped": False},
         ]
 
     @pytest.mark.asyncio

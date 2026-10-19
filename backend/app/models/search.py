@@ -11,7 +11,7 @@ class EntityResult(BaseModel):
     type: EntityType
     name: str
     n: int  # distinct stories in the last 7 days, among the members read
-    capped: bool  # the member cap was reached: more stories than n ("{n}+")
+    capped: bool  # the member cap was reached: at least n stories ("{n}+")
 
 
 class ThreadResult(BaseModel):

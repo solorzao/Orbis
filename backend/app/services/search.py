@@ -18,7 +18,8 @@ from app.services.thread_reads import LIST_HOURS, LISTED_SQL
 # A name's coverage this week is read from at most this many members, so a
 # heavy name costs no more on this type-ahead read. ``n`` is the distinct
 # stories among them; ``capped`` says the cap was reached (the UI shows
-# "{n}+"), and capped names rank first.
+# "{n}+"). Capped names rank first, among themselves by how close the name
+# is: their n is a sample (whichever members the scan met first).
 SEARCH_COUNT_CAP = MENTION_COUNT_CAP
 
 _WINDOW = timedelta(days=7)
@@ -60,18 +61,15 @@ async def search(q: str, now: datetime) -> dict:
     """People, organisations and threads matching *q* (2-80 characters, trimmed).
 
     People and organisations are ranked by coverage in the last 7 days: names
-    with SEARCH_COUNT_CAP members or more first (``capped``), then by distinct
-    stories (``n``, among the members read), then by how close the name is, up
-    to five of each; a name in no story this week is left out. Threads are up to five listed
+    with SEARCH_COUNT_CAP members or more first (``capped``), by how close the
+    name is; then the rest by distinct stories (``n``), then closeness; up to
+    five of each. A name in no story this week is left out. Threads are up to five listed
     threads (as the thread list selects them), the fastest first.
     """
     pool = await get_pool()
     week_ago = now - _WINDOW
     rows = await pool.fetch(_CANDIDATES_SQL, q, like_escape(q) + "%", week_ago, SEARCH_COUNT_CAP)
-    ranked = sorted(
-        (r for r in rows if r["stories"] > 0),
-        key=lambda r: (not r["capped"], -r["stories"], -r["sim"], r["name"]),
-    )
+    ranked = sorted((r for r in rows if r["stories"] > 0), key=_rank)
     groups: dict[str, list[dict]] = {"PERSON": [], "ORG": []}
     for row in ranked:
         group = groups[row["type"]]
@@ -89,6 +87,14 @@ async def search(q: str, now: datetime) -> dict:
         "orgs": groups["ORG"],
         "threads": await _threads(pool, q, now - _THREAD_WINDOW),
     }
+
+
+def _rank(row) -> tuple:
+    """Capped names first, the closest first (their stories are a sample); then
+    the rest by stories, then closeness; then by name."""
+    if row["capped"]:
+        return (0, -row["sim"], -row["stories"], row["name"])
+    return (1, -row["stories"], -row["sim"], row["name"])
 
 
 async def _threads(pool, q: str, since: datetime) -> list[dict]:
