@@ -77,10 +77,10 @@ _SUMMARY_SQL = """
 """
 
 # The newest members in the window, one past the cap to tell it was reached.
-# Every match is read first (MATERIALIZED), then sorted: asyncpg reuses
-# prepared statements, and a generic plan (default selectivities, an unknown
-# LIMIT) could otherwise trade the entity index for a backward scan of the
-# week by published_at, reading every member for a rare name.
+# Every match is read first (MATERIALIZED), then sorted, so the LIMIT can't
+# tilt the plan toward a backward scan of the week by published_at, which
+# reads every member for a rare name. (It runs with custom plans too: see
+# get_entity_dossier.)
 _MEMBERS_SQL = """
     WITH m AS MATERIALIZED (
         SELECT article_id, story_key, source_name, published_at, latitude, longitude,
@@ -92,6 +92,9 @@ _MEMBERS_SQL = """
     ORDER BY published_at DESC, article_id
     LIMIT $3
 """
+
+# For the member reads' transaction: plan each statement with its values.
+_CUSTOM_PLANS = "SET LOCAL plan_cache_mode = force_custom_plan"
 
 # The headlines' titles and links, by primary key: at most 10 rows.
 _HEADLINE_SQL = "SELECT id, title, source_url FROM articles WHERE id = ANY($1::uuid[])"
@@ -273,15 +276,21 @@ async def get_entity_dossier(name: str, entity_type: str, timespan: str, now: da
     """
     pool = await get_pool()
     start = now - WINDOWS[timespan]
-    summary = await pool.fetchrow(
-        _SUMMARY_SQL,
-        name,
-        now - timedelta(days=7),
-        now - timedelta(hours=24),
-        now - timedelta(hours=48),
-        start,
-    )
-    rows = await pool.fetch(_MEMBERS_SQL, name, start, MAX_MENTIONS + 1)
+    async with pool.acquire() as conn, conn.transaction():
+        # asyncpg reuses prepared statements, and PostgreSQL may switch one to a
+        # generic plan after five runs. Made without the name or window, it can
+        # read the week by published_at and filter on the entity (seen on a small
+        # table) instead of using the entity index. Plan with the values, always.
+        await conn.execute(_CUSTOM_PLANS)
+        summary = await conn.fetchrow(
+            _SUMMARY_SQL,
+            name,
+            now - timedelta(days=7),
+            now - timedelta(hours=24),
+            now - timedelta(hours=48),
+            start,
+        )
+        rows = await conn.fetch(_MEMBERS_SQL, name, start, MAX_MENTIONS + 1)
     members = [dict(r) for r in rows[:MAX_MENTIONS]]
     stories = newest_per_story(members)
 

@@ -292,7 +292,8 @@ async def test_a_heavy_entity_is_capped(conn, pool):
 
 
 @pytest.mark.asyncio
-async def test_members_are_read_through_the_entity_index(conn):
+async def test_members_are_read_through_the_entity_index(conn, pool):
+    await _node(conn, "PERSON", "Zz Target")
     thread = await _thread(conn)
     await conn.execute(
         """
@@ -319,25 +320,21 @@ async def test_members_are_read_through_the_entity_index(conn):
         assert "Seq Scan on thread_members" not in plan, plan
 
     # asyncpg reuses prepared statements, and after five runs PostgreSQL may keep a
-    # generic plan: default selectivities and an unknown LIMIT, which could favour a
-    # backward scan of the week by published_at. The member read stays on the index.
+    # generic plan, made without the values: on this table one reads the week by
+    # published_at and filters on the entity. So the dossier's member reads run in
+    # a transaction that plans every statement with its values, however often
+    # the connection has run it.
+    for _ in range(6):
+        await _dossier("Zz Target")
+    # Here its transaction is a savepoint in the test's, so its SET LOCAL outlives it.
+    assert await conn.fetchval("SHOW plan_cache_mode") == "force_custom_plan"
     await conn.execute("PREPARE zz_members (text, timestamptz, bigint) AS " + entities._MEMBERS_SQL)
-    await conn.execute(
-        "PREPARE zz_summary (text, timestamptz, timestamptz, timestamptz, timestamptz) AS "
-        + entities._SUMMARY_SQL
-    )
-    await conn.execute("SET LOCAL plan_cache_mode = force_generic_plan")
     week_ago = "now() - interval '7 days'"
-    generic_members = await _plan(conn, f"EXECUTE zz_members('Zz Target', {week_ago}, 2001)")
-    generic_summary = await _plan(
-        conn,
-        f"EXECUTE zz_summary('Zz Target', {week_ago}, now() - interval '1 day',"
-        f" now() - interval '2 days', {week_ago})",
-    )
-    for plan in (generic_members, generic_summary):
-        assert "$1" in plan, plan  # generic: planned without the values
-        assert "idx_thread_members_entities" in plan, plan
-        assert "Index Scan Backward" not in plan, plan
+    for _ in range(6):
+        await conn.fetch(f"EXECUTE zz_members('Zz Target', {week_ago}, 2001)")
+    plan = await _plan(conn, f"EXECUTE zz_members('Zz Target', {week_ago}, 2001)")
+    assert "$1" not in plan, plan  # planned with the values
+    assert "idx_thread_members_entities" in plan, plan
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -116,6 +117,20 @@ class _Pool:
         self.nodes = list(nodes)  # (type, name) in kg_nodes
         self.calls: list[tuple] = []
 
+    # As a connection too: acquire() yields the pool itself.
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        yield self
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        self.calls.append(("BEGIN", ()))
+        yield
+        self.calls.append(("COMMIT", ()))
+
+    async def execute(self, sql, *args):
+        self.calls.append((sql, args))
+
     async def fetchrow(self, sql, *args, **kwargs):
         self.calls.append((sql, args))
         return {
@@ -159,6 +174,38 @@ def _call(pool, needle):
 
 class TestGetEntityDossier:
     @pytest.mark.asyncio
+    async def test_member_reads_are_planned_with_their_values(self):
+        pool = _Pool([_member(1, entities=["Abbas Araghchi", "Ali Khamenei"])])
+        await _dossier(pool)
+
+        # asyncpg reuses prepared statements, and PostgreSQL may switch one to a
+        # generic plan after five runs: default selectivities could then read the
+        # week by published_at instead of the entity index. Both member reads run
+        # in one transaction that plans every statement with its values.
+        kinds = []
+        for sql, _ in pool.calls:
+            flat = " ".join(sql.split())
+            if "count(DISTINCT" in flat:
+                kinds.append("summary")
+            elif "LIMIT $3" in flat:
+                kinds.append("members")
+            elif "FROM articles" in flat:
+                kinds.append("articles")
+            elif "FROM kg_nodes" in flat:
+                kinds.append("types")
+            else:
+                kinds.append(flat)
+        assert kinds == [
+            "BEGIN",
+            "SET LOCAL plan_cache_mode = force_custom_plan",
+            "summary",
+            "members",
+            "COMMIT",
+            "types",
+            "articles",
+        ]
+
+    @pytest.mark.asyncio
     async def test_a_heavy_entity_reads_its_newest_members_up_to_the_cap(self):
         members = [_member(i, hours_ago=i / 100) for i in range(1, entities.MAX_MENTIONS + 2)]
         pool = _Pool(members)
@@ -166,8 +213,8 @@ class TestGetEntityDossier:
 
         [(sql, args)] = _call(pool, "ORDER BY published_at DESC, article_id LIMIT $3")
         flat = " ".join(sql.split())
-        # Every match first, then the newest: a generic plan can't trade the
-        # entity index for a backward scan of the week by published_at.
+        # Every match first, then the newest: the LIMIT can't tilt the plan toward
+        # a backward scan of the week by published_at.
         assert flat.startswith("WITH m AS MATERIALIZED ( SELECT")
         assert (
             "FROM thread_members WHERE entities @> ARRAY[$1]::text[] AND published_at >= $2 )"
