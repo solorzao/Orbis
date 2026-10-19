@@ -110,9 +110,10 @@ class TestStories:
 class _Pool:
     """Answers the dossier's queries by what they read; records each call."""
 
-    def __init__(self, members: list[dict], articles: dict | None = None):
+    def __init__(self, members: list[dict], articles: set | None = None, nodes=()):
         self.members = members
-        self.articles = articles  # id -> row; None: every id resolves
+        self.articles = articles  # the ids that resolve; None: every id
+        self.nodes = list(nodes)  # (type, name) in kg_nodes
         self.calls: list[tuple] = []
 
     async def fetchrow(self, sql, *args, **kwargs):
@@ -141,6 +142,9 @@ class _Pool:
                 for i in ids
             ]
             return [r for r in rows if self.articles is None or r["id"] in self.articles]
+        if "FROM kg_nodes" in sql:
+            [names] = args
+            return [{"type": t, "name": n} for t, n in self.nodes if n in names]
         raise AssertionError(sql)
 
 
@@ -161,7 +165,15 @@ class TestGetEntityDossier:
         dossier = await _dossier(pool)
 
         [(sql, args)] = _call(pool, "ORDER BY published_at DESC, article_id LIMIT $3")
-        assert "FROM thread_members WHERE entities @> ARRAY[$1]::text[]" in " ".join(sql.split())
+        flat = " ".join(sql.split())
+        # Every match first, then the newest: a generic plan can't trade the
+        # entity index for a backward scan of the week by published_at.
+        assert flat.startswith("WITH m AS MATERIALIZED ( SELECT")
+        assert (
+            "FROM thread_members WHERE entities @> ARRAY[$1]::text[] AND published_at >= $2 )"
+            in flat
+        )
+        assert flat.endswith(") SELECT * FROM m ORDER BY published_at DESC, article_id LIMIT $3")
         assert args == ("Abbas Araghchi", NOW - timedelta(days=7), entities.MAX_MENTIONS + 1)
         assert (dossier["capped"], dossier["cap"]) == (True, entities.MAX_MENTIONS)
         assert sum(p["n"] for p in dossier["places"]) == entities.MAX_MENTIONS
@@ -222,10 +234,33 @@ class TestGetEntityDossier:
         assert [h["source_url"] for h in dossier["headlines"]] == ["https://x.test/2"]
 
     @pytest.mark.asyncio
-    async def test_no_members_no_article_read(self):
+    async def test_co_mentions_carry_the_types_the_graph_knows(self):
+        members = [
+            _member(1, entities=["Abbas Araghchi", "Ali Khamenei", "Hamas", "Zz Unknown"]),
+            _member(2, entities=["Abbas Araghchi", "Ali Khamenei", "Hamas"]),
+            _member(3, entities=["Abbas Araghchi", "Ali Khamenei"]),
+        ]
+        nodes = [("PERSON", "Ali Khamenei"), ("ORG", "Hamas"), ("PERSON", "Hamas")]
+        pool = _Pool(members, nodes=nodes)
+        dossier = await _dossier(pool)
+
+        assert dossier["co_mentions"] == [
+            {"name": "Ali Khamenei", "n": 3, "types": ["person"]},
+            {"name": "Hamas", "n": 2, "types": ["person", "org"]},  # both: the UI offers both
+            {"name": "Zz Unknown", "n": 1, "types": []},  # no node: not trackable
+        ]
+        [(sql, args)] = _call(pool, "FROM kg_nodes")
+        flat = " ".join(sql.split())
+        # The UNIQUE (type, name) btree, one probe per type and name.
+        assert "WHERE type IN ('PERSON', 'ORG') AND name = ANY($1::text[])" in flat
+        assert args == (["Ali Khamenei", "Hamas", "Zz Unknown"],)
+
+    @pytest.mark.asyncio
+    async def test_no_members_no_article_or_type_read(self):
         pool = _Pool([])
         dossier = await _dossier(pool, entity_type="org", name="Nobody Inc")
         assert _call(pool, "FROM articles") == []
+        assert _call(pool, "FROM kg_nodes") == []
         assert (dossier["places"], dossier["headlines"], dossier["co_mentions"]) == ([], [], [])
         assert [b["n"] for b in dossier["timeline"]] == [0] * 7
 
@@ -236,20 +271,40 @@ class TestResolveEntity:
         pool = AsyncMock()
         pool.fetchval.return_value = "Abbas Araghchi"
         with patch("app.services.entities.get_pool", new_callable=AsyncMock, return_value=pool):
-            assert await entities.resolve_entity("person", "abbas araghchi") == "Abbas Araghchi"
+            stored = await entities.resolve_entity("person", "abbas araghchi", NOW)
+        assert stored == "Abbas Araghchi"
 
         sql, *args = pool.fetchval.await_args.args
-        assert "FROM kg_nodes" in sql
-        assert "name ILIKE $2" in sql and "ORDER BY (name = $3) DESC, name" in sql
-        assert args == ["PERSON", "abbas araghchi", "abbas araghchi"]
+        flat = " ".join(sql.split())
+        assert "FROM kg_nodes n WHERE n.type = $1 AND n.name ILIKE $2" in flat
+        # Spellings that differ only in case: the most mentioned this week (counted
+        # up to a cap), then by name. Nothing depends on the request's case, so the
+        # dossier cached under the lowercased name is the same whichever case asks.
+        mentions = entities.recent_mentions_sql("n.id", "$3", "$4")
+        assert f"ORDER BY {mentions} DESC, n.name LIMIT 1" in flat
+        assert args == [
+            "PERSON",
+            "abbas araghchi",
+            NOW - timedelta(days=7),
+            entities.MENTION_COUNT_CAP,
+        ]
 
     @pytest.mark.asyncio
     async def test_like_metacharacters_match_only_themselves(self):
         pool = AsyncMock()
         pool.fetchval.return_value = None
         with patch("app.services.entities.get_pool", new_callable=AsyncMock, return_value=pool):
-            assert await entities.resolve_entity("org", "100%_Fund") is None
+            assert await entities.resolve_entity("org", "100%_Fund", NOW) is None
         assert pool.fetchval.await_args.args[1:3] == ("ORG", "100\\%\\_Fund")
+
+
+class TestRecentMentions:
+    def test_counted_through_the_recency_index_up_to_a_cap(self):
+        assert entities.MENTION_COUNT_CAP == 100
+        assert entities.recent_mentions_sql("c.id", "$3", "$4") == (
+            "(SELECT count(*)::int FROM (SELECT 1 FROM kg_edges e"
+            " WHERE e.source_node_id = c.id AND e.created_at >= $3 LIMIT $4) x)"
+        )
 
 
 # ── /api/entities ──────────────────────────────────────────────────────
@@ -287,7 +342,7 @@ def _dossier_body(name="Abbas Araghchi", type_="person") -> dict:
             }
         ],
         "timeline": [{"t": NOW - timedelta(days=1), "n": 3}],
-        "co_mentions": [{"name": "Ali Khamenei", "n": 5}],
+        "co_mentions": [{"name": "Ali Khamenei", "n": 5, "types": ["person"]}],
         "headlines": [
             {
                 "title": "Talks resume",
@@ -338,10 +393,10 @@ class TestEntityRoute:
             False,
             2000,
         )
-        assert body["co_mentions"] == [{"name": "Ali Khamenei", "n": 5}]
+        assert body["co_mentions"] == [{"name": "Ali Khamenei", "n": 5, "types": ["person"]}]
         assert body["since"] == "2026-10-15T09:00:00Z"
         assert "linked" not in resp.text.lower()
-        resolve.assert_awaited_once_with("person", "abbas araghchi")
+        resolve.assert_awaited_once_with("person", "abbas araghchi", NOW)
         # The stored spelling from then on.
         dossier.assert_awaited_once_with("Abbas Araghchi", "person", "168h", NOW)
         assert resp.headers["cache-control"] == EDGE_CACHE_CONTROL
@@ -352,7 +407,7 @@ class TestEntityRoute:
         async with _client(monkeypatch) as client:
             resp = await client.get("/api/entities/org/AC%2FDC")
         assert resp.status_code == 200
-        resolve.assert_awaited_once_with("org", "AC/DC")
+        resolve.assert_awaited_once_with("org", "AC/DC", NOW)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

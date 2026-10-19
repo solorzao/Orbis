@@ -39,11 +39,13 @@ class TimelineBucket(BaseModel):
 
 
 class CoMention(BaseModel):
-    """A person or organisation that appears in the same coverage (untyped: thread
-    members record names only)."""
+    """A name that appears in the same coverage."""
 
     name: str
     n: int  # stories naming both, among the capped members
+    # The graph's types for the name, to track it: one, both when a person and an
+    # org share it, or none (not trackable).
+    types: list[EntityType]
 
 
 class EntityHeadline(BaseModel):

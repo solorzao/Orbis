@@ -72,10 +72,13 @@ class TestSearchService:
         assert "type IN ('PERSON', 'ORG')" in flat
         assert "name ILIKE $2 OR name % $1" in flat
         assert "LIMIT 20" in flat
-        # Mentions this week per candidate, through the recency index, counted up to a cap.
+        # Mentions this week per candidate, through the recency index, counted up to
+        # 100: entries newer than the last vacuum can each cost a heap fetch, so a
+        # heavy name's count stays short on this type-ahead read ("100+" in the UI).
         counted = "FROM kg_edges e WHERE e.source_node_id = c.id AND e.created_at >= $3 LIMIT $4"
         assert counted in flat
-        assert args == ("Abbas", "Abbas%", NOW - timedelta(days=7), search.MAX_MENTIONS)
+        assert search.SEARCH_COUNT_CAP == 100
+        assert args == ("Abbas", "Abbas%", NOW - timedelta(days=7), search.SEARCH_COUNT_CAP)
 
     @pytest.mark.asyncio
     async def test_an_injection_looking_q_is_only_text(self):

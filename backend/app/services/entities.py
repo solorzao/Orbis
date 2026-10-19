@@ -4,7 +4,9 @@ A dossier reads ``thread_members`` (migration 013), the narrow row thread
 assignment writes for every assigned article, through its GIN index on
 ``entities`` (idx_thread_members_entities). Members carry each article's
 story, outlet, time, place and tone, so the only ``articles`` reads are the
-10 headlines, by primary key. The knowledge graph only resolves the name.
+10 headlines, by primary key. The knowledge graph resolves the name (its
+spelling: the most mentioned when stored spellings differ only in case) and
+types the co-mentioned names (at most 15 probes of its UNIQUE btree).
 
 Bounds: the counts read every match in the last 7 days (narrow rows, about
 2-3 s cold for the heaviest names, then cached); places, timeline,
@@ -38,6 +40,12 @@ WINDOWS: dict[str, timedelta] = {"24h": timedelta(hours=24), "168h": timedelta(d
 # The graph's node type for each entity type the API takes.
 NODE_TYPES = {"person": "PERSON", "org": "ORG"}
 
+# Mentions counted per name to rank names (search, and spellings that differ
+# only in case), up to this many. The count is an index-only scan of
+# idx_kg_edges_source_recent, newest first, except that each entry on a page
+# written since kg_edges' last vacuum costs a heap fetch, a random read.
+MENTION_COUNT_CAP = 100
+
 _TOP_PLACES = 12
 _TOP_CO_MENTIONS = 15
 _HEADLINES = 10
@@ -69,11 +77,18 @@ _SUMMARY_SQL = """
 """
 
 # The newest members in the window, one past the cap to tell it was reached.
+# Every match is read first (MATERIALIZED), then sorted: asyncpg reuses
+# prepared statements, and a generic plan (default selectivities, an unknown
+# LIMIT) could otherwise trade the entity index for a backward scan of the
+# week by published_at, reading every member for a rare name.
 _MEMBERS_SQL = """
-    SELECT article_id, story_key, source_name, published_at, latitude, longitude,
-           region, country_code, entities, tone
-    FROM thread_members
-    WHERE entities @> ARRAY[$1]::text[] AND published_at >= $2
+    WITH m AS MATERIALIZED (
+        SELECT article_id, story_key, source_name, published_at, latitude, longitude,
+               region, country_code, entities, tone
+        FROM thread_members
+        WHERE entities @> ARRAY[$1]::text[] AND published_at >= $2
+    )
+    SELECT * FROM m
     ORDER BY published_at DESC, article_id
     LIMIT $3
 """
@@ -81,13 +96,33 @@ _MEMBERS_SQL = """
 # The headlines' titles and links, by primary key: at most 10 rows.
 _HEADLINE_SQL = "SELECT id, title, source_url FROM articles WHERE id = ANY($1::uuid[])"
 
+# The graph's types of the co-mentioned names: the UNIQUE (type, name) btree.
+_TYPES_SQL = """
+    SELECT type, name FROM kg_nodes
+    WHERE type IN ('PERSON', 'ORG') AND name = ANY($1::text[])
+"""
+
+
+def recent_mentions_sql(node: str, since: str, cap: str) -> str:
+    """SQL for the *node*'s mentions (kg_edges) since *since*, counted up to *cap*.
+
+    *node*, *since* and *cap* are SQL expressions (a column, a parameter).
+    """
+    return (
+        "(SELECT count(*)::int FROM (SELECT 1 FROM kg_edges e"
+        f" WHERE e.source_node_id = {node} AND e.created_at >= {since} LIMIT {cap}) x)"
+    )
+
+
 # A name of that type, in any case, as stored. Without wildcards (escaped),
 # ILIKE is a case-insensitive equality the trigram index on kg_nodes.name
-# serves; the exact spelling wins when stored names differ only in case.
-_RESOLVE_SQL = """
-    SELECT name FROM kg_nodes
-    WHERE type = $1 AND name ILIKE $2
-    ORDER BY (name = $3) DESC, name
+# serves. Stored spellings that differ only in case resolve to the most
+# mentioned this week ($3, counted up to $4), then by name: the answer
+# depends only on the lowercased name, as the dossier's cache key does.
+_RESOLVE_SQL = f"""
+    SELECT n.name FROM kg_nodes n
+    WHERE n.type = $1 AND n.name ILIKE $2
+    ORDER BY {recent_mentions_sql("n.id", "$3", "$4")} DESC, n.name
     LIMIT 1
 """
 
@@ -199,10 +234,35 @@ async def _headlines(pool, stories: list[dict]) -> list[dict]:
     ]
 
 
-async def resolve_entity(entity_type: str, name: str) -> str | None:
-    """The stored name of the graph node of that type named *name* (any case), or None."""
+async def _with_types(pool, co: list[dict]) -> list[dict]:
+    """The co-mentions with the types the graph has for each name: ``["person"]``,
+    ``["org"]``, both when a person and an org share it, or none (not trackable)."""
+    if not co:
+        return co
+    rows = await pool.fetch(_TYPES_SQL, [c["name"] for c in co])
+    found: dict[str, set[str]] = {}
+    for row in rows:
+        found.setdefault(row["name"], set()).add(row["type"])
+    return [
+        {**c, "types": [t for t, node in NODE_TYPES.items() if node in found.get(c["name"], ())]}
+        for c in co
+    ]
+
+
+async def resolve_entity(entity_type: str, name: str, now: datetime) -> str | None:
+    """The stored name of the graph node of that type named *name* (any case), or None.
+
+    Spellings that differ only in case: the most mentioned in the 7 days to
+    *now* (counted up to MENTION_COUNT_CAP), then by name.
+    """
     pool = await get_pool()
-    return await pool.fetchval(_RESOLVE_SQL, NODE_TYPES[entity_type], like_escape(name), name)
+    return await pool.fetchval(
+        _RESOLVE_SQL,
+        NODE_TYPES[entity_type],
+        like_escape(name),
+        now - timedelta(days=7),
+        MENTION_COUNT_CAP,
+    )
 
 
 async def get_entity_dossier(name: str, entity_type: str, timespan: str, now: datetime) -> dict:
@@ -238,7 +298,7 @@ async def get_entity_dossier(name: str, entity_type: str, timespan: str, now: da
         ],
         "places": top_places(stories),
         "timeline": timeline(stories, now, timespan),
-        "co_mentions": co_mentioned(members, name),
+        "co_mentions": await _with_types(pool, co_mentioned(members, name)),
         "headlines": await _headlines(pool, stories[:_HEADLINES]),
         "since": summary["since"],
     }

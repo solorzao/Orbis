@@ -76,11 +76,12 @@ async def _load_dossier(
     cache_k: str, entity_type: str, name: str, timespan: str
 ) -> EntityDossier | None:
     """Resolve the name, then compute and cache its dossier; None (uncached) if unknown."""
+    now = _now()
     async with asyncio.timeout(_DOSSIER_QUERY_TIMEOUT):
-        stored = await resolve_entity(entity_type, name)
+        stored = await resolve_entity(entity_type, name, now)
         if stored is None:
             return None
-        raw = await get_entity_dossier(stored, entity_type, timespan, _now())
+        raw = await get_entity_dossier(stored, entity_type, timespan, now)
     dossier = EntityDossier(**raw)
     await set_cached(cache_k, dossier.model_dump(mode="json"), cycle_ttl(_ENTITY_TTL))
     return dossier

@@ -63,3 +63,24 @@ def test_table_migration_fails_fast_on_locks_and_leaves_articles_alone(name):
     # A foreign key to articles would lock it while the migration runs and fire
     # a trigger for every article the purge deletes.
     assert not re.search(r"REFERENCES\s+articles\b", sql, re.IGNORECASE)
+
+
+# Migrations that only set a table's autovacuum parameters: SHARE UPDATE
+# EXCLUSIVE (no conflict with reads or writes), no data change, no rewrite.
+SETTINGS_MIGRATIONS = {"014_kg_edges_autovacuum.sql": "kg_edges"}
+
+
+@pytest.mark.parametrize(
+    ("name", "table"), SETTINGS_MIGRATIONS.items(), ids=list(SETTINGS_MIGRATIONS)
+)
+def test_settings_migration_only_sets_autovacuum_parameters(name, table):
+    sql = _sql_without_comments(name)
+    statements = [s.strip() for s in sql.split(";") if s.strip()]
+    assert re.fullmatch(r"SET lock_timeout = '\d+s'", statements[0])
+    assert statements[1:]
+    setting = r"autovacuum_\w+\s*=\s*\d+(?:\.\d+)?"
+    for statement in statements[1:]:
+        assert re.fullmatch(
+            rf"ALTER TABLE {table} SET \(\s*{setting}(?:\s*,\s*{setting})*\s*\)", statement
+        ), statement
+    assert not re.search(r"\barticles\b", sql, re.IGNORECASE)

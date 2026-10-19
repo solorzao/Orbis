@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -161,10 +162,34 @@ async def _node(conn, type_: str, name: str) -> None:
     )
 
 
+async def _mentions(conn, type_: str, name: str, count: int, days_ago: int = 0) -> None:
+    """*count* MENTIONED_IN edges from the node, written *days_ago* (no articles needed)."""
+    node = await conn.fetchval(
+        "INSERT INTO kg_nodes (type, name) VALUES ($1, $2)"
+        " ON CONFLICT (type, name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+        type_,
+        name,
+    )
+    target = await conn.fetchval(
+        "INSERT INTO kg_nodes (type, name) VALUES ('ARTICLE', $1) RETURNING id",
+        f"zzentity-{uuid.uuid4()}",
+    )
+    await conn.execute(
+        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, created_at)"
+        " SELECT $1, $2, 'MENTIONED_IN', now() - make_interval(days => $3)"
+        " FROM generate_series(1, $4)",
+        node,
+        target,
+        days_ago,
+        count,
+    )
+
+
 async def _dossier(name, type_="person", timespan="168h"):
-    stored = await entities.resolve_entity(type_, name)
+    now = datetime.now(timezone.utc)
+    stored = await entities.resolve_entity(type_, name, now)
     assert stored is not None, name
-    return await entities.get_entity_dossier(stored, type_, timespan, datetime.now(timezone.utc))
+    return await entities.get_entity_dossier(stored, type_, timespan, now)
 
 
 async def _plan(conn, sql: str, *args) -> str:
@@ -175,6 +200,9 @@ async def _plan(conn, sql: str, *args) -> str:
 @pytest.mark.usefixtures("pool")
 async def test_places_counts_and_co_mentions_count_stories_not_copies(conn):
     await _node(conn, "PERSON", "Zz Alpha")
+    await _node(conn, "PERSON", "Zz Beta")
+    await _node(conn, "PERSON", "Zz Gamma")
+    await _node(conn, "ORG", "Zz Gamma")  # a person and an org of one name
     alpha_beta = ["Zz Alpha", "Zz Beta"]
     await _members(
         conn,
@@ -204,7 +232,10 @@ async def test_places_counts_and_co_mentions_count_stories_not_copies(conn):
         {"country_code": "IR", "n": 4},
         {"country_code": "US", "n": 1},
     ]
-    assert dossier["co_mentions"] == [{"name": "Zz Beta", "n": 2}, {"name": "Zz Gamma", "n": 1}]
+    assert dossier["co_mentions"] == [
+        {"name": "Zz Beta", "n": 2, "types": ["person"]},
+        {"name": "Zz Gamma", "n": 1, "types": ["person", "org"]},
+    ]
     assert [h["title"] for h in dossier["headlines"]] == ["zzentity-Quake"]  # the one article
     assert dossier["capped"] is False
 
@@ -255,7 +286,7 @@ async def test_a_heavy_entity_is_capped(conn, pool):
     assert (dossier["capped"], dossier["cap"]) == (True, 2000)
     assert dossier["counts"]["d7"] == 3000  # every match is counted
     assert sum(p["n"] for p in dossier["places"]) == 2000  # the rest: the newest 2,000
-    assert dossier["co_mentions"] == [{"name": "Zz Sidekick", "n": 2000}]
+    assert dossier["co_mentions"] == [{"name": "Zz Sidekick", "n": 2000, "types": []}]
     [(_, (ids,))] = [f for f in pool.fetches if "FROM articles" in f[0]]
     assert len(ids) == 10
 
@@ -287,6 +318,27 @@ async def test_members_are_read_through_the_entity_index(conn):
         assert "idx_thread_members_entities" in plan, plan
         assert "Seq Scan on thread_members" not in plan, plan
 
+    # asyncpg reuses prepared statements, and after five runs PostgreSQL may keep a
+    # generic plan: default selectivities and an unknown LIMIT, which could favour a
+    # backward scan of the week by published_at. The member read stays on the index.
+    await conn.execute("PREPARE zz_members (text, timestamptz, bigint) AS " + entities._MEMBERS_SQL)
+    await conn.execute(
+        "PREPARE zz_summary (text, timestamptz, timestamptz, timestamptz, timestamptz) AS "
+        + entities._SUMMARY_SQL
+    )
+    await conn.execute("SET LOCAL plan_cache_mode = force_generic_plan")
+    week_ago = "now() - interval '7 days'"
+    generic_members = await _plan(conn, f"EXECUTE zz_members('Zz Target', {week_ago}, 2001)")
+    generic_summary = await _plan(
+        conn,
+        f"EXECUTE zz_summary('Zz Target', {week_ago}, now() - interval '1 day',"
+        f" now() - interval '2 days', {week_ago})",
+    )
+    for plan in (generic_members, generic_summary):
+        assert "$1" in plan, plan  # generic: planned without the values
+        assert "idx_thread_members_entities" in plan, plan
+        assert "Index Scan Backward" not in plan, plan
+
 
 @pytest.mark.asyncio
 async def test_articles_are_read_only_by_primary_key_for_the_ten_headlines(conn, pool):
@@ -313,16 +365,24 @@ async def test_articles_are_read_only_by_primary_key_for_the_ten_headlines(conn,
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("pool")
-async def test_a_name_resolves_exactly_to_its_stored_spelling(conn):
-    await _node(conn, "PERSON", "Zz Epsilon")
-    await _node(conn, "PERSON", "ZZ EPSILON")
+async def test_a_name_resolves_to_one_stored_spelling_whatever_the_case_asked(conn):
+    await _mentions(conn, "PERSON", "Zz Epsilon", 3)
+    await _mentions(conn, "PERSON", "ZZ EPSILON", 1)
+    await _mentions(conn, "PERSON", "zz epsilon", 5, days_ago=8)  # not this week
     await _node(conn, "ORG", "Zz Epsilon Fund")
+    now = datetime.now(timezone.utc)
 
-    assert await entities.resolve_entity("person", "zz epsilon") in {"Zz Epsilon", "ZZ EPSILON"}
-    assert await entities.resolve_entity("person", "ZZ EPSILON") == "ZZ EPSILON"  # exact first
-    assert await entities.resolve_entity("person", "Zz Epsilo") is None
-    assert await entities.resolve_entity("org", "Zz Epsilon") is None  # wrong type
-    assert await entities.resolve_entity("person", "Zz_Epsilon") is None  # _ is literal
+    for asked in ("zz epsilon", "ZZ EPSILON", "Zz Epsilon"):
+        assert await entities.resolve_entity("person", asked, now) == "Zz Epsilon"  # most mentioned
+    # Tied (no mentions): by name, the same answer for every case.
+    await _node(conn, "ORG", "Zz Tie")
+    await _node(conn, "ORG", "ZZ TIE")
+    answers = {await entities.resolve_entity("org", asked, now) for asked in ("zz tie", "ZZ TIE")}
+    assert len(answers) == 1 and answers <= {"Zz Tie", "ZZ TIE"}
+
+    assert await entities.resolve_entity("person", "Zz Epsilo", now) is None
+    assert await entities.resolve_entity("org", "Zz Epsilon", now) is None  # wrong type
+    assert await entities.resolve_entity("person", "Zz_Epsilon", now) is None  # _ is literal
 
 
 # ── search ──────────────────────────────────────────────────────────────
@@ -399,3 +459,28 @@ async def test_search_lists_threads_by_title_or_lead_title(conn):
         {"id": by_lead, "title": "Zzentity lead headline"},
     ]
     assert (await search.search("zzentity_talks", now))["threads"] == []  # _ is literal
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_search_counts_mentions_up_to_the_cap(conn):
+    await _mentions(conn, "PERSON", "Zz Capped Person", 150)
+    result = await search.search("zz capped", datetime.now(timezone.utc))
+    assert result["people"] == [
+        {"type": "person", "name": "Zz Capped Person", "n": search.SEARCH_COUNT_CAP}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_counts_through_the_recency_index(conn):
+    await _mentions(conn, "PERSON", "Zz Planned", 5)
+    await conn.execute("SET LOCAL enable_seqscan = off")
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    plan = await _plan(conn, search._CANDIDATES_SQL, "zz planned", "zz planned%", week_ago, 100)
+    assert re.search(r"Index (Only )?Scan using idx_kg_edges_source_recent", plan), plan
+
+
+@pytest.mark.asyncio
+async def test_kg_edges_are_vacuumed_after_one_percent_new_rows(conn):
+    options = await conn.fetchval("SELECT reloptions FROM pg_class WHERE relname = 'kg_edges'")
+    assert "autovacuum_vacuum_insert_scale_factor=0.01" in (options or [])

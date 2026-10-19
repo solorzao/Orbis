@@ -3,7 +3,7 @@
 Places are searched client-side, over the globe's loaded points. Every read
 is bounded: at most 20 candidate names (by prefix or trigram similarity, on
 the trigram index of kg_nodes.name), each counted over at most
-MAX_MENTIONS of its edges in the week, through idx_kg_edges_source_recent.
+SEARCH_COUNT_CAP of its edges in the week, through idx_kg_edges_source_recent.
 """
 
 from __future__ import annotations
@@ -11,9 +11,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.services.database import get_pool
-from app.services.entities import MAX_MENTIONS, like_escape
+from app.services.entities import MENTION_COUNT_CAP, like_escape, recent_mentions_sql
 
-__all__ = ["MAX_MENTIONS", "search"]
+# A name's mentions this week are counted up to this, so ``n`` is capped
+# (the UI shows "100+"): on this type-ahead read a heavy name must not cost
+# a heap fetch per mention. Ranking still holds, ties broken by similarity.
+SEARCH_COUNT_CAP = MENTION_COUNT_CAP
 
 _WINDOW = timedelta(days=7)
 _PER_GROUP = 5
@@ -21,7 +24,7 @@ _PER_GROUP = 5
 # Up to 20 people and organisations whose name starts with q or resembles it
 # (pg_trgm's %), the closest first; then each one's mentions this week,
 # counted up to the cap by a range scan of the recency index.
-_CANDIDATES_SQL = """
+_CANDIDATES_SQL = f"""
     WITH c AS (
         SELECT id, type, name, similarity(name, $1) AS sim
         FROM kg_nodes
@@ -29,17 +32,14 @@ _CANDIDATES_SQL = """
         ORDER BY sim DESC, name
         LIMIT 20
     )
-    SELECT c.type, c.name, c.sim,
-           (SELECT count(*)::int FROM (
-                SELECT 1 FROM kg_edges e
-                WHERE e.source_node_id = c.id AND e.created_at >= $3
-                LIMIT $4
-            ) x) AS n
+    SELECT c.type, c.name, c.sim, {recent_mentions_sql("c.id", "$3", "$4")} AS n
     FROM c
 """
 
 # Story threads (migration 013), selected as the thread list selects them,
 # whose AI title or lead headline contains q: threads alone, no articles.
+# TODO(15b): import the list's thresholds (3 stories, 3 outlets) from
+# app.services.threads once it merges, instead of repeating them here.
 _THREADS_SQL = """
     SELECT t.id, t.title, t.lead_title
     FROM threads t
@@ -60,7 +60,7 @@ async def search(q: str, now: datetime) -> dict:
     """
     pool = await get_pool()
     week_ago = now - _WINDOW
-    rows = await pool.fetch(_CANDIDATES_SQL, q, like_escape(q) + "%", week_ago, MAX_MENTIONS)
+    rows = await pool.fetch(_CANDIDATES_SQL, q, like_escape(q) + "%", week_ago, SEARCH_COUNT_CAP)
     ranked = sorted((r for r in rows if r["n"] > 0), key=lambda r: (-r["n"], -r["sim"], r["name"]))
     groups: dict[str, list[dict]] = {"PERSON": [], "ORG": []}
     for row in ranked:
