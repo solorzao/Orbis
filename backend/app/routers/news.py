@@ -47,6 +47,7 @@ from app.services.database import (
 )
 from app.services.delta import get_delta
 from app.services.grid import cell_index
+from app.services.thread_reads import article_thread
 from app.services.titles import dedup_key
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,7 @@ def _row_to_article(row: dict) -> NewsArticle:
             else row.get("entities", {})
         ),
         image_url=row.get("image_url"),
+        thread=article_thread(row),
     )
 
 

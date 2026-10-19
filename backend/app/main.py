@@ -14,6 +14,7 @@ from app.middleware.security import SecurityMiddleware
 from app.routers.agent import router as agent_router
 from app.routers.links import router as links_router
 from app.routers.news import router as news_router
+from app.routers.threads import router as threads_router
 from app.services.cache import close_redis, get_redis
 from app.services.database import close_pool, get_pool
 from app.services.ingestion import run_ingestion_cycle, stop_background_tasks
@@ -52,6 +53,7 @@ app.add_middleware(SecurityMiddleware)
 # Register routers.
 app.include_router(news_router)
 app.include_router(links_router)
+app.include_router(threads_router)
 app.include_router(agent_router)
 
 
