@@ -28,6 +28,13 @@ Nothing here reads the ``articles`` heap beyond a bounded set of ids by
 primary key and the last 6 hours through ``idx_articles_published_at``, and
 nothing writes to ``articles``.
 
+``threads`` has fillfactor 80 (migration 013) for HOT updates, but an update
+is HOT only when it changes no indexed column. Velocity, lead-title and
+synopsis updates are. The aggregate step's are not: it changes
+``aggregated_at``, ``n_stories`` and ``n_sources``, the predicates of migration
+015's partial indexes. Nor are joins and copies (``last_seen``,
+``aggregated_at``).
+
 The thresholds are starting points, calibrated on live data after deploy:
 production's embeddings can't be read locally.
 """
@@ -191,7 +198,8 @@ NEW_CENTROID_SQL = f"""
 # any a join or copy left unaggregated (aggregated_at NULL: a failed cycle's;
 # idx_threads_unaggregated). A story is its story_key; a NULL key, its own
 # article. first_seen is the oldest member kept, so it moves forward when the
-# retention purge removes old members.
+# retention purge removes old members. Not a HOT update: aggregated_at,
+# n_stories and n_sources are migration 015's partial-index predicates.
 AGGREGATE_SQL = f"""
     WITH targets AS (
         SELECT id FROM threads
@@ -298,10 +306,12 @@ LEAD_TITLES_SQL = """
     WHERE t.id = ANY($1::bigint[])
 """
 
+# HOT-eligible (lead_title is in no index), and only when the title changes.
 LEAD_TITLE_SQL = "UPDATE threads SET lead_title = $2 WHERE id = $1 AND lead_title <> $2"
 
 # Distinct stories in the last 6 hours; only threads whose value changes are
 # written, and stale non-zero values (last seen within ACTIVE_HOURS) reset to 0.
+# HOT-eligible: velocity is in no index.
 VELOCITY_SQL = """
     WITH recent AS (
         SELECT thread_id,

@@ -195,23 +195,45 @@ async def test_a_topic_is_one_more_parameter():
     assert "topic = $3" in " ".join(query.split())
 
 
-@pytest.mark.asyncio
-async def test_the_detail_runs_its_four_queries_at_once():
-    """Each on its own pool connection (Pool.fetch and fetchrow acquire one per call)."""
+def _timed_pool(row):
+    """A pool whose queries each take a moment, recording their order and overlap."""
     import asyncio
 
-    running, most = 0, 0
+    state = SimpleNamespace(running=0, most=0, calls=[])
 
     async def query(sql, *args):
-        nonlocal running, most
-        running += 1
-        most = max(most, running)
+        state.calls.append(sql)
+        state.running += 1
+        state.most = max(state.most, state.running)
         await asyncio.sleep(0.01)
-        running -= 1
-        return [] if "FROM one" not in sql else None
+        state.running -= 1
+        return row if "FROM one" in sql else []
 
-    pool = SimpleNamespace(fetch=query, fetchrow=query)
+    return SimpleNamespace(fetch=query, fetchrow=query), state
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_thread_is_one_query():
+    """A 404 doesn't take four pool connections."""
+    pool, state = _timed_pool(None)
     with patch("app.services.thread_reads.get_pool", AsyncMock(return_value=pool)):
         assert await thread_reads.thread_detail(7, 0, NOW) is None
 
-    assert most == 4
+    assert state.calls == [thread_reads.DETAIL_SQL]
+
+
+@pytest.mark.asyncio
+async def test_a_thread_is_read_then_its_three_parts_at_once():
+    """Each part on its own pool connection (Pool.fetch acquires one per call)."""
+    pool, state = _timed_pool(_row())
+    with patch("app.services.thread_reads.get_pool", AsyncMock(return_value=pool)):
+        detail = await thread_reads.thread_detail(7, 0, NOW)
+
+    assert detail["id"] == 7
+    assert state.calls[0] == thread_reads.DETAIL_SQL
+    assert set(state.calls[1:]) == {
+        thread_reads.ENTITIES_SQL,
+        thread_reads.TIMELINE_SQL,
+        thread_reads.ARTICLES_SQL,
+    }
+    assert state.most == 3

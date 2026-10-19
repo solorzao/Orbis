@@ -19,6 +19,7 @@ from app.services.embeddings import generate_embeddings
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
 from app.services.ml_models import analyze_sentiment_ml, classify_topics_ml
+from app.services.thread_synopsis import summarise_threads
 from app.services.threads import assign_threads, purge_threads
 from app.services.titles import dedup_key
 from app.services.topic_classifier import classify_topic
@@ -216,17 +217,39 @@ async def _warm_caches() -> None:
         await warm_caches()
     except Exception:
         logger.warning("Cache warm failed; continuing.", exc_info=True)
+    # Started from here, not from a done callback, so a cycle that cancels this
+    # warm can't miss the synopses task it starts.
+    _start_thread_synopses()
 
 
-def _start_cache_warm() -> None:
-    """Refill the busiest API caches (app.warm) in the background."""
-    task = asyncio.create_task(_warm_caches())
+async def _write_thread_synopses() -> None:
+    try:
+        await summarise_threads()
+    except Exception:
+        logger.warning("Thread synopses failed; continuing.", exc_info=True)
+
+
+def _track(coro) -> None:
+    """Run *coro* as one of the cycle's background tasks."""
+    task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
 
+def _start_cache_warm() -> None:
+    """Refill the busiest API caches (app.warm) in the background, then start the
+    thread synopses in a background task of their own."""
+    _track(_warm_caches())
+
+
+def _start_thread_synopses() -> None:
+    """Write thread synopses (thread_synopsis) in the background."""
+    _track(_write_thread_synopses())
+
+
 async def stop_background_tasks() -> None:
-    """Cancel the cycle's background tasks (a cache warm) and wait until they stop.
+    """Cancel the cycle's background tasks (a cache warm, thread synopses) and wait
+    until they stop.
 
     At shutdown, before Redis and the pool close, so a warm cannot reopen
     them; and as a cycle starts, so a warm cannot write answers back after

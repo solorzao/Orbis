@@ -723,7 +723,21 @@ class TestPurgeOldArticles:
         assert "Thread purge failed" in caplog.text
 
 
+async def _drain_background_tasks():
+    """Wait for the cycle's background tasks, including any one of them starts."""
+    from app.services import ingestion
+
+    while ingestion._background_tasks:
+        await asyncio.gather(*ingestion._background_tasks, return_exceptions=True)
+
+
 class TestStartCacheWarm:
+    @pytest.fixture(autouse=True)
+    def synopses(self):
+        """Thread synopses (started after the warm), stubbed: tested in TestThreadSynopses."""
+        with patch("app.services.ingestion.summarise_threads", new_callable=AsyncMock) as summarise:
+            yield summarise
+
     @pytest.mark.asyncio
     async def test_runs_the_warmers_in_the_background(self):
         from app.services import ingestion
@@ -731,7 +745,7 @@ class TestStartCacheWarm:
         with patch("app.warm.warm_caches", new_callable=AsyncMock) as warm_caches:
             ingestion._start_cache_warm()
             assert ingestion._background_tasks  # held until done
-            await asyncio.gather(*ingestion._background_tasks)
+            await _drain_background_tasks()
 
         warm_caches.assert_awaited_once_with()
         assert not ingestion._background_tasks
@@ -746,6 +760,7 @@ class TestStartCacheWarm:
         ):
             ingestion._start_cache_warm()
             await asyncio.gather(*ingestion._background_tasks)  # does not raise
+            await _drain_background_tasks()
 
         assert "Cache warm failed; continuing." in caplog.text
 
@@ -898,3 +913,111 @@ class TestMLClassificationIntegration:
             assert rows[0]["sentiment_score"] == -0.8
             assert rows[1]["topic_tags"] == ["economy"]
             assert rows[1]["sentiment_score"] == 0.7
+
+
+class TestThreadSynopses:
+    """Written after each cycle's cache warm, in a background task of their own."""
+
+    @pytest.mark.asyncio
+    async def test_start_once_the_warm_is_done_in_their_own_task(self):
+        from app.services import ingestion
+
+        events: list[str] = []
+        warm_tasks: list[asyncio.Task] = []
+
+        async def warm():
+            warm_tasks.append(asyncio.current_task())
+            events.append("warm")
+
+        async def summarise():
+            assert asyncio.current_task() not in warm_tasks
+            assert asyncio.current_task() in ingestion._background_tasks  # tracked
+            events.append("synopses")
+
+        with (
+            patch("app.warm.warm_caches", side_effect=warm),
+            patch("app.services.ingestion.summarise_threads", side_effect=summarise),
+        ):
+            ingestion._start_cache_warm()
+            await _drain_background_tasks()
+
+        assert events == ["warm", "synopses"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_warm_still_writes_synopses(self):
+        from app.services import ingestion
+
+        with (
+            patch("app.warm.warm_caches", new_callable=AsyncMock, side_effect=RuntimeError("x")),
+            patch("app.services.ingestion.summarise_threads", new_callable=AsyncMock) as summarise,
+        ):
+            ingestion._start_cache_warm()
+            await _drain_background_tasks()
+
+        summarise.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_a_failure_is_a_warning(self, caplog):
+        from app.services import ingestion
+
+        with (
+            patch("app.warm.warm_caches", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion.summarise_threads",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("boom"),
+            ),
+            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
+        ):
+            ingestion._start_cache_warm()
+            await _drain_background_tasks()  # does not raise
+
+        assert "Thread synopses failed; continuing." in caplog.text
+
+    @staticmethod
+    def _slow_synopses():
+        started = asyncio.Event()
+
+        async def summarise():
+            started.set()
+            await asyncio.sleep(60)
+
+        return summarise, started
+
+    @pytest.mark.asyncio
+    async def test_a_new_cycle_cancels_synopses_still_running(self):
+        """The cycle is about to reassign threads and invalidate their cache."""
+        from app.services import ingestion
+
+        summarise, started = self._slow_synopses()
+        with (
+            patch("app.warm.warm_caches", new_callable=AsyncMock),
+            patch("app.services.ingestion.summarise_threads", side_effect=summarise),
+            patch("app.services.ingestion._start_cache_warm"),  # the new cycle's
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion._ingest_from_raw_gkg", AsyncMock(return_value=3)),
+            patch("app.services.ingestion._purge_old_articles", new_callable=AsyncMock),
+            patch("app.services.ingestion.generate_embeddings", AsyncMock(return_value=[])),
+            patch("app.services.ingestion.assign_threads", new_callable=AsyncMock),
+        ):
+            ingestion._start_thread_synopses()
+            [running] = ingestion._background_tasks
+            await started.wait()
+            assert await ingestion.run_ingestion_cycle() == 3
+
+        assert running.cancelled()
+        assert not ingestion._background_tasks
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_synopses_still_running(self):
+        from app.services import ingestion
+
+        summarise, started = self._slow_synopses()
+        with patch("app.services.ingestion.summarise_threads", side_effect=summarise):
+            ingestion._start_thread_synopses()
+            [running] = ingestion._background_tasks
+            await started.wait()
+            await ingestion.stop_background_tasks()
+
+        assert running.cancelled()
+        assert not ingestion._background_tasks
