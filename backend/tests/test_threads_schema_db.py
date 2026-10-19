@@ -159,7 +159,7 @@ async def test_centroids_stay_inline_and_are_vacuumed_early(conn):
     """PLAIN storage keeps the 1 KB centroid in the row (no TOAST fetch per comparison);
     joins and deactivations churn the index, so vacuum runs after 5% changes."""
     storage = await conn.fetchval(
-        "SELECT attstorage FROM pg_attribute"
+        "SELECT attstorage::text FROM pg_attribute"  # "char"; asyncpg returns bytes
         " WHERE attrelid = 'thread_centroids'::regclass AND attname = 'centroid'"
     )
     options = await conn.fetchval(
