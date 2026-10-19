@@ -94,7 +94,7 @@ Branch: `claude/p4-threads-schema` (this plan is committed here too).
 
 The migration file is the source of truth (it's committed in this PR); read its comments. It has three tables. None references `articles`.
 
-- **`threads`** (`fillfactor = 80`, so the per-cycle velocity and count updates can stay HOT):
+- **`threads`** (`fillfactor = 80`, room for HOT updates. Velocity, lead-title and synopsis updates stay HOT; the aggregate updates can't since 15b's migration 015, whose partial indexes have `aggregated_at`, `n_stories` and `n_sources` in their predicates):
   - `centroid_sum VECTOR(512)`: the decayed sum of the unit 512-d prefixes of the thread's distinct stories;
   - `first_seen`, `last_seen`;
   - counts: `n_articles`, `n_stories`, `n_sources`, `velocity`;

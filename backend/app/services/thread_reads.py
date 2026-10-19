@@ -180,17 +180,18 @@ async def list_threads(now: datetime, hours: int, topic: str | None, limit: int)
 async def thread_detail(thread_id: int, offset: int, now: datetime) -> dict | None:
     """One thread (a ThreadDetail), or None for an unknown id.
 
-    Its four queries run at once, each on its own pool connection.
+    The thread's row first, so an unknown id costs one query; then its three
+    parts at once, each on its own pool connection.
     """
     pool = await get_pool()
-    row, entities, timeline, articles = await asyncio.gather(
-        pool.fetchrow(DETAIL_SQL, thread_id),
+    row = await pool.fetchrow(DETAIL_SQL, thread_id)
+    if row is None:
+        return None
+    entities, timeline, articles = await asyncio.gather(
         pool.fetch(ENTITIES_SQL, thread_id),
         pool.fetch(TIMELINE_SQL, thread_id),
         pool.fetch(ARTICLES_SQL, thread_id, DETAIL_ARTICLES, offset),
     )
-    if row is None:
-        return None
     return {
         **thread_item(row, now),
         "entities": [{"name": r["name"], "n": r["n"]} for r in entities],
