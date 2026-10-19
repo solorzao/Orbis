@@ -288,3 +288,96 @@ class TestPurgeOrphanedNodes:
             count = await purge_orphaned_nodes()
 
         assert count == 0
+
+
+NODE = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+
+def _flat(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+class TestUpsertNode:
+    @pytest.mark.asyncio
+    async def test_a_node_without_metadata_is_never_rewritten(self):
+        from app.services.knowledge_graph import upsert_node
+
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=NODE)
+        assert await upsert_node(conn, "PERSON", "Alice Smith", {}) == NODE
+
+        sql, *args = conn.fetchval.await_args.args
+        # A known name is left as it is: no new row version, so no index entries.
+        assert "ON CONFLICT (type, name) DO NOTHING" in _flat(sql)
+        assert args == ["PERSON", "Alice Smith", "{}"]
+
+    @pytest.mark.asyncio
+    async def test_metadata_is_merged_only_when_the_merge_changes_it(self):
+        from app.services.knowledge_graph import upsert_node
+
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=NODE)
+        await upsert_node(conn, "LOCATION", "Tehran", {"lat": 35.7, "lng": 51.4})
+
+        sql, *args = conn.fetchval.await_args.args
+        # The merge is compared whole (jsonb equality), so what is written is exactly
+        # what || makes, whatever the values' shapes.
+        assert (
+            "ON CONFLICT (type, name) DO UPDATE"
+            " SET metadata = kg_nodes.metadata || EXCLUDED.metadata"
+            " WHERE kg_nodes.metadata || EXCLUDED.metadata IS DISTINCT FROM kg_nodes.metadata"
+        ) in _flat(sql)
+        assert args == ["LOCATION", "Tehran", json.dumps({"lat": 35.7, "lng": 51.4})]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("metadata", [{}, {"lat": 1.0}])
+    async def test_an_untouched_rows_id_comes_from_the_same_statement(self, metadata):
+        from app.services.knowledge_graph import upsert_node
+
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=NODE)
+        await upsert_node(conn, "ORG", "Acme Corp", metadata)
+
+        sql = _flat(conn.fetchval.await_args.args[0])
+        assert sql.startswith("WITH up AS ( INSERT INTO kg_nodes (type, name, metadata)")
+        assert sql.endswith(
+            ") SELECT id FROM up UNION ALL SELECT id FROM kg_nodes"
+            " WHERE type = $1 AND name = $2 AND NOT EXISTS (SELECT 1 FROM up)"
+        )
+        conn.fetchval.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_row_a_concurrent_writer_inserted_is_read_by_a_new_statement(self):
+        from app.services.knowledge_graph import upsert_node
+
+        conn = AsyncMock()
+        # The statement's snapshot predates the other writer's commit: no id.
+        conn.fetchval = AsyncMock(side_effect=[None, NODE])
+        assert await upsert_node(conn, "PERSON", "Alice Smith", {}) == NODE
+
+        sql, *args = conn.fetchval.await_args.args
+        assert _flat(sql) == "SELECT id FROM kg_nodes WHERE type = $1 AND name = $2"
+        assert args == ["PERSON", "Alice Smith"]
+
+    @pytest.mark.asyncio
+    async def test_every_node_of_an_article_goes_through_it(self):
+        from app.services import knowledge_graph
+
+        pool, conn = _mock_pool()
+        article = _make_article(mentioned_locations=[{"name": "China", "lat": 35, "lng": 105}])
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
+            await knowledge_graph.populate_graph([article])
+
+        sql_by_type = {}
+        for call in conn.fetchval.call_args_list:
+            sql_by_type.setdefault(call.args[1], set()).add(call.args[0])
+        keep, merge = knowledge_graph._KEEP_NODE_SQL, knowledge_graph._MERGE_NODE_SQL
+        assert sql_by_type == {
+            "ARTICLE": {merge},
+            "PERSON": {keep},
+            "ORG": {keep},
+            "LOCATION": {merge},
+            "TOPIC": {keep},
+        }
