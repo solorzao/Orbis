@@ -7,6 +7,7 @@
 import { expect, type Page } from "@playwright/test";
 import { GLOBE_OVERSCAN_PX, HOME_VIEW } from "../src/lib/globeView";
 import { arcApex } from "../src/lib/links";
+import type { ApiThread, ApiThreadDetail } from "../src/lib/threads";
 
 // ── Mock data ───────────────────────────────────────────────────────
 
@@ -415,6 +416,180 @@ export async function mockLinkRoutes(page: Page) {
   await page.route("**/api/links/explain", (route) => route.fulfill({ json: MOCK_LINK_EXPLAIN }));
 }
 
+// ── Story threads ───────────────────────────────────────────────────
+
+/** A place a thread reached: its first report there `hoursAgo` hours ago, and its stories. */
+function threadPlace(
+  place: string,
+  country_code: string,
+  lat: number,
+  lng: number,
+  hoursAgo: number,
+  n: number,
+) {
+  return { lat, lng, place, country_code, first_seen: ago(hoursAgo * 60), n };
+}
+
+/** The Red Sea thread's spread, first report first: four places, three arcs from Yemen. */
+export const RED_SEA_SPREAD = [
+  threadPlace("Yemen", "YE", 15.5, 48.5, 30, 7),
+  threadPlace("Suez, Egypt", "EG", 30.5, 32.5, 26, 6),
+  threadPlace("Rotterdam, Netherlands", "NL", 51.5, 4.5, 20, 6),
+  threadPlace("Mombasa, Kenya", "KE", -4.5, 39.5, 9, 5),
+];
+
+function mockThread(
+  over: Pick<ApiThread, "id" | "title" | "n_stories" | "n_sources" | "velocity"> &
+    Partial<ApiThread>,
+): ApiThread {
+  return {
+    synopsis: null,
+    status: "developing",
+    first_seen: ago(30 * 60),
+    last_seen: ago(20),
+    countries: [],
+    places: [],
+    topic: "general",
+    lead: null,
+    ...over,
+  };
+}
+
+/** /api/threads: four developing stories, fastest first, as the API orders them. */
+export const MOCK_THREADS: ApiThread[] = [
+  mockThread({
+    id: 7,
+    title: "Red Sea shipping attacks",
+    synopsis:
+      "Outlets in Yemen first reported attacks on ships in the Red Sea. Coverage then spread to Egypt, the Netherlands and Kenya, where reports describe rerouted cargo.",
+    n_stories: 24,
+    n_sources: 11,
+    velocity: 6,
+    countries: ["YE", "EG", "NL", "KE"],
+    places: RED_SEA_SPREAD,
+    topic: "conflict",
+    lead: {
+      title: "Ships divert from the Red Sea after new attacks",
+      source_name: "Reuters",
+      published_at: ago(40),
+      image_url: null,
+      topic: "conflict",
+    },
+  }),
+  mockThread({
+    id: 12,
+    title: "Typhoon nears Luzon",
+    status: "emerging",
+    first_seen: ago(4 * 60),
+    n_stories: 9,
+    n_sources: 6,
+    velocity: 4,
+    countries: ["PH", "TW"],
+    places: [
+      threadPlace("Manila, Philippines", "PH", 14.5, 120.5, 4, 6),
+      threadPlace("Taipei, Taiwan", "TW", 25.5, 121.5, 2, 3),
+    ],
+    topic: "environment",
+  }),
+  mockThread({
+    id: 15,
+    title: "EU summit on energy prices",
+    n_stories: 12,
+    n_sources: 8,
+    velocity: 3,
+    countries: ["BE", "FR", "DE"],
+    places: [
+      threadPlace("Brussels, Belgium", "BE", 50.5, 4.5, 28, 6),
+      threadPlace("Paris, France", "FR", 48.5, 2.5, 22, 4),
+      threadPlace("Berlin, Germany", "DE", 52.5, 13.5, 18, 2),
+    ],
+    topic: "economy",
+  }),
+  mockThread({
+    id: 21,
+    title: "Mpox cases in Kinshasa",
+    status: "fading",
+    n_stories: 6,
+    n_sources: 4,
+    velocity: 0,
+    countries: ["CD", "UG"],
+    places: [
+      threadPlace("Kinshasa, DR Congo", "CD", -4.5, 15.5, 60, 4),
+      threadPlace("Kampala, Uganda", "UG", 0.5, 32.5, 50, 2),
+    ],
+    topic: "health",
+  }),
+];
+
+/** A thread's stories, 20 a page (the Red Sea thread has 24). */
+function threadArticles(thread: ApiThread, offset: number) {
+  const total = thread.n_stories;
+  const places = thread.places.map((p) => p.place);
+  return Array.from({ length: Math.max(0, Math.min(20, total - offset)) }, (_, i) => {
+    const k = offset + i + 1;
+    return {
+      title: `${thread.title}: report ${k}`,
+      source_name: ["Reuters", "AP", "BBC News", "Al Jazeera"][k % 4],
+      published_at: ago(20 + k * 30),
+      source_url: `https://example.com/thread-${thread.id}/${k}`,
+      place: places[k % places.length] ?? "",
+    };
+  });
+}
+
+/** /api/threads/{id}: the list item, its key entities, its whole spread and a page of stories. */
+export function mockThreadDetail(url: string): ApiThreadDetail | null {
+  const u = new URL(url);
+  const id = Number(u.pathname.split("/").pop());
+  const thread = MOCK_THREADS.find((t) => t.id === id);
+  if (!thread) return null;
+  const offset = Number(u.searchParams.get("offset") ?? 0);
+  return {
+    ...thread,
+    entities: [
+      { name: "Suez Canal Authority", n: 9 },
+      { name: "Houthis", n: 7 },
+      { name: "Maersk", n: 5 },
+    ],
+    spread: thread.places,
+    timeline: [],
+    articles: threadArticles(thread, offset),
+  };
+}
+
+export const isThreadsList = (url: URL) => url.pathname === "/api/threads";
+export const isThreadDetail = (url: URL) => /^\/api\/threads\/\d+$/.test(url.pathname);
+
+/** Mock the Threads layer's endpoints: the list and each thread's detail (404 if unknown). */
+export async function mockThreadRoutes(page: Page) {
+  await page.route(isThreadsList, (route) => route.fulfill({ json: MOCK_THREADS }));
+  await page.route(isThreadDetail, (route) => {
+    const detail = mockThreadDetail(route.request().url());
+    return detail
+      ? route.fulfill({ json: detail })
+      : route.fulfill({ status: 404, json: { detail: "No such thread." } });
+  });
+}
+
+/** The thread Paris's first story is part of, as /api/news/cluster sends it. */
+export const PARIS_THREAD = {
+  id: 15,
+  title: "EU summit on energy prices",
+  places: ["Brussels, Belgium", "Paris, France", "Berlin, Germany"],
+};
+
+/**
+ * gotoStillGlobe/settle setup: a place's first story is part of a thread (the
+ * EU summit), so its panel shows the "Part of" chip.
+ */
+export async function withThreads(page: Page) {
+  await page.route("**/api/news/cluster*", (route) =>
+    route.fulfill({
+      json: MOCK_ARTICLES.map((a, i) => ({ ...a, thread: i === 0 ? PARIS_THREAD : null })),
+    }),
+  );
+}
+
 // ── Breaking stories ────────────────────────────────────────────────
 
 /** A breaking story's lead, as /api/news/breaking sends it. */
@@ -661,6 +836,9 @@ export async function mockAllApiRoutes(page: Page) {
 
   // The Links layer
   await mockLinkRoutes(page);
+
+  // The Threads layer
+  await mockThreadRoutes(page);
 
   // Breaking stories: none, as often (withBreaking adds some)
   await page.route(isBreaking, (route) => route.fulfill({ json: [] }));

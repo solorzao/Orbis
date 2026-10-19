@@ -79,7 +79,8 @@ export interface ApiTopicCount {
   count: number;
 }
 
-async function apiFetch<T>(
+/** GET a same-origin /api route as JSON, with its query (empty values left out). */
+export async function apiFetch<T>(
   path: string,
   params?: Record<string, string>,
   signal?: AbortSignal,

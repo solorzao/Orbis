@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   CAIRO,
   MOCK_LINKS_LIFT,
+  MOCK_THREADS,
   PARIS,
   hoverPlace,
   mockAllApiRoutes,
@@ -75,6 +76,14 @@ async function linksOn(page: Page) {
     "data-arcs",
     String(MOCK_LINKS_LIFT.length),
   );
+}
+
+/** Turn the Threads layer on and wait until the rail lists its rows: its ready signal. */
+async function threadsOn(page: Page) {
+  await page.getByRole("button", { name: "Threads", exact: true }).click();
+  await expect(
+    page.getByRole("list", { name: "Developing stories" }).getByRole("button"),
+  ).toHaveCount(MOCK_THREADS.length);
 }
 
 const GAP = 12;
@@ -348,6 +357,36 @@ for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
     expect(b["since-strip"].x, "since strip at the brand's left edge").toBeCloseTo(24, 0);
     expect(b["since-strip"].y, "since strip under the brand").toBeCloseTo(80, 0);
   });
+}
+
+// Threads on, its rail is the left column's from 1180px: under the brand, or under
+// the since strip when that shows, one stack so they never overlap, and clear of
+// the topics, the side panel and the bottom row (the capsule keeps its place).
+for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
+  for (const strip of [false, true]) {
+    const state = strip ? "threads rail under the since strip" : "threads rail";
+    test(`the ${state} keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({ page }) => {
+      await settle(page, size, strip ? (p) => seedLastVisit(p, 14) : undefined);
+      if (strip) await expect(page.getByTestId("since-strip")).toBeVisible();
+      await threadsOn(page);
+      const regions = [...regionsAt(size.width), "threads-rail", ...(strip ? ["since-strip"] : [])];
+      const b = await expectApart(page, size.width, state, regions);
+      const rail = b["threads-rail"];
+      expect(rail.x, "rail at the brand's left edge").toBeCloseTo(24, 0);
+      if (strip) {
+        const since = b["since-strip"];
+        expect(rail.y - (since.y + since.h), "rail 12px under the strip").toBeCloseTo(GAP, 0);
+      } else {
+        expect(rail.y, "rail under the brand").toBeCloseTo(80, 0);
+      }
+      expect(
+        size.height - (rail.y + rail.h),
+        "rail ends above the bottom row",
+      ).toBeGreaterThanOrEqual(124 - 1);
+      expectCentred(b["timeline"], size.width, state);
+      expect(b["timeline"].w, "capsule at its full width").toBeCloseTo(640, 0);
+    });
+  }
 }
 
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {

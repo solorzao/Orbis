@@ -3,9 +3,13 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { SideTab } from "@/hooks/useSidePanel";
 
-const TABS: { id: SideTab; label: string }[] = [
+const BASE_TABS: { id: SideTab; label: string }[] = [
   { id: "copilot", label: "Co-pilot" },
   { id: "inspect", label: "Inspect" },
+];
+const WITH_THREADS: { id: SideTab; label: string }[] = [
+  ...BASE_TABS,
+  { id: "threads", label: "Threads" },
 ];
 
 interface SidePanelProps {
@@ -16,6 +20,8 @@ interface SidePanelProps {
   onOpenChange: (open: boolean) => void;
   copilot: ReactNode;
   inspect: ReactNode;
+  /** The Threads tab's content (the sheet, below 1180px, where there is no rail), or none. */
+  threads?: ReactNode;
   /** Places and links open in the Inspect tab, shown as a badge on the collapsed pill. */
   inspectCount?: number;
   /** The Inspect tab panel, where focus lands when a place's controls go (useKeepFocus). */
@@ -30,7 +36,8 @@ function isShown(el: HTMLElement): boolean {
 }
 
 /**
- * Co-pilot and Inspect (a place's stories, or a link) in one glass panel (mockup `.side`). From 1180px it
+ * Co-pilot and Inspect (a place's stories, or a link), and below 1180px Threads, in one
+ * glass panel (mockup `.side`). From 1180px it
  * floats on the right and collapses to a pill at the same corner; below that
  * it is a bottom sheet that collapses to its tab bar (soft-orbit.css).
  *
@@ -46,6 +53,7 @@ export default function SidePanel({
   onOpenChange,
   copilot,
   inspect,
+  threads,
   inspectCount = 0,
   inspectRef,
   copilotRef,
@@ -53,7 +61,8 @@ export default function SidePanel({
   const id = useId();
   const tabId = (t: SideTab) => `${id}-tab-${t}`;
   const panelId = (t: SideTab) => `${id}-panel-${t}`;
-  const content: Record<SideTab, ReactNode> = { copilot, inspect };
+  const TABS = threads === undefined ? BASE_TABS : WITH_THREADS;
+  const content: Record<SideTab, ReactNode> = { copilot, inspect, threads };
 
   const tabRefs = useRef<Partial<Record<SideTab, HTMLButtonElement | null>>>({});
   const pillRef = useRef<HTMLButtonElement>(null);
@@ -92,7 +101,7 @@ export default function SidePanel({
   };
 
   const opened = `${inspectCount} open in Inspect`;
-  const active = TABS.find((t) => t.id === tab)!.label;
+  const active = (TABS.find((t) => t.id === tab) ?? TABS[0]).label;
 
   return (
     <>

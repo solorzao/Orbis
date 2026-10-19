@@ -253,7 +253,8 @@ export default function Globe({
       })
       .onArcClick((arc: object) => {
         pointClicked = true;
-        onArcClickRef.current?.((arc as GlobeArc).link);
+        const link = (arc as GlobeArc).link; // a thread's arcs open nothing
+        if (link) onArcClickRef.current?.(link);
       })
       .onZoom((pov: { lat: number; lng: number; altitude: number }) => {
         // The drift moves the camera every frame without zooming; only a real

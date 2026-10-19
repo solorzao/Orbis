@@ -537,15 +537,39 @@ kbd {
 }
 
 /*
- * "Since your last visit" (mockup .since): under the brand from 1180px (top 80,
- * left 24), a callout card in the co-pilot below that. Top 5 opens a short
- * list of places under the text.
+ * The left column from 1180px: the since strip under the brand (top 80, left
+ * 24), then the threads rail, one stack so they never overlap. It ends above
+ * the bottom row, 124px from the bottom as the side panel does, and lets the
+ * globe be dragged beside them.
  */
-.since {
+.left-stack {
   position: fixed;
   top: 80px;
   left: 24px;
+  bottom: 124px;
+  width: 360px;
   z-index: var(--z-panel);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  pointer-events: none;
+}
+.left-stack > * {
+  pointer-events: auto;
+}
+/* With Links on, its rank switch and status float above the layers: the column ends above them. */
+.left-stack.links-on {
+  bottom: 224px;
+}
+
+/*
+ * "Since your last visit" (mockup .since): first in the left column from
+ * 1180px, a callout card in the co-pilot below that. Top 5 opens a short
+ * list of places under the text.
+ */
+.since {
+  flex: none;
   max-width: 360px;
   flex-wrap: wrap;
   gap: 8px 10px;
@@ -626,8 +650,9 @@ kbd {
   flex-basis: 100%;
 }
 @media (width < 1180px) {
-  .since {
-    display: none; /* no room under the brand: the co-pilot's callout instead */
+  .since,
+  .left-stack {
+    display: none; /* no room under the brand: the co-pilot's callout (and Threads tab) instead */
   }
   .since-callout {
     display: flex;
@@ -636,6 +661,101 @@ kbd {
   .copilot:has(.since-callout) .cp-empty {
     display: none;
   }
+}
+
+/*
+ * Threads (mockup .threads, .th): the left column's rail from 1180px, the
+ * sheet's Threads tab below. Each row is a button; the selected one opens its
+ * detail under it.
+ */
+.threads {
+  position: relative; /* for .glass.edge::before */
+  flex: 0 1 auto;
+  width: 340px;
+  max-width: 100%;
+}
+.threads .ghead {
+  padding-bottom: 6px;
+}
+.th-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+.th {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.th:hover {
+  background: var(--surface-hover);
+}
+.th[aria-expanded="true"] {
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+.th .t {
+  font: var(--type-body-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.th .num {
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+}
+.th .m {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: var(--type-label);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.th .bar {
+  flex: 1;
+  min-width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.th .bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-lavender));
+}
+.th:not([aria-expanded="true"]) .bar i {
+  background: rgba(214, 218, 255, 0.35);
+}
+.th-status {
+  color: var(--accent-strong);
+}
+.th-status[data-s="Emerging"] {
+  color: var(--signal-warning);
+}
+.th-note,
+.th-count {
+  margin: 0;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+.th-note {
+  padding: 16px 12px;
+  text-align: center;
+}
+.th-count {
+  padding: 0 14px 6px;
+  font: var(--type-label);
 }
 
 /* Inspect tab: recent places and links, then a place's stories (mockup .insp, .art, lines 357-372) */
@@ -1229,6 +1349,10 @@ button.cite:hover {
   background: var(--border-default);
   margin: 0 4px;
 }
+.layers .overlays {
+  display: flex;
+  gap: 4px;
+}
 .layers .tg {
   display: inline-flex;
   align-items: center;
@@ -1273,6 +1397,22 @@ button.cite:hover {
   }
   .layers .sep {
     margin: 0;
+  }
+}
+/*
+ * Below 1440px a side track can't hold the base layers and both overlays in
+ * one line (318px against 272px at 1280, 222px at 1180): the overlays take a
+ * line of their own above the base layers. 78px tall, the dock still fits the
+ * row the 84px capsule sets.
+ */
+@media (1180px <= width < 1440px) {
+  .layers {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    border-radius: var(--radius-lg);
+  }
+  .layers .sep {
+    display: none;
   }
 }
 /*

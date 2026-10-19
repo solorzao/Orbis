@@ -34,6 +34,7 @@ import {
   toLinkDetail,
   type LinkRank,
 } from "@/lib/links";
+import { threadsStatus } from "@/lib/threads";
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
@@ -42,7 +43,8 @@ import { useBreaking } from "@/hooks/useBreaking";
 import { useLastVisit } from "@/hooks/useLastVisit";
 import { useDelta } from "@/hooks/useDelta";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
-import { useSidePanel } from "@/hooks/useSidePanel";
+import { useSidePanel, useWideScreen } from "@/hooks/useSidePanel";
+import { useThreads } from "@/hooks/useThreads";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
 import { useHoverCard, useTouchOnly } from "@/hooks/useHoverCard";
 import { rememberBrief, useHoverPreview } from "@/hooks/useHoverPreview";
@@ -65,6 +67,7 @@ import ArcPill from "@/components/ArcPill";
 import LinksChip from "@/components/LinksChip";
 import BreakingTicker from "@/components/BreakingTicker";
 import SinceStrip from "@/components/SinceStrip";
+import ThreadsRail, { type ThreadRef } from "@/components/ThreadsRail";
 import type { GlobeControls } from "@/components/Globe";
 
 // Globe requires `window` — load without SSR
@@ -104,9 +107,27 @@ export default function Home() {
   const [linkQueue, setLinkQueue] = useState<LinkEntry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  // Side panel (Co-pilot | Inspect): open by default on wide screens
+  // Side panel (Co-pilot | Inspect, and Threads below 1180px): open by default on wide screens
   const side = useSidePanel();
   const { showInspect } = side;
+  // From 1180px Threads is a rail in the left column; below, a tab in the sheet.
+  const wide = useWideScreen();
+  const sideTab = wide && side.tab === "threads" ? "copilot" : side.tab;
+
+  // The Threads overlay: the window's developing stories (live windows only),
+  // and the selected one's spread. Below 1180px its tab lists them too.
+  const [threadsOn, setThreadsOn] = useState(false);
+  const [selectedThread, setSelectedThread] = useState<ThreadRef | null>(null);
+  const threadsResult = useThreads(
+    timeWindow,
+    activeTopic,
+    threadsOn || (!wide && sideTab === "threads" && side.open === true),
+  );
+  const threadsNote = threadsStatus({
+    on: threadsOn || (!wide && sideTab === "threads"),
+    live: timeWindow.kind === "live",
+    ...threadsResult,
+  });
   // Minimize and close remove the focused control: keep focus in the Inspect tab.
   const inspectRef = useRef<HTMLDivElement>(null);
   const copilotRef = useRef<HTMLDivElement>(null);
@@ -345,6 +366,27 @@ export default function Home() {
     else copilotRef.current?.focus();
     writeSinceDismissed();
     setSinceDismissed(true);
+  }, []);
+
+  // Threads on shows the rail (from 1180px) or the sheet's Threads tab (below,
+  // where the rail has no room); off forgets the selected thread and its arcs.
+  const { setTab: setSideTab, setOpen: setSideOpen } = side;
+  const handleThreadsChange = useCallback(
+    (on: boolean) => {
+      setThreadsOn(on);
+      if (!on) setSelectedThread(null);
+      if (on && !wide) {
+        setSideTab("threads");
+        setSideOpen(true);
+      }
+    },
+    [wide, setSideTab, setSideOpen],
+  );
+
+  // A row selects its thread (Threads on, for the sheet's tab); the selected one again closes it.
+  const handleThreadSelect = useCallback((thread: ThreadRef | null) => {
+    setSelectedThread(thread);
+    if (thread) setThreadsOn(true);
   }, []);
 
   const updateLink = useCallback((linkId: string, updates: Partial<LinkEntry>) => {
@@ -612,11 +654,26 @@ export default function Home() {
         isReplay={replaying}
         topicsRef={topicsRef}
       />
-      {since("strip")}
+      {/* The left column from 1180px: since your last visit, then the threads rail */}
+      <div className={linksOn ? "left-stack links-on" : "left-stack"}>
+        {since("strip")}
+        {wide && threadsOn && (
+          <ThreadsRail
+            variant="rail"
+            threads={threadsResult.threads}
+            status={threadsNote}
+            loading={threadsResult.loading}
+            selected={selectedThread}
+            detail={null}
+            lit={null}
+            onSelect={handleThreadSelect}
+          />
+        )}
+      </div>
 
       {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
       <SidePanel
-        tab={side.tab}
+        tab={sideTab}
         onTabChange={side.setTab}
         open={side.open}
         onOpenChange={side.setOpen}
@@ -646,6 +703,20 @@ export default function Home() {
           />
         }
         inspect={inspectTab}
+        threads={
+          wide ? undefined : (
+            <ThreadsRail
+              variant="sheet"
+              threads={threadsResult.threads}
+              status={threadsNote}
+              loading={threadsResult.loading}
+              selected={selectedThread}
+              detail={null}
+              lit={null}
+              onSelect={handleThreadSelect}
+            />
+          )
+        }
       />
 
       {/* Bottom row: layers and the timeline, centred on the page. After the side
@@ -660,6 +731,8 @@ export default function Home() {
           rank={linkRank}
           onRankChange={setLinkRank}
           linksStatus={linksNote}
+          threads={threadsOn}
+          onThreadsChange={handleThreadsChange}
         />
         {/* Where the layers are hidden (phones), Links has a chip of its own. */}
         {linksOn && (

@@ -157,7 +157,7 @@ export function mapTopicMix(
   return out;
 }
 
-function mapLead(lead: ApiGlobePoint["lead"]): GlobeLead | undefined {
+export function mapLead(lead: ApiGlobePoint["lead"]): GlobeLead | undefined {
   if (!lead) return undefined;
   return {
     title: lead.title,

@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 
-export type SideTab = "copilot" | "inspect";
+export type SideTab = "copilot" | "inspect" | "threads";
 
 /** From this width the side panel floats on the right; below it, it is a bottom sheet. */
 export const SIDE_WIDE_QUERY = "(min-width: 1180px)";
