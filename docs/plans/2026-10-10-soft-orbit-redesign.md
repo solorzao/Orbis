@@ -55,7 +55,7 @@
 | 19 | 5 Events | GDELT Events ingestion: daily country-pair rollups | 4b |
 | 20 | 5 | Relation arcs layer (cooperation and conflict) | 13, 19 |
 
-Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), and Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md`. Phases 4 and 5 are scoped here and get their bite-sized plans when the phase before them is done, so they build on what actually shipped.
+Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md` (done through #85), and Phase 4's is `docs/plans/2026-10-18-soft-orbit-phase-4.md` (PR 15 split into 15a–15c, 17 into 17a/17b, 18 into 18a/18b). Phase 5 is scoped here and gets its bite-sized plan when Phase 4 is done, so it builds on what actually shipped.
 
 ---
 
