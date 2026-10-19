@@ -14,7 +14,7 @@ from app.models.threads import ThreadDetail, ThreadSummary
 from app.routers.http_cache import edge_cached
 from app.routers.news import _globe_topic_tag
 from app.services.cache import cycle_ttl, get_cached, set_cached
-from app.services.thread_reads import list_threads, thread_detail
+from app.services.thread_reads import LIST_HOURS, list_threads, thread_detail
 
 router = APIRouter(prefix="/api", tags=["threads"])
 
@@ -23,8 +23,9 @@ router = APIRouter(prefix="/api", tags=["threads"])
 # app.warm refills the default list.
 _THREADS_TTL = 300
 
-# The timeline's live presets (frontend LiveHours); any other timespan is a 422.
-_LIVE_HOURS = frozenset({1, 6, 24, 168})
+# The timeline's live presets (frontend LiveHours, thread_reads.LIST_HOURS); any
+# other timespan is a 422.
+_LIVE_HOURS = frozenset(LIST_HOURS)
 
 # The threads rail's first request.
 DEFAULT_HOURS = 24

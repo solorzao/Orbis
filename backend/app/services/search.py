@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 from app.services.database import get_pool
 from app.services.entities import MENTION_COUNT_CAP, like_escape, recent_mentions_sql
+from app.services.thread_reads import LIST_HOURS, LISTED_SQL
 
 # A name's mentions this week are counted up to this, so ``n`` is capped
 # (the UI shows "100+"): on this type-ahead read a heavy name must not cost
@@ -38,16 +39,16 @@ _CANDIDATES_SQL = f"""
 
 # Story threads (migration 013), selected as the thread list selects them,
 # whose AI title or lead headline contains q: threads alone, no articles.
-# TODO(15b): import the list's thresholds (3 stories, 3 outlets) from
-# app.services.threads once it merges, instead of repeating them here.
-_THREADS_SQL = """
-    SELECT t.id, t.title, t.lead_title
-    FROM threads t
-    WHERE t.last_seen >= $1
-      AND t.n_stories >= 3 AND t.n_sources >= 3
-      AND (t.title ILIKE $2 OR t.lead_title ILIKE $2)
-    ORDER BY t.velocity DESC, t.n_stories DESC, t.id LIMIT 5
+# The list's own predicate (literal thresholds, so the plan can use the
+# partial idx_threads_listed) over its longest window.
+_THREADS_SQL = f"""
+    SELECT id, title, lead_title
+    FROM threads
+    WHERE last_seen >= $1 AND {LISTED_SQL}
+      AND (title ILIKE $2 OR lead_title ILIKE $2)
+    ORDER BY velocity DESC, n_stories DESC, id LIMIT 5
 """
+_THREAD_WINDOW = timedelta(hours=max(LIST_HOURS))
 
 
 async def search(q: str, now: datetime) -> dict:
@@ -70,7 +71,7 @@ async def search(q: str, now: datetime) -> dict:
     return {
         "people": groups["PERSON"],
         "orgs": groups["ORG"],
-        "threads": await _threads(pool, q, week_ago),
+        "threads": await _threads(pool, q, now - _THREAD_WINDOW),
     }
 
 

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.routers.http_cache import EDGE_CACHE_CONTROL
-from app.services import search
+from app.services import search, thread_reads
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
 
@@ -105,10 +105,18 @@ class TestSearchService:
         [(sql, args)] = [c for c in pool.calls if "FROM threads" in c[0]]
         flat = " ".join(sql.split())
         assert "JOIN" not in flat  # threads alone
-        assert "t.n_stories >= 3 AND t.n_sources >= 3" in flat  # as the thread list
-        assert "(t.title ILIKE $2 OR t.lead_title ILIKE $2)" in flat
-        assert "ORDER BY t.velocity DESC, t.n_stories DESC, t.id LIMIT 5" in flat
-        assert args == (NOW - timedelta(days=7), "%Ab\\_\\%%")
+        # The thread list's own predicate, over its longest window.
+        assert f"WHERE last_seen >= $1 AND {thread_reads.LISTED_SQL} AND" in flat
+        assert "(title ILIKE $2 OR lead_title ILIKE $2)" in flat
+        assert "ORDER BY velocity DESC, n_stories DESC, id LIMIT 5" in flat
+        assert args == (NOW - timedelta(hours=max(thread_reads.LIST_HOURS)), "%Ab\\_\\%%")
+
+    def test_the_listed_predicate_is_the_lists_with_literal_thresholds(self):
+        # Literals, not parameters: every plan can match the partial idx_threads_listed.
+        assert thread_reads.LISTED_SQL == "n_stories >= 3 AND n_sources >= 3"
+        query, _ = thread_reads.list_query(NOW, 168, None, 20)
+        assert f"WHERE last_seen >= $1 AND {thread_reads.LISTED_SQL}" in " ".join(query.split())
+        assert max(thread_reads.LIST_HOURS) == 168
 
     @pytest.mark.asyncio
     async def test_no_listed_threads(self):

@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from app.services import entities, search
+from app.services import entities, search, thread_reads
 from app.services.knowledge_graph import populate_graph
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
@@ -81,7 +81,7 @@ class _Pool:
 async def pool(conn):
     stand_in = _Pool(conn)
     with contextlib.ExitStack() as stack:
-        for module in ("entities", "search", "knowledge_graph"):
+        for module in ("entities", "search", "knowledge_graph", "thread_reads"):
             stack.enter_context(
                 patch(
                     f"app.services.{module}.get_pool",
@@ -456,6 +456,48 @@ async def test_search_lists_threads_by_title_or_lead_title(conn):
         {"id": by_lead, "title": "Zzentity lead headline"},
     ]
     assert (await search.search("zzentity_talks", now))["threads"] == []  # _ is literal
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_search_and_the_thread_list_agree_on_which_threads_are_listed(conn):
+    cases = [  # (hours since last seen, stories, outlets)
+        (1, 3, 3),  # listed: at both thresholds
+        (1, 2, 9),  # 2 stories
+        (1, 9, 2),  # 2 outlets
+        (2, 5, 4),  # listed
+        (24 * 7 - 1, 3, 3),  # listed: inside the list's longest window
+        (24 * 7 + 1, 3, 3),  # outside it
+    ]
+    ids = [
+        await _thread(conn, hours, stories, outlets, 0, f"Zzentity agree {i}")
+        for i, (hours, stories, outlets) in enumerate(cases)
+    ]
+    now = datetime.now(timezone.utc)
+
+    found = {t["id"] for t in (await search.search("zzentity agree", now))["threads"]}
+    week = await thread_reads.list_threads(now, max(thread_reads.LIST_HOURS), None, 50)
+    listed = {t["id"] for t in week} & set(ids)
+    assert found == listed == {ids[0], ids[3], ids[4]}
+
+
+@pytest.mark.asyncio
+async def test_search_reads_only_listed_threads(conn):
+    """The list's partial idx_threads_listed: single-story threads are never read."""
+    await conn.execute(  # a week of mostly single-story threads, and a few listed
+        "INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources, title)"
+        " SELECT array_fill(0.01, ARRAY[512])::vector, now(), now() - i * interval '30 minutes',"
+        " CASE WHEN i <= 3 THEN 3 ELSE 1 END, CASE WHEN i <= 3 THEN 3 ELSE 1 END,"
+        " 'Zzentity ' || i"
+        " FROM generate_series(1, 300) AS i"
+    )
+    await conn.execute("ANALYZE threads")
+    await conn.execute("SET LOCAL enable_seqscan = off")
+    week_ago = datetime.now(timezone.utc) - timedelta(hours=max(thread_reads.LIST_HOURS))
+
+    plan = await _plan(conn, search._THREADS_SQL, week_ago, "%zzentity%")
+    assert "idx_threads_listed" in plan, plan
+    assert "Seq Scan on threads" not in plan, plan
 
 
 @pytest.mark.asyncio

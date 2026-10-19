@@ -22,6 +22,13 @@ from app.services.titles import display_title
 # database.get_articles_in_bounds).
 MIN_STORIES = 3
 MIN_SOURCES = 3
+# That predicate as SQL, with the thresholds as literals (not parameters) so
+# every plan can match idx_threads_listed: the list's, and search's
+# (app.services.search).
+LISTED_SQL = f"n_stories >= {MIN_STORIES} AND n_sources >= {MIN_SOURCES}"
+# The list's live windows, in hours (the timeline's presets); search looks
+# over the longest.
+LIST_HOURS = (1, 6, 24, 168)
 EMERGING_HOURS = 6  # first seen this recently: emerging
 DEVELOPING_VELOCITY = 2  # this many stories in the last 6 hours: developing
 LIST_PLACES = 20
@@ -98,7 +105,7 @@ def list_query(now: datetime, hours: int, topic: str | None, limit: int) -> tupl
         WITH listed AS (
             SELECT {_THREAD_COLUMNS}
             FROM threads
-            WHERE last_seen >= $1 AND n_stories >= {MIN_STORIES} AND n_sources >= {MIN_SOURCES}
+            WHERE last_seen >= $1 AND {LISTED_SQL}
                   {topic_sql}
             ORDER BY velocity DESC, n_stories DESC, id
             LIMIT $2
