@@ -65,6 +65,8 @@ export interface ApiNewsArticle {
   sentiment_score: number;
   entities: Record<string, unknown>;
   image_url?: string | null;
+  /** The story thread it is part of, when /api/threads would list it (cluster stories only). */
+  thread?: { id: number; title: string; places: string[] } | null;
 }
 
 export interface ApiClusterSummary {

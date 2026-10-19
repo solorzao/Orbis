@@ -254,6 +254,7 @@ describe("toLinkDetail", () => {
           region: "Washington, United States",
           topicTags: ["politics"],
           sentimentScore: -0.1,
+          thread: null, // only a place's stories (/api/news/cluster) carry one
         },
       ],
     });

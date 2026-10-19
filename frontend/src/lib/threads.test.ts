@@ -12,6 +12,7 @@ import {
   stopLit,
   threadsStatus,
   toThread,
+  toThreadArticles,
   toThreadDetail,
   velocityShare,
   type ApiThread,
@@ -119,6 +120,23 @@ describe("toThreadDetail", () => {
         place: "Yemen",
       },
     ]);
+  });
+
+  it("keeps only web (http or https) story URLs: any other is dropped, the story kept", () => {
+    const story = (source_url: string) => ({
+      title: "A story",
+      source_name: "AP",
+      published_at: "2026-10-18T14:00:00Z",
+      source_url,
+      place: "Yemen",
+    });
+    const urls = toThreadArticles([
+      story("javascript:alert(1)"),
+      story("data:text/html,x"),
+      story("http://example.com/a"),
+      story("HTTPS://example.com/b"),
+    ]).map((a) => a.sourceUrl);
+    expect(urls).toEqual(["", "", "http://example.com/a", "HTTPS://example.com/b"]);
   });
 });
 

@@ -336,3 +336,30 @@ describe("TimelineCapsule", () => {
     });
   });
 });
+
+describe("TimelineCapsule with a thread selected", () => {
+  it("replays how the thread spread instead of the last 7 days", async () => {
+    const onChange = vi.fn();
+    const spread = {
+      title: "Red Sea shipping attacks",
+      playing: false,
+      onPlay: vi.fn(),
+      onStop: vi.fn(),
+    };
+    const props = { timeWindow: DEFAULT_WINDOW, onChange, stories: 0, places: 0 };
+    const { rerender } = render(<TimelineCapsule {...props} spread={spread} />);
+    await act(async () => {});
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replay how Red Sea shipping attacks spread" }),
+    );
+    expect(spread.onPlay).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled(); // the window stays
+
+    rerender(<TimelineCapsule {...props} spread={{ ...spread, playing: true }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Stop replay" }));
+    expect(spread.onStop).toHaveBeenCalledTimes(1);
+
+    rerender(<TimelineCapsule {...props} spread={null} />);
+    expect(screen.getByRole("button", { name: "Replay the last 7 days" })).toBeInTheDocument();
+  });
+});

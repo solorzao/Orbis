@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
 import {
+  apiArticlesToNewsArticles,
   apiPointsToGlobePoints,
   clusterArticles,
   getTopicColor,
@@ -241,5 +242,37 @@ describe("clusterArticles", () => {
       expect(cluster).toHaveProperty("articles");
       expect(cluster.articles.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("apiArticlesToNewsArticles", () => {
+  const api = {
+    id: "art-001",
+    title: "France announces new climate policy",
+    summary: null,
+    source_url: "https://example.com/france-climate",
+    source_name: "Reuters",
+    source_language: "en",
+    published_at: "2026-10-18T14:00:00Z",
+    ingested_at: "2026-10-18T14:05:00Z",
+    latitude: 48.86,
+    longitude: 2.35,
+    country_code: "FR",
+    region: "Paris, France",
+    topic_tags: ["Climate"],
+    sentiment_score: 0.6,
+    entities: {},
+  };
+
+  it("keeps the thread a cluster story is part of, or none", () => {
+    const thread = { id: 15, title: "EU summit on energy prices", places: ["Brussels, Belgium"] };
+    const [part, plain, older] = apiArticlesToNewsArticles([
+      { ...api, thread },
+      { ...api, id: "art-002", thread: null },
+      { ...api, id: "art-003" }, // a server before threads sends none
+    ]);
+    expect(part.thread).toEqual(thread);
+    expect(plain.thread).toBeNull();
+    expect(older.thread).toBeNull();
   });
 });

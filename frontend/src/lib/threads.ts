@@ -4,10 +4,13 @@
  * to each later one, in order of first report) and the rail's words.
  */
 import { apiFetch, type ApiGlobeLead } from "@/lib/api";
+import { isWebUrl } from "@/hooks/useAgent";
 import { mapApiTopic, mapLead } from "@/lib/clustering";
 import type { GlobeArc } from "@/lib/links";
 import type { LiveHours } from "@/lib/timeWindow";
-import type { GlobeLead, Topic } from "@/types/news";
+import type { ArticleThread, GlobeLead, Topic } from "@/types/news";
+
+export type { ArticleThread };
 
 /** Threads asked for: the rail's first request, which the server warms (24 h, all topics, 20). */
 export const THREADS_LIMIT = 20;
@@ -72,14 +75,6 @@ export interface ApiThreadDetail extends ApiThread {
   timeline: { hour: string; n: number; tone: number | null }[];
   /** 20 stories a page, newest first. */
   articles: ApiThreadArticle[];
-}
-
-/** The thread a cluster article is part of (/api/news/cluster), when it would be listed. */
-export interface ArticleThread {
-  id: number;
-  title: string;
-  /** Its first three place names. */
-  places: string[];
 }
 
 // ── The app's ───────────────────────────────────────────────────────
@@ -160,12 +155,16 @@ export function toThread(api: ApiThread): Thread {
   };
 }
 
+/**
+ * A thread's stories. Only a web (http or https) URL is kept: any other
+ * (javascript:, data:) is dropped, so the story shows without a link.
+ */
 export function toThreadArticles(api: readonly ApiThreadArticle[]): ThreadArticle[] {
   return api.map((a) => ({
     title: a.title,
     sourceName: a.source_name,
     publishedAt: a.published_at,
-    sourceUrl: a.source_url,
+    sourceUrl: isWebUrl(a.source_url) ? a.source_url : "",
     place: a.place,
   }));
 }

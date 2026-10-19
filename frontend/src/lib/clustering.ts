@@ -204,5 +204,6 @@ export function apiArticlesToNewsArticles(apiArticles: readonly ApiNewsArticle[]
     region: a.region,
     topicTags: a.topic_tags,
     sentimentScore: a.sentiment_score,
+    thread: a.thread ?? null,
   }));
 }

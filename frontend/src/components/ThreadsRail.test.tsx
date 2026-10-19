@@ -2,7 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import ThreadsRail from "./ThreadsRail";
-import { toThread, type ApiThread, type Thread } from "@/lib/threads";
+import {
+  toThread,
+  toThreadDetail,
+  type ApiThread,
+  type ApiThreadPlace,
+  type Thread,
+  type ThreadDetail,
+} from "@/lib/threads";
 
 function thread(id: number, over: Partial<ApiThread> = {}): Thread {
   return toThread({
@@ -23,7 +30,57 @@ function thread(id: number, over: Partial<ApiThread> = {}): Thread {
   });
 }
 
-const RED_SEA = thread(7, { title: "Red Sea shipping attacks" });
+const place = (name: string, lat: number, lng: number, iso: string): ApiThreadPlace => ({
+  lat,
+  lng,
+  place: name,
+  country_code: iso,
+  first_seen: "2026-10-18T06:10:00Z",
+  n: 3,
+});
+const SPREAD = [
+  place("Yemen", 15.5, 48.5, "YE"),
+  place("Suez, Egypt", 30.5, 32.5, "EG"),
+  place("Rotterdam, Netherlands", 51.5, 4.5, "NL"),
+];
+
+const RED_SEA = thread(7, { title: "Red Sea shipping attacks", places: SPREAD.slice(0, 2) });
+
+function detail(over: Partial<ApiThread> = {}): ThreadDetail {
+  return toThreadDetail({
+    id: 7,
+    title: "Red Sea shipping attacks",
+    synopsis: "Outlets in Yemen first reported attacks on ships in the Red Sea.",
+    status: "developing",
+    first_seen: "2026-10-18T06:10:00Z",
+    last_seen: "2026-10-18T15:00:00Z",
+    n_stories: 24,
+    n_sources: 11,
+    velocity: 6,
+    countries: ["YE", "EG", "NL"],
+    places: SPREAD.slice(0, 2),
+    topic: "conflict",
+    lead: {
+      title: "Ships divert from the Red Sea",
+      source_name: "Reuters",
+      published_at: "2026-10-18T14:00:00Z",
+      image_url: null,
+      topic: "conflict",
+    },
+    entities: [
+      { name: "Suez Canal Authority", n: 9 },
+      { name: "Houthis", n: 7 },
+    ],
+    spread: SPREAD,
+    timeline: [],
+    articles: [],
+    ...over,
+  });
+}
+
+const SELECTED = { id: 7, title: "Red Sea shipping attacks" };
+const route = () => screen.getByRole("list", { name: "Spread, in order of first report" });
+const stops = () => within(route()).getAllByRole("listitem");
 
 type Props = ComponentProps<typeof ThreadsRail>;
 function renderRail(over: Partial<Props> = {}) {
@@ -108,5 +165,73 @@ describe("ThreadsRail", () => {
     expect(screen.queryByRole("region", { name: "Threads" })).toBeNull();
     expect(screen.getByTestId("threads-sheet")).toHaveTextContent("1 active");
     expect(rows()).toHaveLength(1);
+  });
+  it("opens the selected thread under its row: synopsis, spread in order, facts", () => {
+    renderRail({ selected: SELECTED, detail: detail() });
+    const row = rows()[0];
+    const panel = document.getElementById(row.getAttribute("aria-controls")!)!;
+    expect(panel).toHaveClass("tdetail");
+    expect(within(panel).getByText(/Outlets in Yemen first reported/)).toBeInTheDocument();
+    expect(panel.querySelector(".syn .ai")).toHaveTextContent("AI");
+    expect(stops().map((s) => s.textContent)).toEqual([
+      "Yemen",
+      "Suez, Egypt",
+      "Rotterdam, Netherlands",
+    ]);
+    const facts = within(panel).getByRole("list", { name: "Facts" });
+    expect(facts).toHaveTextContent("First seenSun 06:10");
+    expect(facts).toHaveTextContent("Outlets11");
+    expect(facts).toHaveTextContent("Countries3");
+  });
+
+  it("says when the synopsis is pending, showing the lead headline instead", () => {
+    renderRail({ selected: SELECTED, detail: detail({ synopsis: null }) });
+    expect(screen.getByText("Synopsis pending; showing the lead headline")).toBeInTheDocument();
+    expect(screen.getByText("Ships divert from the Red Sea")).toBeInTheDocument();
+  });
+
+  it("shows the list's places until the detail arrives", () => {
+    renderRail({ selected: SELECTED, detail: null });
+    expect(stops().map((s) => s.textContent)).toEqual(["Yemen", "Suez, Egypt"]);
+    expect(screen.queryByText("Key entities")).toBeNull();
+  });
+
+  it("lights the places a replay has reached, all of them otherwise", () => {
+    const { rerender, props } = renderRail({ selected: SELECTED, detail: detail(), lit: 2 });
+    expect(stops().map((s) => s.querySelector(".stop")!.classList.contains("on"))).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    rerender(<ThreadsRail {...props} lit={null} />);
+    expect(stops().every((s) => s.querySelector(".stop")!.classList.contains("on"))).toBe(true);
+  });
+
+  it("lists its key entities, and opens all its stories", () => {
+    const onShowStories = vi.fn();
+    renderRail({ selected: SELECTED, detail: detail(), onShowStories });
+    const entities = screen.getByRole("list", { name: "Key entities" });
+    expect(
+      within(entities)
+        .getAllByRole("listitem")
+        .map((e) => e.textContent),
+    ).toEqual(["Suez Canal Authority", "Houthis"]);
+    fireEvent.click(screen.getByRole("button", { name: "All 24 stories" }));
+    expect(onShowStories).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+  });
+
+  it("holds a selected thread the list doesn't (a chip's) at the top, open", () => {
+    const other = { id: 99, title: "Port strike in Antwerp" };
+    renderRail({ selected: other, detail: detail({ id: 99, title: "Port strike in Antwerp" }) });
+    expect(rows()).toHaveLength(2);
+    expect(rows()[0]).toHaveTextContent("Port strike in Antwerp");
+    expect(rows()[0]).toHaveAttribute("aria-expanded", "true");
+    expect(rows()[1]).toHaveTextContent("Red Sea shipping attacks");
+  });
+
+  it("names a chip's thread before its detail arrives", () => {
+    renderRail({ selected: { id: 99, title: "Port strike in Antwerp" }, detail: null });
+    expect(rows()[0]).toHaveTextContent("Port strike in Antwerp");
+    expect(rows()[0]).toHaveAttribute("aria-expanded", "true");
   });
 });

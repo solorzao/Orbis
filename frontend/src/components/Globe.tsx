@@ -22,6 +22,7 @@ import {
 } from "@/lib/globeView";
 import type { ScreenPoint } from "@/lib/hoverCard";
 import { ARC_ALTITUDE_SCALE, arcDashTime, arcFlows, linkArcs, type GlobeArc } from "@/lib/links";
+import { revealedArcs, spreadArcs, type ThreadPlace } from "@/lib/threads";
 import { webGpuReady } from "@/lib/webgpu";
 import type { GlobeLayer } from "@/components/LayerSwitcher";
 
@@ -30,6 +31,7 @@ const DOT_ALTITUDE = 0.01;
 const NO_DOTS: GlobePoint[] = [];
 const NO_LINKS: CountryLink[] = [];
 const NO_ALERTS: readonly { lat: number; lng: number }[] = [];
+const NO_ARCS: GlobeArc[] = [];
 
 // Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
 // immutable: a changed file gets a new version (see public/geo/README.md).
@@ -80,6 +82,10 @@ interface GlobeProps {
   /** The link whose arc is under the pointer, or null when it leaves the arcs. */
   onArcHover?: (link: CountryLink | null) => void;
   onArcClick?: (link: CountryLink) => void;
+  /** The selected thread: its spread drawn as aurora arcs, first place to each later one. */
+  thread?: { id: number; spread: readonly ThreadPlace[] } | null;
+  /** While its spread replays, the places lit so far: only their arcs show (null: all). */
+  threadLit?: number | null;
 }
 
 interface LandFeature {
@@ -99,6 +105,15 @@ function readGlobeTokens() {
     arcs: {
       coverage: canvasColor(token("--arc-coverage", ""), "rgba(180, 190, 255, 0.30)"),
       highlight: canvasColor(token("--arc-highlight", ""), "#7fe6ff"),
+      flowMs: durationMs(token("--dur-arc-flow", "6000ms"), 6000),
+    },
+    // The active thread's arcs (tokens.md "Aurora gradient"): faint cyan to lavender.
+    spread: {
+      aurora: [
+        canvasColor(token("--aurora-start", ""), "#00d4ff", 0.25),
+        canvasColor(token("--aurora-mid", ""), "#8b9cff"),
+        canvasColor(token("--aurora-end", ""), "#c3a6ff"),
+      ],
       flowMs: durationMs(token("--dur-arc-flow", "6000ms"), 6000),
     },
   };
@@ -122,6 +137,8 @@ export default function Globe({
   inspectedLink = null,
   onArcHover,
   onArcClick,
+  thread = null,
+  threadLit = null,
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -146,6 +163,13 @@ export default function Globe({
 
   // The tokens the scene was built with, for the effects that redraw it.
   const tokensRef = useRef<ReturnType<typeof readGlobeTokens> | null>(null);
+  // The arcs last built for the links and for the thread: kept while their
+  // inputs hold, so a replay step or a new link list leaves the other's arc
+  // objects (and three-globe's meshes and dash phase) as they were.
+  const linkArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
+  const threadArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
+  // What each step of the thread's last replay drew ("lit:arcs"), for the e2e tests.
+  const replayLogRef = useRef<{ thread: number; steps: string[] } | null>(null);
 
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
@@ -443,25 +467,64 @@ export default function Globe({
     if (containerRef.current) containerRef.current.dataset.rings = String(rings.length); // e2e
   }, [alerts, reduced, lowPower, isLoaded]);
 
-  // The Links layer's arcs: the inspected one highlighted, flowing when motion
-  // allows. New arc objects make three-globe build new meshes, so a drag
-  // doesn't come through here (see the next effect).
+  // The arcs: the Links layer's (the inspected one highlighted) and the
+  // selected thread's spread (aurora, as far as a replay has lit it), flowing
+  // when motion allows. New arc objects make three-globe build new meshes, so
+  // a drag doesn't come through here (see the next effect), and each set's
+  // objects are kept while its own inputs hold.
   useEffect(() => {
     const globe = globeRef.current;
     const container = containerRef.current;
     const tokens = tokensRef.current;
     if (!globe || !isLoaded || !tokens) return;
     const flow = arcFlows({ reduced, lowPower, touch });
-    const arcs = linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow });
+    const same = (a: unknown[], b: unknown[] | undefined) =>
+      b !== undefined && a.length === b.length && a.every((x, i) => x === b[i]);
+    const linkKey = [links, inspectedLink, flow];
+    if (!same(linkKey, linkArcsRef.current?.key)) {
+      linkArcsRef.current = {
+        key: linkKey,
+        arcs: linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow }),
+      };
+    }
+    const threadKey = [thread?.id, thread?.spread, flow];
+    if (!same(threadKey, threadArcsRef.current?.key)) {
+      threadArcsRef.current = {
+        key: threadKey,
+        arcs: thread
+          ? spreadArcs(thread.id, thread.spread, { colors: tokens.spread, flow })
+          : NO_ARCS,
+      };
+    }
+    const linked = linkArcsRef.current!.arcs;
+    const spread = revealedArcs(threadArcsRef.current!.arcs, threadLit);
+    const arcs = [...linked, ...spread];
     globe.arcsData(arcs);
     if (container) {
       // read by the e2e tests: WebGL arcs can't be found in the DOM
-      container.dataset.arcs = String(arcs.length);
+      container.dataset.arcs = String(linked.length);
+      container.dataset.threadArcs = String(spread.length);
+      // Each replay step as drawn, "1:0,2:1,…": a step at or before the last starts a new replay.
+      if (thread && threadLit !== null) {
+        const log = replayLogRef.current;
+        const last = log?.thread === thread.id ? log.steps.at(-1) : undefined;
+        const step = `${threadLit}:${spread.length}`;
+        if (step !== last) {
+          const fresh = !last || threadLit <= Number(last.split(":")[0]);
+          replayLogRef.current = {
+            thread: thread.id,
+            steps: fresh ? [step] : [...log!.steps, step],
+          };
+        }
+      } else if (!thread) {
+        replayLogRef.current = null;
+      }
+      container.dataset.threadReplay = replayLogRef.current?.steps.join(",") ?? "";
       container.dataset.arcDashed = String(arcs.some((a) => a.dashGap > 0));
       // how many times arcs were drawn: pausing them must not redraw any
       container.dataset.arcsDrawn = String(Number(container.dataset.arcsDrawn ?? 0) + 1);
     }
-  }, [links, inspectedLink, reduced, lowPower, touch, isLoaded]);
+  }, [links, inspectedLink, thread, threadLit, reduced, lowPower, touch, isLoaded]);
 
   // A drag pauses the arcs' dashes in place: only the accessor changes, so
   // three-globe keeps each mesh, its dash pattern and where its dashes are.
@@ -471,10 +534,10 @@ export default function Globe({
     if (!globe || !isLoaded) return;
     globe.arcDashAnimateTime(arcDashTime(dragging) as (arc: object) => number);
     if (container) {
-      const flowing = arcFlows({ reduced, lowPower, touch, dragging }) && links.length > 0;
-      container.dataset.arcFlow = String(flowing);
+      const drawn = links.length > 0 || (thread?.spread.length ?? 0) > 1;
+      container.dataset.arcFlow = String(arcFlows({ reduced, lowPower, touch, dragging }) && drawn);
     }
-  }, [dragging, links, reduced, lowPower, touch, isLoaded]);
+  }, [dragging, links, thread, reduced, lowPower, touch, isLoaded]);
 
   // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {

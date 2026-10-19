@@ -1,10 +1,36 @@
 import { test, expect, type Page } from "@playwright/test";
-import { MOCK_THREADS, gotoStillGlobe, isThreadsList } from "./fixtures";
+import {
+  MOCK_THREADS,
+  PARIS,
+  RED_SEA_SPREAD,
+  clickPlace,
+  gotoStillGlobe,
+  isThreadsList,
+  mockAllApiRoutes,
+  withThreads,
+} from "./fixtures";
 
 const rail = (page: Page) => page.getByTestId("threads-rail");
 const rows = (page: Page) =>
   page.getByRole("list", { name: "Developing stories" }).getByRole("button");
 const threadsToggle = (page: Page) => page.getByRole("button", { name: "Threads", exact: true });
+const globe = (page: Page) => page.getByTestId("globe");
+const route = (page: Page) => page.getByRole("list", { name: "Spread, in order of first report" });
+const stops = (page: Page) => route(page).locator(".stop");
+const lit = (page: Page) => route(page).locator(".stop.on");
+const play = (page: Page) => page.getByTestId("timeline").locator("button.play");
+
+const RED_SEA = "Red Sea shipping attacks";
+/** Its arcs: from the first place to each later one. */
+const SPREAD_ARCS = String(RED_SEA_SPREAD.length - 1);
+
+/** Threads on and the Red Sea thread open, its arcs drawn: the ready signal. */
+async function openRedSea(page: Page) {
+  await threadsToggle(page).click();
+  await rows(page).first().click();
+  await expect(rows(page).first()).toHaveAttribute("aria-expanded", "true");
+  await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
+}
 
 test.describe("Threads rail", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -63,10 +89,173 @@ test.describe("Threads rail", () => {
   });
 });
 
+test.describe("A thread's detail, arcs and replay", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("selecting a thread opens it inline and draws its spread as arcs", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await openRedSea(page);
+    const detail = rail(page).locator(".tdetail");
+    await expect(detail.getByText(/Outlets in Yemen first reported/)).toBeVisible();
+    await expect(stops(page)).toHaveText(RED_SEA_SPREAD.map((p) => p.place));
+    await expect(lit(page)).toHaveCount(RED_SEA_SPREAD.length); // all, when not replaying
+    const facts = detail.getByRole("list", { name: "Facts" });
+    await expect(facts).toContainText("Outlets11");
+    await expect(facts).toContainText("Countries4");
+    // Key entities, inert until the tracker (PR 17b): labels, not buttons.
+    const entities = detail.getByRole("list", { name: "Key entities" });
+    await expect(entities.getByRole("listitem")).toHaveText([
+      "Suez Canal Authority",
+      "Houthis",
+      "Maersk",
+    ]);
+    await expect(entities.getByRole("button")).toHaveCount(0);
+    await expect(play(page)).toHaveAccessibleName(`Replay how ${RED_SEA} spread`);
+
+    // The selected one again closes it, and its arcs go.
+    await rows(page).first().click();
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
+    await expect(play(page)).toHaveAccessibleName("Replay the last 7 days");
+  });
+
+  test("a thread without its synopsis yet shows the lead headline", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await threadsToggle(page).click();
+    await rows(page).nth(1).click(); // the typhoon: no synopsis yet
+    await expect(rail(page).getByText("Synopsis pending; showing the lead headline")).toBeVisible();
+  });
+
+  test("replay lights the places in order of first report, revealing their arcs one by one", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page);
+    await page.emulateMedia({ reducedMotion: "no-preference" }); // steps, not all at once
+    await openRedSea(page);
+    await expect(globe(page)).toHaveAttribute("data-thread-replay", "");
+
+    await play(page).click();
+    // What the globe drew at each step, "places lit:arcs drawn": one more place, and its
+    // arc from the first, each time. Recorded as drawn, so no runner can miss a step.
+    await expect(globe(page)).toHaveAttribute("data-thread-replay", "1:0,2:1,3:2,4:3");
+    // Then every place and arc again, and the button to replay it.
+    await expect(play(page)).toHaveAccessibleName(`Replay how ${RED_SEA} spread`);
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
+    await expect(lit(page)).toHaveCount(RED_SEA_SPREAD.length);
+  });
+
+  test("with reduced motion the replay lights every place at once", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await openRedSea(page);
+    await play(page).click();
+    // One step: every place lit and every arc drawn at once.
+    await expect(globe(page)).toHaveAttribute("data-thread-replay", "4:3");
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
+    await expect(play(page)).toHaveAccessibleName(`Replay how ${RED_SEA} spread`);
+  });
+
+  test("the spread's dashes flow with full motion and power, and pause in place on a drag", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0"));
+    await mockAllApiRoutes(page);
+    await page.goto("/");
+    await expect(globe(page).locator("canvas")).toBeVisible({ timeout: 10000 });
+    await openRedSea(page);
+    await expect(globe(page)).toHaveAttribute("data-arc-flow", "true");
+    await expect(globe(page)).toHaveAttribute("data-arc-dashed", "true");
+    // How many times the arcs were drawn: a pause redraws none.
+    const drawn = await globe(page).getAttribute("data-arcs-drawn");
+
+    await page.mouse.move(700, 450);
+    await page.mouse.down();
+    await page.mouse.move(740, 470, { steps: 4 });
+    await expect(globe(page)).toHaveAttribute("data-arc-flow", "false");
+    await expect(globe(page)).toHaveAttribute("data-arc-dashed", "true");
+    await expect(globe(page)).toHaveAttribute("data-arcs-drawn", drawn!);
+    await page.mouse.up();
+    await expect(globe(page)).toHaveAttribute("data-arc-flow", "true");
+    await expect(globe(page)).toHaveAttribute("data-arcs-drawn", drawn!);
+  });
+
+  test("with reduced motion the spread's arcs hold still", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("orbis-low-power", "0"));
+    await gotoStillGlobe(page);
+    await openRedSea(page);
+    await expect(globe(page)).toHaveAttribute("data-arc-flow", "false");
+    await expect(globe(page)).toHaveAttribute("data-arc-dashed", "false");
+  });
+
+  test("a thread's arcs and an inspected link's highlight never show together", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page);
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await page.getByTestId("side-tab-inspect").click();
+    const usIran = page
+      .getByRole("list", { name: "Links on the globe" })
+      .getByRole("button", { name: /^United States and Iran/ });
+    await usIran.click();
+    const named = page.locator('[data-testid="arc-pill"][data-placed="true"]');
+    await page.mouse.move(40, 450);
+    await expect(named).toHaveCount(1); // the inspected link, named at its arc
+
+    // A thread selected: its arcs, not the link's highlight.
+    await threadsToggle(page).click();
+    await rows(page).first().click();
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
+    await expect(named).toHaveCount(0);
+
+    // A link opened: its highlight, and the thread closes.
+    await page.getByTestId("link-inspector").getByRole("button", { name: "Close panel" }).click();
+    await usIran.click();
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
+    await expect(rows(page).first()).toHaveAttribute("aria-expanded", "false");
+    await page.mouse.move(40, 450);
+    await expect(named).toHaveCount(1);
+  });
+
+  test("all its stories open in Inspect, 20 at a time", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await openRedSea(page);
+    await rail(page).getByRole("button", { name: "All 24 stories" }).click();
+    await expect(page.getByTestId("side-tab-inspect")).toHaveAttribute("aria-selected", "true");
+    const panel = page.getByTestId("thread-stories");
+    await expect(panel.getByRole("heading", { name: RED_SEA })).toBeVisible();
+    await expect(panel.getByRole("article")).toHaveCount(20);
+    await panel.getByRole("button", { name: "Load more" }).click();
+    await expect(panel.getByRole("article")).toHaveCount(24);
+    await expect(panel.getByRole("button", { name: "Load more" })).toHaveCount(0);
+    await panel.getByRole("button", { name: "Close panel" }).click();
+    await expect(panel).toHaveCount(0);
+  });
+});
+
+test.describe("The Part of chip", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("a place's story chips its thread; the chip selects it and draws its arcs", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page, withThreads);
+    await clickPlace(page, PARIS);
+    const chip = page.getByTestId("news-panel").getByRole("button", {
+      name: "Part of: EU summit on energy prices (also in Brussels, Belgium and Berlin, Germany)",
+    });
+    await expect(chip).toBeVisible();
+    await expect(threadsToggle(page)).toHaveAttribute("aria-pressed", "false");
+
+    await chip.click();
+    await expect(threadsToggle(page)).toHaveAttribute("aria-pressed", "true");
+    const row = rows(page).filter({ hasText: "EU summit on energy prices" });
+    await expect(row).toHaveAttribute("aria-expanded", "true");
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "2");
+  });
+});
+
 test.describe("Threads on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("a Threads tab in the sheet lists them", async ({ page }) => {
+  test("a Threads tab in the sheet lists them, and opens one there", async ({ page }) => {
     await gotoStillGlobe(page);
     await expect(rail(page)).toHaveCount(0);
     await page.getByTestId("side-tab-threads").click();
@@ -76,5 +265,16 @@ test.describe("Threads on a phone", () => {
     await expect(sheet.getByText(`${MOCK_THREADS.length} active`)).toBeVisible();
     await expect(rows(page)).toHaveCount(MOCK_THREADS.length);
     await expect(rail(page)).toHaveCount(0);
+
+    // A row opens its thread there, and draws its spread.
+    await rows(page).first().click();
+    await expect(sheet.locator(".tdetail")).toBeVisible();
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
+
+    // Its stories open in Inspect, the focus going with them (the Threads tab hides).
+    await sheet.getByRole("button", { name: "All 24 stories" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("thread-stories")).toBeVisible();
+    await expect(page.getByRole("tabpanel", { name: "Inspect" })).toBeFocused();
   });
 });

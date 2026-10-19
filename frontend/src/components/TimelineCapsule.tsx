@@ -88,6 +88,11 @@ interface TimelineCapsuleProps {
   playRef?: Ref<HTMLButtonElement>;
   /** The previous visit (ms): a dashed lavender line marks it on the chart (mockup). */
   lastVisit?: number | null;
+  /**
+   * With a thread selected, the play button replays how it spread (its
+   * places lit in order of first report) instead of the last 7 days.
+   */
+  spread?: { title: string; playing: boolean; onPlay: () => void; onStop: () => void } | null;
 }
 
 /**
@@ -96,7 +101,8 @@ interface TimelineCapsuleProps {
  * count and presets. Drag on the chart (or use the two hidden range inputs)
  * to pick a range; a preset goes back to live. Replay steps the window
  * through the chart's UTC days, then returns to the window it started from;
- * picking a window stops it.
+ * picking a window stops it. With a thread selected it replays how the thread
+ * spread instead (a day replay already playing keeps the button until it ends).
  */
 export default function TimelineCapsule({
   timeWindow,
@@ -107,6 +113,7 @@ export default function TimelineCapsule({
   reduced = false,
   playRef,
   lastVisit = null,
+  spread = null,
 }: TimelineCapsuleProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const now = useSyncExternalStore(subscribeMinute, minuteNow, noNowOnServer);
@@ -259,11 +266,23 @@ export default function TimelineCapsule({
         type="button"
         ref={playRef}
         className="aurora-btn play"
-        aria-label={replay.playing ? "Stop replay" : "Replay the last 7 days"}
-        onClick={() => (replay.playing ? replay.stop() : replay.start(timeWindow))}
+        aria-label={
+          replay.playing || spread?.playing
+            ? "Stop replay"
+            : spread
+              ? `Replay how ${spread.title} spread`
+              : "Replay the last 7 days"
+        }
+        onClick={() => {
+          if (replay.playing) replay.stop();
+          else if (spread) {
+            if (spread.playing) spread.onStop();
+            else spread.onPlay();
+          } else replay.start(timeWindow);
+        }}
       >
         <svg width="16" height="16" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
-          {replay.playing ? (
+          {replay.playing || spread?.playing ? (
             <rect x="2.2" y="2.2" width="5.6" height="5.6" rx="1" />
           ) : (
             <path d="M2.5 1.2l6.3 3.8-6.3 3.8z" />

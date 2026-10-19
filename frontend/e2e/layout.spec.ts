@@ -387,6 +387,26 @@ for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
       expect(b["timeline"].w, "capsule at its full width").toBeCloseTo(640, 0);
     });
   }
+
+  // At its tallest, a thread open under its row and the since strip above,
+  // the rail still ends above the bottom row and clear of Links' rank switch.
+  test(`the threads rail with a thread open and Links on keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await settle(page, size, (p) => seedLastVisit(p, 14));
+    await expect(page.getByTestId("since-strip")).toBeVisible();
+    await linksOn(page);
+    await threadsOn(page);
+    await page
+      .getByRole("list", { name: "Developing stories" })
+      .getByRole("button")
+      .first()
+      .click();
+    await expect(page.getByRole("list", { name: "Key entities" })).toBeVisible(); // the detail
+    const regions = [...regionsAt(size.width), "threads-rail", "since-strip", "link-rank"];
+    const b = await expectApart(page, size.width, "thread open, Links on", regions);
+    expectCentred(b["timeline"], size.width, "thread open, Links on");
+  });
 }
 
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {

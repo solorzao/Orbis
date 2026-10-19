@@ -171,12 +171,12 @@ function channels(value: string): number[] | null {
  * A CSS colour token as "rgba(r,g,b,a)" with whole-number channels, the one
  * form three-globe reads alpha from (its arcs). The CSS build minifies
  * rgba() tokens to 8-digit hex, which three.js parses as white. A value it
- * can't read gives the fallback's.
+ * can't read gives the fallback's. `alpha`, when given, replaces the token's.
  */
-export function canvasColor(value: string, fallback: string): string {
+export function canvasColor(value: string, fallback: string, alpha?: number): string {
   const c = channels(value) ?? channels(fallback) ?? [255, 255, 255, 1];
   const [r, g, b] = c.slice(0, 3).map((x) => Math.round(Math.min(255, Math.max(0, x))));
-  const a = Math.round(Math.min(1, Math.max(0, c[3])) * 1000) / 1000;
+  const a = Math.round(Math.min(1, Math.max(0, alpha ?? c[3])) * 1000) / 1000;
   return `rgba(${r},${g},${b},${a})`;
 }
 

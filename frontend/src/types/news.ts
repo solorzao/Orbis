@@ -1,5 +1,14 @@
 import type { LiveHours } from "@/lib/timeWindow";
 
+/** The story thread a cluster story is part of (/api/news/cluster), when it would be listed. */
+export interface ArticleThread {
+  id: number;
+  /** The thread's AI title, else its lead story's headline. */
+  title: string;
+  /** Its first three place names. */
+  places: string[];
+}
+
 export interface NewsArticle {
   id: string;
   title: string;
@@ -14,6 +23,8 @@ export interface NewsArticle {
   region?: string;
   topicTags: string[];
   sentimentScore: number; // -1 to 1, negative = bad, positive = good
+  /** The developing story it is part of (a place's stories only), or null. */
+  thread?: ArticleThread | null;
 }
 
 export type Topic =

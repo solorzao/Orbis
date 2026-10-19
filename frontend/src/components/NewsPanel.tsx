@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { GlobePoint, PanelFilters } from "@/types/news";
+import type { ArticleThread, GlobePoint, PanelFilters } from "@/types/news";
 import { TOPIC_COLORS, formatScore, sentimentBucket, sentimentKey } from "@/lib/clustering";
 import { fetchSelectionSummary } from "@/lib/api";
+import { partOfLabel } from "@/lib/threads";
+import { timeAgo } from "@/lib/timeAgo";
 
 interface NewsPanelProps {
   point: GlobePoint | null;
@@ -17,6 +19,8 @@ interface NewsPanelProps {
   savedFilters?: PanelFilters;
   savedFilterSummary?: string | null;
   onFiltersChange?: (filters: PanelFilters, filterSummary: string | null) => void;
+  /** A story's "Part of" chip: Threads on, that thread selected and its spread drawn. */
+  onThread?: (thread: ArticleThread) => void;
 }
 
 /** The tone filters, on tokens.md's sentiment bins (see sentimentBucket). */
@@ -38,20 +42,6 @@ const TOPIC_TOKENS = new Set(
 function topicColor(tag: string): string {
   const key = tag.toLowerCase();
   return TOPIC_TOKENS.has(key) ? `var(--topic-${key})` : "var(--topic-all)";
-}
-
-function timeAgo(dateString: string): string {
-  const now = new Date();
-  const date = new Date(dateString);
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
 
 const stories = (n: number) => `${n} ${n === 1 ? "story" : "stories"}`;
@@ -83,6 +73,7 @@ export default function NewsPanel({
   savedFilters,
   savedFilterSummary,
   onFiltersChange,
+  onThread,
 }: NewsPanelProps) {
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(
     () => new Set(savedFilters?.topics ?? []),
@@ -368,6 +359,17 @@ export default function NewsPanel({
                 {formatScore(article.sentimentScore)}
               </span>
             </div>
+            {article.thread && onThread && (
+              <div className="art-thread">
+                <button
+                  type="button"
+                  className="pill th-chip"
+                  onClick={() => onThread(article.thread!)}
+                >
+                  {partOfLabel(article.thread, point.locationName)}
+                </button>
+              </div>
+            )}
           </article>
         ))}
         {hasActiveFilters && filteredArticles.length === 0 && point.articles.length > 0 && (

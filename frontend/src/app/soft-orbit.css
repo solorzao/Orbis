@@ -743,6 +743,109 @@ kbd {
 .th-status[data-s="Emerging"] {
   color: var(--signal-warning);
 }
+/* The selected thread under its row (mockup .tdetail, .route, .facts). */
+.tdetail {
+  display: grid;
+  gap: 12px;
+  padding: 8px 14px 14px;
+}
+.tdetail .syn,
+.tdetail .syn-note {
+  margin: 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+.tdetail .syn-note {
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.tdetail .syn-note + .syn {
+  margin-top: -8px;
+}
+.route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.route li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.route li + li::before {
+  content: "\203A"; /* a single right-pointing angle quote */
+  opacity: 0.5;
+}
+.route .stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  transition:
+    color var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out);
+}
+.route .stop.on {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+.route .stop i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(214, 218, 255, 0.3);
+}
+.route .stop.on i {
+  background: linear-gradient(120deg, var(--accent-primary), var(--accent-lavender));
+  box-shadow: 0 0 8px var(--accent-primary);
+}
+.facts {
+  display: flex;
+  gap: 22px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.facts span {
+  display: block;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.facts b {
+  font: var(--type-data-lg);
+  font-weight: 300;
+  color: var(--text-primary);
+}
+.th-entities {
+  display: grid;
+  gap: 6px;
+}
+.entity-pills {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* A place's story that is part of a thread: its "Part of" chip, under the story's line. */
+.art-thread {
+  margin-top: 6px;
+}
+.th-chip {
+  max-width: 100%;
+  height: auto;
+  min-height: 26px;
+  padding-block: 4px;
+  border-radius: 13px; /* a pill on one line, a rounded card on two */
+  white-space: normal;
+  text-align: left;
+  cursor: pointer;
+}
 .th-note,
 .th-count {
   margin: 0;

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import type {
+  ArticleThread,
   CountryLink,
   GlobePoint,
   LinkEntry,
@@ -34,7 +35,14 @@ import {
   toLinkDetail,
   type LinkRank,
 } from "@/lib/links";
-import { threadsStatus } from "@/lib/threads";
+import {
+  THREAD_PAGE,
+  fetchThread,
+  threadsStatus,
+  toThreadArticles,
+  type ThreadArticle,
+  type ThreadDetail,
+} from "@/lib/threads";
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
@@ -44,7 +52,8 @@ import { useLastVisit } from "@/hooks/useLastVisit";
 import { useDelta } from "@/hooks/useDelta";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel, useWideScreen } from "@/hooks/useSidePanel";
-import { useThreads } from "@/hooks/useThreads";
+import { useThread, useThreads } from "@/hooks/useThreads";
+import { useSpreadReplay } from "@/hooks/useSpreadReplay";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
 import { useHoverCard, useTouchOnly } from "@/hooks/useHoverCard";
 import { rememberBrief, useHoverPreview } from "@/hooks/useHoverPreview";
@@ -68,7 +77,20 @@ import LinksChip from "@/components/LinksChip";
 import BreakingTicker from "@/components/BreakingTicker";
 import SinceStrip from "@/components/SinceStrip";
 import ThreadsRail, { type ThreadRef } from "@/components/ThreadsRail";
+import ThreadStories from "@/components/ThreadStories";
 import type { GlobeControls } from "@/components/Globe";
+
+/** A thread's stories in Inspect ("All {n} stories"). */
+interface ThreadStoriesEntry {
+  id: number;
+  title: string;
+  total: number;
+  articles: ThreadArticle[];
+  nextOffset: number;
+  /** The last page was full. */
+  hasMore: boolean;
+  loadingMore: boolean;
+}
 
 // Globe requires `window` — load without SSR
 const Globe = dynamic(() => import("@/components/Globe"), { ssr: false });
@@ -128,17 +150,32 @@ export default function Home() {
     live: timeWindow.kind === "live",
     ...threadsResult,
   });
+  // The selected thread's detail, and its spread: the list's places until the detail lands.
+  const { detail: threadDetail } = useThread(selectedThread?.id ?? null);
+  const selectedId = selectedThread?.id ?? null;
+  const listedThread = threadsResult.threads.find((t) => t.id === selectedId);
+  const spread = threadDetail?.spread ?? listedThread?.places;
+  const globeThread = useMemo(
+    () => (selectedId !== null && spread ? { id: selectedId, spread } : null),
+    [selectedId, spread],
+  );
   // Minimize and close remove the focused control: keep focus in the Inspect tab.
   const inspectRef = useRef<HTMLDivElement>(null);
   const copilotRef = useRef<HTMLDivElement>(null);
   const topicsRef = useRef<HTMLElement>(null);
   const keepInspectFocus = useKeepFocus(inspectRef);
+  // "All {n} stories" in the sheet's Threads tab hides it: focus goes on to Inspect.
+  const threadsTabRef = useRef<HTMLDivElement>(null);
+  const keepThreadsFocus = useKeepFocus(inspectRef, threadsTabRef);
 
   const globeControlsRef = useRef<GlobeControls | null>(null);
   const playRef = useRef<HTMLButtonElement>(null);
 
   // Reduced motion and low-power mode (also sets .low-power on <html>)
   const { reduced, lowPower } = useMotionPrefs();
+  // "Replay how {title} spread": the selected thread's places lit in order of first report.
+  const spreadReplay = useSpreadReplay(globeThread?.spread.length ?? 0, reduced);
+  const { reset: resetSpreadReplay } = spreadReplay;
   const getGlobeGeometry = useCallback(() => globeControlsRef.current?.getGeometry() ?? null, []);
   // Intensity is off in low-power mode: its heatmap is computed at ~246k vertices,
   // about 0.75 s on a slow CPU even with WebGPU and seconds without it (see
@@ -374,20 +411,78 @@ export default function Home() {
   const handleThreadsChange = useCallback(
     (on: boolean) => {
       setThreadsOn(on);
-      if (!on) setSelectedThread(null);
+      if (!on) {
+        resetSpreadReplay();
+        setSelectedThread(null);
+      }
       if (on && !wide) {
         setSideTab("threads");
         setSideOpen(true);
       }
     },
-    [wide, setSideTab, setSideOpen],
+    [wide, setSideTab, setSideOpen, resetSpreadReplay],
   );
 
-  // A row selects its thread (Threads on, for the sheet's tab); the selected one again closes it.
-  const handleThreadSelect = useCallback((thread: ThreadRef | null) => {
-    setSelectedThread(thread);
-    if (thread) setThreadsOn(true);
-  }, []);
+  // A row selects its thread (Threads on, for the sheet's tab); the selected one
+  // again closes it. A thread's arcs and an inspected link's highlight don't
+  // show together: the link's comes back when the thread closes.
+  const handleThreadSelect = useCallback(
+    (thread: ThreadRef | null) => {
+      resetSpreadReplay();
+      setSelectedThread(thread);
+      if (thread) setThreadsOn(true);
+    },
+    [resetSpreadReplay],
+  );
+
+  // A story's "Part of" chip: Threads on, its thread selected and its spread drawn.
+  const handleThreadChip = useCallback(
+    (thread: ArticleThread) => handleThreadSelect({ id: thread.id, title: thread.title }),
+    [handleThreadSelect],
+  );
+
+  // "All {n} stories": the thread's stories in Inspect, the detail's first page
+  // at once, then 20 more a page.
+  const [threadStories, setThreadStories] = useState<ThreadStoriesEntry | null>(null);
+  const threadStoriesId = threadStories ? `thread-${threadStories.id}` : null;
+  const handleShowThreadStories = useCallback(
+    (detail: ThreadDetail) => {
+      keepThreadsFocus(null);
+      setThreadStories({
+        id: detail.id,
+        title: detail.title,
+        total: detail.stories,
+        articles: detail.articles,
+        nextOffset: detail.articles.length,
+        hasMore: detail.articles.length === THREAD_PAGE && detail.articles.length < detail.stories,
+        loadingMore: false,
+      });
+      setActiveId(`thread-${detail.id}`);
+      showInspect();
+    },
+    [showInspect, keepThreadsFocus],
+  );
+  const handleMoreThreadStories = useCallback(async () => {
+    if (!threadStories || threadStories.loadingMore) return;
+    const { id, nextOffset } = threadStories;
+    // Only into the same thread's list: another may have replaced it meanwhile.
+    const update = (f: (s: ThreadStoriesEntry) => ThreadStoriesEntry) =>
+      setThreadStories((s) => (s !== null && s.id === id ? f(s) : s));
+    update((s) => ({ ...s, loadingMore: true }));
+    try {
+      const api = await fetchThread({ id, offset: nextOffset });
+      const page = toThreadArticles(api.articles);
+      update((s) => ({
+        ...s,
+        articles: [...s.articles, ...page],
+        nextOffset: s.nextOffset + page.length,
+        hasMore: page.length === THREAD_PAGE,
+        loadingMore: false,
+      }));
+    } catch {
+      update((s) => ({ ...s, loadingMore: false }));
+    }
+  }, [threadStories]);
 
   const updateLink = useCallback((linkId: string, updates: Partial<LinkEntry>) => {
     setLinkQueue((prev) => prev.map((l) => (l.linkId === linkId ? { ...l, ...updates } : l)));
@@ -414,6 +509,9 @@ export default function Home() {
   // for the same pair, topic and window).
   const handleLinkOpen = useCallback(
     (link: CountryLink) => {
+      // Its highlight, not a thread's arcs.
+      resetSpreadReplay();
+      setSelectedThread(null);
       const query = panelQuery(activeTopic, timeWindow, Date.now());
       const key = linkKey(link.a.iso, link.b.iso);
       const existing = linkQueue.find(
@@ -442,7 +540,7 @@ export default function Home() {
       setActiveId(linkId);
       fetchLinkData(linkId, link, query);
     },
-    [panelQueue, linkQueue, activeTopic, timeWindow, fetchLinkData, showInspect],
+    [panelQueue, linkQueue, activeTopic, timeWindow, fetchLinkData, showInspect, resetSpreadReplay],
   );
 
   // Explain this link: one request per link at a time (useLinkExplain).
@@ -484,9 +582,10 @@ export default function Home() {
       keepInspectFocus(id === activeId ? null : activeId);
       setPanelQueue((prev) => prev.filter((p) => p.panelId !== id));
       setLinkQueue((prev) => prev.filter((l) => l.linkId !== id));
+      if (id === threadStoriesId) setThreadStories(null);
       setActiveId((prev) => (prev === id ? null : prev));
     },
-    [activeId, keepInspectFocus],
+    [activeId, keepInspectFocus, threadStoriesId],
   );
 
   const handleMinimizePanel = useCallback(
@@ -511,7 +610,10 @@ export default function Home() {
   // Inspect tab: the recent places and links, then the one inspected
   const expandedPanel = panelQueue.find((p) => p.panelId === activeId) ?? null;
   const activeLink = linkQueue.find((l) => l.linkId === activeId) ?? null;
-  const inspectedLink = activeLink ? linkKey(activeLink.link.a.iso, activeLink.link.b.iso) : null;
+  // The inspected link's highlight, unless a thread's arcs are drawn (one or the other).
+  const inspectedLink =
+    activeLink && !selectedThread ? linkKey(activeLink.link.a.iso, activeLink.link.b.iso) : null;
+  const activeThreadStories = threadStories && activeId === threadStoriesId ? threadStories : null;
 
   // The arc pill names the hovered arc, else the inspected one, while it is drawn.
   const drawn = (key: string | null) =>
@@ -583,6 +685,19 @@ export default function Home() {
           onFiltersChange={(filters, filterSummary) =>
             handleFiltersChange(expandedPanel.panelId, filters, filterSummary)
           }
+          onThread={handleThreadChip}
+        />
+      ) : activeThreadStories && threadStoriesId ? (
+        <ThreadStories
+          key={threadStoriesId}
+          title={activeThreadStories.title}
+          total={activeThreadStories.total}
+          articles={activeThreadStories.articles}
+          loading={false}
+          loadingMore={activeThreadStories.loadingMore}
+          hasMore={activeThreadStories.hasMore}
+          onLoadMore={handleMoreThreadStories}
+          onClose={() => handleClosePanel(threadStoriesId)}
         />
       ) : (
         <>
@@ -626,6 +741,8 @@ export default function Home() {
         inspectedLink={inspectedLink}
         onArcHover={setHoveredLink}
         onArcClick={handleLinkOpen}
+        thread={globeThread}
+        threadLit={spreadReplay.lit}
       />
 
       {/* Orbital rings around the globe */}
@@ -664,9 +781,10 @@ export default function Home() {
             status={threadsNote}
             loading={threadsResult.loading}
             selected={selectedThread}
-            detail={null}
-            lit={null}
+            detail={threadDetail}
+            lit={spreadReplay.lit}
             onSelect={handleThreadSelect}
+            onShowStories={handleShowThreadStories}
           />
         )}
       </div>
@@ -680,6 +798,7 @@ export default function Home() {
         inspectCount={panelQueue.length + linkQueue.length}
         inspectRef={inspectRef}
         copilotRef={copilotRef}
+        threadsRef={threadsTabRef}
         copilot={
           <CoPilot
             messages={agentMessages}
@@ -711,9 +830,10 @@ export default function Home() {
               status={threadsNote}
               loading={threadsResult.loading}
               selected={selectedThread}
-              detail={null}
-              lit={null}
+              detail={threadDetail}
+              lit={spreadReplay.lit}
               onSelect={handleThreadSelect}
+              onShowStories={handleShowThreadStories}
             />
           )
         }
@@ -753,6 +873,16 @@ export default function Home() {
           reduced={reduced}
           playRef={playRef}
           lastVisit={lastVisit}
+          spread={
+            selectedThread && globeThread
+              ? {
+                  title: threadDetail?.title ?? selectedThread.title,
+                  playing: spreadReplay.playing,
+                  onPlay: spreadReplay.start,
+                  onStop: spreadReplay.stop,
+                }
+              : null
+          }
         />
         <BreakingTicker stories={breaking} reduced={reduced} onOpen={handleBreakingOpen} />
       </BottomBar>

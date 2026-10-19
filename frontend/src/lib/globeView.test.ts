@@ -80,6 +80,11 @@ describe("canvasColor", () => {
     expect(canvasColor("rgb(1 2 3)", "#000")).toBe("rgba(1,2,3,1)");
   });
 
+  it("can set the alpha, as the aurora arcs' faint start", () => {
+    expect(canvasColor("#00d4ff", "#000", 0.25)).toBe("rgba(0,212,255,0.25)");
+    expect(canvasColor("rgba(180, 190, 255, 0.30)", "#000", 1)).toBe("rgba(180,190,255,1)");
+  });
+
   it("falls back for a value it can't read", () => {
     expect(canvasColor("", "#7fe6ff")).toBe("rgba(127,230,255,1)");
     expect(canvasColor("var(--x)", "rgba(180, 190, 255, 0.30)")).toBe("rgba(180,190,255,0.3)");
