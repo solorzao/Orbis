@@ -61,6 +61,19 @@ async def test_returns_text_after_thinking_block(client):
 
 
 @pytest.mark.asyncio
+async def test_a_json_schema_constrains_the_reply_when_given(client):
+    """Structured outputs: the reply is the schema's JSON (thread synopses)."""
+    schema = {"type": "object", "properties": {}, "additionalProperties": False}
+    client.messages.create.return_value = _response([("text", "{}")])
+
+    assert await ai_summary._call_claude("<headlines>...", json_schema=schema) == "{}"
+    assert client.messages.create.call_args.kwargs["output_config"] == {
+        "effort": "low",
+        "format": {"type": "json_schema", "schema": schema},
+    }
+
+
+@pytest.mark.asyncio
 async def test_refusal_returns_fallback(client):
     client.messages.create.return_value = _response([("thinking", "")], stop_reason="refusal")
 

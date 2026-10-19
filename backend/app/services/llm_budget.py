@@ -29,12 +29,17 @@ _PRICES: dict[str, tuple[float, float]] = {
 # 5.1), so pointing HAIKU_MODEL_ID at any model cannot overspend the cap.
 _UNKNOWN_PRICE = (10.00, 50.00)
 
+# Share of the cap for thread synopses, written in the background after each
+# cycle: they pause first, so visitors' features keep the rest.
+SYNOPSIS_SHARE = 0.5
+
 # Share of the cap for features whose answers serve one visitor (the agent,
 # selection summaries); the rest is kept for the cached cluster summaries.
 UNCACHED_SHARE = 0.7
 
 # Shares of the cap that log a warning when spend crosses them, and what pauses.
 _THRESHOLDS = (
+    (SYNOPSIS_SHARE, "thread synopses pause"),
     (UNCACHED_SHARE, "the agent and selection summaries pause"),
     (1.0, "all AI features pause"),
 )

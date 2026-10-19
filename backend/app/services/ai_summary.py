@@ -217,11 +217,16 @@ async def summarise_selection(
 
 
 async def _call_claude(
-    user_message: str, system: str | None = None, budget_share: float = 1.0
+    user_message: str,
+    system: str | None = None,
+    budget_share: float = 1.0,
+    json_schema: dict | None = None,
 ) -> str:
     """Call the Anthropic messages API.  Returns the text response.
 
     ``budget_share`` is the share of the daily cap this call may draw on.
+    ``json_schema``, when given, constrains the reply to JSON matching it
+    (structured outputs); the caller still parses and validates it.
     Raises ``SummaryUnavailable`` when there is no summary to return.
     """
     if not settings.anthropic_api_key:
@@ -234,12 +239,15 @@ async def _call_claude(
         )
         raise SummaryUnavailable("AI summaries are paused until 00:00 UTC (daily limit reached).")
 
+    output_config: dict = {"effort": "low"}
+    if json_schema is not None:
+        output_config["format"] = {"type": "json_schema", "schema": json_schema}
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model=settings.haiku_model_id,
             max_tokens=1024,  # room for adaptive thinking plus the short summary
-            output_config={"effort": "low"},
+            output_config=output_config,
             system=system or _SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )

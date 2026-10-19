@@ -206,8 +206,9 @@ async def test_record_logs_usage_and_warns_once_per_threshold(caplog):
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(infos) == 4
     assert HAIKU in infos[-1] and "0.0160" in infos[-1]  # model and running total
-    assert len(warnings) == 2
-    assert "70%" in warnings[0] and "100%" in warnings[1]
+    assert len(warnings) == 3  # $0.008 crosses two thresholds at once
+    assert "50%" in warnings[0] and "thread synopses pause" in warnings[0]
+    assert "70%" in warnings[1] and "100%" in warnings[2]
 
 
 @pytest.mark.asyncio
