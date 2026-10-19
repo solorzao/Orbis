@@ -109,15 +109,17 @@ _TYPES_SQL = """
 
 
 def member_mentions_sql(name: str, since: str, cap: str) -> str:
-    """SQL for how much coverage names *name* since *since*, read from at most *cap*
-    thread members through idx_thread_members_entities.
+    """A LATERAL subquery for how much coverage names *name* since *since*, read
+    from at most *cap* thread members through idx_thread_members_entities.
 
-    The value is the name's distinct stories, as the dossier counts them (its
-    d7 for a week), or *cap* when the name has at least *cap* members ("100+").
+    ``stories``: the distinct stories among the members read, copies counted
+    once; under the cap that is every member, so the dossier's d7 for a week.
+    ``capped``: the cap was reached, so the name has at least *cap* members and
+    more stories than counted ("{stories}+"). Rank capped names first.
     *name*, *since* and *cap* are SQL expressions (a column, a parameter).
     """
     return f"""
-        (SELECT CASE WHEN count(*) >= {cap} THEN {cap} ELSE count(DISTINCT story) END::int
+        (SELECT count(DISTINCT story)::int AS stories, count(*) >= {cap} AS capped
          FROM (SELECT {STORY_SQL} AS story FROM thread_members
                WHERE entities @> ARRAY[{name}]::text[] AND published_at >= {since}
                LIMIT {cap}) x)
@@ -129,13 +131,14 @@ def member_mentions_sql(name: str, since: str, cap: str) -> str:
 # plan use idx_kg_nodes_entity_name_trgm (migration 016), which holds only
 # people and organisations; $1 alone would match it only in a custom plan.
 # Stored spellings that differ only in case resolve to the one with the most
-# coverage this week in thread members ($3, reading at most $4), which the
-# dossier reads by that spelling, then by name: the answer depends only on
-# the lowercased name, as the dossier's cache key does.
+# coverage this week in thread members ($3, reading at most $4), ranked as
+# search ranks names, which the dossier reads by that spelling, then by name:
+# the answer depends only on the lowercased name, as the dossier's cache key.
 _RESOLVE_SQL = f"""
-    SELECT n.name FROM kg_nodes n
+    SELECT n.name
+    FROM kg_nodes n CROSS JOIN LATERAL {member_mentions_sql("n.name", "$3", "$4")} m
     WHERE n.type IN ('PERSON', 'ORG') AND n.type = $1 AND n.name ILIKE $2
-    ORDER BY {member_mentions_sql("n.name", "$3", "$4")} DESC, n.name
+    ORDER BY m.capped DESC, m.stories DESC, n.name
     LIMIT 1
 """
 

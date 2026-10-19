@@ -15,8 +15,10 @@ NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
 MIGRATIONS = Path(__file__).resolve().parents[2] / "database" / "migrations"
 
 
-def _candidate(type_, name, n, sim=0.5):
-    return {"type": type_, "name": name, "n": n, "sim": sim}
+def _candidate(type_, name, n, sim=0.5, capped=False):
+    """A candidate row: its distinct stories among the members read, and whether
+    the member cap was hit."""
+    return {"type": type_, "name": name, "stories": n, "capped": capped, "sim": sim}
 
 
 class _Pool:
@@ -56,14 +58,35 @@ class TestSearchService:
         result = await _search(pool)
 
         assert result["people"] == [
-            {"type": "person", "name": "Mahmoud Abbas", "n": 90},
-            {"type": "person", "name": "Abbas Abbasi", "n": 40},
-            {"type": "person", "name": "Abbas Araghchi", "n": 40},
-            {"type": "person", "name": "Abbas 0", "n": 1},
-            {"type": "person", "name": "Abbas 1", "n": 1},
+            {"type": "person", "name": "Mahmoud Abbas", "n": 90, "capped": False},
+            {"type": "person", "name": "Abbas Abbasi", "n": 40, "capped": False},
+            {"type": "person", "name": "Abbas Araghchi", "n": 40, "capped": False},
+            {"type": "person", "name": "Abbas 0", "n": 1, "capped": False},
+            {"type": "person", "name": "Abbas 1", "n": 1, "capped": False},
         ]  # up to five
-        assert result["orgs"] == [{"type": "org", "name": "Abbas Foundation", "n": 2}]
+        assert result["orgs"] == [
+            {"type": "org", "name": "Abbas Foundation", "n": 2, "capped": False}
+        ]
         assert result["threads"] == []
+
+    @pytest.mark.asyncio
+    async def test_names_at_the_member_cap_come_first_with_their_stories(self):
+        pool = _Pool(
+            [
+                _candidate("PERSON", "Donald Trump Jr", 99, 0.6),  # 99 stories, under the cap
+                _candidate("PERSON", "Melania Trump", 40, 0.5, capped=True),  # 100+ members
+                _candidate("PERSON", "Donald Trump", 85, 0.4, capped=True),
+            ]
+        )
+        result = await _search(pool, "trump")
+
+        # At the cap, a name has 100+ members this week: more coverage than any
+        # name under it, whatever its stories among the 100 read ("{n}+" in the UI).
+        assert result["people"] == [
+            {"type": "person", "name": "Donald Trump", "n": 85, "capped": True},
+            {"type": "person", "name": "Melania Trump", "n": 40, "capped": True},
+            {"type": "person", "name": "Donald Trump Jr", "n": 99, "capped": False},
+        ]
 
     @pytest.mark.asyncio
     async def test_candidates_by_prefix_or_trigram_counted_from_thread_members(self):
@@ -76,9 +99,12 @@ class TestSearchService:
         assert "WHERE type IN ('PERSON', 'ORG') AND (name ILIKE $2 OR name % $1)" in flat
         assert "LIMIT 20" in flat
         # Each candidate's stories this week from thread members, as the dossier
-        # counts them, reading at most 100 members ("100+" in the UI).
+        # counts them, reading at most 100 members.
         mentions = " ".join(entities.member_mentions_sql("c.name", "$3", "$4").split())
-        assert f"SELECT c.type, c.name, c.sim, {mentions} AS n FROM c" in flat
+        assert (
+            f"SELECT c.type, c.name, c.sim, m.stories, m.capped FROM c CROSS JOIN LATERAL"
+            f" {mentions} m"
+        ) in flat
         assert "kg_edges" not in flat
         assert search.SEARCH_COUNT_CAP == 100
         assert args == ("Abbas", "Abbas%", NOW - timedelta(days=7), search.SEARCH_COUNT_CAP)
@@ -151,7 +177,7 @@ def _client(monkeypatch):
 
 
 RESULTS = {
-    "people": [{"type": "person", "name": "Abbas Araghchi", "n": 40}],
+    "people": [{"type": "person", "name": "Abbas Araghchi", "n": 40, "capped": True}],
     "orgs": [],
     "threads": [{"id": 7, "title": "Iran nuclear talks"}],
 }

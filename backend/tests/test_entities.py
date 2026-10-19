@@ -324,16 +324,14 @@ class TestResolveEntity:
         sql, *args = pool.fetchval.await_args.args
         flat = " ".join(sql.split())
         # The literal type predicate: the partial trigram index of people and orgs.
-        assert (
-            "FROM kg_nodes n WHERE n.type IN ('PERSON', 'ORG') AND n.type = $1"
-            " AND n.name ILIKE $2" in flat
-        )
-        # Spellings that differ only in case: the most mentioned this week in thread
-        # members, which the dossier reads by that spelling (counted up to a cap),
-        # then by name. Nothing depends on the request's case, so the dossier cached
-        # under the lowercased name is the same whichever case asks.
+        assert "WHERE n.type IN ('PERSON', 'ORG') AND n.type = $1 AND n.name ILIKE $2" in flat
+        # Spellings that differ only in case: the most coverage this week in thread
+        # members, which the dossier reads by that spelling, ranked as search ranks
+        # names, then by name. Nothing depends on the request's case, so the dossier
+        # cached under the lowercased name is the same whichever case asks.
         mentions = " ".join(entities.member_mentions_sql("n.name", "$3", "$4").split())
-        assert f"ORDER BY {mentions} DESC, n.name LIMIT 1" in flat
+        assert f"FROM kg_nodes n CROSS JOIN LATERAL {mentions} m WHERE" in flat
+        assert "ORDER BY m.capped DESC, m.stories DESC, n.name LIMIT 1" in flat
         assert "kg_edges" not in flat
         assert args == [
             "PERSON",
@@ -355,10 +353,10 @@ class TestMemberMentions:
     def test_stories_from_at_most_a_cap_of_members_as_the_dossier_counts_them(self):
         assert entities.MENTION_COUNT_CAP == 100
         sql = " ".join(entities.member_mentions_sql("c.name", "$3", "$4").split())
-        # A name with the cap's worth of members shows the cap ("100+"); below it,
-        # its distinct stories: the dossier's d7, copies counted once.
+        # Always distinct stories, copies counted once (below the cap, the dossier's
+        # d7); capped when the cap's worth of members was read ("{n}+").
         assert sql == (
-            "(SELECT CASE WHEN count(*) >= $4 THEN $4 ELSE count(DISTINCT story) END::int"
+            "(SELECT count(DISTINCT story)::int AS stories, count(*) >= $4 AS capped"
             f" FROM (SELECT {entities.STORY_SQL} AS story FROM thread_members"
             " WHERE entities @> ARRAY[c.name]::text[] AND published_at >= $3 LIMIT $4) x)"
         )

@@ -155,11 +155,10 @@ async def _members(conn, specs: list[dict]) -> list[uuid.UUID]:
     return ids
 
 
-async def _bulk_members(conn, count: int, entities_sql: str, keyed: bool = True) -> None:
-    """*count* members this week whose entities are *entities_sql* (SQL over ``g``,
-    1..count), each its own story unless not *keyed*."""
+async def _bulk_members(conn, count: int, entities_sql: str, story: str = "g") -> None:
+    """*count* members this week whose entities and story_key are *entities_sql* and
+    *story* (SQL over ``g``, 1..count): by default each its own story."""
     thread = await _thread(conn)
-    story = "g" if keyed else "NULL"
     await conn.execute(
         f"""
         INSERT INTO thread_members (article_id, thread_id, story_key, published_at,
@@ -408,10 +407,10 @@ async def test_search_ranks_by_stories_this_week_and_drops_the_unmentioned(conn)
     result = await search.search("zz searchable", now)
 
     assert result["people"] == [
-        {"type": "person", "name": "Zz Searchable One", "n": 3},
-        {"type": "person", "name": "Zz Searchable Two", "n": 1},
+        {"type": "person", "name": "Zz Searchable One", "n": 3, "capped": False},
+        {"type": "person", "name": "Zz Searchable Two", "n": 1, "capped": False},
     ]
-    assert result["orgs"] == [{"type": "org", "name": "Zz Searchable Org", "n": 1}]
+    assert result["orgs"] == [{"type": "org", "name": "Zz Searchable Org", "n": 1, "capped": False}]
     # As the dossier counts them.
     dossier = await entities.get_entity_dossier("Zz Searchable One", "person", "168h", now)
     assert dossier["counts"]["d7"] == 3
@@ -479,13 +478,27 @@ async def test_search_reads_only_listed_threads(conn):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("pool")
-async def test_search_counts_up_to_the_cap(conn):
-    await _node(conn, "PERSON", "Zz Capped Person")
-    await _bulk_members(conn, 150, "ARRAY['Zz Capped Person']")
-    result = await search.search("zz capped", datetime.now(timezone.utc))
+async def test_search_counts_stories_among_the_capped_members_and_ranks_the_capped_first(
+    conn,
+):
+    for name in ("Zz Cap Many", "Zz Cap Copies", "Zz Cap Under"):
+        await _node(conn, "PERSON", name)
+    await _bulk_members(conn, 150, "ARRAY['Zz Cap Many']")  # 150 stories
+    await _bulk_members(conn, 100, "ARRAY['Zz Cap Copies']", story="g % 40")  # 40 stories
+    await _bulk_members(conn, 99, "ARRAY['Zz Cap Under']")  # 99 stories, under the cap
+    now = datetime.now(timezone.utc)
+    result = await search.search("zz cap", now)
+
+    assert search.SEARCH_COUNT_CAP == 100
     assert result["people"] == [
-        {"type": "person", "name": "Zz Capped Person", "n": search.SEARCH_COUNT_CAP}
+        # The cap's worth of members read: n is their distinct stories, "{n}+".
+        {"type": "person", "name": "Zz Cap Many", "n": 100, "capped": True},
+        {"type": "person", "name": "Zz Cap Copies", "n": 40, "capped": True},
+        # Under the cap: every member read, n is the dossier's d7.
+        {"type": "person", "name": "Zz Cap Under", "n": 99, "capped": False},
     ]
+    dossier = await entities.get_entity_dossier("Zz Cap Under", "person", "168h", now)
+    assert dossier["counts"]["d7"] == 99
 
 
 @pytest.mark.asyncio

@@ -15,9 +15,10 @@ from app.services.database import get_pool
 from app.services.entities import MENTION_COUNT_CAP, like_escape, member_mentions_sql
 from app.services.thread_reads import LIST_HOURS, LISTED_SQL
 
-# A name's coverage this week is read from at most this many members, so
-# ``n`` is capped (the UI shows "100+") and a heavy name costs no more on this
-# type-ahead read. Ranking still holds, ties broken by similarity.
+# A name's coverage this week is read from at most this many members, so a
+# heavy name costs no more on this type-ahead read. ``n`` is the distinct
+# stories among them; ``capped`` says the cap was reached (the UI shows
+# "{n}+"), and capped names rank first.
 SEARCH_COUNT_CAP = MENTION_COUNT_CAP
 
 _WINDOW = timedelta(days=7)
@@ -37,8 +38,8 @@ _CANDIDATES_SQL = f"""
         ORDER BY sim DESC, name
         LIMIT 20
     )
-    SELECT c.type, c.name, c.sim, {member_mentions_sql("c.name", "$3", "$4")} AS n
-    FROM c
+    SELECT c.type, c.name, c.sim, m.stories, m.capped
+    FROM c CROSS JOIN LATERAL {member_mentions_sql("c.name", "$3", "$4")} m
 """
 
 # Story threads (migration 013), selected as the thread list selects them,
@@ -58,20 +59,31 @@ _THREAD_WINDOW = timedelta(hours=max(LIST_HOURS))
 async def search(q: str, now: datetime) -> dict:
     """People, organisations and threads matching *q* (2-80 characters, trimmed).
 
-    People and organisations are ranked by stories in the last 7 days (up to
-    SEARCH_COUNT_CAP), then by how close the name is, up to five of each; a
-    name in no story this week is left out. Threads are up to five listed
+    People and organisations are ranked by coverage in the last 7 days: names
+    with SEARCH_COUNT_CAP members or more first (``capped``), then by distinct
+    stories (``n``, among the members read), then by how close the name is, up
+    to five of each; a name in no story this week is left out. Threads are up to five listed
     threads (as the thread list selects them), the fastest first.
     """
     pool = await get_pool()
     week_ago = now - _WINDOW
     rows = await pool.fetch(_CANDIDATES_SQL, q, like_escape(q) + "%", week_ago, SEARCH_COUNT_CAP)
-    ranked = sorted((r for r in rows if r["n"] > 0), key=lambda r: (-r["n"], -r["sim"], r["name"]))
+    ranked = sorted(
+        (r for r in rows if r["stories"] > 0),
+        key=lambda r: (not r["capped"], -r["stories"], -r["sim"], r["name"]),
+    )
     groups: dict[str, list[dict]] = {"PERSON": [], "ORG": []}
     for row in ranked:
         group = groups[row["type"]]
         if len(group) < _PER_GROUP:
-            group.append({"type": row["type"].lower(), "name": row["name"], "n": row["n"]})
+            group.append(
+                {
+                    "type": row["type"].lower(),
+                    "name": row["name"],
+                    "n": row["stories"],
+                    "capped": row["capped"],
+                }
+            )
     return {
         "people": groups["PERSON"],
         "orgs": groups["ORG"],
