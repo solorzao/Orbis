@@ -55,7 +55,7 @@ test.describe("Threads rail", () => {
     await expect(rail(page).getByText(`${MOCK_THREADS.length} active`)).toBeVisible();
     await expect(rows(page)).toHaveCount(MOCK_THREADS.length);
     await expect(rows(page).first()).toHaveAccessibleName(
-      "Red Sea shipping attacks, Developing, 24 stories, 4 regions, 11 outlets",
+      "Red Sea shipping attacks, Developing, 24 stories, 4 countries, 11 outlets",
     );
     await expect(rows(page).nth(1).locator(".th-status")).toHaveText("Emerging");
     expect(asked).toEqual(["?timespan=24h&limit=20"]);

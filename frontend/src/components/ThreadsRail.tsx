@@ -40,8 +40,8 @@ interface ThreadsRailProps {
 const plural = (n: number, one: string, many: string) =>
   `${n.toLocaleString("en-GB")} ${n === 1 ? one : many}`;
 
-/** "{n} regions": the countries it reached. */
-const regions = (t: Thread) => plural(t.countries.length, "region", "regions");
+/** "{n} countries": the countries it reached. */
+const countries = (t: Thread) => plural(t.countries.length, "country", "countries");
 
 const when = (iso: string) => {
   const ms = Date.parse(iso);
@@ -168,7 +168,7 @@ export default function ThreadsRail({
   const row = (t: Thread | null, ref: ThreadRef) => {
     const open = selected?.id === ref.id;
     const label = t
-      ? `${t.title}, ${t.status}, ${plural(t.stories, "story", "stories")}, ${regions(t)}, ${plural(t.outlets, "outlet", "outlets")}`
+      ? `${t.title}, ${t.status}, ${plural(t.stories, "story", "stories")}, ${countries(t)}, ${plural(t.outlets, "outlet", "outlets")}`
       : ref.title;
     return (
       <li key={ref.id}>
@@ -187,8 +187,9 @@ export default function ThreadsRail({
               <span className="th-status" data-s={t.status}>
                 {t.status}
               </span>
-              <span>{regions(t)}</span>
-              <span>{plural(t.outlets, "outlet", "outlets")}</span>
+              {/* Open, the facts under it say these. */}
+              {!open && <span>{countries(t)}</span>}
+              {!open && <span>{plural(t.outlets, "outlet", "outlets")}</span>}
               <span className="bar">
                 <i style={{ width: `${velocityShare(t, threads)}%` }} />
               </span>

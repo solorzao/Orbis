@@ -120,12 +120,12 @@ describe("ThreadsRail", () => {
     expect(rows()[9]).toHaveTextContent("Thread 10");
   });
 
-  it("shows each thread's title, stories, status, regions, outlets and velocity", () => {
+  it("shows each thread's title, stories, status, countries, outlets and velocity", () => {
     const slower = thread(8, { title: "Typhoon nears Luzon", status: "emerging", velocity: 1 });
     renderRail({ threads: [RED_SEA, slower] });
     const [first, second] = rows();
     expect(first).toHaveAccessibleName(
-      "Red Sea shipping attacks, Developing, 14 stories, 3 regions, 9 outlets",
+      "Red Sea shipping attacks, Developing, 14 stories, 3 countries, 9 outlets",
     );
     expect(first.querySelector(".th-status")).toHaveAttribute("data-s", "Developing");
     expect(second.querySelector(".th-status")).toHaveAttribute("data-s", "Emerging");
@@ -133,6 +133,22 @@ describe("ThreadsRail", () => {
     // The velocity bar: against the fastest listed.
     expect(first.querySelector<HTMLElement>(".bar i")!.style.width).toBe("100%");
     expect(second.querySelector<HTMLElement>(".bar i")!.style.width).toBe("25%");
+  });
+
+  it("counts countries as countries, and leaves an open row's numbers to its facts", () => {
+    const { props, rerender } = renderRail();
+    const meta = () => rows()[0].querySelector(".m")!;
+    expect(meta()).toHaveTextContent("3 countries");
+    expect(meta()).toHaveTextContent("9 outlets");
+    expect(screen.queryByText(/regions?\b/)).toBeNull();
+
+    rerender(<ThreadsRail {...props} selected={SELECTED} detail={detail()} />);
+    // Open: the facts say Outlets and Countries; the row's line doesn't repeat them.
+    expect(meta()).not.toHaveTextContent("countries");
+    expect(meta()).not.toHaveTextContent("outlets");
+    expect(meta().querySelector(".th-status")).toHaveTextContent("Developing");
+    expect(meta().querySelector(".bar")).not.toBeNull();
+    expect(screen.getByRole("list", { name: "Facts" })).toHaveTextContent("Countries3");
   });
 
   it("says why it lists nothing", () => {

@@ -7,6 +7,7 @@ import {
   type AgentMessage as AgentMessageType,
   type Citation,
   type GlobeAction,
+  isWebUrl,
 } from "@/hooks/useAgent";
 
 /** The quiet tool line while an answer streams: what each retrieval tool is doing. */
@@ -105,14 +106,17 @@ function AgentMessage({
     );
   };
 
+  // The answer's own links: only to the web (http or https); any other stays its text.
   const components: Components = {
     a: ({ href, children }) =>
       href?.startsWith(CITE_HREF) ? (
         cite(Number(href.slice(CITE_HREF.length)))
-      ) : (
+      ) : isWebUrl(href) ? (
         <a href={href} target="_blank" rel="noopener noreferrer">
           {children}
         </a>
+      ) : (
+        <span>{children}</span>
       ),
   };
 

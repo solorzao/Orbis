@@ -101,6 +101,24 @@ describe("NewsPanel", () => {
     expect(negative.style.getPropertyValue("--sc")).toBe("var(--sentiment-n2)");
   });
 
+  it("links only web stories: a javascript: or data: URL shows the headline as plain text", () => {
+    const articles = [
+      { ...ARTICLES[0], sourceUrl: "javascript:alert(1)" },
+      { ...ARTICLES[1], sourceUrl: "data:text/html,<script>alert(1)</script>" },
+      { ...ARTICLES[2], sourceUrl: "https://example.com/a3" },
+    ];
+    render(<NewsPanel point={point({ articles })} onClose={() => {}} />);
+    const [js, data, web] = rows();
+    expect(within(js).queryByRole("link")).toBeNull();
+    expect(within(js).getByText("France announces new climate policy")).toHaveClass("h");
+    expect(within(data).queryByRole("link")).toBeNull();
+    expect(within(web).getByRole("link", { name: "Paris strikes halt the metro" })).toHaveAttribute(
+      "href",
+      "https://example.com/a3",
+    );
+    expect(document.querySelector('a[href^="javascript:"], a[href^="data:"]')).toBeNull();
+  });
+
   it("tags each row with its topics, coloured by the topic tokens", () => {
     render(
       <NewsPanel

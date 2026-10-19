@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import type { ArticleThread, GlobePoint, PanelFilters } from "@/types/news";
 import { TOPIC_COLORS, formatScore, sentimentBucket, sentimentKey } from "@/lib/clustering";
 import { fetchSelectionSummary } from "@/lib/api";
+import { isWebUrl } from "@/hooks/useAgent";
 import { partOfLabel } from "@/lib/threads";
 import { timeAgo } from "@/lib/timeAgo";
 
@@ -332,9 +333,14 @@ export default function NewsPanel({
         )}
         {filteredArticles.map((article) => (
           <article key={article.id} className="art">
-            <a className="h" href={article.sourceUrl} target="_blank" rel="noopener noreferrer">
-              {article.title}
-            </a>
+            {/* Only a web URL is a link: javascript:, data: and the like stay text. */}
+            {isWebUrl(article.sourceUrl) ? (
+              <a className="h" href={article.sourceUrl} target="_blank" rel="noopener noreferrer">
+                {article.title}
+              </a>
+            ) : (
+              <span className="h">{article.title}</span>
+            )}
             <div className="m">
               <span>{article.sourceName}</span>
               <span suppressHydrationWarning>{timeAgo(article.publishedAt)}</span>
