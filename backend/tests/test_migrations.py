@@ -45,3 +45,21 @@ def test_column_migration_adds_columns_without_a_table_rewrite(name, expected):
     for column, definition in columns:
         pattern = rf"[\w\[\]]+(?:\s+NOT NULL\s+DEFAULT\s+{CONSTANT})?"
         assert re.fullmatch(pattern, definition, re.IGNORECASE), f"{column}: {definition}"
+
+
+# Migrations that only create new tables: they must fail fast on locks and
+# leave the live articles table alone (it is rewritten on every embedding).
+TABLE_MIGRATIONS = ["013_threads.sql"]
+
+
+@pytest.mark.parametrize("name", TABLE_MIGRATIONS)
+def test_table_migration_fails_fast_on_locks_and_leaves_articles_alone(name):
+    sql = _sql_without_comments(name)
+    lock = re.search(r"SET lock_timeout = '\d+s';", sql)
+    assert lock is not None
+    assert lock.start() < sql.index("CREATE")
+    assert not re.search(r"ALTER\s+TABLE\s+(IF\s+EXISTS\s+)?articles\b", sql, re.IGNORECASE)
+    assert not re.search(r"CREATE\s+INDEX[^;]*\bON\s+articles\b", sql, re.IGNORECASE)
+    # A foreign key to articles would lock it while the migration runs and fire
+    # a trigger for every article the purge deletes.
+    assert not re.search(r"REFERENCES\s+articles\b", sql, re.IGNORECASE)
