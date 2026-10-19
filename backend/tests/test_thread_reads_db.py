@@ -9,6 +9,7 @@ reaches back from NOW, so only these rows fall in it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -40,15 +41,33 @@ async def conn():
         pytest.skip("thread tables are missing: apply migration 013")
     tx = connection.transaction()
     await tx.start()
+    pool = _OneConnectionPool(connection)
     try:
         with (
-            patch("app.services.thread_reads.get_pool", AsyncMock(return_value=connection)),
-            patch("app.services.database.get_pool", AsyncMock(return_value=connection)),
+            patch("app.services.thread_reads.get_pool", AsyncMock(return_value=pool)),
+            patch("app.services.database.get_pool", AsyncMock(return_value=pool)),
         ):
             yield connection
     finally:
         await tx.rollback()
         await connection.close()
+
+
+class _OneConnectionPool:
+    """The test's connection as a pool: queries that would each take a pool connection
+    (the detail's, gathered) take turns on it, inside the test's transaction."""
+
+    def __init__(self, connection):
+        self._connection = connection
+        self._lock = asyncio.Lock()
+
+    async def fetch(self, *args):
+        async with self._lock:
+            return await self._connection.fetch(*args)
+
+    async def fetchrow(self, *args):
+        async with self._lock:
+            return await self._connection.fetchrow(*args)
 
 
 _counter = iter(range(10**6))
@@ -260,12 +279,23 @@ async def test_a_lead_no_longer_kept_is_null(conn):
 
 
 @pytest.mark.asyncio
-async def test_the_list_reads_articles_by_primary_key_only(conn):
+@pytest.mark.parametrize("topic", [None, "conflict"])
+async def test_the_list_reads_listed_threads_and_articles_by_primary_key_only(conn, topic):
+    """The partial idx_threads_listed: a week's single-story threads are never read."""
+    await conn.execute(  # a week of mostly single-story threads, and a few listed
+        "INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources, topic)"
+        " SELECT array_fill(0.01, ARRAY[512])::vector, $1, $1 - i * interval '30 minutes',"
+        " CASE WHEN i <= 3 THEN 3 ELSE 1 END, CASE WHEN i <= 3 THEN 3 ELSE 1 END, 'conflict'"
+        " FROM generate_series(1, 300) AS i",
+        NOW,
+    )
+    await conn.execute("ANALYZE threads")
     await conn.execute("SET LOCAL enable_seqscan = off")
-    query, args = thread_reads.list_query(NOW, 168, "conflict", 20)
+    query, args = thread_reads.list_query(NOW, 168, topic, 20)
 
     plan = "\n".join(r[0] for r in await conn.fetch("EXPLAIN " + query, *args))
 
+    assert "idx_threads_listed" in plan
     assert "Seq Scan on articles" not in plan
     assert "Seq Scan on threads" not in plan
 

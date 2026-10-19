@@ -133,7 +133,21 @@ async def _thread(conn, thread_id):
 
 
 async def _centroid(conn, thread_id):
-    return await conn.fetchrow("SELECT * FROM thread_centroids WHERE thread_id = $1", thread_id)
+    return await conn.fetchrow(
+        "SELECT thread_id, last_seen, n_stories, centroid::text AS centroid"
+        " FROM thread_centroids WHERE thread_id = $1",
+        thread_id,
+    )
+
+
+async def _centroid_version(conn, thread_id):
+    """The centroid row's version: any write (even of the same values) changes it.
+
+    Each placement runs in its own savepoint, so its writes carry their own xmin."""
+    row = await conn.fetchrow(
+        "SELECT xmin::text, ctid::text FROM thread_centroids WHERE thread_id = $1", thread_id
+    )
+    return tuple(row) if row else None
 
 
 async def _cos(conn, thread_id, weights) -> float:
@@ -182,9 +196,27 @@ async def test_assignment_never_scans_the_articles_heap(conn):
 
     for name, plan in plans.items():
         assert "Seq Scan on articles" not in plan, name
+    assert "Seq Scan on threads" not in plans["lead titles"]
     assert "idx_articles_published_at" in plans["backlog"]
     assert "articles_pkey" in plans["load"]
     assert "articles_pkey" in plans["lead titles"]
+
+
+@pytest.mark.asyncio
+async def test_the_aggregate_step_finds_unaggregated_threads_by_the_partial_index(conn):
+    """Most threads are aggregated; the few a failed cycle left are found by index."""
+    await conn.execute(
+        "INSERT INTO threads (centroid_sum, first_seen, last_seen, aggregated_at)"
+        " SELECT array_fill(0.01, ARRAY[512])::vector, $1, $1, CASE WHEN i > 3 THEN $1 END"
+        " FROM generate_series(1, 300) AS i",
+        NOW - HOUR,
+    )
+    await conn.execute("ANALYZE threads")
+    await conn.execute("SET LOCAL enable_seqscan = off")
+
+    plan = await _plan(conn, threads.AGGREGATE_SQL, [1, 2], NOW)
+
+    assert "idx_threads_unaggregated" in plan
 
 
 # --- joining --------------------------------------------------------------------
@@ -241,9 +273,7 @@ async def test_a_copy_joins_without_changing_the_centroid(conn):
     await _assign(conn, [seed])
     thread = await _thread_of(conn, seed)
     before = await _thread(conn, thread)
-    centroid_before = await conn.fetchval(
-        "SELECT centroid::text FROM thread_centroids WHERE thread_id = $1", thread
-    )
+    row_before = await _centroid_version(conn, thread)
     copy = await _article(conn, {3: 1.0}, NOW - HOUR, story_key=9001, source="zz-b.test")
 
     stats = await _assign(conn, [copy])
@@ -253,15 +283,28 @@ async def test_a_copy_joins_without_changing_the_centroid(conn):
     assert await _similarity(conn, copy) == 1.0
     assert stats.copies == 1
     assert after["centroid_sum"] == before["centroid_sum"]
-    assert (
-        await conn.fetchval(
-            "SELECT centroid::text FROM thread_centroids WHERE thread_id = $1", thread
-        )
-        == centroid_before
-    )
-    assert after["last_seen"] == NOW - HOUR
-    assert (await _centroid(conn, thread))["last_seen"] == NOW - HOUR
+    # Untouched: the same row version, so no new HNSW entry and no dead one.
+    assert await _centroid_version(conn, thread) == row_before
+    assert after["last_seen"] == NOW - HOUR  # the thread itself stays active and listed
     assert (after["n_articles"], after["n_stories"], after["n_sources"]) == (2, 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_a_copy_reactivates_an_inactive_thread(conn):
+    seed = await _article(conn, published_at=NOW - 26 * HOUR, story_key=9002)
+    await threads.assign_threads(conn, [seed], now=NOW - 25 * HOUR)
+    thread = await _thread_of(conn, seed)
+    centroid = (await _centroid(conn, thread))["centroid"]
+    await _assign(conn)  # a singleton 26 hours old: inactive
+    assert await _centroid(conn, thread) is None
+    copy = await _article(conn, {3: 1.0}, NOW - HOUR, story_key=9002, source="zz-b.test")
+
+    await _assign(conn, [copy])
+
+    assert await _thread_of(conn, copy) == thread
+    row = await _centroid(conn, thread)
+    assert row is not None
+    assert row["centroid"] == centroid  # the story's own vector, not the copy's
 
 
 @pytest.mark.asyncio
@@ -371,7 +414,6 @@ async def test_the_aggregates_count_stories_outlets_places_entities_and_the_lead
     assert t["lead_title"] == "Zzthread lead story breaks"
     assert t["velocity"] == 3
     assert t["aggregated_at"] == NOW
-    assert (await _centroid(conn, thread_id))["n_stories"] == 3
 
 
 @pytest.mark.asyncio
@@ -479,17 +521,25 @@ async def test_threads_go_inactive_after_24_hours_alone_or_72_hours(conn):
     old_singleton = await _bare_thread(conn, NOW - 25 * HOUR, active=True)
     fresh_thread = await _bare_thread(conn, NOW - 71 * HOUR, n_stories=2, active=True)
     old_thread = await _bare_thread(conn, NOW - 73 * HOUR, n_stories=2, active=True)
+    # The centroid row's own last_seen and n_stories are informational (set at insert):
+    # a thread that grew, and was seen since, stays active whatever its row says.
+    grown = await _bare_thread(conn, NOW - 30 * HOUR, n_stories=2, active=True)
+    await conn.execute(
+        "UPDATE thread_centroids SET n_stories = 1, last_seen = $2 WHERE thread_id = $1",
+        grown,
+        NOW - 80 * HOUR,
+    )
 
     stats = await _assign(conn)
 
     active = {r["thread_id"] for r in await conn.fetch("SELECT thread_id FROM thread_centroids")}
-    assert active == {fresh_singleton, fresh_thread}
-    assert stats.active == 2
+    assert active == {fresh_singleton, fresh_thread, grown}
+    assert stats.active == 3
     left = await conn.fetchval(
         "SELECT count(*) FROM threads WHERE id = ANY($1::bigint[])",
-        [fresh_singleton, old_singleton, fresh_thread, old_thread],
+        [fresh_singleton, old_singleton, fresh_thread, old_thread, grown],
     )
-    assert left == 4  # inactive, not deleted
+    assert left == 5  # inactive, not deleted
 
 
 @pytest.mark.asyncio
@@ -521,8 +571,8 @@ async def test_retention_deletes_old_members_and_old_threads(conn):
 
 @pytest.mark.asyncio
 async def test_short_titles_cannot_starve_the_backlog(conn):
-    """600 newer short titles, filtered in SQL, don't fill the 500 cap."""
-    good = await _article(conn, published_at=NOW - 2 * HOUR)
+    """600 older short titles, filtered in SQL, don't fill the 500 cap (oldest first)."""
+    good = await _article(conn, published_at=NOW - HOUR)
     await conn.execute(
         """
         INSERT INTO articles (title, source_url, source_name, published_at, latitude, longitude,
@@ -531,7 +581,7 @@ async def test_short_titles_cannot_starve_the_backlog(conn):
                $1, 0, 0, ST_SetSRID(ST_MakePoint(0, 0), 4326)::geography, $3::vector
         FROM generate_series(1, 600) AS i
         """,
-        NOW - HOUR,
+        NOW - 2 * HOUR,
         str(uuid.uuid4()),
         _vector({0: 1.0}, 1536),
     )
@@ -540,3 +590,22 @@ async def test_short_titles_cannot_starve_the_backlog(conn):
 
     assert await _thread_of(conn, good) is not None
     assert stats.assigned == 1
+
+
+@pytest.mark.asyncio
+async def test_articles_left_by_a_time_budget_cut_are_assigned_next_cycle(conn, monkeypatch):
+    """The backlog skips the cycle's own ids and takes the oldest first, so newer
+    articles can't keep crowding the leftovers out until they age past 6 hours."""
+    left = await _article(conn, {0: 1.0}, NOW - 5 * HOUR)
+    monkeypatch.setattr(threads, "TIME_BUDGET_S", -1)  # out of time before the first
+    cut = await _assign(conn, [left])
+    assert (cut.assigned, cut.deferred) == (0, 1)
+    assert await _thread_of(conn, left) is None
+
+    monkeypatch.setattr(threads, "TIME_BUDGET_S", 60)
+    monkeypatch.setattr(threads, "BACKLOG_LIMIT", 2)
+    newer = [await _article(conn, {i: 1.0}, NOW - HOUR) for i in (5, 6, 7)]
+    stats = await _assign(conn, newer)
+
+    assert await _thread_of(conn, left) is not None
+    assert stats.assigned == 4

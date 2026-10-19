@@ -206,8 +206,16 @@ async def test_loads_the_input_and_the_backlog_once_each():
     await _assign(conn, [a, b])
 
     [backlog_args] = conn.args_of(threads.BACKLOG_SQL)
-    assert backlog_args == (T0 - timedelta(hours=6), threads.MIN_TITLE_WORDS, 500)
+    assert backlog_args == (T0 - timedelta(hours=6), threads.MIN_TITLE_WORDS, 500, [a, b])
     assert conn.args_of(threads.LOAD_SQL) == [([a, b, c],)]
+
+
+def test_the_backlog_skips_this_cycles_ids_and_takes_the_oldest_first():
+    """Its 500 are all left for leftovers (a budget cut, a big embedding cycle), and the
+    oldest go first, before they age out of the 6-hour window unassigned."""
+    sql = " ".join(threads.BACKLOG_SQL.split())
+    assert "AND NOT (a.id = ANY($4::uuid[]))" in sql
+    assert "ORDER BY a.published_at LIMIT $3" in sql
 
 
 @pytest.mark.asyncio
@@ -308,7 +316,8 @@ async def test_a_copy_joins_its_storys_thread_without_adding_its_vector():
     assert conn.args_of(threads.STORY_THREADS_SQL) == [([42],)]
     assert _member_threads(conn) == [(copy["id"], 7, 1.0)]
     assert conn.args_of(threads.COPY_THREAD_SQL) == [(7, T0)]
-    assert conn.args_of(threads.COPY_CENTROID_SQL) == [(7,)]
+    assert conn.args_of(threads.REACTIVATE_SQL) == [(7,)]
+    assert threads.REACTIVATE_SQL.rstrip().endswith("ON CONFLICT (thread_id) DO NOTHING")
     assert conn.args_of(threads.SUM_SQL) == []
     assert conn.args_of(threads.JOIN_THREAD_SQL) == []
     assert (stats.copies, stats.joined, stats.touched) == (1, 0, {7})
@@ -333,12 +342,12 @@ async def test_a_story_joins_a_thread_started_earlier_in_the_cycle():
     second = _row(v="[0.9,0.43]", published_at=T0 + timedelta(minutes=1))
     conn = _conn(
         [first, second],
-        **{threads.NEW_SCORE_SQL: [{"thread_id": 101, "sim": 0.9}], threads.SUM_SQL: "[1,0]"},
+        **{threads.RESCORE_SQL: [{"thread_id": 101, "sim": 0.9}], threads.SUM_SQL: "[1,0]"},
     )
 
     stats = await _assign(conn, [first["id"], second["id"]])
 
-    assert conn.args_of(threads.NEW_SCORE_SQL) == [("[0.9,0.43]", [101])]
+    assert conn.args_of(threads.RESCORE_SQL) == [("[0.9,0.43]", [101])]
     assert _member_threads(conn) == [(first["id"], 101, 1.0), (second["id"], 101, 0.9)]
     assert (stats.started, stats.joined) == (1, 1)
 
@@ -347,12 +356,60 @@ async def test_a_story_joins_a_thread_started_earlier_in_the_cycle():
 async def test_a_thread_started_this_cycle_shares_its_members_entities():
     first = _row(persons=["Zz Jane Specific"])
     second = _row(persons=["Zz Jane Specific"], published_at=T0 + timedelta(minutes=1))
-    conn = _conn([first, second], **{threads.NEW_SCORE_SQL: [{"thread_id": 101, "sim": 0.7}]})
+    conn = _conn([first, second], **{threads.RESCORE_SQL: [{"thread_id": 101, "sim": 0.7}]})
 
     stats = await _assign(conn, [first["id"], second["id"]])
 
     assert _member_threads(conn) == [(first["id"], 101, 1.0), (second["id"], 101, 0.7)]
     assert stats.joined == 1
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_joined_earlier_in_the_cycle_is_rescored_on_its_new_centroid():
+    first = _row(v="[1,0]")
+    second = _row(v="[0.8,0.6]", published_at=T0 + timedelta(minutes=1))
+    conn = _conn(
+        [first, second],
+        **{
+            threads.SCORE_SQL: [
+                {"ord": 0, "thread_id": 7, "sim": 0.9},
+                {"ord": 1, "thread_id": 7, "sim": 0.7},  # against 7's centroid before `first`
+            ],
+            threads.RESCORE_SQL: [{"thread_id": 7, "sim": 0.85}],
+            threads.SUM_SQL: "[1,0]",
+        },
+    )
+
+    stats = await _assign(conn, [first["id"], second["id"]])
+
+    assert conn.args_of(threads.RESCORE_SQL) == [("[0.8,0.6]", [7])]  # only for `second`
+    assert _member_threads(conn) == [(first["id"], 7, 0.9), (second["id"], 7, 0.85)]
+    assert stats.joined == 2
+
+
+@pytest.mark.asyncio
+async def test_a_thread_started_this_cycle_matches_on_its_top_8_entities():
+    """As an existing thread matches on its top_entities: counted per story."""
+    common = [f"Zz Person {i}" for i in range(8)]
+    seed = _row(persons=common, orgs=["Zz Rare Org"])
+    again = _row(persons=common, v="[0.9,0.1]", published_at=T0 + timedelta(minutes=1))
+    rare = _row(persons=["Zz Rare Org"], v="[0.7,0.3]", published_at=T0 + timedelta(minutes=2))
+    conn = _conn(
+        [seed, again, rare],
+        **{
+            threads.RESCORE_SQL: lambda v, ids: [
+                {"thread_id": 101, "sim": 0.9 if v == again["v"] else 0.7}
+            ]
+        },
+    )
+
+    await _assign(conn, [seed["id"], again["id"], rare["id"]])
+
+    assert _member_threads(conn) == [
+        (seed["id"], 101, 1.0),
+        (again["id"], 101, 0.9),
+        (rare["id"], 102, 1.0),  # its only shared name isn't in 101's top 8
+    ]
 
 
 @pytest.mark.asyncio
@@ -449,7 +506,7 @@ async def test_every_cycle_finishes_even_with_nothing_to_assign():
     stats = await _assign(conn, [])
 
     assert conn.args_of(threads.LOAD_SQL) == []
-    assert conn.args_of(threads.AGGREGATE_SQL) == [([], T0, T0 - timedelta(hours=72))]
+    assert conn.args_of(threads.AGGREGATE_SQL) == [([], T0)]
     assert conn.args_of(threads.VELOCITY_SQL) == [
         (T0 - timedelta(hours=6), T0 - timedelta(hours=72))
     ]
@@ -480,7 +537,24 @@ async def test_aggregates_cover_the_touched_threads_and_set_display_lead_titles(
     assert conn.args_of(threads.LEAD_TITLE_SQL) == [
         ([(101, "Zz quake hits the old city"), (5, "Zz floods rise")],)
     ]
-    assert conn.args_of(threads.CENTROID_COUNTS_SQL) == [([101, 5],)]
+    # Centroid rows are written only when the centroid changes: never here.
+    assert not [c for c in conn.calls if "UPDATE thread_centroids" in (c[1] or "")]
+
+
+def test_deactivation_reads_the_threads_last_seen_and_stories():
+    """Not thread_centroids' own columns, so they never need rewriting (each rewrite
+    leaves a dead HNSW entry)."""
+    sql = " ".join(threads.DEACTIVATE_SQL.split())
+    assert sql == (
+        "DELETE FROM thread_centroids c USING threads t WHERE c.thread_id = t.id"
+        " AND (t.last_seen < $1 OR (t.n_stories <= 1 AND t.last_seen < $2))"
+    )
+
+
+def test_the_repair_pick_up_is_every_unaggregated_thread():
+    sql = " ".join(threads.AGGREGATE_SQL.split())
+    assert "WHERE id = ANY($1::bigint[]) OR aggregated_at IS NULL )" in sql
+    assert "aggregated_at IS NULL OR last_seen > aggregated_at" not in sql
 
 
 @pytest.mark.asyncio
@@ -491,9 +565,12 @@ async def test_logs_one_summary_line(caplog):
     with caplog.at_level(logging.INFO, logger="orbis.threads"):
         await _assign(conn, [article["id"]])
 
-    [line] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Threads:")]
-    assert line.startswith("Threads: 1 assigned (0 joined, 1 started, 0 copies) in ")
-    assert line.endswith(" s; 3 active.")
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Threads:")]
+    [summary] = [line for line in lines if " assigned " in line]
+    assert summary.startswith("Threads: 1 assigned (0 joined, 1 started, 0 copies) in ")
+    assert summary.endswith(" s; 3 active.")
+    [finish] = [line for line in lines if line.startswith("Threads: aggregates")]
+    assert finish.startswith("Threads: aggregates, velocity and deactivation in ")
 
 
 @pytest.mark.asyncio

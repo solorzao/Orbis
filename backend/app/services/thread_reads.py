@@ -8,6 +8,7 @@ a detail page's 20 stories.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Any
@@ -16,7 +17,9 @@ from app.services.database import get_pool, globe_lead
 from app.services.places import display_place
 from app.services.titles import display_title
 
-# Outlets beat stories: a thread is listed with 3 stories from 3 outlets.
+# Outlets beat stories: a thread is listed with 3 stories from 3 outlets (the
+# predicate of migration 015's idx_threads_listed, and of the cluster join in
+# database.get_articles_in_bounds).
 MIN_STORIES = 3
 MIN_SOURCES = 3
 EMERGING_HOURS = 6  # first seen this recently: emerging
@@ -83,19 +86,22 @@ ARTICLES_SQL = f"""
 
 def list_query(now: datetime, hours: int, topic: str | None, limit: int) -> tuple[str, list]:
     """The list's SQL and arguments. No topic leaves its predicate out (no
-    ``$n IS NULL OR``), so neither plan has to cover both."""
-    args: list[Any] = [now - timedelta(hours=hours), MIN_STORIES, MIN_SOURCES, limit]
+    ``$n IS NULL OR``), so neither plan has to cover both. The thresholds are
+    constants, not parameters, so every plan matches the partial index
+    idx_threads_listed (migration 015) and skips the single-story threads."""
+    args: list[Any] = [now - timedelta(hours=hours), limit]
     topic_sql = ""
     if topic is not None:
         args.append(topic)
-        topic_sql = "AND topic = $5"
+        topic_sql = "AND topic = $3"
     query = f"""
         WITH listed AS (
             SELECT {_THREAD_COLUMNS}
             FROM threads
-            WHERE last_seen >= $1 AND n_stories >= $2 AND n_sources >= $3 {topic_sql}
+            WHERE last_seen >= $1 AND n_stories >= {MIN_STORIES} AND n_sources >= {MIN_SOURCES}
+                  {topic_sql}
             ORDER BY velocity DESC, n_stories DESC, id
-            LIMIT $4
+            LIMIT $2
         )
         {_LEAD.format(threads="listed")}
         ORDER BY t.velocity DESC, t.n_stories DESC, t.id
@@ -165,14 +171,19 @@ async def list_threads(now: datetime, hours: int, topic: str | None, limit: int)
 
 
 async def thread_detail(thread_id: int, offset: int, now: datetime) -> dict | None:
-    """One thread (a ThreadDetail), or None for an unknown id."""
+    """One thread (a ThreadDetail), or None for an unknown id.
+
+    Its four queries run at once, each on its own pool connection.
+    """
     pool = await get_pool()
-    row = await pool.fetchrow(DETAIL_SQL, thread_id)
+    row, entities, timeline, articles = await asyncio.gather(
+        pool.fetchrow(DETAIL_SQL, thread_id),
+        pool.fetch(ENTITIES_SQL, thread_id),
+        pool.fetch(TIMELINE_SQL, thread_id),
+        pool.fetch(ARTICLES_SQL, thread_id, DETAIL_ARTICLES, offset),
+    )
     if row is None:
         return None
-    entities = await pool.fetch(ENTITIES_SQL, thread_id)
-    timeline = await pool.fetch(TIMELINE_SQL, thread_id)
-    articles = await pool.fetch(ARTICLES_SQL, thread_id, DETAIL_ARTICLES, offset)
     return {
         **thread_item(row, now),
         "entities": [{"name": r["name"], "n": r["n"]} for r in entities],

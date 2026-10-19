@@ -30,7 +30,7 @@ class ThreadSummary(BaseModel):
     # emerging: first seen within 6 hours; developing: 2+ stories in the last
     # 6 hours; otherwise fading.
     status: Literal["emerging", "developing", "fading"]
-    first_seen: datetime
+    first_seen: datetime  # its oldest story kept: moves forward as old stories are purged
     last_seen: datetime
     n_stories: int
     n_sources: int

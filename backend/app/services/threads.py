@@ -8,17 +8,21 @@ unassigned ones) joins the best-matching active thread, or starts one:
   ``centroid_sum`` is the decayed sum of its distinct stories' vectors (one
   per ``story_key``: syndicated copies join but add nothing, so syndication
   can't overweight a story); ``thread_centroids`` holds its unit form under
-  an HNSW inner-product index, for active threads only.
+  an HNSW inner-product index, for active threads only. A centroid row is
+  written only when the centroid changes (a thread starts, a story joins, an
+  inactive thread comes back): its 1 KB rows fill their pages, so every
+  update is a new HNSW entry and a dead one.
 - **Joining.** A story joins its best candidate at a cosine of JOIN_SIM, or
   of JOIN_SIM_WITH_ENTITY when it shares a specific person or organisation
   with the thread (one in more than GENERIC_ENTITY_SHARE of active threads,
   and in more than one, is generic and doesn't count). Titles shorter than
   MIN_TITLE_WORDS ("Police arrest man") neither join nor seed a thread.
 - **Aggregates** (counts, places, entities, topic, lead) are recomputed once
-  at the end from ``thread_members`` only; velocity is the distinct stories
-  of the last 6 hours; a thread goes inactive (its centroid row deleted)
-  after ACTIVE_HOURS without a story, or SINGLETON_HOURS for a one-story
-  thread.
+  at the end from ``thread_members`` only, so ``first_seen`` moves forward
+  when the retention purge removes a thread's oldest members; velocity is
+  the distinct stories of the last 6 hours; a thread goes inactive (its
+  centroid row deleted) after ACTIVE_HOURS without a story, or
+  SINGLETON_HOURS for a one-story thread.
 
 Nothing here reads the ``articles`` heap beyond a bounded set of ids by
 primary key and the last 6 hours through ``idx_articles_published_at``, and
@@ -66,13 +70,16 @@ HNSW_EF_SEARCH = 100  # so dead index entries can't crowd live candidates out
 # The same raw word count as Python's title_words: btrim drops spaces, \s+ splits.
 _TITLE_WORDS_SQL = r"array_length(regexp_split_to_array(btrim(a.title), '\s+'), 1)"
 
+# Not this cycle's own ids (they come anyway), and the oldest first: what a time
+# budget or a big embedding cycle left over goes before it ages out of the window.
 BACKLOG_SQL = f"""
     SELECT a.id
     FROM articles a
     WHERE a.published_at >= $1 AND a.embedding IS NOT NULL
+      AND NOT (a.id = ANY($4::uuid[]))
       AND NOT EXISTS (SELECT 1 FROM thread_members m WHERE m.article_id = a.id)
       AND {_TITLE_WORDS_SQL} >= $2
-    ORDER BY a.published_at DESC
+    ORDER BY a.published_at
     LIMIT $3
 """
 
@@ -118,7 +125,9 @@ STORY_THREADS_SQL = """
     ORDER BY story_key, published_at DESC, article_id
 """
 
-NEW_SCORE_SQL = f"""
+# Threads whose centroid changed this cycle (started, or joined), by id: their
+# batch scores, if any, are against the centroid before.
+RESCORE_SQL = f"""
     SELECT thread_id, -(centroid <#> $1::halfvec({PREFIX_DIMS})) AS sim
     FROM thread_centroids
     WHERE thread_id = ANY($2::bigint[])
@@ -136,8 +145,9 @@ MEMBER_SQL = """
 SUM_SQL = "SELECT centroid_sum::text FROM threads WHERE id = $1 FOR UPDATE"
 
 # A member added clears aggregated_at, marking the thread for the aggregate step
-# even if this cycle fails before it (a story's published_at is usually older
-# than the last aggregation, so last_seen > aggregated_at alone would miss it).
+# even if this cycle fails before it (idx_threads_unaggregated finds it next
+# cycle; comparing last_seen with aggregated_at would miss it, since a story's
+# published_at is usually older than the last aggregation).
 JOIN_THREAD_SQL = """
     UPDATE threads
     SET centroid_sum = $2::vector, last_seen = GREATEST(last_seen, $3), aggregated_at = NULL
@@ -148,8 +158,11 @@ COPY_THREAD_SQL = """
     UPDATE threads SET last_seen = GREATEST(last_seen, $2), aggregated_at = NULL WHERE id = $1
 """
 
-# A join rewrites the unit centroid; a copy only bumps last_seen (the row stays
-# HOT, and an inactive thread's row comes back).
+# A centroid row is written only when the centroid changes: its 1 KB PLAIN rows
+# fill their pages, so no update is HOT and each leaves a dead HNSW entry. Its
+# last_seen and n_stories are informational, set when the row is written;
+# deactivation reads threads. A join rewrites the row once; a copy writes it
+# only to bring an inactive thread back (DO NOTHING when it is there).
 _CENTROID_FROM_THREAD = f"""
     INSERT INTO thread_centroids (thread_id, last_seen, n_stories, centroid)
     SELECT id, last_seen, GREATEST(n_stories, 1),
@@ -161,11 +174,7 @@ JOIN_CENTROID_SQL = (
     + "    ON CONFLICT (thread_id) DO UPDATE"
     + " SET last_seen = EXCLUDED.last_seen, centroid = EXCLUDED.centroid\n"
 )
-COPY_CENTROID_SQL = (
-    _CENTROID_FROM_THREAD
-    + "    ON CONFLICT (thread_id) DO UPDATE"
-    + " SET last_seen = GREATEST(thread_centroids.last_seen, EXCLUDED.last_seen)\n"
-)
+REACTIVATE_SQL = _CENTROID_FROM_THREAD + "    ON CONFLICT (thread_id) DO NOTHING\n"
 
 NEW_THREAD_SQL = """
     INSERT INTO threads (centroid_sum, first_seen, last_seen, lead_article_id, lead_title)
@@ -179,13 +188,14 @@ NEW_CENTROID_SQL = f"""
 """
 
 # Recomputed from thread_members only, for the threads touched this cycle and
-# any whose last story came after their last aggregation (a failed cycle's,
-# within ACTIVE_HOURS). A story is its story_key; a NULL key, its own article.
+# any a join or copy left unaggregated (aggregated_at NULL: a failed cycle's;
+# idx_threads_unaggregated). A story is its story_key; a NULL key, its own
+# article. first_seen is the oldest member kept, so it moves forward when the
+# retention purge removes old members.
 AGGREGATE_SQL = f"""
     WITH targets AS (
         SELECT id FROM threads
-        WHERE id = ANY($1::bigint[])
-           OR (last_seen >= $3 AND (aggregated_at IS NULL OR last_seen > aggregated_at))
+        WHERE id = ANY($1::bigint[]) OR aggregated_at IS NULL
     ),
     m AS MATERIALIZED (
         SELECT tm.thread_id, tm.article_id, tm.source_name, tm.published_at, tm.latitude,
@@ -290,13 +300,6 @@ LEAD_TITLES_SQL = """
 
 LEAD_TITLE_SQL = "UPDATE threads SET lead_title = $2 WHERE id = $1 AND lead_title <> $2"
 
-CENTROID_COUNTS_SQL = """
-    UPDATE thread_centroids c SET n_stories = t.n_stories, last_seen = t.last_seen
-    FROM threads t
-    WHERE c.thread_id = t.id AND t.id = ANY($1::bigint[])
-      AND (c.n_stories IS DISTINCT FROM t.n_stories OR c.last_seen IS DISTINCT FROM t.last_seen)
-"""
-
 # Distinct stories in the last 6 hours; only threads whose value changes are
 # written, and stale non-zero values (last seen within ACTIVE_HOURS) reset to 0.
 VELOCITY_SQL = """
@@ -317,9 +320,10 @@ VELOCITY_SQL = """
     WHERE t.id = ids.thread_id AND t.velocity IS DISTINCT FROM COALESCE(r.velocity, 0)
 """
 
+# Through threads, whose last_seen and n_stories the cycle keeps current.
 DEACTIVATE_SQL = """
-    DELETE FROM thread_centroids
-    WHERE last_seen < $1 OR (n_stories <= 1 AND last_seen < $2)
+    DELETE FROM thread_centroids c USING threads t
+    WHERE c.thread_id = t.id AND (t.last_seen < $1 OR (t.n_stories <= 1 AND t.last_seen < $2))
 """
 
 ACTIVE_SQL = "SELECT count(*) FROM thread_centroids"
@@ -450,7 +454,38 @@ class ThreadStats:
     deferred: int = 0  # left to the backlog by the time budget
     active: int = 0
     seconds: float = 0.0
+    finish_seconds: float = 0.0  # aggregates, velocity and deactivation
     touched: set[int] = field(default_factory=set)
+
+
+class _NewThread:
+    """A thread started this cycle, before the aggregate step: its entities counted
+    per story, so it matches on its top TOP_ENTITIES as an existing thread does on
+    its top_entities."""
+
+    def __init__(self) -> None:
+        self._stories: dict[str, set[Any]] = defaultdict(set)
+
+    def add(self, article: _Article) -> None:
+        story = article.story_key if article.story_key is not None else ("a", article.id)
+        for name in article.entities:
+            self._stories[name].add(story)
+
+    def top_entities(self) -> set[str]:
+        ranked = sorted(self._stories.items(), key=lambda item: (-len(item[1]), item[0]))
+        return {name for name, _ in ranked[:TOP_ENTITIES]}
+
+
+@dataclass
+class _Cycle:
+    """What one cycle's placements share."""
+
+    candidates: dict[int, dict[int, float]]  # article ordinal -> thread -> batch score
+    thread_entities: dict[int, set[str]]  # candidate threads' top_entities
+    story_threads: dict[int, int]  # story_key -> its thread
+    generic: set[str]
+    started: dict[int, _NewThread] = field(default_factory=dict)
+    changed: set[int] = field(default_factory=set)  # centroids rewritten this cycle
 
 
 class _AlreadyAssigned(Exception):
@@ -480,7 +515,11 @@ async def assign_threads(
     stats = ThreadStats()
     async with _connection(db) as conn:
         backlog = await conn.fetch(
-            BACKLOG_SQL, now - timedelta(hours=BACKLOG_HOURS), MIN_TITLE_WORDS, BACKLOG_LIMIT
+            BACKLOG_SQL,
+            now - timedelta(hours=BACKLOG_HOURS),
+            MIN_TITLE_WORDS,
+            BACKLOG_LIMIT,
+            list(article_ids),
         )
         ids = list(dict.fromkeys([*article_ids, *(r["id"] for r in backlog)]))
         if ids:
@@ -530,72 +569,69 @@ async def _assign(conn: Any, articles: list[_Article], stats: ThreadStats, began
     if keys:
         for r in await conn.fetch(STORY_THREADS_SQL, keys):
             story_threads[r["story_key"]] = r["thread_id"]
+    cycle = _Cycle(candidates, thread_entities, story_threads, generic)
 
-    started: dict[int, set[str]] = {}  # threads started this cycle: their members' entities
     for ord_, article in enumerate(articles):
         if time.monotonic() - began > TIME_BUDGET_S:
             stats.deferred = len(articles) - ord_
             break
         try:
-            await _place(
-                conn,
-                article,
-                candidates.get(ord_, {}),
-                thread_entities,
-                started,
-                story_threads,
-                generic,
-                stats,
-            )
+            await _place(conn, cycle, ord_, article, stats)
         except Exception:
             stats.failed += 1
             logger.warning("Thread assignment failed for article %s.", article.id, exc_info=True)
 
 
 async def _place(
-    conn: Any,
-    article: _Article,
-    scores: dict[int, float],
-    thread_entities: dict[int, set[str]],
-    started: dict[int, set[str]],
-    story_threads: dict[int, int],
-    generic: set[str],
-    stats: ThreadStats,
+    conn: Any, cycle: _Cycle, ord_: int, article: _Article, stats: ThreadStats
 ) -> None:
     """Join a copy's thread, else the best candidate, else start a thread."""
-    copy_of = story_threads.get(article.story_key) if article.story_key is not None else None
+    copy_of = cycle.story_threads.get(article.story_key) if article.story_key is not None else None
     if copy_of is not None:
         if await _join(conn, article, copy_of, 1.0, copy=True):
             stats.copies += 1
-            _assigned(stats, article, copy_of, story_threads)
+            if copy_of in cycle.started:
+                cycle.started[copy_of].add(article)
+            _assigned(stats, cycle, article, copy_of)
         return
 
-    scores = dict(scores)
-    if started:
-        for r in await conn.fetch(NEW_SCORE_SQL, article.v, sorted(started)):
+    scores = dict(cycle.candidates.get(ord_, {}))
+    rescore = sorted(set(cycle.started) | (scores.keys() & cycle.changed))
+    if rescore:
+        for r in await conn.fetch(RESCORE_SQL, article.v, rescore):
             scores[r["thread_id"]] = r["sim"]
-    choice = choose(scores, article.entities, {**thread_entities, **started}, generic)
+    entities = {
+        t: (
+            cycle.started[t].top_entities()
+            if t in cycle.started
+            else cycle.thread_entities.get(t, set())
+        )
+        for t in scores
+    }
+    choice = choose(scores, article.entities, entities, cycle.generic)
     if choice is not None:
         thread_id, sim = choice
         if await _join(conn, article, thread_id, sim, copy=False):
             stats.joined += 1
-            if thread_id in started:
-                started[thread_id].update(article.entities)
-            _assigned(stats, article, thread_id, story_threads)
+            cycle.changed.add(thread_id)
+            if thread_id in cycle.started:
+                cycle.started[thread_id].add(article)
+            _assigned(stats, cycle, article, thread_id)
         return
 
     thread_id = await _start(conn, article)
     if thread_id is not None:
         stats.started += 1
-        started[thread_id] = set(article.entities)
-        _assigned(stats, article, thread_id, story_threads)
+        cycle.started[thread_id] = _NewThread()
+        cycle.started[thread_id].add(article)
+        _assigned(stats, cycle, article, thread_id)
 
 
-def _assigned(stats: ThreadStats, article: _Article, thread_id: int, story_threads: dict) -> None:
+def _assigned(stats: ThreadStats, cycle: _Cycle, article: _Article, thread_id: int) -> None:
     stats.assigned += 1
     stats.touched.add(thread_id)
     if article.story_key is not None:
-        story_threads[article.story_key] = thread_id
+        cycle.story_threads[article.story_key] = thread_id
 
 
 async def _join(conn: Any, article: _Article, thread_id: int, sim: float, *, copy: bool) -> bool:
@@ -603,9 +639,9 @@ async def _join(conn: Any, article: _Article, thread_id: int, sim: float, *, cop
     async with conn.transaction():
         if await conn.fetchval(MEMBER_SQL, *article.member_args(thread_id, sim)) is None:
             return False
-        if copy:  # a story counts once in the centroid
+        if copy:  # a story counts once in the centroid: its row is left alone
             await conn.execute(COPY_THREAD_SQL, thread_id, article.published_at)
-            await conn.execute(COPY_CENTROID_SQL, thread_id)
+            await conn.execute(REACTIVATE_SQL, thread_id)  # only if the thread is inactive
         else:
             current = parse_vector(await conn.fetchval(SUM_SQL, thread_id))
             new_sum = decayed_sum(current, parse_vector(article.v))
@@ -637,19 +673,23 @@ async def _start(conn: Any, article: _Article) -> int | None:
 
 async def _finish(conn: Any, stats: ThreadStats, now: datetime) -> None:
     """Aggregates, lead titles, velocity and deactivation: every cycle, articles or not."""
+    began = time.monotonic()
     active_since = now - timedelta(hours=ACTIVE_HOURS)
-    updated = [
-        r["id"] for r in await conn.fetch(AGGREGATE_SQL, sorted(stats.touched), now, active_since)
-    ]
+    updated = [r["id"] for r in await conn.fetch(AGGREGATE_SQL, sorted(stats.touched), now)]
     if updated:
         rows = await conn.fetch(LEAD_TITLES_SQL, updated)
         titles = [(r["id"], display_title(r["title"] or "")) for r in rows]
         if titles:
             await conn.executemany(LEAD_TITLE_SQL, titles)
-        await conn.execute(CENTROID_COUNTS_SQL, updated)
     await conn.execute(VELOCITY_SQL, now - timedelta(hours=VELOCITY_HOURS), active_since)
     await conn.execute(DEACTIVATE_SQL, active_since, now - timedelta(hours=SINGLETON_HOURS))
     stats.active = await conn.fetchval(ACTIVE_SQL)
+    stats.finish_seconds = time.monotonic() - began
+    logger.info(
+        "Threads: aggregates, velocity and deactivation in %.1f s (%d threads aggregated).",
+        stats.finish_seconds,
+        len(updated),
+    )
 
 
 async def purge_threads(db: Any, retention_days: int, now: datetime | None = None) -> None:

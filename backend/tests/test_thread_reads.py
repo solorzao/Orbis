@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -176,8 +177,10 @@ async def test_the_list_query_takes_its_thresholds_window_and_limit():
         items = await thread_reads.list_threads(NOW, 24, None, 20)
 
     query, *args = pool.fetch.await_args.args
-    assert args == [NOW - 24 * HOUR, 3, 3, 20]
+    assert args == [NOW - 24 * HOUR, 20]
     assert "topic =" not in query
+    # Constants, not parameters, so the partial idx_threads_listed matches any plan.
+    assert "n_stories >= 3 AND n_sources >= 3" in " ".join(query.split())
     assert [i["id"] for i in items] == [7]
 
 
@@ -188,5 +191,27 @@ async def test_a_topic_is_one_more_parameter():
         await thread_reads.list_threads(NOW, 6, "environment", 5)
 
     query, *args = pool.fetch.await_args.args
-    assert args == [NOW - 6 * HOUR, 3, 3, 5, "environment"]
-    assert "topic = $5" in " ".join(query.split())
+    assert args == [NOW - 6 * HOUR, 5, "environment"]
+    assert "topic = $3" in " ".join(query.split())
+
+
+@pytest.mark.asyncio
+async def test_the_detail_runs_its_four_queries_at_once():
+    """Each on its own pool connection (Pool.fetch and fetchrow acquire one per call)."""
+    import asyncio
+
+    running, most = 0, 0
+
+    async def query(sql, *args):
+        nonlocal running, most
+        running += 1
+        most = max(most, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return [] if "FROM one" not in sql else None
+
+    pool = SimpleNamespace(fetch=query, fetchrow=query)
+    with patch("app.services.thread_reads.get_pool", AsyncMock(return_value=pool)):
+        assert await thread_reads.thread_detail(7, 0, NOW) is None
+
+    assert most == 4
