@@ -323,12 +323,20 @@ class TestResolveEntity:
 
         sql, *args = pool.fetchval.await_args.args
         flat = " ".join(sql.split())
-        assert "FROM kg_nodes n WHERE n.type = $1 AND n.name ILIKE $2" in flat
-        # Spellings that differ only in case: the most mentioned this week (counted
-        # up to a cap), then by name. Nothing depends on the request's case, so the
-        # dossier cached under the lowercased name is the same whichever case asks.
-        mentions = entities.recent_mentions_sql("n.id", "$3", "$4")
-        assert f"ORDER BY {mentions} DESC, n.name LIMIT 1" in flat
+        # The literal type predicate: the partial trigram index of people and orgs.
+        assert "WHERE n.type IN ('PERSON', 'ORG') AND n.type = $1 AND n.name ILIKE $2" in flat
+        # Spellings that differ only in case: the most coverage this week in thread
+        # members, which the dossier reads by that spelling, ranked as search ranks
+        # names, then by name. Nothing depends on the request's case, so the dossier
+        # cached under the lowercased name is the same whichever case asks.
+        mentions = " ".join(entities.member_mentions_sql("n.name", "$3", "$4").split())
+        assert f"FROM kg_nodes n CROSS JOIN LATERAL {mentions} m WHERE" in flat
+        # Capped variants' stories are a sample, so among them, by name.
+        assert (
+            "ORDER BY m.capped DESC, CASE WHEN m.capped THEN 0 ELSE m.stories END DESC, n.name"
+            " LIMIT 1"
+        ) in flat
+        assert "kg_edges" not in flat
         assert args == [
             "PERSON",
             "abbas araghchi",
@@ -345,13 +353,19 @@ class TestResolveEntity:
         assert pool.fetchval.await_args.args[1:3] == ("ORG", "100\\%\\_Fund")
 
 
-class TestRecentMentions:
-    def test_counted_through_the_recency_index_up_to_a_cap(self):
+class TestMemberMentions:
+    def test_stories_from_at_most_a_cap_of_members_as_the_dossier_counts_them(self):
         assert entities.MENTION_COUNT_CAP == 100
-        assert entities.recent_mentions_sql("c.id", "$3", "$4") == (
-            "(SELECT count(*)::int FROM (SELECT 1 FROM kg_edges e"
-            " WHERE e.source_node_id = c.id AND e.created_at >= $3 LIMIT $4) x)"
+        sql = " ".join(entities.member_mentions_sql("c.name", "$3", "$4").split())
+        # Always distinct stories, copies counted once (below the cap, the dossier's
+        # d7); capped when the cap's worth of members was read ("{n}+").
+        assert sql == (
+            "(SELECT count(DISTINCT story)::int AS stories, count(*) >= $4 AS capped"
+            f" FROM (SELECT {entities.STORY_SQL} AS story FROM thread_members"
+            " WHERE entities @> ARRAY[c.name]::text[] AND published_at >= $3 LIMIT $4) x)"
         )
+        assert "count(DISTINCT story)" in " ".join(entities._SUMMARY_SQL.split())
+        assert f"SELECT {entities.STORY_SQL} AS story" in " ".join(entities._SUMMARY_SQL.split())
 
 
 # ── /api/entities ──────────────────────────────────────────────────────

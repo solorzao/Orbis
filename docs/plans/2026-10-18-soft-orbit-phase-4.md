@@ -370,17 +370,18 @@ In the place panel (`NewsPanel`), an article whose cluster row carries `thread` 
 ## PR 17a: Entity API
 
 Branch: `claude/p4-entities-api`. It merges after 15b.
-- **Names** come from the knowledge graph: `kg_nodes` PERSON and ORG (`idx_kg_nodes_name_trgm`), with recent mention counts from `kg_edges` (`idx_kg_edges_source_recent`, index-only counts).
+- **Names** come from the knowledge graph: `kg_nodes` PERSON and ORG (`idx_kg_nodes_entity_name_trgm`, migration 016, a trigram index of people and orgs only), with recent coverage counted from `thread_members` (`idx_thread_members_entities`), as the dossier counts it.
 - **Dossiers** read `thread_members` through its GIN `entities` index, joining articles by primary key only for the 10 headlines.
 
 ### Task 17a.1: `GET /api/search?q=` (`app/routers/search.py`, `app/services/search.py`)
 
 - **Query:** `q` is 2–80 characters after `strip_invisible` and trim; anything else is 422.
 - **People and orgs:**
-  - match `kg_nodes` of type PERSON or ORG with `name ILIKE $q || '%' OR name % $q` (trigram), up to 20 candidates;
-  - rank by mentions in the last 7 days (a count of `MENTIONED_IN` edges per candidate through `idx_kg_edges_source_recent`, bounded to 20 candidates), then similarity;
-  - return up to 5 each, as `{type: "person"|"org", name, n}`;
-  - drop candidates with 0 mentions in the window.
+  - match `kg_nodes` of type PERSON or ORG with `name ILIKE $q || '%' OR name % $q` (trigram), up to 20 candidates, naming `type IN ('PERSON', 'ORG')` literally so every plan can use the partial index;
+  - count each candidate's coverage in the last 7 days from at most 100 thread members (`SEARCH_COUNT_CAP`): `n` is the distinct stories among the members read, and `capped` says the cap was reached, so the name has at least `n` stories;
+  - rank capped names first, by similarity among themselves (their `n` is a sample of whichever members the scan met first), then the rest by `n`, then similarity;
+  - return up to 5 each, as `{type: "person"|"org", name, n, capped}`; 17b renders a capped result as "{n}+";
+  - drop candidates with no stories in the window.
 - **Threads:** up to 5 listed threads (as 15b's list filter) whose `title` or `lead_title` matches `ILIKE '%' || like_escape($q) || '%'`, as `{id, title}`. This reads only `threads`.
 - **Places:** not searched server-side. The client searches the places it has loaded (17b).
 - **Caching:** Redis 5 min keyed on the lowercased q, plus `edge_cached`. Rate group `data`.

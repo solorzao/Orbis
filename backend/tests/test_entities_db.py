@@ -5,8 +5,8 @@ migrations applied (013 included). Every test runs in a transaction that is
 rolled back, so nothing it inserts is ever committed. Its people and orgs are
 named ``Zz ...``, its articles titled ``zzentity-...``. Dossiers read
 ``thread_members`` rows (the fixtures insert them as thread assignment
-would), names resolve through ``kg_nodes``, and search's mention counts come
-from the graph that populate_graph builds. Skipped without the variable.
+would), names resolve through ``kg_nodes``, and search counts the same
+members. Skipped without the variable.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import pytest
 import pytest_asyncio
 
 from app.services import entities, search, thread_reads
-from app.services.knowledge_graph import populate_graph
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -72,7 +71,7 @@ class _Pool:
 
     @contextlib.asynccontextmanager
     async def acquire(self):
-        """For populate_graph: its transaction is a savepoint in the test's."""
+        """For the dossier's member reads: their transaction is a savepoint in the test's."""
         async with self._lock:
             yield self._conn
 
@@ -81,7 +80,7 @@ class _Pool:
 async def pool(conn):
     stand_in = _Pool(conn)
     with contextlib.ExitStack() as stack:
-        for module in ("entities", "search", "knowledge_graph", "thread_reads"):
+        for module in ("entities", "search", "thread_reads"):
             stack.enter_context(
                 patch(
                     f"app.services.{module}.get_pool",
@@ -156,32 +155,25 @@ async def _members(conn, specs: list[dict]) -> list[uuid.UUID]:
     return ids
 
 
+async def _bulk_members(conn, count: int, entities_sql: str, story: str = "g") -> None:
+    """*count* members this week whose entities and story_key are *entities_sql* and
+    *story* (SQL over ``g``, 1..count): by default each its own story."""
+    thread = await _thread(conn)
+    await conn.execute(
+        f"""
+        INSERT INTO thread_members (article_id, thread_id, story_key, published_at,
+                                    latitude, longitude, entities, similarity)
+        SELECT gen_random_uuid(), $1, {story}, now() - make_interval(mins => g), 1, 2,
+               {entities_sql}, 1.0
+        FROM generate_series(1, {count}) g
+        """,
+        thread,
+    )
+
+
 async def _node(conn, type_: str, name: str) -> None:
     await conn.execute(
         "INSERT INTO kg_nodes (type, name) VALUES ($1, $2) ON CONFLICT DO NOTHING", type_, name
-    )
-
-
-async def _mentions(conn, type_: str, name: str, count: int, days_ago: int = 0) -> None:
-    """*count* MENTIONED_IN edges from the node, written *days_ago* (no articles needed)."""
-    node = await conn.fetchval(
-        "INSERT INTO kg_nodes (type, name) VALUES ($1, $2)"
-        " ON CONFLICT (type, name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
-        type_,
-        name,
-    )
-    target = await conn.fetchval(
-        "INSERT INTO kg_nodes (type, name) VALUES ('ARTICLE', $1) RETURNING id",
-        f"zzentity-{uuid.uuid4()}",
-    )
-    await conn.execute(
-        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, created_at)"
-        " SELECT $1, $2, 'MENTIONED_IN', now() - make_interval(days => $3)"
-        " FROM generate_series(1, $4)",
-        node,
-        target,
-        days_ago,
-        count,
     )
 
 
@@ -363,10 +355,16 @@ async def test_articles_are_read_only_by_primary_key_for_the_ten_headlines(conn,
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("pool")
 async def test_a_name_resolves_to_one_stored_spelling_whatever_the_case_asked(conn):
-    await _mentions(conn, "PERSON", "Zz Epsilon", 3)
-    await _mentions(conn, "PERSON", "ZZ EPSILON", 1)
-    await _mentions(conn, "PERSON", "zz epsilon", 5, days_ago=8)  # not this week
+    for spelling in ("Zz Epsilon", "ZZ EPSILON", "zz epsilon"):
+        await _node(conn, "PERSON", spelling)
     await _node(conn, "ORG", "Zz Epsilon Fund")
+    await _members(
+        conn,
+        [{"story": 4000 + i, "entities": ["Zz Epsilon"]} for i in range(3)]
+        + [{"story": 4010, "entities": ["ZZ EPSILON"]}]
+        # not this week
+        + [{"story": 4020 + i, "entities": ["zz epsilon"], "hours_ago": 24 * 8} for i in range(5)],
+    )
     now = datetime.now(timezone.utc)
 
     for asked in ("zz epsilon", "ZZ EPSILON", "Zz Epsilon"):
@@ -385,61 +383,39 @@ async def test_a_name_resolves_to_one_stored_spelling_whatever_the_case_asked(co
 # ── search ──────────────────────────────────────────────────────────────
 
 
-async def _graph(conn, specs: list[dict]) -> list[dict]:
-    """Insert articles, then build their graph with populate_graph, as ingestion does."""
-    now = await conn.fetchval("SELECT now()")
-    rows = []
-    for i, s in enumerate(specs):
-        published = now - timedelta(hours=1, minutes=i)
-        article_id = await _article(conn, s["title"], published)
-        rows.append(
-            {
-                "id": article_id,
-                "title": s["title"],
-                "source_url": "",
-                "latitude": 0.0,
-                "longitude": 0.0,
-                "published_at": published,
-                "persons": s.get("persons", []),
-                "organizations": s.get("orgs", []),
-                "region": "",
-                "topic_tags": [],
-                "mentioned_locations": [],
-            }
-        )
-    await populate_graph(rows)
-    return rows
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("pool")
-async def test_search_ranks_by_mentions_and_drops_the_unmentioned(conn):
-    rows = await _graph(
+async def test_search_ranks_by_stories_this_week_and_drops_the_unmentioned(conn):
+    for type_, name in [
+        ("PERSON", "Zz Searchable One"),
+        ("PERSON", "Zz Searchable Two"),
+        ("PERSON", "Zz Searchable Old"),
+        ("ORG", "Zz Searchable Org"),
+    ]:
+        await _node(conn, type_, name)
+    await _members(
         conn,
         [
-            {
-                "title": "zzentity-S1",
-                "persons": ["Zz Searchable One"],
-                "orgs": ["Zz Searchable Org"],
-            },
-            {"title": "zzentity-S2", "persons": ["Zz Searchable One", "Zz Searchable Two"]},
-            {"title": "zzentity-S3", "persons": ["Zz Searchable One"]},
-            {"title": "zzentity-S4", "persons": ["Zz Searchable Old"]},
+            {"story": 5001, "entities": ["Zz Searchable One", "Zz Searchable Org"]},
+            {"story": 5001, "entities": ["Zz Searchable One"]},  # a copy: the same story
+            {"story": 5002, "entities": ["Zz Searchable One", "Zz Searchable Two"]},
+            {"entities": ["Zz Searchable One"]},  # unkeyed: a story of its own
+            {"story": 5004, "entities": ["Zz Searchable Old"], "hours_ago": 24 * 8},
         ],
     )
-    await conn.execute(  # no mentions this week
-        "UPDATE kg_edges SET created_at = now() - interval '8 days' WHERE article_id = $1",
-        rows[3]["id"],
-    )
-    result = await search.search("zz searchable", datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    result = await search.search("zz searchable", now)
 
     assert result["people"] == [
-        {"type": "person", "name": "Zz Searchable One", "n": 3},
-        {"type": "person", "name": "Zz Searchable Two", "n": 1},
+        {"type": "person", "name": "Zz Searchable One", "n": 3, "capped": False},
+        {"type": "person", "name": "Zz Searchable Two", "n": 1, "capped": False},
     ]
-    assert result["orgs"] == [{"type": "org", "name": "Zz Searchable Org", "n": 1}]
+    assert result["orgs"] == [{"type": "org", "name": "Zz Searchable Org", "n": 1, "capped": False}]
+    # As the dossier counts them.
+    dossier = await entities.get_entity_dossier("Zz Searchable One", "person", "168h", now)
+    assert dossier["counts"]["d7"] == 3
     # Like-wildcards are text: "_z" would otherwise match "Zz…".
-    assert (await search.search("_z", datetime.now(timezone.utc)))["people"] == []
+    assert (await search.search("_z", now))["people"] == []
 
 
 @pytest.mark.asyncio
@@ -502,21 +478,81 @@ async def test_search_reads_only_listed_threads(conn):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("pool")
-async def test_search_counts_mentions_up_to_the_cap(conn):
-    await _mentions(conn, "PERSON", "Zz Capped Person", 150)
-    result = await search.search("zz capped", datetime.now(timezone.utc))
+async def test_search_counts_stories_among_the_capped_members_and_ranks_the_capped_first(
+    conn,
+):
+    for name in ("Zz Cap Many Stories", "Zz Cap Few", "Zz Cap Under"):
+        await _node(conn, "PERSON", name)
+    await _bulk_members(conn, 150, "ARRAY['Zz Cap Many Stories']")  # 150 stories
+    await _bulk_members(conn, 100, "ARRAY['Zz Cap Few']", story="g % 40")  # 40 stories
+    await _bulk_members(conn, 99, "ARRAY['Zz Cap Under']")  # 99 stories, under the cap
+    now = datetime.now(timezone.utc)
+    result = await search.search("zz cap", now)
+
+    assert search.SEARCH_COUNT_CAP == 100
     assert result["people"] == [
-        {"type": "person", "name": "Zz Capped Person", "n": search.SEARCH_COUNT_CAP}
+        # The cap's worth of members read: n is their distinct stories, "{n}+",
+        # a sample, so the capped rank by how close the name is.
+        {"type": "person", "name": "Zz Cap Few", "n": 40, "capped": True},
+        {"type": "person", "name": "Zz Cap Many Stories", "n": 100, "capped": True},
+        # Under the cap: every member read, n is the dossier's d7.
+        {"type": "person", "name": "Zz Cap Under", "n": 99, "capped": False},
     ]
+    dossier = await entities.get_entity_dossier("Zz Cap Under", "person", "168h", now)
+    assert dossier["counts"]["d7"] == 99
 
 
 @pytest.mark.asyncio
-async def test_search_counts_through_the_recency_index(conn):
-    await _mentions(conn, "PERSON", "Zz Planned", 5)
+async def test_names_are_matched_among_people_and_orgs_and_counted_from_members(conn):
+    # Headlines (ARTICLE nodes) that carry the name, which the full trigram index
+    # would match and recheck one by one, and many people.
+    await conn.execute(
+        "INSERT INTO kg_nodes (type, name)"
+        " SELECT 'ARTICLE', 'Markets fell sharply on Monday after Zzplanned spoke, report '"
+        " || g FROM generate_series(1, 2000) g"
+    )
+    await conn.execute(
+        "INSERT INTO kg_nodes (type, name)"
+        " SELECT 'PERSON', 'Bulkperson ' || g FROM generate_series(1, 50000) g"
+    )
+    await _node(conn, "PERSON", "Zzplanned Person")
+    await _bulk_members(conn, 2000, "ARRAY['Zz Other ' || (g % 200)]")
+    # New GIN entries wait in a pending list that every scan reads in full, until
+    # (auto)vacuum or autoanalyze merges them; merge them now, as production's are.
+    for index in ("idx_kg_nodes_name_trgm", "idx_kg_nodes_entity_name_trgm"):
+        await conn.execute(f"SELECT gin_clean_pending_list('{index}')")
+    await conn.execute("ANALYZE kg_nodes")
+    await conn.execute("ANALYZE thread_members")
     await conn.execute("SET LOCAL enable_seqscan = off")
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
-    plan = await _plan(conn, search._CANDIDATES_SQL, "zz planned", "zz planned%", week_ago, 100)
-    assert re.search(r"Index (Only )?Scan using idx_kg_edges_source_recent", plan), plan
+
+    candidates = await _plan(conn, search._CANDIDATES_SQL, "zzplanned", "zzplanned%", week_ago, 100)
+    resolve = await _plan(conn, entities._RESOLVE_SQL, "PERSON", "zzplanned person", week_ago, 100)
+    for plan in (candidates, resolve):
+        assert "idx_kg_nodes_entity_name_trgm" in plan, plan
+        assert not re.search(r"\bidx_kg_nodes_name_trgm\b", plan), plan
+        # Each name's count: thread members through the entity index.
+        assert "idx_thread_members_entities" in plan, plan
+        assert "kg_edges" not in plan, plan
+
+    # Plans made without the values (asyncpg reuses prepared statements, and
+    # after five runs PostgreSQL may keep a generic plan) can use the partial
+    # index only because each query names its predicate literally.
+    await conn.execute(
+        "PREPARE zz_candidates (text, text, timestamptz, bigint) AS " + search._CANDIDATES_SQL
+    )
+    await conn.execute(
+        "PREPARE zz_resolve (text, text, timestamptz, bigint) AS " + entities._RESOLVE_SQL
+    )
+    await conn.execute("SET LOCAL plan_cache_mode = force_generic_plan")
+    for statement in (
+        "EXECUTE zz_candidates('zzplanned', 'zzplanned%', now(), 100)",
+        "EXECUTE zz_resolve('PERSON', 'zzplanned person', now(), 100)",
+    ):
+        plan = await _plan(conn, statement)
+        assert "$2" in plan, plan  # generic: planned without the values
+        assert "idx_kg_nodes_entity_name_trgm" in plan, plan
+        assert not re.search(r"\bidx_kg_nodes_name_trgm\b", plan), plan
 
 
 @pytest.mark.asyncio

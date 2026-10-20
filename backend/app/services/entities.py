@@ -40,11 +40,13 @@ WINDOWS: dict[str, timedelta] = {"24h": timedelta(hours=24), "168h": timedelta(d
 # The graph's node type for each entity type the API takes.
 NODE_TYPES = {"person": "PERSON", "org": "ORG"}
 
-# Mentions counted per name to rank names (search, and spellings that differ
-# only in case), up to this many. The count is an index-only scan of
-# idx_kg_edges_source_recent, newest first, except that each entry on a page
-# written since kg_edges' last vacuum costs a heap fetch, a random read.
+# Thread members read per name to rank names (search, and stored spellings
+# that differ only in case), at most: each is a narrow row read through the
+# entity index, so a heavy name costs no more than this.
 MENTION_COUNT_CAP = 100
+
+# A member's story: its story_key, or its article alone when it has none.
+STORY_SQL = "coalesce(story_key::text, article_id::text)"
 
 _TOP_PLACES = 12
 _TOP_CO_MENTIONS = 15
@@ -54,9 +56,9 @@ _HEADLINES = 10
 # before ($4..$3) and 7 days ($2..), and per country in the window ($5..):
 # one pass over every match. A member without a story_key is a story of
 # its own. ``since`` is the earliest member of all (idx_thread_members_published).
-_SUMMARY_SQL = """
+_SUMMARY_SQL = f"""
     WITH m AS (
-        SELECT coalesce(story_key::text, article_id::text) AS story, published_at, country_code
+        SELECT {STORY_SQL} AS story, published_at, country_code
         FROM thread_members
         WHERE entities @> ARRAY[$1]::text[] AND published_at >= $2
     ),
@@ -106,26 +108,40 @@ _TYPES_SQL = """
 """
 
 
-def recent_mentions_sql(node: str, since: str, cap: str) -> str:
-    """SQL for the *node*'s mentions (kg_edges) since *since*, counted up to *cap*.
+def member_mentions_sql(name: str, since: str, cap: str) -> str:
+    """A LATERAL subquery for how much coverage names *name* since *since*, read
+    from at most *cap* thread members through idx_thread_members_entities.
 
-    *node*, *since* and *cap* are SQL expressions (a column, a parameter).
+    ``stories``: the distinct stories among the members read, copies counted
+    once; under the cap that is every member, so the dossier's d7 for a week.
+    ``capped``: the cap was reached, so the name has at least *cap* members and
+    more stories than counted ("{stories}+"). Rank capped names first.
+    *name*, *since* and *cap* are SQL expressions (a column, a parameter).
     """
-    return (
-        "(SELECT count(*)::int FROM (SELECT 1 FROM kg_edges e"
-        f" WHERE e.source_node_id = {node} AND e.created_at >= {since} LIMIT {cap}) x)"
-    )
+    return f"""
+        (SELECT count(DISTINCT story)::int AS stories, count(*) >= {cap} AS capped
+         FROM (SELECT {STORY_SQL} AS story FROM thread_members
+               WHERE entities @> ARRAY[{name}]::text[] AND published_at >= {since}
+               LIMIT {cap}) x)
+    """
 
 
 # A name of that type, in any case, as stored. Without wildcards (escaped),
-# ILIKE is a case-insensitive equality the trigram index on kg_nodes.name
-# serves. Stored spellings that differ only in case resolve to the most
-# mentioned this week ($3, counted up to $4), then by name: the answer
-# depends only on the lowercased name, as the dossier's cache key does.
+# ILIKE is a case-insensitive equality. The literal type predicate lets every
+# plan use idx_kg_nodes_entity_name_trgm (migration 016), which holds only
+# people and organisations; $1 alone would match it only in a custom plan.
+# Stored spellings that differ only in case resolve to the one with the most
+# coverage this week in thread members ($3, reading at most $4), which the
+# dossier reads by that spelling: capped spellings first, as search ranks
+# names, then the rest by stories, then by name. A capped spelling's stories
+# are a sample and case variants are equally close to the name, so capped ones
+# go by name. The answer depends only on the lowercased name, as the dossier's
+# cache key does.
 _RESOLVE_SQL = f"""
-    SELECT n.name FROM kg_nodes n
-    WHERE n.type = $1 AND n.name ILIKE $2
-    ORDER BY {recent_mentions_sql("n.id", "$3", "$4")} DESC, n.name
+    SELECT n.name
+    FROM kg_nodes n CROSS JOIN LATERAL {member_mentions_sql("n.name", "$3", "$4")} m
+    WHERE n.type IN ('PERSON', 'ORG') AND n.type = $1 AND n.name ILIKE $2
+    ORDER BY m.capped DESC, CASE WHEN m.capped THEN 0 ELSE m.stories END DESC, n.name
     LIMIT 1
 """
 
@@ -256,7 +272,7 @@ async def resolve_entity(entity_type: str, name: str, now: datetime) -> str | No
     """The stored name of the graph node of that type named *name* (any case), or None.
 
     Spellings that differ only in case: the most mentioned in the 7 days to
-    *now* (counted up to MENTION_COUNT_CAP), then by name.
+    *now* in thread members (reading at most MENTION_COUNT_CAP), then by name.
     """
     pool = await get_pool()
     return await pool.fetchval(

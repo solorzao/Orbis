@@ -10,7 +10,8 @@ from app.models.entities import EntityType
 class EntityResult(BaseModel):
     type: EntityType
     name: str
-    n: int  # mentions in the last 7 days
+    n: int  # distinct stories in the last 7 days, among the members read
+    capped: bool  # the member cap was reached: at least n stories ("{n}+")
 
 
 class ThreadResult(BaseModel):
