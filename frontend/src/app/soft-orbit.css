@@ -581,8 +581,9 @@ kbd {
   width: max(100%, 340px);
   max-height: min(60vh, 440px);
   border-radius: var(--radius-lg);
-  /* It lies over the side panel's text: the sheet's denser glass keeps the results legible. */
-  background: var(--surface-sheet);
+  /* It lies over the side panel's text: the sheet's glass over the page's own colour
+     (opaque), so nothing reads through the results. */
+  background: linear-gradient(var(--surface-sheet), var(--surface-sheet)), var(--bg-page);
   box-shadow: var(--elev-lifted);
 }
 .glass.track-pop[hidden] {
