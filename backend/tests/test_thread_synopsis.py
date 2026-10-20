@@ -158,6 +158,23 @@ def test_a_reply_that_names_no_story_counts_as_none(title, synopsis):
 
 
 @pytest.mark.parametrize(
+    "sentence",
+    [
+        "Police said information provided by witnesses led to two arrests",
+        "Aid material supplied by the UN reached Gaza",
+        "Officials gave no specific details about the suspect's motive",
+    ],
+)
+def test_a_real_story_mentioning_information_or_material_is_kept(sentence):
+    """Only the meta phrasing about the headlines counts as no story."""
+    synopsis = f"{sentence}, according to local reports on Tuesday."
+    assert parse_synopsis(json.dumps({"title": sentence, "synopsis": synopsis})) == (
+        sentence,
+        synopsis,
+    )
+
+
+@pytest.mark.parametrize(
     "reply",
     [
         json.dumps({"title": None, "synopsis": SYNOPSIS}),

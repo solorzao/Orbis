@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 
 from app.services.database import get_pool
 from app.services.entities import MENTION_COUNT_CAP, like_escape, member_mentions_sql
-from app.services.thread_reads import LIST_HOURS, LISTED_SQL
+from app.services.thread_reads import LIST_HOURS, LISTED_SQL, shown_text
 
 logger = logging.getLogger(__name__)
 
@@ -140,4 +140,6 @@ def _rank(row) -> tuple:
 async def _threads(pool, q: str, since: datetime) -> list[dict]:
     """Listed threads whose AI title or lead headline contains *q*, as ``{id, title}``."""
     rows = await pool.fetch(_THREADS_SQL, since, "%" + like_escape(q) + "%")
-    return [{"id": r["id"], "title": r["title"] or r["lead_title"]} for r in rows]
+    return [
+        {"id": r["id"], "title": shown_text(r["title"], None)[0] or r["lead_title"]} for r in rows
+    ]
