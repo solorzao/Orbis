@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import random
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from scripts.backfill_entity_names import backfill
@@ -28,6 +29,15 @@ from tests.realistic_names import (
 )
 
 NOW = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
+
+_ANALYZED = ("kg_nodes", "kg_entity_names", "thread_members")
+
+
+@dataclass
+class Fixture:
+    names: list[tuple[str, str]]  # (type, name) of every person and organisation
+    node_ids: list[uuid.UUID]
+    thread_id: int
 
 
 def entity_names(people: int, seed: int = 7) -> list[tuple[str, str]]:
@@ -65,9 +75,12 @@ async def build(
     members: int = 100_000,
     cycles: int = 150,
     seed: int = 7,
-) -> list[tuple[str, str]]:
-    """Write the graph and members on *conn* (inside the caller's transaction) and
-    return the (type, name) of every person and organisation written."""
+) -> Fixture:
+    """Write the graph and members on *conn*, inside the caller's transaction.
+
+    ANALYZE's row and page counts outlive the rollback (pg_class is updated in
+    place), so a test using this should run after the others that plan on
+    these tables: see tests/test_zz_search_real_names_db.py."""
     rng = random.Random(seed)
     names = entity_names(people, seed)
     per_cycle = articles // cycles
@@ -147,6 +160,6 @@ async def build(
     )
     for gin in gins:
         await conn.execute("SELECT gin_clean_pending_list($1::regclass)", gin["name"])
-    for table in ("kg_nodes", "kg_entity_names", "thread_members"):
+    for table in _ANALYZED:
         await conn.execute(f"ANALYZE {table}")
-    return [(t, n) for t, n in names]
+    return Fixture(names=list(names), node_ids=[r[0] for r in records], thread_id=thread)
