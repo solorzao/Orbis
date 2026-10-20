@@ -763,20 +763,49 @@ async def test_two_threads_of_one_story_merge_into_the_larger(conn, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_a_pair_below_merge_sim_needs_a_specific_shared_name(conn, monkeypatch):
+def _leaning(base: int, other: int, cos: float) -> dict[int, float]:
+    return {base: cos, other: math.sqrt(1 - cos * cos)}
+
+
+@pytest.mark.asyncio
+async def test_a_pair_below_merge_sim_needs_two_specific_shared_names(conn, monkeypatch):
     await _filler_threads(conn, 300)
-    sharing = await _story_thread(conn, {0: 1.0}, 4, entities=("Zz Tiger Specific",))
-    joins = await _story_thread(
-        conn, _direction(0.82), 3, entities=("Zz Tiger Specific",), first_story=10
+    names = ("Zz Tiger Specific", "Zz Bandra Specific")
+    two = await _story_thread(conn, {0: 1.0}, 4, entities=names)
+    joins = await _story_thread(conn, _leaning(0, 1, 0.79), 3, entities=names, first_story=10)
+    one = await _story_thread(conn, {3: 1.0}, 4, entities=("Zz Only Specific",))
+    stays = await _story_thread(
+        conn, _leaning(3, 4, 0.79), 3, entities=("Zz Only Specific", "Zz Other"), first_story=20
     )
-    alone = await _story_thread(conn, {4: 1.0}, 4, first_story=20)
-    apart = await _story_thread(conn, _direction(0.82, other=5), 3, first_story=30)
+    alone = await _story_thread(conn, {6: 1.0}, 4, first_story=30)
+    apart = await _story_thread(conn, _leaning(6, 7, 0.79), 3, first_story=40)
 
     await _catch_up(conn, monkeypatch)
 
-    assert (await _thread(conn, joins))["merged_into"] == sharing
-    assert (await _thread(conn, apart))["merged_into"] is None
+    assert (await _thread(conn, joins))["merged_into"] == two
+    assert (await _thread(conn, stays))["merged_into"] is None  # one name shared
+    assert (await _thread(conn, apart))["merged_into"] is None  # none shared
+    assert (await _thread(conn, one))["merged_into"] is None
     assert (await _thread(conn, alone))["merged_into"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_thread_close_only_to_a_merged_pair_joins_it(conn, monkeypatch):
+    """448/514 (Helen Haines): 514 was under the bar from 448 and 548 apart, and over
+    it once 548 joined 448. The winner looks for its nearest again."""
+    a = await _story_thread(conn, {0: 1.0}, 5)
+    b = await _story_thread(conn, _leaning(0, 1, 0.9), 3, first_story=10)
+    c = await _story_thread(
+        conn, {0: 0.81, 1: 0.2, 2: math.sqrt(1 - 0.81**2 - 0.2**2)}, 3, first_story=20
+    )
+    assert await _cos(conn, a, {0: 0.81, 1: 0.2, 2: 0.5514}) < threads.MERGE_SIM
+    assert await _cos(conn, b, {0: 0.81, 1: 0.2, 2: 0.5514}) < threads.MERGE_SIM
+
+    stats = await _catch_up(conn, monkeypatch)
+
+    assert stats.merged == 2
+    assert (await _thread(conn, b))["merged_into"] == a
+    assert (await _thread(conn, c))["merged_into"] == a
 
 
 @pytest.mark.asyncio
