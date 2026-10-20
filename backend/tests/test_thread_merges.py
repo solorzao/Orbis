@@ -446,3 +446,96 @@ def test_a_new_process_catches_up_first():
         check=True,
     )
     assert fresh.stdout.strip() == "False"
+
+
+# --- the audit log ------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_each_merge_is_logged_for_audit_ids_only(caplog):
+    """So a wrong merge can be found in the logs later: no titles, ids only."""
+    article = _row()
+    conn = _merging_conn(**{threads.LOAD_SQL: [article], threads.NEW_THREAD_SQL: 1})
+
+    with caplog.at_level(logging.INFO, logger="orbis.threads"):
+        await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    audit = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Thread merge:")]
+    assert audit == ["Thread merge: 1 -> 2 sim=0.880 shared=0 round=1"]
+
+
+@pytest.mark.asyncio
+async def test_the_audit_counts_the_shared_names_and_the_round(caplog):
+    merged: set[int] = set()
+
+    def neighbours(ids, _k):
+        pairs = [(548, 448, 0.79)] if 548 in ids else []
+        if ids == [448]:
+            pairs = [(448, 514, 0.83)]
+        return [
+            {"id": a, "other": b, "sim": sim}
+            for a, b, sim in pairs
+            if a not in merged and b not in merged
+        ]
+
+    def drop(loser):
+        merged.add(loser)
+        return "DELETE 1"
+
+    names = ["Helen Haines", "Indi", "Victoria Police"]
+    article = _row()
+    conn = _merging_conn(
+        **{
+            threads.LOAD_SQL: [article],
+            threads.NEW_THREAD_SQL: 548,
+            threads.NEIGHBOURS_SQL: neighbours,
+            threads.DROP_CENTROID_SQL: drop,
+            threads.MERGE_INFO_SQL: [
+                {"id": 448, "n_stories": 6, "n_articles": 6, "top_entities": names},
+                {"id": 548, "n_stories": 3, "n_articles": 3, "top_entities": names[:2]},
+                {"id": 514, "n_stories": 4, "n_articles": 4, "top_entities": []},
+            ],
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="orbis.threads"):
+        await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    audit = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Thread merge:")]
+    assert audit == [
+        "Thread merge: 548 -> 448 sim=0.790 shared=2 round=1",
+        "Thread merge: 514 -> 448 sim=0.830 shared=0 round=2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_audit_log_is_capped_per_pass_with_a_count_beyond(monkeypatch, caplog):
+    monkeypatch.setattr(threads, "MERGE_AUDIT_LINES", 1)
+    article = _row()
+    conn = _merging_conn(
+        **{
+            threads.LOAD_SQL: [article],
+            threads.NEW_THREAD_SQL: 1,
+            threads.NEIGHBOURS_SQL: lambda ids, _k: (
+                [
+                    {"id": 1, "other": 2, "sim": 0.9},
+                    {"id": 3, "other": 4, "sim": 0.88},
+                    {"id": 5, "other": 6, "sim": 0.86},
+                ]
+                if 1 in ids
+                else []
+            ),
+            threads.MERGE_INFO_SQL: [
+                {"id": i, "n_stories": n, "n_articles": n, "top_entities": []}
+                for i, n in ((1, 3), (2, 9), (3, 3), (4, 9), (5, 3), (6, 9))
+            ],
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="orbis.threads"):
+        stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    audit = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Thread merge:")]
+    assert stats.merged == 3
+    assert audit == [
+        "Thread merge: 1 -> 2 sim=0.900 shared=0 round=1",
+        "Thread merge: 2 more not listed.",
+    ]

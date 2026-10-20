@@ -92,6 +92,14 @@ SINGLETON_HOURS = 24  # a one-story thread stays joinable this long
 # Hence MERGE_SIM 0.82, over both wrong pairs, and MERGE_SIM_WITH_ENTITY 0.77 with
 # MERGE_SHARED_ENTITIES (2) specific names in both; one shared name needs MERGE_SIM.
 #
+# The risk, from a synthetic stress test (#100): different stories whose threads
+# sit 0.82-0.84 apart would merge, and merging duplicates makes centroids purer,
+# lifting such neighbours over the bar. At deploy, production had no wrong pair at
+# 0.82 or above (16 nearest pairs at 0.80-0.85: the one wrong one was 0.806). A
+# guard against threads naming disjoint people was rejected: top names differ
+# even within one story (12 of the 13 pairs it would block were true duplicates).
+# Watch for wrong merges in the audit log: one "Thread merge:" line per merge.
+#
 # Centroids of one story sit closer than its articles do. With headlines alike at
 # rho, an article's cosine to a k-story centroid is k*rho / sqrt(k*(1 + (k-1)*rho)):
 # at rho = 0.7, 0.70 for k = 1 and 0.78 for k = 3, under JOIN_SIM; but two such
@@ -106,6 +114,7 @@ MERGE_SHARED_ENTITIES = 2  # top entities (people, orgs) both threads name, not 
 MERGE_NEIGHBOURS = 3  # nearest active threads checked per candidate
 MERGE_ROUNDS = 3  # a pass's rounds: each round's winners look for their nearest again
 MAX_MERGES = 200  # a cycle's merges at most
+MERGE_AUDIT_LINES = 50  # "Thread merge:" lines a pass logs; then a count of the rest
 # A cycle's moved members at most (each a non-HOT update into five indexes, some
 # 16 GIN entries): one merge always goes ahead, and the rest wait for the next.
 MAX_MOVED_MEMBERS = 5000
@@ -689,6 +698,17 @@ def plan_merges(
     group is one thread from then on, with the stories of all its members. The
     smaller merges into the larger (by stories, the older on a tie).
     """
+    return [(loser, winner) for loser, winner, _, _ in _planned(pairs, infos, generic, limit)]
+
+
+def _planned(
+    pairs: list[tuple[int, int, float]],
+    infos: dict[int, ThreadInfo],
+    generic: set[str],
+    limit: int | None = None,
+) -> list[tuple[int, int, float, int]]:
+    """plan_merges' merges, each with the similarity and the number of specific
+    shared names of the pair that made it (for the audit log)."""
     limit = MAX_MERGES if limit is None else limit
     parent: dict[int, int] = {}
     size = {thread_id: info.n_stories for thread_id, info in infos.items()}
@@ -698,15 +718,15 @@ def plan_merges(
             thread_id = parent[thread_id]
         return thread_id
 
+    def shared(a: int, b: int) -> int:
+        return len((infos[a].entities - generic) & (infos[b].entities - generic))
+
     def qualifies(a: int, b: int, sim: float) -> bool:
         if sim >= MERGE_SIM:
             return True
-        if sim < MERGE_SIM_WITH_ENTITY or a not in infos or b not in infos:
-            return False
-        shared = (infos[a].entities - generic) & (infos[b].entities - generic)
-        return len(shared) >= MERGE_SHARED_ENTITIES
+        return sim >= MERGE_SIM_WITH_ENTITY and shared(a, b) >= MERGE_SHARED_ENTITIES
 
-    merges: list[tuple[int, int]] = []
+    merges: list[tuple[int, int, float, int]] = []
     for a, b, sim in sorted(pairs, key=lambda p: (-p[2], p[0], p[1])):
         if len(merges) >= limit:
             break
@@ -718,7 +738,7 @@ def plan_merges(
         winner, loser = sorted((ra, rb), key=lambda t: (-size.get(t, 0), t))
         parent[loser] = winner
         size[winner] = size.get(winner, 0) + size.get(loser, 0)
-        merges.append((loser, winner))
+        merges.append((loser, winner, sim, shared(a, b)))
     return merges
 
 
@@ -963,9 +983,9 @@ async def _merge_pass(conn: Any, stats: ThreadStats, now: datetime) -> set[int]:
     budget = _MergeBudget(MAX_MERGES, MAX_MOVED_MEMBERS)
     aggregated: set[int] = set()
     complete = False
-    for _ in range(MERGE_ROUNDS):
+    for round_no in range(1, MERGE_ROUNDS + 1):
         winners: set[int] = set()
-        done = await _merge(conn, stats, candidates, winners, budget, now)
+        done = await _merge(conn, stats, candidates, winners, budget, now, round_no)
         if winners:
             aggregated |= set(await _aggregate(conn, sorted(winners), now))
         if not done:
@@ -974,6 +994,8 @@ async def _merge_pass(conn: Any, stats: ThreadStats, now: datetime) -> set[int]:
             complete = True
             break
         candidates = winners
+    if budget.made > budget.logged:
+        logger.info("Thread merge: %d more not listed.", budget.made - budget.logged)
     # Done only after a pass that completed: one that failed, stopped short or ran
     # out of rounds catches up next cycle.
     _caught_up = complete
@@ -985,6 +1007,8 @@ class _MergeBudget:
     merges: int  # merges left this pass
     members: int  # moved members left this pass (one merge always goes ahead)
     used: bool = False  # whether a merge has been made
+    made: int = 0  # merges made this pass
+    logged: int = 0  # of them, "Thread merge:" lines logged (MERGE_AUDIT_LINES)
 
 
 async def _merge(
@@ -994,6 +1018,7 @@ async def _merge(
     winners: set[int],
     budget: _MergeBudget,
     now: datetime,
+    round_no: int = 1,
 ) -> bool:
     """Merge *candidates* where plan_merges says so, adding the winners to
     *winners*; whether every planned merge was made (none failed or was left for
@@ -1013,10 +1038,10 @@ async def _merge(
         for r in await conn.fetch(MERGE_INFO_SQL, ids)
     }
     generic = {r["e"] for r in await conn.fetch(GENERIC_SQL, GENERIC_ENTITY_SHARE)}
-    plan = plan_merges(pairs, infos, generic, budget.merges)
+    plan = _planned(pairs, infos, generic, budget.merges)
     members = {thread_id: info.n_articles for thread_id, info in infos.items()}
     complete = len(plan) < budget.merges
-    for loser, winner in plan:
+    for loser, winner, sim, shared in plan:
         if budget.used and members.get(loser, 0) > budget.members:
             logger.info(
                 "Threads: merge budget of %d moved members reached; the rest wait.",
@@ -1035,6 +1060,17 @@ async def _merge(
             complete = False  # the catch-up tries again next cycle
             continue
         budget.used = True
+        budget.made += 1
+        if budget.logged < MERGE_AUDIT_LINES:  # ids only, to audit merges later
+            logger.info(
+                "Thread merge: %s -> %s sim=%.3f shared=%d round=%d",
+                loser,
+                winner,
+                sim,
+                shared,
+                round_no,
+            )
+            budget.logged += 1
         budget.merges -= 1
         budget.members -= members.get(loser, 0)
         members[winner] = members.get(winner, 0) + members.get(loser, 0)
