@@ -15,8 +15,11 @@ unassigned ones) joins the best-matching active thread, or starts one:
 - **Joining.** A story joins its best candidate at a cosine of JOIN_SIM, or
   of JOIN_SIM_WITH_ENTITY when it shares a specific person or organisation
   with the thread (one in more than GENERIC_ENTITY_SHARE of active threads,
-  and in more than one, is generic and doesn't count). Titles shorter than
-  MIN_TITLE_WORDS ("Police arrest man") neither join nor seed a thread.
+  and in more than one, is generic and doesn't count). A title is judged as
+  it shows (``display_title``: "Police arrest man - BBC News" shows "Police
+  arrest man"): shorter than MIN_TITLE_WORDS (MIN_NAMED_TITLE_WORDS when the
+  article names a person or org: "Biden drops out"), a news digest or a bare
+  section name ("National"), it neither joins nor seeds a thread.
 - **Aggregates** (counts, places, entities, topic, lead) are recomputed once
   at the end from ``thread_members`` only, so ``first_seen`` moves forward
   when the retention purge removes a thread's oldest members; velocity is
@@ -45,14 +48,20 @@ import logging
 import re
 import time
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.services.thread_reads import LISTED_SQL
-from app.services.titles import display_title
+from app.services.titles import (
+    DASH_CHARS,
+    LEADING_TAGS_PATTERN,
+    OUTLET_MAX_CHARS,
+    OUTLET_SEP_PATTERN,
+    display_title,
+)
 
 logger = logging.getLogger("orbis.threads")
 
@@ -124,7 +133,10 @@ MERGE_TIME_BUDGET_S = 30
 MAX_MOVED_MEMBERS = 5000
 CATCH_UP_LIMIT = 2000  # a process's first merge pass checks this many listed threads
 GENERIC_ENTITY_SHARE = 0.01  # in more than this share of active threads: generic, not shared
-MIN_TITLE_WORDS = 4  # shorter titles neither join nor seed a thread
+MIN_TITLE_WORDS = 4  # titles shorter than this, as shown, neither join nor seed a thread,
+# but for MIN_NAMED_TITLE_WORDS when the article names a person or org: "Biden drops
+# out" is a story and "Police arrest man" isn't (both shown without the outlet's name).
+MIN_NAMED_TITLE_WORDS = 3
 DECAY = 0.97  # each join multiplies centroid_sum by this before adding
 CANDIDATES = 15  # nearest active threads scored per story
 # Placement stops starting new articles after this (counted from its start, not
@@ -145,9 +157,6 @@ TOP_ENTITIES = 8
 ENTITIES_PER_TYPE = 8  # a member's entities: up to 8 persons, then up to 8 orgs
 HNSW_EF_SEARCH = 100  # so dead index entries can't crowd live candidates out
 
-# The same raw word count as Python's title_words: btrim drops spaces, \s+ splits.
-_TITLE_WORDS_SQL = r"array_length(regexp_split_to_array(btrim(a.title), '\s+'), 1)"
-
 # News digests: one page summarising many stories under a clock-stamped title
 # ("AP News Summary at 6:14 a.m. EDT", "AP News in Brief at 12:04 a.m. EDT"). They
 # embed alike, so they formed thread 129, "Developing news story with no
@@ -161,16 +170,87 @@ DIGEST_PATTERN = (
 )
 _DIGEST = re.compile(DIGEST_PATTERN, re.IGNORECASE)
 
+# A site section's name, all a headline shows once display_title takes the outlet's
+# name off ("National - The Hindu" shows "National"): thread 9574, "National", grew
+# from three ("National", "Health", "World"). These words only, in any number ("Top
+# News Headlines Today"). Plain ERE, as DIGEST_PATTERN. English only: another
+# language's section names pass (as its digests do).
+_SECTION_WORDS = (
+    "latest|top|breaking|local|world|national|international|regional|business|economy"
+    "|markets|money|sport|sports|health|opinion|opinions|editorial|live|politics"
+    "|entertainment|tech|technology|science|lifestyle|culture|weather|news|home"
+    "|updates|update|stories|headlines|video|videos|today|and|&"
+)
+SECTION_PATTERN = rf"^\s*({_SECTION_WORDS})(\s+({_SECTION_WORDS}))*\s*$"
+_SECTION = re.compile(SECTION_PATTERN, re.IGNORECASE)
+
+
+# Python's \s (str.isspace; all in the BMP), which display_title collapses, spelled
+# out as ARE escapes: Postgres' own \s follows the database's locale (U+2028 and
+# U+1680 are spaces in some, not in others).
+SPACE_CHARS = "".join(c for c in map(chr, range(0x10000)) if c.isspace())
+_SPACES_SQL = "[" + "".join(f"\\u{ord(c):04x}" for c in SPACE_CHARS) + "]+"
+
+
+def shown_title_sql(title: str) -> str:
+    """FROM items giving ``st.shown``: ``display_title`` of *title* (a column of an
+    earlier FROM item) in SQL, so the backlog judges a title as Python does
+    (tests/test_threads_db.py compares them). The same steps but two: html.unescape
+    (ingestion's titles are unescaped already, in gdelt._clean_title) and folding
+    quotes, which adds or removes no word or separator. So ``st.shown`` keeps curly
+    quotes: it is for judging a title, never for showing one.
+
+    The outlet's name goes at the last separator ``finditer`` finds: the last of
+    regexp_count's non-overlapping matches, so stacked ones ("Floods - | The Hindu")
+    cut where Python cuts. The lateral subqueries are flattened into the scan."""
+    dashes = "-" * len(DASH_CHARS)
+    sep = OUTLET_SEP_PATTERN
+    return f"""
+    CROSS JOIN LATERAL (
+        SELECT regexp_replace(
+                   regexp_replace(translate(normalize({title}, NFKC), '{DASH_CHARS}', '{dashes}'),
+                                  '{_SPACES_SQL}', ' ', 'g'),
+                   '{LEADING_TAGS_PATTERN}', '', 'i') AS tagless
+    ) tt
+    CROSS JOIN LATERAL (SELECT regexp_count(tt.tagless, '{sep}') AS seps) ts
+    CROSS JOIN LATERAL (
+        SELECT btrim(CASE
+                   WHEN ts.seps > 0
+                        AND length(tt.tagless) + 1
+                            - regexp_instr(tt.tagless, '{sep}', 1, ts.seps, 1)
+                            < {OUTLET_MAX_CHARS}
+                   THEN left(tt.tagless, regexp_instr(tt.tagless, '{sep}', 1, ts.seps) - 1)
+                   ELSE tt.tagless
+               END) AS shown
+    ) st"""
+
+
+def threadable_sql(shown: str, min_words: str, names: str) -> str:
+    """``threadable`` as an SQL condition on a shown title (shown_title_sql's
+    ``st.shown``): *min_words* is MIN_TITLE_WORDS, as a parameter, and *names* the
+    article's persons and orgs as one text[] (NULL and empty names name no one).
+    title_words' rule: \\s+ splits (shown is trimmed, its spaces collapsed)."""
+    words = f"array_length(regexp_split_to_array({shown}, '\\s+'), 1)"
+    named = f"coalesce(array_to_string({names}, ''), '') <> ''"
+    return (
+        f"({words} >= {min_words} OR ({words} >= {MIN_NAMED_TITLE_WORDS} AND {named}))"
+        f" AND {shown} !~* '{DIGEST_PATTERN}'"
+        f" AND {shown} !~* '{SECTION_PATTERN}'"
+    )
+
+
 # Not this cycle's own ids (they come anyway), and the oldest first: what a time
 # budget or a big embedding cycle left over goes before it ages out of the window.
+# Titles are judged as shown, as threadable() judges them: one Python drops but this
+# keeps would come back every cycle and crowd the 500 out.
 BACKLOG_SQL = f"""
     SELECT a.id
     FROM articles a
+    {shown_title_sql("a.title")}
     WHERE a.published_at >= $1 AND a.embedding IS NOT NULL
       AND NOT (a.id = ANY($4::uuid[]))
       AND NOT EXISTS (SELECT 1 FROM thread_members m WHERE m.article_id = a.id)
-      AND {_TITLE_WORDS_SQL} >= $2
-      AND a.title !~* '{DIGEST_PATTERN}'
+      AND {threadable_sql("st.shown", "$2", "a.persons || a.orgs")}
     ORDER BY a.published_at
     LIMIT $3
 """
@@ -517,9 +597,26 @@ def is_digest(title: str | None) -> bool:
     return bool(_DIGEST.match(title or ""))
 
 
-def threadable(title: str | None) -> bool:
-    """Whether an article may join or seed a thread: the backlog's SQL rule."""
-    return title_words(title) >= MIN_TITLE_WORDS and not is_digest(title)
+def is_section_label(title: str | None) -> bool:
+    """Whether *title* is only a site section's name (SECTION_PATTERN), not a story."""
+    return bool(_SECTION.match(title or ""))
+
+
+def threadable(
+    title: str | None, persons: Sequence[str] | None = (), orgs: Sequence[str] | None = ()
+) -> bool:
+    """Whether an article may join or seed a thread, judged on the title as shown
+    (display_title: "National - The Hindu" shows "National"): MIN_TITLE_WORDS, or
+    MIN_NAMED_TITLE_WORDS when it names a person or org, and never a digest or a bare
+    section name. The backlog's SQL rule (threadable_sql)."""
+    shown = display_title(title or "")
+    words = title_words(shown)
+    named = any(name for name in (*(persons or ()), *(orgs or ())))
+    return (
+        (words >= MIN_TITLE_WORDS or (words >= MIN_NAMED_TITLE_WORDS and named))
+        and not is_digest(shown)
+        and not is_section_label(shown)
+    )
 
 
 def title_words(title: str | None) -> int:
@@ -785,7 +882,11 @@ async def assign_threads(
             rows = await conn.fetch(LOAD_SQL, ids, MAX_BATCH)
             if len(rows) == MAX_BATCH:  # the newest past the batch wait for the backlog
                 stats.deferred += len(ids) - MAX_BATCH
-            articles = [_Article.from_row(r) for r in rows if threadable(r["title"])]
+            articles = [
+                _Article.from_row(r)
+                for r in rows
+                if threadable(r["title"], r["persons"], r["orgs"])
+            ]
         stats.load_seconds = time.monotonic() - began
         if articles:
             await _assign(conn, articles, stats)

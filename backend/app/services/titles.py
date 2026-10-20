@@ -17,8 +17,11 @@ import re
 import unicodedata
 
 # Pattern: "Headline : NPR", "Headline | WXXJ News", "Headline - The Post"
-# (dashes are folded to "-" first).
-_OUTLET_SEP = re.compile(r"\s+[|:-]\s+")
+# (dashes are folded to "-" first). The patterns here are Postgres ARE too:
+# threads.shown_title_sql applies them in SQL.
+OUTLET_SEP_PATTERN = r"\s+[|:-]\s+"
+_OUTLET_SEP = re.compile(OUTLET_SEP_PATTERN)
+OUTLET_MAX_CHARS = 40  # text after the last separator shorter than this is the outlet's name
 
 # Curly quotes as straight ones; every dash style as "-" (NFKC leaves these).
 _QUOTES = str.maketrans(
@@ -35,20 +38,24 @@ _QUOTES = str.maketrans(
         "\u2033": '"',
     }
 )
-_DASHES = re.compile(r"[\u2010-\u2015\u2212\u2e3a\u2e3b\ufe58\ufe63\uff0d]")
+# The dashes as characters, for SQL's translate() too (threads.shown_title_sql).
+DASH_CHARS = "".join(
+    map(chr, (*range(0x2010, 0x2016), 0x2212, 0x2E3A, 0x2E3B, 0xFE58, 0xFE63, 0xFF0D))
+)
+_DASHES = re.compile(f"[{DASH_CHARS}]")
 _SPACES = re.compile(r"\s+")
 
 # Tags newsrooms put before a headline: "WATCH:", "LIVE |", "Live updates - ",
 # "BREAKING NEWS:", and Reuters' "UPDATE 2-". A tag needs a colon, a bar or a
 # spaced dash after it ("Live-action remake" keeps its word), except UPDATE n.
-_LEADING_TAGS = re.compile(
+LEADING_TAGS_PATTERN = (
     r"^\s*(?:"
     r"(?:breaking(?: news)?|live(?: updates?)?|watch|video|exclusive|analysis|opinion)"
     r"\s*(?::|\||\s-\s)\s*"
     r"|update(?:d)?(?: \d+)?\s*(?::|\||-)\s*"
-    r")+",
-    re.IGNORECASE,
+    r")+"
 )
+_LEADING_TAGS = re.compile(LEADING_TAGS_PATTERN, re.IGNORECASE)
 _TRAILING_PUNCTUATION = re.compile(r"[\s.,;:!?]+$")
 
 
@@ -58,7 +65,7 @@ def display_title(title: str) -> str:
     HTML entities decoded, NFKC, straight quotes, every dash as "-", one
     space between words; a leading tag ("WATCH:", "UPDATE 2-") dropped; then
     the outlet's name: the text after the last separator (whitespace, one of
-    | : -, whitespace), when it is shorter than 40 characters.
+    | : -, whitespace), when it is shorter than OUTLET_MAX_CHARS (40).
     """
     text = unicodedata.normalize("NFKC", html.unescape(title))
     text = _SPACES.sub(" ", _DASHES.sub("-", text.translate(_QUOTES)))
@@ -66,7 +73,7 @@ def display_title(title: str) -> str:
     parts = list(_OUTLET_SEP.finditer(text))
     if parts:
         last = parts[-1]
-        if len(text[last.end() :]) < 40:
+        if len(text[last.end() :]) < OUTLET_MAX_CHARS:
             text = text[: last.start()]
     return text.strip()
 

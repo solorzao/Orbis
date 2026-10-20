@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 
 from app.services import threads
+from app.services.titles import DASH_CHARS, display_title
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -917,3 +918,254 @@ async def test_news_digests_are_never_threaded(conn):
     assert await _thread_of(conn, brief) is None
     assert await _thread_of(conn, story) is not None
     assert stats.assigned == 1
+
+
+# --- titles as shown -----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_section_labels_and_short_titles_as_shown_are_never_threaded(conn):
+    """Thread 9574, "National", grew from headlines display_title shows as "National",
+    "Health" and "World". Judged as shown, in the backlog's SQL too."""
+    label = await _article(conn, title="National - The Hindu")
+    older = [
+        await _article(conn, published_at=NOW - 2 * HOUR, title=title)
+        for title in (
+            "World | Reuters",
+            "Police arrest man - BBC News",
+            "Latest News and Updates - The Hindu",
+        )
+    ]
+    story = await _article(
+        conn, published_at=NOW - 3 * HOUR, title="Floods kill twenty in Sindh - The Hindu"
+    )
+
+    backlog = await conn.fetch(
+        threads.BACKLOG_SQL, NOW - 6 * HOUR, threads.MIN_TITLE_WORDS, 500, []
+    )
+    stats = await _assign(conn, [label])
+
+    assert [r["id"] for r in backlog] == [story]
+    assert [await _thread_of(conn, a) for a in (label, *older)] == [None] * 4
+    assert await _thread_of(conn, story) is not None
+    assert stats.assigned == 1
+
+
+@pytest.mark.asyncio
+async def test_three_word_headlines_that_name_someone_are_threaded(conn):
+    named = await _article(
+        conn, published_at=NOW - 2 * HOUR, title="Biden drops out - Reuters", persons=("Joe Biden",)
+    )
+    unnamed = await _article(conn, published_at=NOW - 2 * HOUR, title="Police arrest man - BBC")
+    two = await _article(
+        conn, published_at=NOW - 2 * HOUR, title="Trump indicted | CNN", persons=("Donald Trump",)
+    )
+
+    backlog = await conn.fetch(
+        threads.BACKLOG_SQL, NOW - 6 * HOUR, threads.MIN_TITLE_WORDS, 500, []
+    )
+    stats = await _assign(conn)
+
+    assert [r["id"] for r in backlog] == [named]
+    assert await _thread_of(conn, named) is not None
+    assert [await _thread_of(conn, a) for a in (unnamed, two)] == [None, None]
+    assert stats.assigned == 1
+
+
+def _fullwidth(text: str) -> str:
+    return "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in text)
+
+
+# (title, a person, an org): None names no one.
+SHOWN = [
+    ("National - The Hindu", None, None),
+    ("Health | Reuters", None, None),
+    (f"World {chr(0x2013)} BBC News", None, None),
+    (f"Oil rises {chr(0x2212)} and falls {chr(0x2014)} Reuters", None, None),
+    (f"Storm{chr(0xA0)}Austen hits the coast - Met Office", None, None),
+    (_fullwidth("National | The Hindu"), None, None),
+    ("Police arrest man - BBC News", None, None),
+    ("Police arrest man - BBC News", "", ""),
+    ("Biden drops out - Reuters", "Joe Biden", None),
+    ("Fed holds rates | CNBC", None, "Federal Reserve"),
+    ("Trump indicted | CNN", "Donald Trump", None),
+    ("LIVE: Top stories this morning - CNN", None, None),
+    ("UPDATE 2-Oil rises on supply fears - Reuters", None, None),
+    ("Breaking News: Quake hits Kathmandu valley | Reuters", None, None),
+    ("Live updates - Storm Austen hits the coast", None, None),
+    ("Watch: Video: Crowds gather in central Paris - France 24", None, None),
+    ("Update: World - Reuters", None, None),
+    ("Opinion | Why the Fed should wait for more data", None, None),
+    ("Latest News and Updates - The Hindu", None, None),
+    ("Top News Headlines Today - CNN", None, "CNN"),
+    ("Sports & Business News - Times of India", None, None),
+    ("Trump - Xi summit - what we know so far", None, None),
+    ("Floods kill twenty - | The Hindu", None, None),  # stacked separators
+    (
+        "Markets slide as investors weigh rates - and the outlook for the rest of the year",
+        None,
+        None,
+    ),
+    ("Live-action remake tops the box office", None, None),
+    ("AP News Summary at 6:14 a.m. EDT", None, None),
+    ("Sports: India beat Pakistan in the final", None, None),
+    ("  Leading and trailing spaces here  ", None, None),
+    (f"Line{chr(0x2028)}separated{chr(0x1680)}words in a title", None, None),
+    ("", None, None),
+]
+
+_FUZZ_TAGS = (
+    "WATCH:",
+    "LIVE |",
+    "Live updates -",
+    "BREAKING NEWS:",
+    "UPDATE 2-",
+    "Updated:",
+    "Opinion |",
+    "Video:",
+    "Exclusive -",
+    "Analysis:",
+)
+_FUZZ_WORDS = (
+    "Floods",
+    "kill",
+    "twenty",
+    "in",
+    "Sindh",
+    "Biden",
+    "drops",
+    "out",
+    "Queen",
+    "Elizabeth",
+    "dies",
+    "Trump",
+    "indicted",
+    "Police",
+    "arrest",
+    "man",
+    "AP",
+    "News",
+    "Summary",
+    "Brief",
+    "Top",
+    "stories",
+    "headlines",
+    "Today",
+    "History",
+    "National",
+    "World",
+    "Health",
+    "Business",
+    "Sport",
+    "Latest",
+    "Updates",
+    "and",
+    "&",
+    "Live-action",
+    "2",
+)
+_FUZZ_OUTLETS = (
+    "The Hindu",
+    "BBC News",
+    "Reuters",
+    "CNN",
+    "Times of India",
+    "France 24",
+    "A very long outlet name that runs on past forty characters",
+)
+# Mostly plain spaces; then every other kind: a tab, NEL, no-break and ideographic
+# spaces, the ogham mark, line and paragraph separators.
+_FUZZ_SPACES = (" ",) * 8 + tuple(
+    chr(c)
+    for c in (0x09, 0x85, 0xA0, 0x1680, 0x2002, 0x2009, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000)
+)
+_FUZZ_SEPS = ("-", "|", ":", *DASH_CHARS)
+
+
+def _fuzz_cases(n: int = 400, seed: int = 20261020) -> list[tuple[str, str | None, str | None]]:
+    """Tags, separators (every dash, spaced or not, stacked), Unicode spaces,
+    fullwidth text and section words, combined at random but the same every run."""
+    rng = random.Random(seed)
+
+    def space() -> str:
+        return rng.choice(_FUZZ_SPACES)
+
+    def sep() -> str:
+        left = space() if rng.random() < 0.85 else ""
+        right = space() if rng.random() < 0.85 else ""
+        return left + rng.choice(_FUZZ_SEPS) + right
+
+    cases = []
+    for _ in range(n):
+        words = [rng.choice(_FUZZ_WORDS) for _ in range(rng.randint(1, 6))]
+        title = words[0]
+        for word in words[1:]:
+            title += (space() if rng.random() < 0.8 else sep()) + word
+        if rng.random() < 0.3:
+            title = rng.choice(_FUZZ_TAGS) + space() + title
+        for _ in range(rng.choice((0, 1, 1, 2))):
+            title += sep() + (sep() if rng.random() < 0.1 else "") + rng.choice(_FUZZ_OUTLETS)
+        if rng.random() < 0.15:
+            title = _fullwidth(title)
+        if rng.random() < 0.2:
+            title = space() + title + space()
+        cases.append(
+            (title, rng.choice((None, None, "", "Joe Biden")), rng.choice((None, "", "Reuters")))
+        )
+    return cases
+
+
+async def _in_sql(conn, cases) -> list[tuple[str, bool]]:
+    rows = await conn.fetch(
+        f"SELECT st.shown,"
+        f" {threads.threadable_sql('st.shown', '$2', 'ARRAY[u.person, u.org]')} AS threadable"
+        " FROM unnest($1::text[], $3::text[], $4::text[]) WITH ORDINALITY"
+        " AS u(title, person, org, n)"
+        f" {threads.shown_title_sql('u.title')}"
+        " ORDER BY u.n",
+        [title for title, _, _ in cases],
+        threads.MIN_TITLE_WORDS,
+        [person for _, person, _ in cases],
+        [org for _, _, org in cases],
+    )
+    return [(r["shown"], r["threadable"]) for r in rows]
+
+
+def _in_python(case) -> tuple[str, bool]:
+    title, person, org = case
+    names = ([person] if person is not None else [], [org] if org is not None else [])
+    return display_title(title), threads.threadable(title, *names)
+
+
+@pytest.mark.asyncio
+async def test_the_backlog_shows_and_judges_titles_as_python_does(conn):
+    """display_title and threadable in SQL, title by title, on cases and a seeded fuzz.
+    Ingestion's titles are unescaped already (gdelt._clean_title), so neither has
+    entities; the SQL skips html.unescape."""
+    cases = SHOWN + _fuzz_cases()
+
+    in_sql = await _in_sql(conn, cases)
+
+    differ = [
+        (case, sql, _in_python(case))
+        for case, sql in zip(cases, in_sql, strict=True)
+        if sql != _in_python(case)
+    ]
+    assert differ == []
+
+
+@pytest.mark.asyncio
+async def test_curly_quotes_judge_alike_though_sql_leaves_them_curly(conn):
+    """The SQL skips folding quotes: they add or remove no word or separator, so only
+    the verdict compares (st.shown is for judging, never for showing)."""
+    quoted = [
+        (f"{chr(0x201C)}National{chr(0x201D)} - The Hindu", None, None),
+        (f"{chr(0x2018)}Biden drops out{chr(0x2019)} - Reuters", "Joe Biden", None),
+        (f"{chr(0x201C)}Latest News and Updates{chr(0x201D)}", None, None),
+        (f"Police say {chr(0x201C)}no threat{chr(0x201D)} after alarm - BBC", None, None),
+        (f"{chr(0x2033)}Top stories{chr(0x2033)} - CNN", None, None),
+    ]
+
+    in_sql = await _in_sql(conn, quoted)
+
+    assert [ok for _, ok in in_sql] == [_in_python(case)[1] for case in quoted]

@@ -5,6 +5,8 @@ The SQL itself runs in tests/test_threads_db.py against a real PostgreSQL.
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import logging
 import re
 import uuid
@@ -21,12 +23,17 @@ from app.services.threads import (
     choose,
     decayed_sum,
     format_vector,
+    is_section_label,
     parse_vector,
     story_entities,
+    threadable,
     title_words,
 )
+from app.services.titles import display_title
 
 T0 = datetime(2001, 1, 10, 12, tzinfo=timezone.utc)
+# display_title's source, as shown_title_sql mirrors it.
+DISPLAY_TITLE_SHA256 = "3f8ddc927aa4be628776f9ecfd7d0ce80dd018f1ee19617910c75f5b5178d0ae"
 
 
 @pytest.fixture(autouse=True)
@@ -147,11 +154,138 @@ def test_title_words_is_the_backlog_sql_rule():
     assert title_words(None) == 1
 
 
-def test_the_backlog_filters_short_titles_with_the_same_rule():
-    assert (
-        r"array_length(regexp_split_to_array(btrim(a.title), '\s+'), 1) >= $2"
-        in threads.BACKLOG_SQL
+def test_the_backlog_judges_the_title_as_shown_with_the_same_rule():
+    """A title Python drops but the backlog's SQL keeps would come back every cycle and
+    crowd the backlog (tests/test_threads_db.py runs both on the same titles)."""
+    sql = " ".join(threads.BACKLOG_SQL.split())
+    assert " ".join(threads.shown_title_sql("a.title").split()) in sql
+    assert " ".join(threads.threadable_sql("st.shown", "$2", "a.persons || a.orgs").split()) in sql
+    assert "a.title !~*" not in sql
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "National - The Hindu",  # one word once the outlet's name is off
+        "Health | Reuters",
+        f"World {chr(0x2013)} BBC News",  # an en dash
+        "Police arrest man - BBC News",  # three words shown
+        "LIVE: Top stories this morning - CNN",  # a digest once the tag and outlet are off
+        "Latest News and Updates - The Hindu",  # four words, all a section's
+        "Sports & Business News - Times of India",
+    ],
+)
+def test_titles_are_judged_as_shown(title):
+    """Thread 9574, "National": its stories show as "National", "Health" and "World"."""
+    assert not threadable(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Floods kill twenty in Sindh - The Hindu",
+        "Opinion | Why the Fed should wait for more data",
+        "Live updates: Storm Austen hits the coast",
+        "World leaders meet in Geneva on Tuesday",
+        "Health workers strike across Kenya - Nation",
+        "Live-action remake tops the box office",
+        "Sports: India beat Pakistan in the final",
+    ],
+)
+def test_stories_are_threadable_as_shown(title):
+    assert threadable(title)
+
+
+@pytest.mark.parametrize(
+    ("title", "persons", "orgs"),
+    [
+        ("Queen Elizabeth dies - BBC News", ["Queen Elizabeth"], []),
+        ("Biden drops out - Reuters", ["Joe Biden"], []),
+        ("Fed holds rates | CNBC", [], ["Federal Reserve"]),
+    ],
+)
+def test_three_words_shown_thread_when_the_article_names_someone(title, persons, orgs):
+    """Short headlines about someone ("Biden drops out") are stories; "Police arrest
+    man" isn't. Before #102 the outlet's name padded them to MIN_TITLE_WORDS."""
+    assert threadable(title, persons, orgs)
+
+
+@pytest.mark.parametrize(
+    ("title", "persons", "orgs"),
+    [
+        ("Biden drops out - Reuters", [], []),  # no one named
+        ("Police arrest man - BBC News", [], []),
+        ("Police arrest man - BBC News", [""], [""]),  # empty names name no one
+        ("Trump indicted | CNN", ["Donald Trump"], []),  # two words: never
+        ("Top News Today - CNN", [], ["CNN"]),  # a section label
+        ("News in Brief - AP", [], ["AP"]),  # a digest
+    ],
+)
+def test_short_titles_shown_stay_out_otherwise(title, persons, orgs):
+    assert not threadable(title, persons, orgs)
+
+
+def test_shown_title_sql_mirrors_this_display_title():
+    """shown_title_sql repeats display_title's steps in SQL (tests/test_threads_db.py
+    compares them, on PostgreSQL only): a change to one needs the other."""
+    source = inspect.getsource(display_title)
+    assert hashlib.sha256(source.encode()).hexdigest() == DISPLAY_TITLE_SHA256, (
+        "display_title changed: update shown_title_sql to match"
     )
+
+
+def test_the_sql_whitespace_is_pythons():
+    """display_title collapses Python's \\s (str.isspace); Postgres' own \\s follows the
+    database's locale, so shown_title_sql spells Python's out."""
+    spaces = {c for c in map(chr, range(0x110000)) if c.isspace()}
+    assert spaces == {c for c in map(chr, range(0x110000)) if re.fullmatch(r"\s", c)}
+    assert set(threads.SPACE_CHARS) == spaces
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "National",
+        "World",
+        "Health",
+        "Business",
+        "Sport",
+        "Sports",
+        "Opinion",
+        "Live",
+        "Latest News",
+        "Breaking News",
+        "News & Updates",
+        "Latest News and Updates",
+        "Top News Headlines Today",
+        "  world news  ",
+    ],
+)
+def test_bare_section_labels_are_not_stories(title):
+    assert is_section_label(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "World leaders meet in Geneva",
+        "Health workers strike",
+        "Newsom signs climate bill",
+        "Sports: India win",
+        "Livestock prices fall",
+        "National Guard deployed to Memphis",
+        "Business as usual at the Fed",
+    ],
+)
+def test_stories_are_not_section_labels(title):
+    assert not is_section_label(title)
+
+
+def test_the_section_pattern_is_the_same_in_postgres_and_python():
+    """Plain ERE, as DIGEST_PATTERN: no \\b (a backspace in Postgres), no lookarounds."""
+    assert "\\b" not in threads.SECTION_PATTERN
+    assert "(?" not in threads.SECTION_PATTERN
+    assert "'" not in threads.SECTION_PATTERN
 
 
 def test_story_entities_caps_persons_and_orgs_separately():
@@ -241,6 +375,30 @@ async def test_articles_are_placed_in_published_order_with_the_id_tie_break():
     await _assign(conn, [second["id"], first["id"]])
 
     assert [m[0] for m in _member_threads(conn)] == [first["id"], second["id"]]
+
+
+@pytest.mark.asyncio
+async def test_a_three_word_title_naming_someone_seeds_a_thread():
+    named = _row(title="Biden drops out - Reuters", persons=["Joe Biden"])
+    unnamed = _row(title="Police arrest man - BBC News")
+    conn = _conn([named, unnamed])
+
+    stats = await _assign(conn, [named["id"], unnamed["id"]])
+
+    assert [m[0] for m in _member_threads(conn)] == [named["id"]]
+    assert stats.started == 1
+
+
+@pytest.mark.asyncio
+async def test_section_labels_neither_join_nor_seed_a_thread():
+    label = _row(title="National - The Hindu")
+    conn = _conn([label], **{threads.SCORE_SQL: [{"ord": 0, "thread_id": 7, "sim": 0.99}]})
+
+    stats = await _assign(conn, [label["id"]])
+
+    assert _member_threads(conn) == []
+    assert conn.args_of(threads.NEW_THREAD_SQL) == []
+    assert stats.assigned == 0
 
 
 @pytest.mark.asyncio
