@@ -126,6 +126,11 @@ async def test_eligibility_reads_listed_threads_by_the_partial_index(conn):
     own choice, on statistics this test sets for both tables the query reads: with
     thread_centroids' left to earlier tests, a near-empty estimate could drive the
     semi-join from it instead."""
+    # Rolled back, 2000 centroids would stay in the HNSW graph as dead entries that
+    # crowd later tests' nearest neighbours out (scoring then returned 13775 of
+    # 16500). Dropped in this transaction (eligibility doesn't use it), the index
+    # never sees them; the rollback restores it.
+    await conn.execute("DROP INDEX idx_thread_centroids_hnsw")
     await conn.execute(
         """
         WITH t AS (

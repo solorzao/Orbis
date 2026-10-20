@@ -231,6 +231,10 @@ async def test_assignment_never_scans_the_articles_heap(conn):
     earlier tests and autovacuum left, a batch's load was once planned as a walk of
     idx_articles_published_at filtering on id, which on production visits every row.
     ANALYZE also locks the tables against autovacuum until the rollback."""
+    # Rolled back, these rows would stay in the articles' HNSW graph as dead entries
+    # that crowd later searches' neighbours out. Dropped in this transaction (none of
+    # these queries uses it), the index never sees them; the rollback restores it.
+    await conn.execute("DROP INDEX idx_articles_embedding_half")
     await conn.execute(
         """
         WITH a AS (
