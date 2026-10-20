@@ -80,6 +80,7 @@ _PATH_GROUPS: dict[str, str] = {
     "/api/news/summarize-selection": "ai",
     "/api/agent/ask": "ai",
     "/api/links/explain": "ai",
+    "/api/board/analyze": "ai",
     "/api/news/delta": "delta",
 }
 
