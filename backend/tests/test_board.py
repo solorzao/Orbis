@@ -6,15 +6,18 @@ are tested in tests/test_board_router.py.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.services import board
+from app.services import board, threads
+from app.services.cache import cycle_ttl
 
 NOW = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
 ARTICLE_ID = "3f2a6c1e-8b4d-4f0a-9c2e-1d5b7a9e0f13"
@@ -504,8 +507,8 @@ A2 = f"article:{OTHER_ID}"
 ANN = "entity:person:ann lee"
 
 
-def _connect(ids, facts, mentions=(), listed=None):
-    return board.connect(_items(*ids), facts, set(mentions), listed)
+def _connect(ids, facts, mentions=(), listed=None, generic=frozenset()):
+    return board.connect(_items(*ids), facts, set(mentions), listed, generic)
 
 
 def _edge(a, b, kind, label):
@@ -626,12 +629,133 @@ class TestConnect:
             "co_covered",
         ]
 
+    def test_names_too_common_to_connect_two_stories_are_not_shared(self):
+        facts = {
+            A1: board.Facts(entities=("Donald Trump", "Ann Lee", "United Nations")),
+            A2: board.Facts(entities=("United Nations", "Ann Lee", "Donald Trump")),
+            "thread:7": board.Facts(thread=7, entities=("Donald Trump", "United Nations")),
+        }
+        common = frozenset({"Donald Trump", "United Nations"})
+
+        edges = _connect([A1, A2, "thread:7"], facts, generic=common)
+
+        assert edges == [_edge(A1, A2, "shared_entity", "shared: Ann Lee")]
+
+    def test_a_pinned_name_connects_however_common_it_is(self):
+        """The visitor pinned it on purpose."""
+        trump = "entity:person:donald trump"
+        facts = {
+            trump: board.Facts(name="Donald Trump"),
+            A1: board.Facts(entities=("Donald Trump",)),
+            "thread:7": board.Facts(thread=7),
+        }
+
+        edges = _connect(
+            [trump, A1, "thread:7"],
+            facts,
+            mentions={("Donald Trump", 7)},
+            generic=frozenset({"Donald Trump"}),
+        )
+
+        assert edges == [
+            _edge(trump, A1, "shared_entity", "shared: Donald Trump"),
+            _edge(trump, "thread:7", "shared_entity", "shared: Donald Trump"),
+        ]
+
 
 def _member_row(article_id, thread_id, entities):
     return {"article_id": uuid.UUID(article_id), "thread_id": thread_id, "entities": entities}
 
 
+@pytest.fixture
+def cache(monkeypatch):
+    """The board's Redis reads and writes, an empty cache to start."""
+    stub = SimpleNamespace(get=AsyncMock(return_value=None), set=AsyncMock())
+    monkeypatch.setattr(board, "get_cached", stub.get)
+    monkeypatch.setattr(board, "set_cached", stub.set)
+    return stub
+
+
+class TestCommonNames:
+    """Thread assignment's rule for a generic name: in more than
+    GENERIC_ENTITY_SHARE of active threads' top names."""
+
+    @pytest.mark.asyncio
+    async def test_read_with_thread_assignments_rule_and_cached_until_the_next_cycle(
+        self, pool, cache
+    ):
+        pool.answers[threads.GENERIC_SQL] = [{"e": "Donald Trump"}, {"e": "Israel"}]
+
+        common = await board.generic_names(pool)
+
+        assert common == frozenset({"Donald Trump", "Israel"})
+        assert pool.calls_to(threads.GENERIC_SQL) == [(threads.GENERIC_ENTITY_SHARE,)]
+        cache.get.assert_awaited_once_with("db:board:generic:v1")
+        cache.set.assert_awaited_once_with(
+            "db:board:generic:v1", ["Donald Trump", "Israel"], cycle_ttl(600)
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_cached_set_reads_nothing(self, pool, cache):
+        cache.get.return_value = ["Donald Trump"]
+
+        assert await board.generic_names(pool) == frozenset({"Donald Trump"})
+        assert pool.calls == []
+
+    @pytest.mark.asyncio
+    async def test_misses_at_once_share_one_read(self, pool, cache):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(*args):
+            started.set()
+            await release.wait()
+            return [{"e": "Donald Trump"}]
+
+        pool.fetch = AsyncMock(side_effect=slow)
+        first = asyncio.create_task(board.generic_names(pool))
+        await started.wait()
+        second = asyncio.create_task(board.generic_names(pool))
+        await asyncio.sleep(0)
+        release.set()
+
+        assert await first == await second == frozenset({"Donald Trump"})
+        assert pool.fetch.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_read_is_not_cached_and_the_next_miss_reads_again(self, pool, cache):
+        pool.fetch = AsyncMock(side_effect=[RuntimeError("connection reset"), [{"e": "Iran"}]])
+
+        with pytest.raises(RuntimeError):
+            await board.generic_names(pool)
+
+        assert await board.generic_names(pool) == frozenset({"Iran"})
+        cache.set.assert_awaited_once()
+
+
 class TestBoardEdges:
+    @pytest.fixture(autouse=True)
+    def no_cache(self, cache):
+        return cache
+
+    @pytest.mark.asyncio
+    async def test_common_names_are_left_out_of_edges_between_stories(self, pool, names):
+        pool.answers[board.MEMBERS_SQL] = [
+            _member_row(ARTICLE_ID, 7, ["Donald Trump", "Bo Chan"]),
+            _member_row(OTHER_ID, 8, ["Donald Trump"]),
+        ]
+        pool.answers[threads.GENERIC_SQL] = [{"e": "Donald Trump"}]
+
+        edges = await board.board_edges(_items(A1, A2, ANN), None, NOW)
+
+        assert edges == []
+
+    @pytest.mark.asyncio
+    async def test_common_names_are_read_only_for_two_articles_or_threads(self, pool, names):
+        await board.board_edges(_items(ANN, A1, "place:6:3", "link:FR-US"), None, NOW)
+
+        assert pool.calls_to(threads.GENERIC_SQL) == []
+
     @pytest.fixture
     def names(self):
         stored = {("person", "ann lee"): "Ann Lee"}

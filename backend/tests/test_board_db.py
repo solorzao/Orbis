@@ -307,6 +307,37 @@ async def test_edges_from_members_threads_names_cells_and_listed_pairs(conn):
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_a_name_in_most_active_threads_connects_no_two_stories(conn):
+    """Thread assignment's rule, on the active threads: here every one names it."""
+    await knowledge_graph.upsert_node(conn, "PERSON", "Zzboard Common", {})
+    active = [await _thread(conn, top_entities=["Zzboard Common"]) for _ in range(3)]
+    for thread in active:
+        await conn.execute(
+            "INSERT INTO thread_centroids (thread_id, last_seen, centroid)"
+            " VALUES ($1, now(), l2_normalize(array_fill(0.01, ARRAY[512])::vector)::halfvec)",
+            thread,
+        )
+    first = await _member(conn, active[0], entities=["Zzboard Common", "Zzboard Rare"])
+    second = await _member(conn, active[1], entities=["Zzboard Common", "Zzboard Rare"])
+    third = await _member(conn, active[2], entities=["Zzboard Common"])
+    a1, a2, a3 = (f"article:{a}" for a in (first, second, third))
+    common = "entity:person:zzboard common"
+
+    edges = await board.board_edges(
+        [board.parse_item(i) for i in (a1, a2, a3, common)], None, _now()
+    )
+
+    assert edges == [
+        _edge(a1, a2, "shared_entity", "shared: Zzboard Rare"),
+        # A pinned name connects however common it is.
+        _edge(a1, common, "shared_entity", "shared: Zzboard Common"),
+        _edge(a2, common, "shared_entity", "shared: Zzboard Common"),
+        _edge(a3, common, "shared_entity", "shared: Zzboard Common"),
+    ]
+
+
 # --- Plans at production's scale ----------------------------------------------------
 #
 # A week of production: about 60K articles (wide rows), 100K thread members and

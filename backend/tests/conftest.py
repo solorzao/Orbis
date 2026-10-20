@@ -14,16 +14,18 @@ _TEST_DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL")
 
 @pytest.fixture(autouse=True)
 def _no_shared_query_in_flight():
-    """Every test starts and ends with no shared breaking-stories or threads query
-    pending, so one that fails mid-query can't leave the next a task tied to its
-    closed event loop."""
+    """Every test starts and ends with no shared breaking-stories, threads or board
+    common-names query pending, so one that fails mid-query can't leave the next a
+    task tied to its closed event loop."""
     from app.routers import news, threads
+    from app.services import board
 
-    news._breaking_in_flight.clear()
-    threads._list_in_flight.clear()
+    in_flight = (news._breaking_in_flight, threads._list_in_flight, board._generic_in_flight)
+    for tasks in in_flight:
+        tasks.clear()
     yield
-    news._breaking_in_flight.clear()
-    threads._list_in_flight.clear()
+    for tasks in in_flight:
+        tasks.clear()
 
 
 @pytest_asyncio.fixture

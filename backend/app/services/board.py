@@ -18,6 +18,8 @@ geography box for a place, the entity index for names.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import hashlib
 import html
 import json
@@ -33,12 +35,13 @@ from urllib.parse import urlsplit
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.services import llm_budget
 from app.services.ai_summary import SummaryUnavailable, _call_claude
-from app.services.cache import get_cached, set_cached
+from app.services.cache import cycle_ttl, get_cached, set_cached
 from app.services.country_centroids import centroid
 from app.services.database import _cell_box, get_pool
 from app.services.entities import newest_per_story, resolve_entity, top_places
 from app.services.places import display_place
 from app.services.thread_synopsis import _acceptable, _clean_reply
+from app.services.threads import GENERIC_ENTITY_SHARE, GENERIC_SQL
 from app.services.titles import display_title
 
 logger = logging.getLogger(__name__)
@@ -432,12 +435,13 @@ def _pair_edges(
     fb: Facts,
     mentions: set[tuple[str, int]],
     listed: set[frozenset[str]] | None,
+    generic: frozenset[str],
 ) -> list[dict]:
     edges = []
     if a.kind in _TOPICAL and b.kind in _TOPICAL:
         if fa.thread is not None and fa.thread == fb.thread:
             edges.append(_edge(a, b, "same_thread", "same thread"))
-        theirs = set(fb.entities)
+        theirs = set(fb.entities) - generic
         shared = [name for name in fa.entities if name in theirs]
         if shared:
             edges.append(_edge(a, b, "shared_entity", _shared(shared)))
@@ -466,13 +470,16 @@ def connect(
     facts: dict[str, Facts],
     mentions: set[tuple[str, int]],
     listed: set[frozenset[str]] | None,
+    generic: frozenset[str] = frozenset(),
 ) -> list[dict]:
     """The edges between every two pins, each from the earlier pin, by pins then kind.
 
     - ``same_thread``: two articles in one thread, or an article and its thread;
     - ``shared_entity``: articles and threads sharing names (up to 3 in the
-      label, in the earlier pin's order), or an entity pin and an article or
-      thread naming it (*mentions*: the (name, thread) pairs a member names);
+      label, in the earlier pin's order) other than the *generic* ones (in
+      most stories, they would connect almost any two), or an entity pin and an
+      article or thread naming it, however common (the visitor pinned it;
+      *mentions*: the (name, thread) pairs a member names);
     - ``same_place``: places and articles in one 1° cell;
     - ``co_covered``: places, articles and links whose countries make a pair
       in *listed* (the 7-day /api/links list); none when *listed* is None.
@@ -481,8 +488,42 @@ def connect(
     for i, a in enumerate(items):
         for b in items[i + 1 :]:
             fa, fb = facts.get(a.id, Facts()), facts.get(b.id, Facts())
-            edges += _pair_edges(a, b, fa, fb, mentions, listed)
+            edges += _pair_edges(a, b, fa, fb, mentions, listed, generic)
     return edges
+
+
+# Names too common to connect two stories: thread assignment's rule (in more
+# than GENERIC_ENTITY_SHARE of active threads' top names), read once a cycle.
+# Under db:*, so the end of each cycle clears it.
+GENERIC_KEY = "db:board:generic:v1"
+_GENERIC_TTL = 600
+# The read running for the key: misses that arrive while it runs wait for it.
+_generic_in_flight: dict[str, asyncio.Task[frozenset[str]]] = {}
+
+
+async def generic_names(pool) -> frozenset[str]:
+    """The names too common to connect two stories, cached until the next cycle ends."""
+    cached = await get_cached(GENERIC_KEY)
+    if cached is not None:
+        return frozenset(cached)
+    task = _generic_in_flight.get(GENERIC_KEY)
+    if task is None:
+        task = asyncio.create_task(_load_generic(pool))
+        _generic_in_flight[GENERIC_KEY] = task
+        task.add_done_callback(functools.partial(_landed, GENERIC_KEY))
+    return await asyncio.shield(task)
+
+
+async def _load_generic(pool) -> frozenset[str]:
+    names = sorted({row["e"] for row in await pool.fetch(GENERIC_SQL, GENERIC_ENTITY_SHARE)})
+    await set_cached(GENERIC_KEY, names, cycle_ttl(_GENERIC_TTL))
+    return frozenset(names)
+
+
+def _landed(key: str, task: asyncio.Task) -> None:
+    """Forget a finished read, so the next miss runs a new one."""
+    if _generic_in_flight.get(key) is task:
+        del _generic_in_flight[key]
 
 
 def _cell(lat: float, lng: float) -> tuple[int, int]:
@@ -530,6 +571,8 @@ async def board_edges(
     names = await _entity_names(items, now)
     places = await _places(pool, items, now) if listed is not None else {}
     mentions = await _mentions(pool, sorted(set(names.values())), sorted(threads))
+    topical = sum(1 for item in items if item.kind in _TOPICAL)
+    generic = await generic_names(pool) if topical >= 2 else frozenset()
 
     facts: dict[str, Facts] = {}
     for item in items:
@@ -546,7 +589,7 @@ async def board_edges(
             facts[item.id] = Facts(countries=frozenset(item.key))
         elif item.kind == "entity":
             facts[item.id] = Facts(name=names.get(item.key))
-    return connect(items, facts, mentions, listed)
+    return connect(items, facts, mentions, listed, generic)
 
 
 # ---------------------------------------------------------------------------
