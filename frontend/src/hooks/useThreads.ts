@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Topic } from "@/types/news";
 import {
   fetchThread,
@@ -73,9 +73,13 @@ export function useThreads(
 /**
  * The selected thread's detail (its spread, key entities and first stories),
  * or none. A new thread aborts the last request; only the thread asked for
- * is ever returned.
+ * is ever returned. A thread merged into another answers as that thread:
+ * `onMerged` gets its id, so the caller selects it (and shares it) instead.
  */
-export function useThread(id: number | null): {
+export function useThread(
+  id: number | null,
+  onMerged?: (id: number) => void,
+): {
   detail: ThreadDetail | null;
   loading: boolean;
   error: boolean;
@@ -85,6 +89,11 @@ export function useThread(id: number | null): {
     detail: ThreadDetail | null;
     error: boolean;
   } | null>(null);
+  // The latest callback, without refetching when its identity changes.
+  const onMergedRef = useRef(onMerged);
+  useEffect(() => {
+    onMergedRef.current = onMerged;
+  });
 
   useEffect(() => {
     if (id === null) return;
@@ -93,6 +102,7 @@ export function useThread(id: number | null): {
       .then((api) => {
         if (!controller.signal.aborted) {
           setResult({ id, detail: toThreadDetail(api), error: false });
+          if (api.id !== id) onMergedRef.current?.(api.id);
         }
       })
       .catch(() => {

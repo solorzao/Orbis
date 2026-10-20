@@ -49,7 +49,11 @@ def test_column_migration_adds_columns_without_a_table_rewrite(name, expected):
 
 # Migrations that only create new tables: they must fail fast on locks and
 # leave the live articles table alone (it is rewritten on every embedding).
-TABLE_MIGRATIONS = ["013_threads.sql", "015_thread_indexes.sql", "017_kg_entity_names.sql"]
+TABLE_MIGRATIONS = [
+    "013_threads.sql",
+    "015_thread_indexes.sql",
+    "017_kg_entity_names.sql",
+]
 
 
 @pytest.mark.parametrize("name", TABLE_MIGRATIONS)
@@ -155,3 +159,16 @@ def test_settings_migration_only_sets_autovacuum_parameters(name, table):
             rf"ALTER TABLE {table} SET \(\s*{setting}(?:\s*,\s*{setting})*\s*\)", statement
         ), statement
     assert not re.search(r"\barticles\b", sql, re.IGNORECASE)
+
+
+def test_thread_merges_migration_only_adds_merged_into():
+    """One instant schema change. No data operation: deleting or rewriting production
+    rows is the owner's call, case by case (digest-led threads age out). No index: it
+    would scan threads to build. So no foreign key either: unindexed, it would scan
+    threads for every thread the retention purge deletes."""
+    sql = " ".join(_sql_without_comments("019_thread_merges.sql").split())
+    statements = [st.strip() for st in sql.split(";") if st.strip()]
+    assert statements == [
+        "SET lock_timeout = '5s'",
+        "ALTER TABLE threads ADD COLUMN IF NOT EXISTS merged_into BIGINT",
+    ]

@@ -237,3 +237,38 @@ async def test_a_thread_is_read_then_its_three_parts_at_once():
         thread_reads.ARTICLES_SQL,
     }
     assert state.most == 3
+
+
+@pytest.mark.parametrize(
+    ("title", "synopsis"),
+    [
+        (
+            "Developing news story with no identifiable details",
+            "The material provided does not state what has happened, who is involved, or "
+            "where, so no specific story can be described.",
+        ),
+        ("Unspecified news story", "Strikes spread."),
+    ],
+)
+def test_an_ai_title_naming_no_story_shows_the_lead_headline(title, synopsis):
+    """Thread 129's AI title stops showing without touching its row."""
+    item = thread_item(_row(title=title, synopsis=synopsis), NOW)
+
+    assert (item["title"], item["synopsis"]) == ("Strikes spread across France", None)
+
+
+def test_a_synopsis_naming_no_story_is_dropped():
+    item = thread_item(
+        _row(title="French strikes widen", synopsis="The headlines provided do not say."), NOW
+    )
+    assert (item["title"], item["synopsis"]) == ("French strikes widen", None)
+
+
+def test_cluster_articles_show_the_lead_headline_for_a_junk_title():
+    row = {
+        "thread_id": 129,
+        "thread_title": "Developing news story with no identifiable details",
+        "thread_lead_title": "Strikes spread",
+        "thread_places": "[]",
+    }
+    assert article_thread(row)["title"] == "Strikes spread"

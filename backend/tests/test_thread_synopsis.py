@@ -15,7 +15,7 @@ import pytest
 
 from app.services import llm_budget, thread_reads, thread_synopsis
 from app.services.ai_summary import SummaryUnavailable
-from app.services.thread_synopsis import build_prompt, parse_synopsis
+from app.services.thread_synopsis import NOT_IDENTIFIABLE, build_prompt, parse_synopsis
 
 SYNOPSIS = (
     "Strikes against the pension reform spread from Paris to Lyon and Marseille "
@@ -131,6 +131,66 @@ def test_a_reply_is_parsed_and_validated():
     assert parse_synopsis(REPLY) == ("French pension strikes spread", SYNOPSIS)
 
 
+def test_no_identifiable_story_is_an_answer_of_its_own():
+    """Thread 129, built from "AP News Summary at 6:14 a.m. EDT" digests, was titled
+    "Developing news story with no identifiable details". Now the reply says so with
+    nulls, and the thread keeps its lead headline."""
+    assert parse_synopsis(json.dumps({"title": None, "synopsis": None})) == NOT_IDENTIFIABLE
+    assert NOT_IDENTIFIABLE == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("title", "synopsis"),
+    [
+        (
+            "Developing news story with no identifiable details",
+            "The material provided does not state what has happened, who is involved, or "
+            "where, so no specific story can be described.",
+        ),
+        ("Unspecified news story", SYNOPSIS),
+        ("AP news summary roundup", SYNOPSIS),
+        ("French pension strikes spread", "The headlines provided do not describe one story."),
+    ],
+)
+def test_a_reply_that_names_no_story_counts_as_none(title, synopsis):
+    reply = json.dumps({"title": title, "synopsis": synopsis})
+    assert parse_synopsis(reply) == NOT_IDENTIFIABLE
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Police said information provided by witnesses led to two arrests",
+        "Aid material supplied by the UN reached Gaza",
+        "Officials gave no specific details about the suspect's motive",
+    ],
+)
+def test_a_real_story_mentioning_information_or_material_is_kept(sentence):
+    """Only the meta phrasing about the headlines counts as no story."""
+    synopsis = f"{sentence}, according to local reports on Tuesday."
+    assert parse_synopsis(json.dumps({"title": sentence, "synopsis": synopsis})) == (
+        sentence,
+        synopsis,
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        json.dumps({"title": None, "synopsis": SYNOPSIS}),
+        json.dumps({"title": "French pension strikes spread", "synopsis": None}),
+    ],
+)
+def test_half_a_null_reply_is_malformed(reply):
+    assert parse_synopsis(reply) is None
+
+
+def test_the_schema_and_prompt_allow_the_null_answer():
+    for field in ("title", "synopsis"):
+        assert {"type": "null"} in thread_synopsis.SCHEMA["properties"][field]["anyOf"]
+    assert '{"title": null, "synopsis": null}' in thread_synopsis.SYSTEM_PROMPT
+
+
 @pytest.mark.parametrize(
     "reply",
     [
@@ -168,6 +228,18 @@ def test_invisible_and_control_characters_are_stripped_before_checking():
 
 
 # --- summarise_threads -----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_thread_without_one_story_has_its_title_cleared_until_it_regrows(env):
+    """Written as nulls, so the list shows the lead headline, and summarized_n is
+    set: it isn't asked again until it has grown by half."""
+    env.call.return_value = json.dumps({"title": None, "synopsis": None})
+
+    assert await thread_synopsis.summarise_threads(now=NOW) == 2
+
+    assert env.pool.writes == [(7, None, None), (8, None, None)]
+    env.invalidate.assert_awaited_once_with("db:threads*")
 
 
 @pytest.mark.asyncio

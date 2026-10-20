@@ -194,6 +194,11 @@ class TestSearchService:
         threads = [
             {"id": 7, "title": "Iran nuclear talks", "lead_title": "Talks resume in Vienna"},
             {"id": 9, "title": None, "lead_title": "Abbas speaks"},  # no AI title yet
+            {  # an AI title that names no story shows the lead headline
+                "id": 129,
+                "title": "Developing news story with no identifiable details",
+                "lead_title": "AP News Summary at 6:14 a.m. EDT",
+            },
         ]
         pool = _Pool([], threads=threads)
         result = await _search(pool, "Ab_%")
@@ -201,6 +206,7 @@ class TestSearchService:
         assert result["threads"] == [
             {"id": 7, "title": "Iran nuclear talks"},
             {"id": 9, "title": "Abbas speaks"},
+            {"id": 129, "title": "AP News Summary at 6:14 a.m. EDT"},
         ]
         [(sql, args)] = [c for c in pool.calls if "FROM threads" in c[0]]
         flat = " ".join(sql.split())

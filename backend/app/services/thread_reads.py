@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -51,8 +52,23 @@ _LEAD = """
     FROM {threads} t LEFT JOIN articles a ON a.id = t.lead_article_id
 """
 
+# A thread merged into another answers as the thread its merges end in (share
+# links and the UI hold thread ids): merged_into is followed by primary key,
+# through later merges, at most MERGE_HOPS. One that ends in a purged thread
+# (merged_into has no foreign key) is unknown.
+MERGE_HOPS = 10
 DETAIL_SQL = f"""
-    WITH one AS (SELECT {_THREAD_COLUMNS} FROM threads WHERE id = $1)
+    WITH RECURSIVE chain (id, next, hops) AS (
+        SELECT id, merged_into, 0 FROM threads WHERE id = $1
+        UNION ALL
+        SELECT t.id, t.merged_into, c.hops + 1
+        FROM chain c JOIN threads t ON t.id = c.next
+        WHERE c.hops < {MERGE_HOPS}
+    ),
+    one AS (
+        SELECT {_THREAD_COLUMNS} FROM threads
+        WHERE id = (SELECT id FROM chain WHERE next IS NULL)
+    )
     {_LEAD.format(threads="one")}
 """
 
@@ -116,6 +132,34 @@ def list_query(now: datetime, hours: int, topic: str | None, limit: int) -> tupl
     return query, args
 
 
+# An AI title or synopsis that names no story, the meta phrasing only (thread 129:
+# "Developing news story with no identifiable details", "The material provided
+# does not state what has happened ..."): never shown, so the lead headline is.
+# Narrow on purpose: "Police said information provided by witnesses ..." is news.
+NO_STORY_TITLE = re.compile(
+    r"no identifiable (story|stories|details|event|news)"
+    r"|^(developing|unspecified|unidentified|generic) news (story|stories|event)"
+    r"|news (summary|roundup|digest|in brief)",
+    re.IGNORECASE,
+)
+NO_STORY_SYNOPSIS = re.compile(
+    r"^(the )?(headlines|material|information|reports?) (provided|given|supplied)"
+    r" (do|does|did)( not|n't)"
+    r"|no identifiable (story|stories|event|news)",
+    re.IGNORECASE,
+)
+
+
+def shown_text(title: str | None, synopsis: str | None) -> tuple[str | None, str | None]:
+    """The AI title and synopsis to show: neither when the title names no story, and
+    no synopsis when it does."""
+    if title and NO_STORY_TITLE.search(title):
+        return None, None
+    if synopsis and NO_STORY_SYNOPSIS.search(synopsis):
+        return title, None
+    return title, synopsis
+
+
 def thread_status(first_seen: datetime, velocity: int, now: datetime) -> str:
     if first_seen >= now - timedelta(hours=EMERGING_HOURS):
         return "emerging"
@@ -153,10 +197,11 @@ def thread_item(row: Any, now: datetime, places_cap: int | None = LIST_PLACES) -
                 "topic_tags": row["lead_topic_tags"],
             }
         )
+    title, synopsis = shown_text(row["title"], row["synopsis"])
     return {
         "id": row["id"],
-        "title": row["title"] or row["lead_title"],
-        "synopsis": row["synopsis"],
+        "title": title or row["lead_title"],
+        "synopsis": synopsis,
         "status": thread_status(row["first_seen"], row["velocity"], now),
         "first_seen": row["first_seen"],
         "last_seen": row["last_seen"],
@@ -178,7 +223,8 @@ async def list_threads(now: datetime, hours: int, topic: str | None, limit: int)
 
 
 async def thread_detail(thread_id: int, offset: int, now: datetime) -> dict | None:
-    """One thread (a ThreadDetail), or None for an unknown id.
+    """One thread (a ThreadDetail), or None for an unknown id. A merged thread's id
+    answers as the thread it joined, with that thread's id.
 
     The thread's row first, so an unknown id costs one query; then its three
     parts at once, each on its own pool connection.
@@ -187,10 +233,11 @@ async def thread_detail(thread_id: int, offset: int, now: datetime) -> dict | No
     row = await pool.fetchrow(DETAIL_SQL, thread_id)
     if row is None:
         return None
+    resolved = row["id"]
     entities, timeline, articles = await asyncio.gather(
-        pool.fetch(ENTITIES_SQL, thread_id),
-        pool.fetch(TIMELINE_SQL, thread_id),
-        pool.fetch(ARTICLES_SQL, thread_id, DETAIL_ARTICLES, offset),
+        pool.fetch(ENTITIES_SQL, resolved),
+        pool.fetch(TIMELINE_SQL, resolved),
+        pool.fetch(ARTICLES_SQL, resolved, DETAIL_ARTICLES, offset),
     )
     return {
         **thread_item(row, now),
@@ -232,6 +279,6 @@ def article_thread(row: Any) -> dict | None:
             break
     return {
         "id": thread_id,
-        "title": row.get("thread_title") or row.get("thread_lead_title") or "",
+        "title": shown_text(row.get("thread_title"), None)[0] or row.get("thread_lead_title") or "",
         "places": names,
     }

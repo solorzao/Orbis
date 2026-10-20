@@ -427,3 +427,41 @@ async def test_cluster_articles_name_their_listed_thread(conn):
         alone: None,
     }
     assert [r["id"] for r in rows] == [in_listed, in_quiet, alone]
+
+
+@pytest.mark.asyncio
+async def test_a_merged_thread_answers_as_the_thread_it_joined(conn):
+    """Share links and the UI hold thread ids: a merged id still resolves."""
+    winner = await _thread(conn, title="Zzthread merged winner")
+    article = await _article(conn, NOW - HOUR, title="Zzthread winner story today")
+    await _member(conn, winner, article, published_at=NOW - HOUR, story_key=1)
+    loser = await _thread(conn, n_stories=0, n_sources=0)
+    await conn.execute("UPDATE threads SET merged_into = $1 WHERE id = $2", winner, loser)
+
+    detail = await thread_reads.thread_detail(loser, 0, NOW)
+
+    assert detail["id"] == winner
+    assert detail["title"] == "Zzthread merged winner"
+    assert [a["title"] for a in detail["articles"]] == ["Zzthread winner story today"]
+    assert loser not in await _listed()
+
+
+@pytest.mark.asyncio
+async def test_a_chain_of_merges_answers_as_its_last_thread(conn):
+    winner = await _thread(conn, title="Zzthread chain winner")
+    middle = await _thread(conn, n_stories=0, n_sources=0)
+    first = await _thread(conn, n_stories=0, n_sources=0)
+    await conn.execute("UPDATE threads SET merged_into = $1 WHERE id = $2", winner, middle)
+    await conn.execute("UPDATE threads SET merged_into = $1 WHERE id = $2", middle, first)
+
+    assert (await thread_reads.thread_detail(first, 0, NOW))["id"] == winner
+    assert (await thread_reads.thread_detail(middle, 0, NOW))["id"] == winner
+
+
+@pytest.mark.asyncio
+async def test_a_thread_merged_into_a_purged_one_is_unknown(conn):
+    """No foreign key: the purge may delete the winner and leave the id dangling."""
+    loser = await _thread(conn, n_stories=0, n_sources=0)
+    await conn.execute("UPDATE threads SET merged_into = $1 WHERE id = $2", 2**62, loser)
+
+    assert await thread_reads.thread_detail(loser, 0, NOW) is None
