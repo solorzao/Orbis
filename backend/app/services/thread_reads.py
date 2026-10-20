@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any
@@ -17,6 +18,8 @@ from typing import Any
 from app.services.database import get_pool, globe_lead
 from app.services.places import display_place
 from app.services.titles import display_title
+
+logger = logging.getLogger("orbis.thread_reads")
 
 # Outlets beat stories: a thread is listed with 3 stories from 3 outlets (the
 # predicate of migration 015's idx_threads_listed, and of the cluster join in
@@ -55,7 +58,8 @@ _LEAD = """
 # A thread merged into another answers as the thread its merges end in (share
 # links and the UI hold thread ids): merged_into is followed by primary key,
 # through later merges, at most MERGE_HOPS. One that ends in a purged thread
-# (merged_into has no foreign key) is unknown.
+# (merged_into has no foreign key), or goes on past MERGE_HOPS (chain_cut,
+# logged), is unknown. No row: no such thread; a row with a NULL id: unresolved.
 MERGE_HOPS = 10
 
 
@@ -83,11 +87,14 @@ def merge_chain(start: str) -> str:
 
 DETAIL_SQL = f"""
     WITH RECURSIVE {merge_chain("id = $1")},
+    last AS (SELECT next, hops FROM chain ORDER BY hops DESC LIMIT 1),
     one AS (
         SELECT {_THREAD_COLUMNS} FROM threads
         WHERE id = (SELECT id FROM chain WHERE next IS NULL)
-    )
-    {_LEAD.format(threads="one")}
+    ),
+    found AS ({_LEAD.format(threads="one")})
+    SELECT found.*, (l.next IS NOT NULL AND l.hops >= {MERGE_HOPS}) AS chain_cut
+    FROM last l LEFT JOIN found ON true
 """
 
 ENTITIES_SQL = f"""
@@ -249,7 +256,9 @@ async def thread_detail(thread_id: int, offset: int, now: datetime) -> dict | No
     """
     pool = await get_pool()
     row = await pool.fetchrow(DETAIL_SQL, thread_id)
-    if row is None:
+    if row is None or row["id"] is None:
+        if row is not None and row["chain_cut"]:
+            logger.warning("Thread %s: merge chain cut at %d hops.", thread_id, MERGE_HOPS)
         return None
     resolved = row["id"]
     entities, timeline, articles = await asyncio.gather(

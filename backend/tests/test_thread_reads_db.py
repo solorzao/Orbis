@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -465,3 +466,21 @@ async def test_a_thread_merged_into_a_purged_one_is_unknown(conn):
     await conn.execute("UPDATE threads SET merged_into = $1 WHERE id = $2", 2**62, loser)
 
     assert await thread_reads.thread_detail(loser, 0, NOW) is None
+
+
+@pytest.mark.asyncio
+async def test_a_chain_longer_than_merge_hops_is_cut_and_logged(conn, caplog):
+    ids = [
+        await _thread(conn, n_stories=0, n_sources=0) for _ in range(thread_reads.MERGE_HOPS + 2)
+    ]
+    for loser, winner in zip(ids, ids[1:]):
+        await conn.execute("UPDATE threads SET merged_into = $1 WHERE id = $2", winner, loser)
+
+    with caplog.at_level(logging.WARNING, logger="orbis.thread_reads"):
+        assert await thread_reads.thread_detail(ids[0], 0, NOW) is None
+
+    assert f"Thread {ids[0]}: merge chain cut at {thread_reads.MERGE_HOPS} hops" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="orbis.thread_reads"):
+        assert (await thread_reads.thread_detail(ids[2], 0, NOW))["id"] == ids[-1]
+    assert caplog.text == ""
