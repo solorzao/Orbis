@@ -401,3 +401,11 @@ async def test_at_production_scale_one_pass_reads_the_week_once_by_index(big):
     each = [await _executed(big, s, a) for s, a in seven]
     # One read of the week, against seven.
     assert custom["buffers"] < sum(p["buffers"] for p in each) / 2, (custom, each)
+    import warnings  # TEMPORARY: the PR's measurements, from CI's log
+
+    pages = await big.fetchval("SELECT relpages FROM pg_class WHERE relname = 'articles'")
+    warnings.warn(
+        f"GLOBE WEEK pages={pages} one_pass={custom} generic={generic} "
+        f"seven={dict(zip(map(str, VARIANTS), each))}",
+        stacklevel=1,
+    )
