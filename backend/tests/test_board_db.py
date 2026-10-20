@@ -351,7 +351,11 @@ async def _production_week(conn, now: datetime) -> dict:
         INSERT INTO thread_members (article_id, thread_id, story_key, source_name,
                                     published_at, latitude, longitude, region, country_code,
                                     entities, tone, similarity)
-        SELECT gen_random_uuid(), t.ids[1 + g % 5000], g / 2, 'outlet' || g % 900 || '.test',
+        SELECT gen_random_uuid(),
+               -- The first thread is big: every 20th member, spread over the week, and
+               -- none naming "Zzplan Heavy 0" (g % 5 = 1). The rest share the others.
+               CASE WHEN g % 20 = 1 THEN t.ids[1] ELSE t.ids[2 + g % 4999] END,
+               g / 2, 'outlet' || g % 900 || '.test',
                $1::timestamptz - make_interval(secs => (100000 - g) * 6.048),
                -60 + (g::bigint * 7919 % 130000) / 1000.0,
                -170 + (g::bigint * 104729 % 340000) / 1000.0,
@@ -403,11 +407,19 @@ async def _production_week(conn, now: datetime) -> dict:
         now,
         *_OLD_CELL,
     )
+    # The heaviest name is a person the graph knows, so an entity pin resolves.
+    await conn.execute(
+        "INSERT INTO kg_entity_names (node_id, type, name)"
+        " VALUES (gen_random_uuid(), 'PERSON', 'Zzplan Heavy 0')"
+    )
     # As (auto)vacuum leaves production's: the GIN pending list merged, statistics fresh.
     await conn.execute("SELECT gin_clean_pending_list('idx_thread_members_entities'::regclass)")
     for table in _FILLED:
         await conn.execute(f"ANALYZE {table}")
     return {
+        "big_thread": await conn.fetchval(
+            "SELECT min(id) FROM threads WHERE lead_title = 'zzplan'"
+        ),
         "articles": [
             str(r["id"])
             for r in await conn.fetch(
@@ -477,39 +489,120 @@ async def test_at_production_scale_pins_are_read_by_primary_key(big):
     assert threads == {"seq_scans": set(), "indexes": {"threads_pkey"}}
 
 
+# --- Pages read, at production's scale ----------------------------------------------
+#
+# Every statement a board read runs is recorded, then run again under EXPLAIN
+# (ANALYZE, BUFFERS) as a prepared statement, with the plan PostgreSQL makes for
+# its values (custom: a statement's first runs) and without them (generic: asyncpg
+# reuses prepared statements, and PostgreSQL may switch one to a generic plan
+# after five runs). A busy cell's stories this week are thousands of pages cold.
+
+PAGE_BOUND = 300
+
+
+class _Recorder:
+    """The pool as the services use it, on the test's connection, recording each statement."""
+
+    def __init__(self, connection):
+        self._conn = connection
+        self.statements: list[tuple[str, tuple]] = []
+
+    async def fetch(self, sql, *args, timeout=None):
+        self.statements.append((sql, args))
+        return await self._conn.fetch(sql, *args)
+
+    async def fetchval(self, sql, *args, timeout=None):
+        self.statements.append((sql, args))
+        return await self._conn.fetchval(sql, *args)
+
+
+async def _recorded(conn, read, *args):
+    """What *read*(*args) returns, and every statement it ran through the pool."""
+    recorder = _Recorder(conn)
+    with contextlib.ExitStack() as stack:
+        for module in ("board", "entities"):
+            stack.enter_context(
+                patch(f"app.services.{module}.get_pool", AsyncMock(return_value=recorder))
+            )
+        result = await read(*args)
+    return result, recorder.statements
+
+
+def _literal(value) -> str:
+    """*value* as an SQL literal of unknown type, which EXECUTE coerces to the parameter's."""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, (list, tuple)):
+        items = ",".join(
+            '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"' for v in value
+        )
+        return _literal("{" + items + "}")
+    text = value.isoformat() if isinstance(value, datetime) else str(value)
+    return "'" + text.replace("'", "''") + "'"
+
+
+async def _pages(conn, sql: str, args: tuple, mode: str) -> int:
+    """Shared buffers (hit + read) the statement touches when run with a *mode* plan."""
+    await conn.execute(f"SET LOCAL plan_cache_mode = force_{mode}_plan")
+    await conn.execute(f"PREPARE zzboard_q AS {sql}")
+    try:
+        raw = await conn.fetchval(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE zzboard_q"
+            f" ({', '.join(_literal(a) for a in args)})"
+        )
+    finally:
+        await conn.execute("DEALLOCATE zzboard_q")
+        await conn.execute("SET LOCAL plan_cache_mode = auto")
+    plan = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Plan"]
+    return plan.get("Shared Hit Blocks", 0) + plan.get("Shared Read Blocks", 0)
+
+
+async def _total_pages(conn, statements, mode: str) -> int:
+    return sum([await _pages(conn, sql, args, mode) for sql, args in statements])
+
+
 @pytest.mark.asyncio
-async def test_at_production_scale_a_place_reads_its_cell_never_the_articles_heap(big):
+async def test_at_production_scale_a_place_pin_reads_few_pages_whatever_the_plan(big):
     now = _now()
     await _production_week(big, now)
     cells = {
-        "busy": _BUSY_CELLS[0],
+        "busy": _BUSY_CELLS[0],  # thousands of stories this week
         "spread": (10, 20),  # about one story a week, as most cells
-        "old": _OLD_CELL,
-        "none": _NO_CELL,
+        "old": _OLD_CELL,  # stories 3 days ago, none since
+        "none": _NO_CELL,  # never a story
     }
-    types = ["float8"] * 8 + ["timestamptz"]
+    found = {}
     for name, (lat, lng) in cells.items():
-        _, box = board._cell_box(lat, lng, lat + 1, lng + 1)
-        for window in board.PLACE_WINDOWS:
-            args = [*box, now - window]
-            custom = await _custom_plan(big, board.PLACE_SQL, *args)
-            generic = await _generic_plan(
-                big, board.PLACE_SQL, types, [repr(float(v)) for v in box] + [_ts(args[-1])]
-            )
-            for mode, plan in (("custom", custom), ("generic", generic)):
-                assert "articles" not in plan["seq_scans"], (name, window, mode, plan)
-                assert plan["indexes"] & {"idx_articles_location", "idx_articles_published_at"}, (
-                    name,
-                    window,
-                    mode,
-                    plan,
-                )
+        item = board.parse_item(f"place:{lat}:{lng}")
+        [snapshot], statements = await _recorded(big, board.resolve_items, [item], now)
+        found[name] = snapshot and snapshot["title"]
+        for mode in ("custom", "generic"):
+            pages = await _total_pages(big, statements, mode)
+            assert pages < PAGE_BOUND, (name, mode, pages)
 
-    # And the ladder finds what each cell has.
-    _, box = board._cell_box(*_OLD_CELL, _OLD_CELL[0] + 1, _OLD_CELL[1] + 1)
-    assert await big.fetch(board.PLACE_SQL, *box, now - timedelta(hours=6)) == []
-    [old] = await big.fetch(board.PLACE_SQL, *box, now - timedelta(days=7))
-    assert old["region"] == "Zzplan Old"
+    assert found["busy"].startswith("Zzplan Region")
+    assert found["old"] == "Zzplan Old"
+    assert found["none"] is None
+
+
+@pytest.mark.asyncio
+async def test_at_production_scale_an_entity_and_a_big_thread_without_it_read_few_pages(big):
+    """A thread of 5K members spread over the week, none naming the pinned person."""
+    now = _now()
+    ids = await _production_week(big, now)
+    items = [
+        board.parse_item("entity:person:Zzplan Heavy 0"),
+        board.parse_item(f"thread:{ids['big_thread']}"),
+    ]
+
+    edges, statements = await _recorded(big, board.board_edges, items, None, now)
+
+    assert edges == []
+    for mode in ("custom", "generic"):
+        pages = await _total_pages(big, statements, mode)
+        assert pages < PAGE_BOUND, (mode, pages, [sql.split()[:3] for sql, _ in statements])
 
 
 @pytest.mark.asyncio
