@@ -226,9 +226,34 @@ async def test_scoring_at_production_scale_takes_the_hnsw_index_and_seconds(conn
 
 @pytest.mark.asyncio
 async def test_assignment_never_scans_the_articles_heap(conn):
-    """CI's near-empty tables make seq scans cheapest, so this asserts that the index
-    paths exist and are taken with seq scans off, not on pg_stat counters."""
-    await conn.execute("SET LOCAL enable_seqscan = off")
+    """The planner's own choice, on statistics this test sets: six days of articles
+    (one thread each) and ANALYZE, as autovacuum would have them. Left to whatever
+    earlier tests and autovacuum left, a batch's load was once planned as a walk of
+    idx_articles_published_at filtering on id, which on production visits every row.
+    ANALYZE also locks the tables against autovacuum until the rollback."""
+    # Rolled back, these rows would stay in the articles' HNSW graph as dead entries
+    # that crowd later searches' neighbours out. Dropped in this transaction (none of
+    # these queries uses it), the index never sees them; the rollback restores it.
+    await conn.execute("DROP INDEX idx_articles_embedding_half")
+    await conn.execute(
+        """
+        WITH a AS (
+            INSERT INTO articles (title, source_url, source_name, published_at, latitude,
+                                  longitude, location, embedding)
+            SELECT 'Zzplan story number ' || i || ' in the news today',
+                   'https://zzplans.test/' || i || '/' || gen_random_uuid(), 'zz-plan.test',
+                   $1::timestamptz - (3000 - i) * interval '3 minutes', 10.5, 20.5,
+                   ST_SetSRID(ST_MakePoint(20.5, 10.5), 4326)::geography,
+                   array_fill(0.01, ARRAY[1536])::vector
+            FROM generate_series(1, 3000) AS i
+            RETURNING id, published_at
+        )
+        INSERT INTO threads (centroid_sum, first_seen, last_seen, lead_article_id)
+        SELECT array_fill(0.01, ARRAY[512])::vector, published_at, published_at, id FROM a
+        """,
+        NOW,
+    )
+    await conn.execute("ANALYZE articles, threads, thread_members")
 
     plans = {
         "backlog": await _plan(
