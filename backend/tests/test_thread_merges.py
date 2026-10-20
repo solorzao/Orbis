@@ -154,8 +154,8 @@ def _merging_conn(**results):
             {"id": 2, "other": 1, "sim": 0.88},
         ],
         threads.MERGE_INFO_SQL: [
-            {"id": 1, "n_stories": 3, "top_entities": []},
-            {"id": 2, "n_stories": 8, "top_entities": []},
+            {"id": 1, "n_stories": 3, "n_articles": 4, "top_entities": []},
+            {"id": 2, "n_stories": 8, "n_articles": 9, "top_entities": []},
         ],
     }
     answers.update(results)
@@ -248,3 +248,96 @@ async def test_a_failed_merge_is_a_warning_and_the_cycle_finishes(caplog):
     assert stats.merged == 0
     assert "Merging thread 1 into 2 failed" in caplog.text
     assert conn.args_of(threads.DEACTIVATE_SQL)  # the cycle still finishes
+
+
+# --- a pass that fails, or stops short ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_failed_merge_pass_still_updates_velocity_and_deactivates(caplog):
+    def fail(*_args):
+        raise RuntimeError("HNSW unavailable")
+
+    article = _row()
+    conn = _merging_conn(
+        **{threads.LOAD_SQL: [article], threads.NEW_THREAD_SQL: 1, threads.NEIGHBOURS_SQL: fail}
+    )
+    with caplog.at_level(logging.WARNING, logger="orbis.threads"):
+        stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    assert "Thread merge pass failed" in caplog.text
+    assert conn.args_of(threads.VELOCITY_SQL) and conn.args_of(threads.DEACTIVATE_SQL)
+    assert (stats.assigned, stats.merged) == (1, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_catch_up_is_tried_again_next_cycle(monkeypatch):
+    monkeypatch.setattr(threads, "_caught_up", False)
+
+    def fail(*_args):
+        raise RuntimeError("boom")
+
+    await threads.assign_threads(_merging_conn(**{threads.CATCH_UP_SQL: fail}), [], now=T0)
+    assert threads._caught_up is False
+
+    conn = _merging_conn(**{threads.CATCH_UP_SQL: [{"id": 1}, {"id": 2}]})
+    await threads.assign_threads(conn, [], now=T0)
+    assert conn.args_of(threads.CATCH_UP_SQL)
+    assert threads._caught_up is True
+
+
+@pytest.mark.asyncio
+async def test_a_pass_that_hits_max_merges_catches_up_again_next_cycle(monkeypatch):
+    """The rest of the duplicates wait for the next cycle's catch-up, not a restart."""
+    monkeypatch.setattr(threads, "MAX_MERGES", 1)
+    article = _row()
+    conn = _merging_conn(**{threads.LOAD_SQL: [article], threads.NEW_THREAD_SQL: 1})
+
+    stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    assert stats.merged == 1
+    assert threads._caught_up is False
+
+
+@pytest.mark.asyncio
+async def test_moved_members_are_budgeted_and_the_rest_wait(monkeypatch, caplog):
+    """Each moved member is a non-HOT update into five indexes (about 16 GIN entries):
+    a cycle moves at most MAX_MOVED_MEMBERS, always at least one merge, and catches
+    up on the rest next cycle."""
+    monkeypatch.setattr(threads, "MAX_MOVED_MEMBERS", 10)
+    article = _row()
+    conn = _merging_conn(
+        **{
+            threads.LOAD_SQL: [article],
+            threads.NEW_THREAD_SQL: 1,
+            threads.NEIGHBOURS_SQL: [
+                {"id": 1, "other": 2, "sim": 0.9},
+                {"id": 3, "other": 4, "sim": 0.89},
+                {"id": 5, "other": 6, "sim": 0.88},
+            ],
+            threads.MERGE_INFO_SQL: [
+                {"id": i, "n_stories": n, "n_articles": n, "top_entities": []}
+                for i, n in ((1, 6), (2, 20), (3, 5), (4, 20), (5, 3), (6, 20))
+            ],
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="orbis.threads"):
+        stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    # 6 members moved, then 5 more would pass 10: the third pair (3) waits too.
+    moved = [args for args in conn.args_of(threads.MERGE_MEMBERS_SQL)]
+    assert moved == [(2, 1)]
+    assert stats.merged == 1
+    assert threads._caught_up is False
+    assert "merge budget" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_one_merge_bigger_than_the_budget_still_happens(monkeypatch):
+    monkeypatch.setattr(threads, "MAX_MOVED_MEMBERS", 2)
+    article = _row()
+    conn = _merging_conn(**{threads.LOAD_SQL: [article], threads.NEW_THREAD_SQL: 1})
+
+    stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    assert stats.merged == 1  # the loser has 4 members: progress over the budget

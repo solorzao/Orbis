@@ -82,6 +82,9 @@ MERGE_SIM = 0.85  # merge two active threads on centroid similarity alone
 MERGE_SIM_WITH_ENTITY = 0.80  # ... or with a specific person or org in both top entities
 MERGE_NEIGHBOURS = 3  # nearest active threads checked per candidate
 MAX_MERGES = 200  # a cycle's merges at most
+# A cycle's moved members at most (each a non-HOT update into five indexes, some
+# 16 GIN entries): one merge always goes ahead, and the rest wait for the next.
+MAX_MOVED_MEMBERS = 5000
 CATCH_UP_LIMIT = 2000  # a process's first merge pass checks this many listed threads
 GENERIC_ENTITY_SHARE = 0.01  # in more than this share of active threads: generic, not shared
 MIN_TITLE_WORDS = 4  # shorter titles neither join nor seed a thread
@@ -382,7 +385,9 @@ NEIGHBOURS_SQL = """
     WHERE t.thread_id = ANY($1::bigint[])
 """
 
-MERGE_INFO_SQL = "SELECT id, n_stories, top_entities FROM threads WHERE id = ANY($1::bigint[])"
+MERGE_INFO_SQL = """
+    SELECT id, n_stories, n_articles, top_entities FROM threads WHERE id = ANY($1::bigint[])
+"""
 
 # A process's first pass also checks every listed active thread (idx_threads_listed),
 # so duplicates from before merges existed are caught once.
@@ -643,6 +648,7 @@ class ThreadInfo:
 
     n_stories: int
     entities: set[str]
+    n_articles: int = 0  # its members, the rows a merge moves
 
 
 def plan_merges(
@@ -896,7 +902,8 @@ MERGE_STEPS = (
     JOIN_CENTROID_SQL,
 )
 
-# Whether this process has made its first merge pass, the catch-up.
+# Whether the catch-up is done: this process's first merge pass, and any pass
+# after one that stopped short (MAX_MERGES or MAX_MOVED_MEMBERS) or failed.
 _caught_up = False
 
 
@@ -913,32 +920,51 @@ async def _aggregate(conn: Any, thread_ids: list[int], now: datetime) -> list[in
 
 
 async def _merge_pass(conn: Any, stats: ThreadStats, now: datetime) -> set[int]:
-    """Merge the threads this cycle touched (all listed active ones on a process's
-    first pass) into their nearest active neighbour where plan_merges says so;
-    the winners, to aggregate again."""
+    """Merge the threads this cycle touched (and every listed active one until the
+    catch-up is done) into their nearest active neighbour where plan_merges says
+    so; the winners, to aggregate again."""
     global _caught_up
     candidates = set(stats.touched)
     if not _caught_up:
         rows = await conn.fetch(CATCH_UP_SQL, now - timedelta(hours=ACTIVE_HOURS), CATCH_UP_LIMIT)
         candidates |= {r["id"] for r in rows}
-        _caught_up = True
+    winners: set[int] = set()
+    complete = await _merge(conn, stats, candidates, winners, now)
+    # Done only after a pass that completed; a short one catches up next cycle.
+    _caught_up = complete
+    return winners
+
+
+async def _merge(
+    conn: Any, stats: ThreadStats, candidates: set[int], winners: set[int], now: datetime
+) -> bool:
+    """Merge *candidates* where plan_merges says so, adding the winners to
+    *winners*; whether every planned merge was made (none left for lack of budget)."""
     if not candidates:
-        return set()
+        return True
     async with conn.transaction():
         for setting in SCORE_SETTINGS:
             await conn.execute(setting)
         rows = await conn.fetch(NEIGHBOURS_SQL, sorted(candidates), MERGE_NEIGHBOURS)
     pairs = [(r["id"], r["other"], r["sim"]) for r in rows if r["sim"] >= MERGE_SIM_WITH_ENTITY]
     if not pairs:
-        return set()
+        return True
     ids = sorted({a for a, _, _ in pairs} | {b for _, b, _ in pairs})
     infos = {
-        r["id"]: ThreadInfo(r["n_stories"], set(r["top_entities"] or ()))
+        r["id"]: ThreadInfo(r["n_stories"], set(r["top_entities"] or ()), r["n_articles"])
         for r in await conn.fetch(MERGE_INFO_SQL, ids)
     }
     generic = {r["e"] for r in await conn.fetch(GENERIC_SQL, GENERIC_ENTITY_SHARE)}
-    winners: set[int] = set()
-    for loser, winner in plan_merges(pairs, infos, generic):
+    plan = plan_merges(pairs, infos, generic)
+    members = {thread_id: info.n_articles for thread_id, info in infos.items()}
+    moved = 0
+    for loser, winner in plan:
+        if moved and moved + members.get(loser, 0) > MAX_MOVED_MEMBERS:
+            logger.info(
+                "Threads: merge budget of %d moved members reached; the rest wait.",
+                MAX_MOVED_MEMBERS,
+            )
+            return False
         try:
             async with conn.transaction():
                 await conn.execute(MERGE_MEMBERS_SQL, winner, loser)
@@ -949,9 +975,11 @@ async def _merge_pass(conn: Any, stats: ThreadStats, now: datetime) -> set[int]:
         except Exception:
             logger.warning("Merging thread %s into %s failed.", loser, winner, exc_info=True)
             continue
+        moved += members.get(loser, 0)
+        members[winner] = members.get(winner, 0) + members.get(loser, 0)
         stats.merged += 1
         winners.add(winner)
-    return winners
+    return len(plan) < MAX_MERGES
 
 
 async def _finish(conn: Any, stats: ThreadStats, now: datetime) -> None:
@@ -962,7 +990,11 @@ async def _finish(conn: Any, stats: ThreadStats, now: datetime) -> None:
     # Merges decide on fresh counts and entities, then the winners are aggregated
     # again with their new members.
     updated = set(await _aggregate(conn, sorted(stats.touched), now))
-    winners = await _merge_pass(conn, stats, now)
+    try:
+        winners = await _merge_pass(conn, stats, now)
+    except Exception:  # merges wait for the next cycle; velocity and deactivation don't
+        logger.warning("Thread merge pass failed; continuing.", exc_info=True)
+        winners = set()
     if winners:
         updated |= set(await _aggregate(conn, sorted(winners), now))
     stats.aggregated = len(updated)
