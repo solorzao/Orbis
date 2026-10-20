@@ -1,4 +1,5 @@
 import { test, expect, type Request } from "@playwright/test";
+import { TOPIC_COLORS } from "../src/lib/clustering";
 import { gotoStillGlobe, mockAllApiRoutes, mockGlobeNews } from "./fixtures";
 
 /** A request for the globe's dots (/api/news, not /api/news/...), with its topic. */
@@ -151,7 +152,7 @@ test.describe("Topic filter", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  test("a topic refetches the globe: only its places, counted by its stories", async ({ page }) => {
+  test("a topic filters the dots on screen at once, then the server's land", async ({ page }) => {
     // The server's Politics answer waits until the test has looked at the globe meanwhile.
     let answerPolitics!: () => void;
     const politicsHeld = new Promise<void>((resolve) => (answerPolitics = resolve));
@@ -165,24 +166,28 @@ test.describe("Topic filter", () => {
     const globe = page.getByTestId("globe");
     const timeline = page.getByTestId("timeline");
     const status = page.getByTestId("status-pill").getByRole("status");
+    const pills = page.getByTestId("topic-filter");
     await expect(globe).toHaveAttribute("data-dots", "3");
-    await expect(timeline.getByText("16 stories · 3 places")).toBeVisible();
+    const every = [TOPIC_COLORS.Climate, TOPIC_COLORS.Politics, TOPIC_COLORS.Economy];
+    await expect(globe).toHaveAttribute("data-dot-colors", every.sort().join(" "));
 
     const politics = page.waitForRequest((r) => globeFetchTopic(r) === "Politics");
-    await page.getByTestId("topic-filter").getByRole("button", { name: "Politics" }).click();
+    await pills.getByRole("button", { name: "Politics" }).press("Enter");
     await politics;
-    // While it loads, the last dots stay up: no flash to an empty globe.
+    // While the server's answer is held, the dots on screen are already the topic's:
+    // Paris (1 politics story) and London (3), in its colour; New York has none.
     await expect(status).toHaveText("Loading…");
-    await expect(globe).toHaveAttribute("data-dots", "3");
-
-    answerPolitics();
-    // Paris (1 politics story) and London (3); New York has none.
-    await expect(status).toHaveText("Live");
     await expect(globe).toHaveAttribute("data-dots", "2");
+    await expect(globe).toHaveAttribute("data-dot-colors", TOPIC_COLORS.Politics);
     await expect(timeline.getByText("4 stories · 2 places")).toBeVisible();
 
+    answerPolitics();
+    await expect(status).toHaveText("Live");
+    await expect(globe).toHaveAttribute("data-dots", "2");
+    await expect(globe).toHaveAttribute("data-dot-colors", TOPIC_COLORS.Politics);
+
     const all = page.waitForRequest((r) => globeFetchTopic(r) === null);
-    await page.getByTestId("topic-filter").getByRole("button", { name: "All" }).click();
+    await pills.getByRole("button", { name: "All" }).press("Enter");
     await all;
     await expect(globe).toHaveAttribute("data-dots", "3");
     await expect(timeline.getByText("16 stories · 3 places")).toBeVisible();

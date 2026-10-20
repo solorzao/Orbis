@@ -611,6 +611,7 @@ export default function Globe({
     <div
       ref={containerRef}
       data-testid="globe"
+      data-dot-colors={[...new Set(points.map((p) => p.color))].sort().join(" ")}
       className="fixed inset-x-0 bottom-0"
       style={{ top: -GLOBE_OVERSCAN_PX, zIndex: "var(--z-globe)" }}
     />
