@@ -56,7 +56,7 @@ def _node_upsert_sql(on_conflict: str) -> str:
 # is left as it is. Every cycle names thousands of known people and orgs; the
 # old unconditional "SET metadata = metadata || '{}'" rewrote each one, and on
 # a full page that is a non-HOT update into every kg_nodes index, including
-# both trigram GIN indexes (006, 016).
+# the trigram GIN index (006; 016's partial one until 018 dropped it).
 _KEEP_NODE_SQL = _node_upsert_sql("DO NOTHING")
 
 # A node with metadata (articles, locations): merged as before, but written

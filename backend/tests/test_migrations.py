@@ -106,6 +106,36 @@ def test_concurrent_index_migration_never_blocks_ingestion(name, indexes):
         ]
 
 
+# Migrations that drop indexes from tables ingestion writes every cycle:
+# CONCURRENTLY (a plain DROP INDEX waits for, then blocks, every write), and no
+# lock_timeout or transaction block, as for concurrent builds.
+CONCURRENT_DROP_MIGRATIONS = {"018_drop_kg_entity_name_trgm.sql": ["idx_kg_nodes_entity_name_trgm"]}
+
+
+@pytest.mark.parametrize(
+    ("name", "indexes"),
+    CONCURRENT_DROP_MIGRATIONS.items(),
+    ids=list(CONCURRENT_DROP_MIGRATIONS),
+)
+def test_concurrent_drop_migration_never_blocks_ingestion(name, indexes):
+    statements = [s.strip() for s in _sql_without_comments(name).split(";") if s.strip()]
+    assert statements == [f"DROP INDEX CONCURRENTLY IF EXISTS {index}" for index in indexes]
+    # Retrieval's fuzzy matching over every node type still needs the full index.
+    assert not re.search(r"\bidx_kg_nodes_name_trgm\b", _sql_without_comments(name))
+
+
+def test_the_names_table_is_filled_before_its_index_is_built():
+    """One sequential pass over kg_nodes (ACCESS SHARE only), then a bulk GIN build,
+    so the table is complete when the new backend first reads it."""
+    sql = " ".join(_sql_without_comments("017_kg_entity_names.sql").split())
+    fill = (
+        "INSERT INTO kg_entity_names (node_id, type, name)"
+        " SELECT id, type, name FROM kg_nodes WHERE type IN ('PERSON', 'ORG')"
+    )
+    assert sql.index("SET lock_timeout") < sql.index("CREATE TABLE") < sql.index(fill)
+    assert sql.index(fill) < sql.index("CREATE INDEX")
+
+
 # Migrations that only set a table's autovacuum parameters: SHARE UPDATE
 # EXCLUSIVE (no conflict with reads or writes), no data change, no rewrite.
 SETTINGS_MIGRATIONS = {"014_kg_edges_autovacuum.sql": "kg_edges"}

@@ -11,14 +11,18 @@
 -- production even with 016's partial index. Here the same names fill a few
 -- MB that stay cached.
 --
--- Ingestion keeps it in sync: knowledge_graph.upsert_node adds a row for each
--- person and organisation it writes or mentions again, and the orphan purge
--- deletes the rows of the nodes it deletes. scripts/backfill_entity_names.py
--- adds the ones stored before this migration (run it once after deploy).
+-- Filled here, so it is complete when the new backend first reads it: one
+-- sequential pass over kg_nodes, which takes only ACCESS SHARE (ingestion
+-- keeps writing), then a bulk build of the trigram index over the filled
+-- table. Ingestion keeps it in sync from then on: knowledge_graph.upsert_node
+-- adds a row for each person and organisation it writes or mentions again,
+-- and the orphan purge deletes the rows of the nodes it deletes. Nodes the
+-- previous backend writes while the deploy finishes are added by their next
+-- mention, or by scripts/reconcile_entity_names.py.
 --
--- New table only. No foreign key to kg_nodes, so creating it takes no lock on
--- kg_nodes, which ingestion writes every cycle; nothing here touches articles.
--- Safe while the previous backend still serves.
+-- New table only. No foreign key to kg_nodes, so it takes no lock that
+-- conflicts with ingestion's writes; nothing here touches articles. Safe
+-- while the previous backend still serves.
 SET lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS kg_entity_names (
@@ -27,6 +31,10 @@ CREATE TABLE IF NOT EXISTS kg_entity_names (
     name    TEXT NOT NULL
 );
 
--- Built on the empty table, so a plain CREATE INDEX is instant.
+INSERT INTO kg_entity_names (node_id, type, name)
+SELECT id, type, name FROM kg_nodes WHERE type IN ('PERSON', 'ORG')
+ON CONFLICT (node_id) DO NOTHING;
+
+-- Built after the fill: one bulk GIN build rather than a row-by-row insert.
 CREATE INDEX IF NOT EXISTS idx_kg_entity_names_trgm
     ON kg_entity_names USING gin (name gin_trgm_ops);

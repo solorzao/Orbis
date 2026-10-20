@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from scripts.backfill_entity_names import backfill
+from scripts.reconcile_entity_names import reconcile
 from tests.realistic_names import (
     CITIES,
     CITY_ORG_SUFFIXES,
@@ -79,8 +79,8 @@ async def build(
     """Write the graph and members on *conn*, inside the caller's transaction.
 
     ANALYZE's row and page counts outlive the rollback (pg_class is updated in
-    place), so a test using this should run after the others that plan on
-    these tables: see tests/test_zz_search_real_names_db.py."""
+    place), and the aborted rows stay in the heap: the caller vacuums the
+    tables after rolling back (tests/test_search_real_names_db.py)."""
     rng = random.Random(seed)
     names = entity_names(people, seed)
     per_cycle = articles // cycles
@@ -112,8 +112,8 @@ async def build(
     await conn.copy_records_to_table(
         "kg_nodes", records=records, columns=["id", "type", "name", "metadata"]
     )
-    # The narrow names table, as the backfill fills it after migration 017.
-    await backfill(conn, write=True)
+    # The narrow names table, as migration 017's fill and the reconcile leave it.
+    await reconcile(conn, write=True, prune=False, pause=0)
 
     # Members: a week of assigned articles. Public figures and named
     # organisations by weight, the generated names at random.

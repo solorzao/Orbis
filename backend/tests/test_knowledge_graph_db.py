@@ -257,3 +257,31 @@ async def test_a_purged_node_leaves_the_names_table(conn):
     assert await _names(conn, "Zz Kept") == [(kept, "PERSON", "Zz Kept")]
     assert await _names(conn, "Zz Orphan") == []
     assert await _names(conn, "Zz Orphan Org") == []
+
+
+@pytest.mark.asyncio
+async def test_after_a_cycle_and_the_purge_the_names_are_exactly_the_people_and_orgs(conn):
+    class _CyclePool(_Pool):
+        async def fetchval(self, sql, *args):
+            return await conn.fetchval(sql, *args)
+
+    article = await _article(conn, "zzgraph-Sync")
+    with patch.object(
+        knowledge_graph, "get_pool", new_callable=AsyncMock, return_value=_CyclePool(conn)
+    ):
+        await knowledge_graph.populate_graph([_graph_article(article, "zzgraph-Sync")])
+        await _upsert(conn, "PERSON", "Zz Lonely", {})  # no edge keeps these
+        await _upsert(conn, "ORG", "Zz Lonely Org", {})
+        await knowledge_graph.purge_orphaned_nodes()
+
+    names = {tuple(r) for r in await conn.fetch("SELECT node_id, type, name FROM kg_entity_names")}
+    nodes = {
+        tuple(r)
+        for r in await conn.fetch(
+            "SELECT id, type, name FROM kg_nodes WHERE type IN ('PERSON', 'ORG')"
+        )
+    }
+    assert names == nodes
+    kept = {(t, n) for _, t, n in names}
+    assert {("PERSON", "Zz Graph Person"), ("ORG", "Zz Graph Org")} <= kept
+    assert not kept & {("PERSON", "Zz Lonely"), ("ORG", "Zz Lonely Org")}

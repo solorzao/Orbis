@@ -370,7 +370,7 @@ In the place panel (`NewsPanel`), an article whose cluster row carries `thread` 
 ## PR 17a: Entity API
 
 Branch: `claude/p4-entities-api`. It merges after 15b.
-- **Names** come from the knowledge graph's people and organisations, kept in the narrow `kg_entity_names` table (migration 017, its own trigram index; a few MB that stay cached, synced by `knowledge_graph.upsert_node` and the orphan purge, backfilled once by `scripts/backfill_entity_names.py`), with recent coverage counted from `thread_members` (`idx_thread_members_entities`), as the dossier counts it.
+- **Names** come from the knowledge graph's people and organisations, kept in the narrow `kg_entity_names` table (migration 017, its own trigram index; a few MB that stay cached, filled by the migration, synced by `knowledge_graph.upsert_node` and the orphan purge, repaired by `scripts/reconcile_entity_names.py`; migration 018 drops 016's partial index), with recent coverage counted from `thread_members` (`idx_thread_members_entities`), as the dossier counts it.
 - **Dossiers** read `thread_members` through its GIN `entities` index, joining articles by primary key only for the 10 headlines.
 
 ### Task 17a.1: `GET /api/search?q=` (`app/routers/search.py`, `app/services/search.py`)
