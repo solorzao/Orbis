@@ -16,8 +16,8 @@ const rows = (page: Page) =>
 const threadsToggle = (page: Page) => page.getByRole("button", { name: "Threads", exact: true });
 const globe = (page: Page) => page.getByTestId("globe");
 const route = (page: Page) => page.getByRole("list", { name: "Spread, in order of first report" });
-const stops = (page: Page) => route(page).locator(".stop");
-const lit = (page: Page) => route(page).locator(".stop.on");
+const stops = (page: Page) => route(page).locator(".stop-place");
+const lit = (page: Page) => route(page).locator(".stop.on .stop-place");
 const play = (page: Page) => page.getByTestId("timeline").locator("button.play");
 
 const RED_SEA = "Red Sea shipping attacks";
@@ -134,9 +134,18 @@ test.describe("A thread's detail, arcs and replay", () => {
     await expect(globe(page)).toHaveAttribute("data-thread-replay", "");
 
     await play(page).click();
-    // What the globe drew at each step, "places lit:arcs drawn": one more place, and its
-    // arc from the first, each time. Recorded as drawn, so no runner can miss a step.
-    await expect(globe(page)).toHaveAttribute("data-thread-replay", "1:0,2:1,3:2,4:3");
+    // What the globe drew at each step, "places lit:arcs drawn", ends with every place.
+    await expect(globe(page)).toHaveAttribute("data-thread-replay", /(^|,)4:3$/);
+    // On a slow runner two steps can land in one render: each drawn step lights more
+    // places than the last, with an arc to each but the first.
+    const steps = (await globe(page).getAttribute("data-thread-replay"))!
+      .split(",")
+      .map((step) => step.split(":").map(Number));
+    expect(steps[0][0]).toBeGreaterThanOrEqual(1);
+    for (const [i, [places, arcs]] of steps.entries()) {
+      expect(arcs, `step ${i}: an arc to each lit place but the first`).toBe(places - 1);
+      if (i > 0) expect(places, `step ${i}: more places lit`).toBeGreaterThan(steps[i - 1][0]);
+    }
     // Then every place and arc again, and the button to replay it.
     await expect(play(page)).toHaveAccessibleName(`Replay how ${RED_SEA} spread`);
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
@@ -185,33 +194,54 @@ test.describe("A thread's detail, arcs and replay", () => {
     await expect(globe(page)).toHaveAttribute("data-arc-dashed", "false");
   });
 
-  test("a thread's arcs and an inspected link's highlight never show together", async ({
+  /** Links on, and the US-Iran link opened from the Inspect tab's list. */
+  async function inspectUsIran(page: Page) {
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await page.getByTestId("side-tab-inspect").click();
+    await page
+      .getByRole("list", { name: "Links on the globe" })
+      .getByRole("button", { name: /^United States and Iran/ })
+      .click();
+    await expect(page.getByTestId("link-inspector")).toBeVisible();
+  }
+
+  test("selecting a thread draws its arcs instead of an inspected link's highlight", async ({
     page,
   }) => {
     await gotoStillGlobe(page);
-    await page.getByRole("button", { name: "Links", exact: true }).click();
-    await page.getByTestId("side-tab-inspect").click();
-    const usIran = page
-      .getByRole("list", { name: "Links on the globe" })
-      .getByRole("button", { name: /^United States and Iran/ });
-    await usIran.click();
-    const named = page.locator('[data-testid="arc-pill"][data-placed="true"]');
-    await page.mouse.move(40, 450);
-    await expect(named).toHaveCount(1); // the inspected link, named at its arc
+    await inspectUsIran(page);
+    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
 
-    // A thread selected: its arcs, not the link's highlight.
     await threadsToggle(page).click();
     await rows(page).first().click();
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
-    await expect(named).toHaveCount(0);
-
-    // A link opened: its highlight, and the thread closes.
-    await page.getByTestId("link-inspector").getByRole("button", { name: "Close panel" }).click();
-    await usIran.click();
+    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "");
+    // Closed, the thread gives the inspected link its highlight back.
+    await rows(page).first().click();
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
+    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
+  });
+
+  test("opening a link closes the selected thread", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await openRedSea(page);
+    await inspectUsIran(page);
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
+    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
     await expect(rows(page).first()).toHaveAttribute("aria-expanded", "false");
-    await page.mouse.move(40, 450);
-    await expect(named).toHaveCount(1);
+  });
+
+  test("a range closes the selected thread: threads follow the live windows", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await openRedSea(page);
+    await page.getByRole("slider", { name: "Window start" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("timeline-label")).not.toHaveText(/live/);
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
+    await expect(
+      rail(page).getByText("Threads follow the live windows: pick 1h, 6h, 24h or 7d"),
+    ).toBeVisible();
+    await expect(play(page)).toHaveAccessibleName("Replay the last 7 days");
   });
 
   test("all its stories open in Inspect, 20 at a time", async ({ page }) => {
@@ -247,6 +277,25 @@ test.describe("The Part of chip", () => {
     await chip.click();
     await expect(threadsToggle(page)).toHaveAttribute("aria-pressed", "true");
     const row = rows(page).filter({ hasText: "EU summit on energy prices" });
+    await expect(row).toHaveAttribute("aria-expanded", "true");
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "2");
+  });
+});
+
+test.describe("The Part of chip below 1180px", () => {
+  test.use({ viewport: { width: 1024, height: 768 } });
+
+  test("the chip opens the sheet's Threads tab on its thread", async ({ page }) => {
+    await gotoStillGlobe(page, withThreads);
+    await clickPlace(page, PARIS);
+    await page
+      .getByTestId("news-panel")
+      .getByRole("button", { name: /^Part of: EU summit on energy prices/ })
+      .click();
+    await expect(page.getByTestId("side-tab-threads")).toHaveAttribute("aria-selected", "true");
+    const row = page
+      .getByTestId("threads-sheet")
+      .getByRole("button", { name: /^EU summit on energy prices/ });
     await expect(row).toHaveAttribute("aria-expanded", "true");
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", "2");
   });

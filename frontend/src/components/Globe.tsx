@@ -38,7 +38,8 @@ const NO_ARCS: GlobeArc[] = [];
 const LAND_URL = "/geo/land-110m.v1.geojson";
 
 export interface GlobeControls {
-  flyTo: (lat: number, lng: number, altitude: number) => void;
+  /** Move the camera there over 1500 ms, or `ms` (0: at once, for reduced motion). */
+  flyTo: (lat: number, lng: number, altitude: number, ms?: number) => void;
   /** Where the globe sits on screen (for the orbital rings), or null once torn down. */
   getGeometry: () => GlobeGeometry | null;
   /**
@@ -378,10 +379,10 @@ export default function Globe({
 
     // Expose camera controls to parent
     onReadyRef.current?.({
-      flyTo: (lat: number, lng: number, altitude: number) => {
+      flyTo: (lat: number, lng: number, altitude: number, ms = 1500) => {
         // The fly-to owns the camera now; the drift would pull it back.
         driftStoppedRef.current = true;
-        globeRef.current?.pointOfView({ lat, lng, altitude }, 1500);
+        globeRef.current?.pointOfView({ lat, lng, altitude }, ms);
       },
       getGeometry: () => {
         const g = globeRef.current;
@@ -503,6 +504,7 @@ export default function Globe({
     if (container) {
       // read by the e2e tests: WebGL arcs can't be found in the DOM
       container.dataset.arcs = String(linked.length);
+      container.dataset.arcHighlight = inspectedLink ?? "";
       container.dataset.threadArcs = String(spread.length);
       // Each replay step as drawn, "1:0,2:1,…": a step at or before the last starts a new replay.
       if (thread && threadLit !== null) {

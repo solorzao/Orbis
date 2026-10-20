@@ -81,6 +81,7 @@ function detail(over: Partial<ApiThread> = {}): ThreadDetail {
 const SELECTED = { id: 7, title: "Red Sea shipping attacks" };
 const route = () => screen.getByRole("list", { name: "Spread, in order of first report" });
 const stops = () => within(route()).getAllByRole("listitem");
+const stopNames = () => stops().map((s) => s.querySelector(".stop-place")!.textContent);
 
 type Props = ComponentProps<typeof ThreadsRail>;
 function renderRail(over: Partial<Props> = {}) {
@@ -189,11 +190,9 @@ describe("ThreadsRail", () => {
     expect(panel).toHaveClass("tdetail");
     expect(within(panel).getByText(/Outlets in Yemen first reported/)).toBeInTheDocument();
     expect(panel.querySelector(".syn .ai")).toHaveTextContent("AI");
-    expect(stops().map((s) => s.textContent)).toEqual([
-      "Yemen",
-      "Suez, Egypt",
-      "Rotterdam, Netherlands",
-    ]);
+    expect(stopNames()).toEqual(["Yemen", "Suez, Egypt", "Rotterdam, Netherlands"]);
+    // Each stop's first report, for screen readers too (not only in its tooltip).
+    expect(stops()[0].querySelector(".sr-only")).toHaveTextContent("first reported Sun 06:10 UTC");
     const facts = within(panel).getByRole("list", { name: "Facts" });
     expect(facts).toHaveTextContent("First seenSun 06:10");
     expect(facts).toHaveTextContent("Outlets11");
@@ -208,7 +207,7 @@ describe("ThreadsRail", () => {
 
   it("shows the list's places until the detail arrives", () => {
     renderRail({ selected: SELECTED, detail: null });
-    expect(stops().map((s) => s.textContent)).toEqual(["Yemen", "Suez, Egypt"]);
+    expect(stopNames()).toEqual(["Yemen", "Suez, Egypt"]);
     expect(screen.queryByText("Key entities")).toBeNull();
   });
 

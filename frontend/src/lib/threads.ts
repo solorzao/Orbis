@@ -6,6 +6,7 @@
 import { apiFetch, type ApiGlobeLead } from "@/lib/api";
 import { isWebUrl } from "@/hooks/useAgent";
 import { mapApiTopic, mapLead } from "@/lib/clustering";
+import { HOME_VIEW } from "@/lib/globeView";
 import type { GlobeArc } from "@/lib/links";
 import type { LiveHours } from "@/lib/timeWindow";
 import type { ArticleThread, GlobeLead, Topic } from "@/types/news";
@@ -297,4 +298,54 @@ export function partOfLabel(thread: ArticleThread, here: string | undefined): st
   return others.length > 0
     ? `Part of: ${thread.title} (also in ${others.join(" and ")})`
     : `Part of: ${thread.title}`;
+}
+
+/** The closest a thread's view comes (a thread in one place), in globe radii. */
+const SPREAD_NEAR_ALTITUDE = 1.5;
+const RAD = Math.PI / 180;
+
+/**
+ * Where the globe goes when a thread is selected: the middle of its places on
+ * the sphere (the mean of their unit vectors), high enough to frame the one
+ * furthest from it (1.2 globe radii, plus one for every 40 degrees), between
+ * 1.5 and the home view's 2.5. The middle frames a spread better than its
+ * first place, which is often at one edge. Places on opposite sides have no
+ * middle: the first place, from the home view's height. Null without places.
+ */
+export function spreadView(
+  places: readonly { lat: number; lng: number }[],
+): { lat: number; lng: number; altitude: number } | null {
+  const [first] = places;
+  if (!first) return null;
+  if (places.length === 1) {
+    return { lat: first.lat, lng: first.lng, altitude: SPREAD_NEAR_ALTITUDE };
+  }
+  const unit = places.map(({ lat, lng }) => [
+    Math.cos(lat * RAD) * Math.cos(lng * RAD),
+    Math.cos(lat * RAD) * Math.sin(lng * RAD),
+    Math.sin(lat * RAD),
+  ]);
+  const sum = [0, 1, 2].map((i) => unit.reduce((s, v) => s + v[i], 0));
+  const length = Math.hypot(...sum);
+  if (length < 0.01) return { lat: first.lat, lng: first.lng, altitude: HOME_VIEW.altitude };
+  const mid = sum.map((c) => c / length);
+  const radius = Math.max(
+    ...unit.map((v) => Math.acos(Math.min(1, v[0] * mid[0] + v[1] * mid[1] + v[2] * mid[2])) / RAD),
+  );
+  return {
+    lat: Math.asin(mid[2]) / RAD,
+    lng: Math.atan2(mid[1], mid[0]) / RAD,
+    altitude: Math.min(HOME_VIEW.altitude, Math.max(SPREAD_NEAR_ALTITUDE, 1.2 + radius / 40)),
+  };
+}
+
+/**
+ * What a screen reader hears as a replay lights a place: "Suez, Egypt: place
+ * 2 of 4", and at the last "… Every place shown." (all a reduced-motion
+ * replay, one step, says). Nothing when not replaying.
+ */
+export function replayAnnouncement(spread: readonly ThreadPlace[], lit: number | null): string {
+  if (lit === null || lit < 1 || lit > spread.length) return "";
+  const said = `${spread[lit - 1].place}: place ${lit} of ${spread.length}`;
+  return lit === spread.length ? `${said}. Every place shown.` : said;
 }

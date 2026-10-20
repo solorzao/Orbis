@@ -7,7 +7,9 @@ import {
   fetchThread,
   fetchThreads,
   partOfLabel,
+  replayAnnouncement,
   revealedArcs,
+  spreadView,
   spreadArcs,
   stopLit,
   threadsStatus,
@@ -286,5 +288,53 @@ describe("partOfLabel", () => {
     expect(partOfLabel({ ...thread, places: ["Yemen"] }, "Yemen")).toBe(
       "Part of: Red Sea shipping attacks",
     );
+  });
+});
+
+describe("spreadView", () => {
+  const at = (lat: number, lng: number, place = "") => ({
+    lat,
+    lng,
+    place,
+    countryCode: "",
+    firstSeen: "2026-10-18T06:10:00Z",
+    n: 1,
+  });
+
+  it("centres on the middle of the places (on the sphere), high enough to frame them", () => {
+    // The Red Sea thread: Yemen, Suez, Rotterdam, Mombasa. Rotterdam is the
+    // furthest from their middle, about 36 degrees.
+    const view = spreadView([at(15.5, 48.5), at(30.5, 32.5), at(51.5, 4.5), at(-4.5, 39.5)])!;
+    expect(view.lat).toBeCloseTo(24, 0);
+    expect(view.lng).toBeCloseTo(34.1, 0);
+    expect(view.altitude).toBeCloseTo(1.2 + 35.7 / 40, 1);
+  });
+
+  it("comes close for one place, and no further than the home view for a wide spread", () => {
+    expect(spreadView([at(48.5, 2.5)])).toEqual({ lat: 48.5, lng: 2.5, altitude: 1.5 });
+    const wide = spreadView([at(0, -100), at(10, 60)])!;
+    expect(wide.altitude).toBe(2.5);
+  });
+
+  it("falls back to the first place when the places' middle is nowhere (opposite sides)", () => {
+    expect(spreadView([at(0, 0), at(0, 180)])).toEqual({ lat: 0, lng: 0, altitude: 2.5 });
+  });
+
+  it("has nowhere to go without places", () => {
+    expect(spreadView([])).toBeNull();
+  });
+});
+
+describe("replayAnnouncement", () => {
+  const spread = toThread(apiThread()).places; // Yemen, Egypt, Netherlands
+
+  it("names each place as the replay lights it, and nothing otherwise", () => {
+    expect(replayAnnouncement(spread, null)).toBe("");
+    expect(replayAnnouncement(spread, 1)).toBe("Yemen: place 1 of 3");
+    expect(replayAnnouncement(spread, 2)).toBe("Egypt: place 2 of 3");
+  });
+
+  it("says when every place is shown (all a reduced-motion replay says)", () => {
+    expect(replayAnnouncement(spread, 3)).toBe("Netherlands: place 3 of 3. Every place shown.");
   });
 });

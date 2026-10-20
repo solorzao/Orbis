@@ -100,7 +100,8 @@ function ThreadDetailPanel({
                 title={`First report ${when(p.firstSeen)} UTC`}
               >
                 <i aria-hidden="true" />
-                {p.place}
+                <span className="stop-place">{p.place}</span>
+                <span className="sr-only">, first reported {when(p.firstSeen)} UTC</span>
               </span>
             </li>
           ))}

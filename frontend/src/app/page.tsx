@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import type {
   ArticleThread,
@@ -38,6 +38,8 @@ import {
 import {
   THREAD_PAGE,
   fetchThread,
+  replayAnnouncement,
+  spreadView,
   threadsStatus,
   toThreadArticles,
   type ThreadArticle,
@@ -205,9 +207,33 @@ export default function Home() {
   );
 
   // The same window again (a preset clicked twice) keeps its dots: no refetch.
-  const changeWindow = useCallback((next: TimeWindow) => {
-    setTimeWindow((prev) => (sameWindow(prev, next) ? prev : next));
-  }, []);
+  // A range (or a day replay's) has no threads: the selected one and its arcs go.
+  const changeWindow = useCallback(
+    (next: TimeWindow) => {
+      setTimeWindow((prev) => (sameWindow(prev, next) ? prev : next));
+      if (next.kind !== "live") {
+        resetSpreadReplay();
+        setSelectedThread(null);
+      }
+    },
+    [resetSpreadReplay],
+  );
+
+  // A thread selected: the globe goes to the middle of its places, framing them
+  // (spreadView), at once with reduced motion. Once per selection: the same
+  // thread chosen again (a chip) stays where the visitor has the globe.
+  const flownRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (selectedId === null) {
+      flownRef.current = null;
+      return;
+    }
+    if (flownRef.current === selectedId || !globeThread) return;
+    const view = spreadView(globeThread.spread);
+    if (!view) return;
+    flownRef.current = selectedId;
+    globeControlsRef.current?.flyTo(view.lat, view.lng, view.altitude, reduced ? 0 : undefined);
+  }, [selectedId, globeThread, reduced]);
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     globeControlsRef.current?.flyTo(action.lat, action.lng, 2.0);
@@ -435,10 +461,17 @@ export default function Home() {
     [resetSpreadReplay],
   );
 
-  // A story's "Part of" chip: Threads on, its thread selected and its spread drawn.
+  // A story's "Part of" chip: Threads on, its thread selected and its spread
+  // drawn; below 1180px the sheet shows it in the Threads tab.
   const handleThreadChip = useCallback(
-    (thread: ArticleThread) => handleThreadSelect({ id: thread.id, title: thread.title }),
-    [handleThreadSelect],
+    (thread: ArticleThread) => {
+      handleThreadSelect({ id: thread.id, title: thread.title });
+      if (!wide) {
+        setSideTab("threads");
+        setSideOpen(true);
+      }
+    },
+    [handleThreadSelect, wide, setSideTab, setSideOpen],
   );
 
   // "All {n} stories": the thread's stories in Inspect, the detail's first page
@@ -892,6 +925,7 @@ export default function Home() {
       <p className="sr-only" aria-live="polite" data-testid="hover-announcer">
         <span>{cardPoint ? cardLabel(cardPoint) : ""}</span>
         <span>{linksNote ?? ""}</span>
+        <span>{replayAnnouncement(globeThread?.spread ?? [], spreadReplay.lit)}</span>
       </p>
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}
