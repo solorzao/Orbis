@@ -332,7 +332,13 @@ class TestResolveThreads:
 
         assert " ".join(thread_reads.merge_chain("id = ANY($1::bigint[])").split()) in flat
         assert f"WHERE c.hops < {thread_reads.MERGE_HOPS}" in flat
-        assert flat.endswith("WHERE c.next IS NULL")
+        # Every hop and the final read are probes by primary key: LATERAL with LIMIT 1
+        # can't be flattened into a join that hashes a scan of every thread.
+        assert "LATERAL ( SELECT id, merged_into FROM threads WHERE id = c.next LIMIT 1 ) t" in flat
+        assert (
+            "CROSS JOIN LATERAL ( SELECT id, title, lead_title, places, last_seen, top_entities"
+            " FROM threads WHERE id = c.id LIMIT 1 ) t WHERE c.next IS NULL"
+        ) in flat
 
     @pytest.mark.asyncio
     async def test_a_purged_thread_is_null(self, pool):

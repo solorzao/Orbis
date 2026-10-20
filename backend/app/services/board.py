@@ -138,9 +138,12 @@ ARTICLES_SQL = """
 # whose merges end in a purged thread has no row.
 THREADS_SQL = f"""
     WITH RECURSIVE {merge_chain("id = ANY($1::bigint[])")}
-    SELECT c.start AS pinned, t.id, t.title, t.lead_title, t.places, t.last_seen,
-           t.top_entities
-    FROM chain c JOIN threads t ON t.id = c.id
+    SELECT c.start AS pinned, t.*
+    FROM chain c
+    CROSS JOIN LATERAL (
+        SELECT id, title, lead_title, places, last_seen, top_entities
+        FROM threads WHERE id = c.id LIMIT 1
+    ) t
     WHERE c.next IS NULL
 """
 

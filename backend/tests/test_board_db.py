@@ -509,6 +509,17 @@ async def _production_week(conn, now: datetime) -> dict:
         now,
         *_OLD_CELL,
     )
+    # Merges, as the merge pass leaves them: threads 2-11 joined the thread 100 ids
+    # on, and thread 12 joined thread 2 (a chain of two).
+    await conn.execute(
+        """
+        UPDATE threads t SET merged_into = CASE WHEN o.n = 12 THEN o.second ELSE t.id + 100 END
+        FROM (SELECT id, row_number() OVER (ORDER BY id) AS n,
+                     min(id) OVER () + 1 AS second
+              FROM threads WHERE lead_title = 'zzplan') o
+        WHERE o.id = t.id AND o.n BETWEEN 2 AND 12
+        """
+    )
     # The heaviest name is a person the graph knows, so an entity pin resolves.
     await conn.execute(
         "INSERT INTO kg_entity_names (node_id, type, name)"
@@ -532,9 +543,11 @@ async def _production_week(conn, now: datetime) -> dict:
             str(r["article_id"])
             for r in await conn.fetch("SELECT article_id FROM thread_members LIMIT 20")
         ],
-        "threads": [
+        "threads": [  # the first 20: 11 of them merged, one through a chain of two
             r["id"]
-            for r in await conn.fetch("SELECT id FROM threads WHERE lead_title = 'zzplan' LIMIT 20")
+            for r in await conn.fetch(
+                "SELECT id FROM threads WHERE lead_title = 'zzplan' ORDER BY id LIMIT 20"
+            )
         ],
     }
 
@@ -585,10 +598,19 @@ async def test_at_production_scale_pins_are_read_by_primary_key(big):
     articles = await _custom_plan(big, board.ARTICLES_SQL, ids["articles"])
     members = await _custom_plan(big, board.MEMBERS_SQL, ids["members"])
     threads = await _custom_plan(big, board.THREADS_SQL, ids["threads"])
+    threads_generic = await _generic_plan(
+        big, board.THREADS_SQL, ["bigint[]"], [_literal(ids["threads"])]
+    )
 
     assert articles == {"seq_scans": set(), "indexes": {"articles_pkey"}}
     assert members == {"seq_scans": set(), "indexes": {"thread_members_pkey"}}
-    assert threads == {"seq_scans": set(), "indexes": {"threads_pkey"}}
+    # Through 11 merges, one a chain of two: every hop by primary key.
+    assert threads == threads_generic == {"seq_scans": set(), "indexes": {"threads_pkey"}}
+    first = ids["threads"][0]
+    resolved = {r["pinned"]: r["id"] for r in await big.fetch(board.THREADS_SQL, ids["threads"])}
+    assert resolved[first] == first
+    assert resolved[first + 1] == resolved[first + 11] == first + 101
+    assert resolved[first + 12] == first + 12
 
 
 # --- Pages read, at production's scale ----------------------------------------------

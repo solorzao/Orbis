@@ -64,12 +64,19 @@ def merge_chain(start: str) -> str:
     thread *start* selects (a condition on threads), merged_into followed by primary
     key, at most MERGE_HOPS. A start's row with ``next IS NULL`` is the thread its
     merges end in; a start with none ends in a purged thread and is unknown. The
-    detail reads one id through it, the board each pinned thread."""
+    detail reads one id through it, the board each pinned thread.
+
+    Each hop is a probe by primary key (LATERAL with LIMIT 1, which can't be
+    flattened into a join): from 20 starts, a plain join was planned as a hash
+    join over a scan of every thread."""
     return f"""chain (start, id, next, hops) AS (
         SELECT id, id, merged_into, 0 FROM threads WHERE {start}
         UNION ALL
         SELECT c.start, t.id, t.merged_into, c.hops + 1
-        FROM chain c JOIN threads t ON t.id = c.next
+        FROM chain c
+        CROSS JOIN LATERAL (
+            SELECT id, merged_into FROM threads WHERE id = c.next LIMIT 1
+        ) t
         WHERE c.hops < {MERGE_HOPS}
     )"""
 
