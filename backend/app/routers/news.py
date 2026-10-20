@@ -41,6 +41,7 @@ from app.services.database import (
     get_cell_entities,
     get_cell_spark,
     get_globe_points,
+    get_globe_points_by_topic,
     get_hourly_density,
     get_hourly_volume,
     get_topic_counts,
@@ -185,8 +186,7 @@ async def cached_globe(
     The request and its cache warmer both come here, so a warmed entry has
     the key and the bytes a request would have stored.
     """
-    # v2: points carry the hover card's lead, topic mix and tone.
-    cache_k = f"db:globe:v2:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
+    cache_k = _globe_key(hours, start_time, end_time, limit, tag)
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
         return [GlobeDataPoint(**p) for p in cached]
@@ -199,11 +199,22 @@ async def cached_globe(
         end_time=_parse_iso(end_time),
         topic=tag,
     )
-    points = [GlobeDataPoint(**r) for r in rows]
+    return await _cache_globe(cache_k, rows)
 
+
+def _globe_key(
+    hours: int, start_time: str | None, end_time: str | None, limit: int, tag: str | None
+) -> str:
+    """cached_globe's key for a request."""
+    # v2: points carry the hover card's lead, topic mix and tone.
+    return f"db:globe:v2:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
+
+
+async def _cache_globe(cache_k: str, rows: list[dict]) -> list[GlobeDataPoint]:
+    """Cache a globe's points until the next cycle ends; an empty globe only briefly."""
+    points = [GlobeDataPoint(**r) for r in rows]
     ttl = cycle_ttl(settings.db_cache_ttl) if points else _EMPTY_GLOBE_TTL
     await set_cached(cache_k, [p.model_dump(mode="json") for p in points], ttl)
-
     return points
 
 
@@ -215,6 +226,25 @@ _FIRST_VISIT_GLOBE_LIMIT = 500
 async def warm_globe() -> None:
     """Cache the globe the first visit asks for (app.warm, after each ingestion cycle)."""
     await cached_globe(_FIRST_VISIT_GLOBE_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, None)
+
+
+# The timeline's 7-day preset (frontend LiveHours).
+_WEEK_HOURS = 168
+
+
+async def warm_globe_week() -> None:
+    """Cache the 7-day globe for All and each topic pill (app.warm, after each cycle).
+
+    One query reads the week's stories once for all seven (get_globe_points_by_topic);
+    each is cached under the key, bytes and TTL its request would cache, so a topic
+    click on the 7-day window is a hit. Each was its own query, 20-73 s cold on
+    production, and a click kept the last topic's dots up meanwhile.
+    """
+    globes = await get_globe_points_by_topic(
+        timespan_hours=_WEEK_HOURS, cell_size=1.0, limit=_FIRST_VISIT_GLOBE_LIMIT
+    )
+    for tag, rows in globes.items():
+        await _cache_globe(_globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, tag), rows)
 
 
 # Grid cell size must match get_globe_points() call in get_globe_data().

@@ -31,6 +31,7 @@ __all__ = [
     "upsert_articles",
     "get_topic_counts",
     "get_globe_points",
+    "get_globe_points_by_topic",
     "globe_lead",
     "dominant_topic",
     "get_hourly_density",
@@ -408,25 +409,51 @@ async def get_globe_points(
         window_args = [cutoff]
 
     rows = await pool.fetch(*_globe_points_query(window, window_args, topic, cell_size, limit))
-    results = []
-    for row in rows:
-        mix = {tag: row[tag] for tag in GLOBE_TOPIC_TAGS if row[tag]}
-        results.append(
-            {
-                "lat": row["lat"],
-                "lng": row["lng"],
-                "weight": min(row["article_count"] * 10, 500),
-                "article_count": row["article_count"],
-                "top_headline": row["title"] or "",
-                "topic": topic or dominant_topic(mix, row["topic_tags"] or []),
-                "location_name": display_place(row["region"], row["country_code"]),
-                "country_code": row["country_code"] or "",
-                "lead": globe_lead(row),
-                "topic_mix": mix,
-                "tone": round(row["tone"] or 0.0, 3),
-            }
-        )
-    return results
+    return [_globe_point(row, topic) for row in rows]
+
+
+async def get_globe_points_by_topic(
+    *,
+    timespan_hours: int = 24,
+    cell_size: float = 2.0,
+    limit: int = 500,
+) -> dict[str | None, list[dict[str, Any]]]:
+    """get_globe_points' live window for All (``None``) and each of the six topics, at once.
+
+    Each list is what ``get_globe_points(timespan_hours=..., cell_size=...,
+    limit=..., topic=tag)`` returns, from one query that reads the window's
+    stories once (tests/test_globe_week_db.py holds them equal). A topic
+    without stories in the window has an empty list. The 7-day globe's cache
+    warmer: seven 7-day queries took 20-73 s each, cold, on production.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=timespan_hours)
+    pool = await get_pool()
+    rows = await pool.fetch(*_globe_by_topic_query(cutoff, timespan_hours, cell_size, limit))
+    globes: dict[str | None, list[dict[str, Any]]] = {None: []}
+    globes.update((tag, []) for tag in GLOBE_TOPIC_TAGS)
+    for row in rows:  # each variant's cells, busiest first
+        tag = row["tag"] or None
+        globes[tag].append(_globe_point(row, tag))
+    return globes
+
+
+def _globe_point(row: Any, topic: str | None) -> dict[str, Any]:
+    """A globe query's cell row as a point (a GlobeDataPoint); *topic* is the
+    filter's article tag, or None for every story."""
+    mix = {tag: row[tag] for tag in GLOBE_TOPIC_TAGS if row[tag]}
+    return {
+        "lat": row["lat"],
+        "lng": row["lng"],
+        "weight": min(row["article_count"] * 10, 500),
+        "article_count": row["article_count"],
+        "top_headline": row["title"] or "",
+        "topic": topic or dominant_topic(mix, row["topic_tags"] or []),
+        "location_name": display_place(row["region"], row["country_code"]),
+        "country_code": row["country_code"] or "",
+        "lead": globe_lead(row),
+        "topic_mix": mix,
+        "tone": round(row["tone"] or 0.0, 3),
+    }
 
 
 def globe_lead(row: Any) -> dict[str, Any]:
@@ -535,6 +562,118 @@ def _globe_points_query(
         ORDER BY cells.article_count DESC, cells.lat_cell, cells.lng_cell
     """
     return query, *args, cell_size, limit
+
+
+def _globe_by_topic_query(
+    cutoff: datetime, hours: int, cell_size: float, limit: int
+) -> tuple[Any, ...]:
+    """SQL and arguments for get_globe_points_by_topic, as ``pool.fetch`` takes them.
+
+    The stories since *cutoff* are read once, an hour at a time: each hour is a
+    range of idx_articles_published_at (the last hour has no end, as the live
+    window has none). With 7-day retention a 7-day window is the whole table,
+    where a single range is planned as a Seq Scan of every page; OFFSET 0 keeps
+    each hour's subquery from being flattened into a join, so it is planned on
+    its own, as an index range.
+
+    Then each story counts for All ('') and for each of the six topics it is
+    tagged with: per variant and cell, the counts, topic mix, tone and newest
+    times that _globe_points_query's ``cells`` gives with that topic's filter;
+    the same ranking (count, then the cell) and LIMIT, per variant. The lead is
+    _globe_points_query's too, picked from the stories already read: at the
+    cell's newest time with an https image (else its newest), an https story
+    first when the cell has one, then non-null images, then the lowest id. Only
+    each lead's wide columns are read again, by primary key.
+
+    A cell's tone may differ in its last bit from get_globe_points' (a float
+    sum, added in another order) before both round it to 3 places.
+    """
+    starts = [cutoff + timedelta(hours=h) for h in range(max(hours, 1))]
+    ends: list[datetime | None] = [*starts[1:], None]
+    topic_counts = ",\n".join(
+        f"                COUNT(*) FILTER (WHERE topic_tags && '{{{tag}}}') AS {tag}"
+        for tag in GLOBE_TOPIC_TAGS
+    )
+    query = f"""
+        WITH stories AS MATERIALIZED (
+            SELECT
+                id,
+                FLOOR(latitude / $3) AS lat_cell,
+                FLOOR(longitude / $3) AS lng_cell,
+                sentiment_score,
+                topic_tags,
+                published_at,
+                image_url LIKE 'https://%' AS https
+            FROM unnest($1::timestamptz[], $2::timestamptz[]) AS s(lo, hi)
+            CROSS JOIN LATERAL (
+                SELECT id, latitude, longitude, sentiment_score, topic_tags, published_at,
+                       image_url
+                FROM articles
+                WHERE published_at >= s.lo AND published_at < COALESCE(s.hi, 'infinity')
+                OFFSET 0
+            ) a
+        ),
+        variants AS (
+            SELECT v.tag, w.*
+            FROM stories w
+            CROSS JOIN LATERAL (
+                SELECT '' AS tag
+                UNION ALL
+                SELECT t FROM unnest($4::text[]) AS t WHERE w.topic_tags && ARRAY[t]
+            ) v
+        ),
+        cells AS (
+            SELECT
+                tag,
+                lat_cell,
+                lng_cell,
+                COUNT(*) AS article_count,
+                AVG(sentiment_score) AS tone,
+{topic_counts},
+                MAX(published_at) AS newest,
+                MAX(published_at) FILTER (WHERE https) AS newest_with_image,
+                ROW_NUMBER() OVER (
+                    PARTITION BY tag ORDER BY COUNT(*) DESC, lat_cell, lng_cell
+                ) AS rank
+            FROM variants
+            GROUP BY tag, lat_cell, lng_cell
+        ),
+        leads AS (
+            SELECT DISTINCT ON (c.tag, c.rank) c.*, w.id AS lead_id
+            FROM cells c
+            JOIN stories w
+              ON w.lat_cell = c.lat_cell
+             AND w.lng_cell = c.lng_cell
+             AND w.published_at = COALESCE(c.newest_with_image, c.newest)
+            WHERE c.rank <= $5
+              AND (c.newest_with_image IS NULL OR w.https)
+              AND (c.tag = '' OR w.topic_tags && ARRAY[c.tag])
+            ORDER BY c.tag, c.rank, w.https DESC NULLS LAST, w.id
+        )
+        SELECT
+            l.tag,
+            l.lat_cell * $3 + $3 / 2 AS lat,
+            l.lng_cell * $3 + $3 / 2 AS lng,
+            l.article_count,
+            l.tone,
+            {", ".join(f"l.{tag}" for tag in GLOBE_TOPIC_TAGS)},
+            lead.title,
+            lead.source_name,
+            lead.published_at,
+            lead.image_url,
+            lead.region,
+            lead.country_code,
+            lead.topic_tags
+        FROM leads l
+        CROSS JOIN LATERAL (
+            SELECT title, source_name, published_at, image_url, region, country_code, topic_tags
+            FROM articles
+            WHERE id = l.lead_id
+            LIMIT 1
+        ) lead
+        ORDER BY l.tag, l.rank
+    """
+    return query, starts, ends, cell_size, list(GLOBE_TOPIC_TAGS), limit
 
 
 async def get_hourly_density(*, timespan_hours: int = 24, offset_days: int = 0) -> dict[int, int]:

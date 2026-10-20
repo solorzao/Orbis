@@ -425,15 +425,9 @@ class TestGetGlobePoints:
         assert "FLOOR(longitude / $3) = cells.lng_cell" in lead
         # A cell with an https image takes only an https story at that time: a NULL
         # image_url's LIKE is NULL, which DESC would otherwise sort first.
-        assert (
-            "AND (cells.newest_with_image IS NULL OR image_url LIKE 'https://%')" in lead
-        )
-        assert (
-            "ORDER BY (image_url LIKE 'https://%') DESC NULLS LAST, id LIMIT 1 ) lead" in lead
-        )
-        assert query.endswith(
-            "ORDER BY cells.article_count DESC, cells.lat_cell, cells.lng_cell"
-        )
+        assert "AND (cells.newest_with_image IS NULL OR image_url LIKE 'https://%')" in lead
+        assert "ORDER BY (image_url LIKE 'https://%') DESC NULLS LAST, id LIMIT 1 ) lead" in lead
+        assert query.endswith("ORDER BY cells.article_count DESC, cells.lat_cell, cells.lng_cell")
 
     @pytest.mark.asyncio
     async def test_parameters_with_a_range_and_no_topic(self, pool):
@@ -620,6 +614,79 @@ class TestGetGlobePoints:
         assert point["tone"] == 0.0
         assert point["location_name"] == ""
         assert point["country_code"] == ""
+
+
+class TestGetGlobePointsByTopic:
+    """All's globe and each topic's, from one query (the 7-day globe's warmer)."""
+
+    @pytest.mark.asyncio
+    async def test_one_query_answers_all_and_each_topic_as_get_globe_points_would(self, pool):
+        """Its rows are the variants' cells, tagged by variant ('' is All), each in its
+        variant's order; each cell becomes a point exactly as get_globe_points makes one."""
+        every = [
+            _globe_row(lat=1.5, politics=3, conflict=2, topic_tags=["conflict", "politics"]),
+            _globe_row(lat=2.5, article_count=2, topic_tags=["sport"]),
+        ]
+        politics = [_globe_row(lat=1.5, politics=3, conflict=1, topic_tags=["sport", "politics"])]
+        conflict = [_globe_row(lat=1.5, article_count=2, politics=1, conflict=2)]
+        pool.fetch.return_value = [
+            *({**row, "tag": ""} for row in every),
+            *({**row, "tag": "conflict"} for row in conflict),
+            *({**row, "tag": "politics"} for row in politics),
+        ]
+
+        globes = await database.get_globe_points_by_topic(timespan_hours=168, cell_size=1.0)
+
+        assert pool.fetch.call_count == 1
+        assert list(globes) == [None, *TOPIC_TAGS]
+        for tag, rows in [(None, every), ("politics", politics), ("conflict", conflict)]:
+            pool.fetch.return_value = rows
+            assert globes[tag] == await database.get_globe_points(cell_size=1.0, topic=tag), tag
+        assert [p["topic"] for p in globes[None]] == ["politics", "general"]
+        assert [p["topic"] for p in globes["politics"]] == ["politics"]  # the topic's colour
+        # A topic without stories in the window is an empty globe, as its request's.
+        assert globes["technology"] == globes["health"] == []
+
+    @pytest.mark.asyncio
+    async def test_the_window_is_read_an_hour_at_a_time_and_the_last_hour_runs_on(self, pool):
+        """Each hour is a range of idx_articles_published_at; the last has no end, as the
+        live window (published_at >= now - hours) has none."""
+        before = datetime.now(timezone.utc)
+        await database.get_globe_points_by_topic(timespan_hours=168, cell_size=1.0, limit=500)
+        after = datetime.now(timezone.utc)
+
+        query, args = _fetched(pool)
+        starts, ends, cell, tags, limit = args
+        assert len(starts) == 168
+        assert before - timedelta(hours=168) <= starts[0] <= after - timedelta(hours=168)
+        assert all(b - a == timedelta(hours=1) for a, b in zip(starts, starts[1:]))
+        assert ends == [*starts[1:], None]
+        assert (cell, tags, limit) == (1.0, list(TOPIC_TAGS), 500)
+        assert "FROM unnest($1::timestamptz[], $2::timestamptz[]) AS s(lo, hi)" in query
+        assert "WHERE published_at >= s.lo AND published_at < COALESCE(s.hi, 'infinity')" in query
+        assert max(int(n) for n in re.findall(r"\$(\d+)", query)) == len(args)
+
+    @pytest.mark.asyncio
+    async def test_the_variants_count_rank_and_lead_as_get_globe_points_does(self, pool):
+        """The same per-topic counts, tone and newest times; the same ranking (ties by the
+        cell); the same lead: the newest https-imaged story, else the newest."""
+        await database.get_globe_points_by_topic(timespan_hours=168, cell_size=1.0)
+
+        query, _ = _fetched(pool)
+        for tag in TOPIC_TAGS:
+            assert f"COUNT(*) FILTER (WHERE topic_tags && '{{{tag}}}') AS {tag}" in query
+        assert "AVG(sentiment_score) AS tone" in query
+        assert "MAX(published_at) AS newest" in query
+        assert "MAX(published_at) FILTER (WHERE https) AS newest_with_image" in query
+        assert (
+            "ROW_NUMBER() OVER ( PARTITION BY tag ORDER BY COUNT(*) DESC, lat_cell, lng_cell )"
+            " AS rank" in query
+        )
+        assert "WHERE c.rank <= $5" in query
+        assert "w.published_at = COALESCE(c.newest_with_image, c.newest)" in query
+        assert "(c.newest_with_image IS NULL OR w.https)" in query
+        assert "ORDER BY c.tag, c.rank, w.https DESC NULLS LAST, w.id" in query
+        assert query.endswith("ORDER BY l.tag, l.rank")
 
 
 class TestGetHourlyVolume:
