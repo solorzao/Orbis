@@ -489,10 +489,12 @@ Branch: `claude/p4-board-api` (#97). This section records what shipped, includin
 
 ### Task 18a.1: `POST /api/board/resolve {items: [id, ...]}` (1–20)
 
-Returns `{items: [{item, snapshot}]}` in request order. A snapshot is `{title, place, lat, lng, time, url}`, with `null` for what a kind lacks; the snapshot itself is `null` for an unknown or expired item. Rate group `data`, not cached.
+Returns `{items: [{item, snapshot}]}` in request order. A snapshot is `{title, place, lat, lng, time, url, resolved_as}`, with `null` for what a kind lacks; the snapshot itself is `null` for an unknown or expired item. Rate group `data`, not cached.
 - **article** (primary key): `display_title`, its place, coordinates, `published_at`, and `url` (http(s) only, else null).
 - **link:** `"France and United States"` (label-point names), no query; no place, coordinates or time.
-- **thread** (primary key): the AI title, else `lead_title`; its first place and coordinates; `time` = `last_seen`.
+- **thread** (primary key):
+  - **Merges:** the pin answers as the thread its merges end in (#98). `merged_into` is followed through `thread_reads.merge_chain`, the detail's recursive chain, at most `MERGE_HOPS`; a chain ending in a purged thread is `null`. The snapshot shows the winner, and `resolved_as` is the winner's id (`"thread:9"`, else null) so 18b can swap the pin. `item` stays the pin's own id.
+  - **Fields:** the AI title through `thread_reads.shown_text` (one that names no story gives way to `lead_title`), else `lead_title`; its first place and coordinates; `time` = `last_seen`.
 - **entity:** the graph's stored spelling (resolved as the dossier resolves it, via `kg_entity_names`, typed). Its top 1° cell (`place`, `lat`, `lng`) comes from a sample of at most 100 of its members this week, through `idx_thread_members_entities`, so it is "much of its coverage", not "most". `time` is null. The snapshot is null when the graph doesn't know the name as that type.
 - **place:** `title` and `place` are the name of the cell's newest story; `lat`/`lng` are the cell centre (floor + 0.5, where the globe draws the dot); `time` is that story's.
   - **How it's found:** the cell's geography box (`idx_articles_location`) and the time index, the last 6 h first, then the week (MATERIALIZED, so a `LIMIT` can't become a backward walk of the time index).
@@ -501,7 +503,7 @@ Returns `{items: [{item, snapshot}]}` in request order. A snapshot is `{title, p
 
 ### Task 18a.2: `POST /api/board/links {items}` (1–20)
 
-Returns `{edges: [{a, b, kind, label}], co_coverage_checked}`. Each edge runs from the earlier pin in board order; edges sort by pins, then kind (`same_thread`, `shared_entity`, `same_place`, `co_covered`). One pair of pins can have an edge of each kind. Rate group `data`.
+Returns `{edges: [{a, b, kind, label}], co_coverage_checked}`. Each edge runs from the earlier pin in board order; edges sort by pins, then kind (`same_thread`, `shared_entity`, `same_place`, `co_covered`). One pair of pins can have an edge of each kind. A merged thread's pin connects as the thread it resolves to (its articles, top names and mention probes are the winner's), so two pins of what is now one thread get `same_thread`. Rate group `data`.
 - **`same_thread`** (`same thread`): two articles in one thread, or an article and its thread (`thread_members` by primary key).
 - **`shared_entity`** (`shared: A, B, C`, up to 3 names in the earlier pin's order), two cases:
   - **Articles and threads:** from the article's member `entities` and the thread's `top_entities`. Names thread assignment treats as generic (`threads.GENERIC_SQL`: in more than `GENERIC_ENTITY_SHARE` of active threads' top names) are left out. That set is read only when two articles or threads are pinned, cached under `db:board:generic:v1` until the cycle ends, and single-flighted.

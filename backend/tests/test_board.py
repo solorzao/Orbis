@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.services import board, threads
+from app.services import board, thread_reads, threads
 from app.services.cache import cycle_ttl
 
 NOW = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
@@ -249,6 +249,21 @@ class TestResolveArticles:
         assert pool.calls_to(board.ARTICLES_SQL) == []
 
 
+def _thread_row(pinned=7, thread_id=None, **extra):
+    """A THREADS_SQL row: the pinned id, and the thread its merges end in (itself
+    when it never merged)."""
+    return {
+        "pinned": pinned,
+        "id": thread_id or pinned,
+        "title": "Pension strikes spread across France",
+        "lead_title": "Unions walk out",
+        "places": [],
+        "last_seen": NOW - timedelta(hours=1),
+        "top_entities": [],
+        **extra,
+    }
+
+
 class TestResolveThreads:
     @pytest.mark.asyncio
     async def test_a_thread_is_its_title_first_place_and_last_story(self, pool):
@@ -256,15 +271,8 @@ class TestResolveThreads:
             {"lat": 48.9, "lng": 2.3, "region": "Paris, France", "country_code": "FR"},
             {"lat": 50.8, "lng": 4.4, "region": "Brussels, Belgium", "country_code": "BE"},
         ]
-        pool.answers[board.THREADS_SQL] = [
-            {
-                "id": 7,
-                "title": "Pension strikes spread across France",
-                "lead_title": "Unions walk out",
-                "places": json.dumps(places),  # JSONB arrives as text
-                "last_seen": NOW - timedelta(hours=1),
-            }
-        ]
+        # JSONB arrives as text.
+        pool.answers[board.THREADS_SQL] = [_thread_row(places=json.dumps(places))]
 
         [snapshot] = await board.resolve_items(_items("thread:7"), NOW)
 
@@ -280,20 +288,51 @@ class TestResolveThreads:
 
     @pytest.mark.asyncio
     async def test_without_an_ai_title_the_lead_headline_and_without_places_no_place(self, pool):
-        pool.answers[board.THREADS_SQL] = [
-            {
-                "id": 7,
-                "title": None,
-                "lead_title": "Unions walk out",
-                "places": [],
-                "last_seen": NOW,
-            }
-        ]
+        pool.answers[board.THREADS_SQL] = [_thread_row(title=None)]
 
         [snapshot] = await board.resolve_items(_items("thread:7"), NOW)
 
         assert snapshot["title"] == "Unions walk out"
         assert (snapshot["place"], snapshot["lat"], snapshot["lng"]) == (None, None, None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "title", ["No identifiable story in these headlines", "Developing news story"]
+    )
+    async def test_an_ai_title_naming_no_story_shows_the_lead_headline(self, pool, title):
+        """thread_reads.shown_text, as the threads list and search show titles."""
+        pool.answers[board.THREADS_SQL] = [_thread_row(title=title)]
+
+        [snapshot] = await board.resolve_items(_items("thread:7"), NOW)
+
+        assert snapshot["title"] == "Unions walk out"
+
+    @pytest.mark.asyncio
+    async def test_a_merged_thread_answers_as_the_thread_it_joined(self, pool):
+        places = [{"lat": 50.8, "lng": 4.4, "region": "Brussels, Belgium", "country_code": "BE"}]
+        pool.answers[board.THREADS_SQL] = [
+            _thread_row(7, 9, title="Strikes across Europe", places=places)
+        ]
+
+        [snapshot] = await board.resolve_items(_items("thread:7"), NOW)
+
+        assert snapshot == {
+            "title": "Strikes across Europe",
+            "place": "Brussels, Belgium",
+            "lat": 50.8,
+            "lng": 4.4,
+            "time": NOW - timedelta(hours=1),
+            "url": None,
+            # The winner's id, so the board can swap the pin.
+            "resolved_as": "thread:9",
+        }
+
+    def test_thread_pins_follow_their_merges_as_the_detail_does(self):
+        flat = " ".join(board.THREADS_SQL.split())
+
+        assert " ".join(thread_reads.merge_chain("id = ANY($1::bigint[])").split()) in flat
+        assert f"WHERE c.hops < {thread_reads.MERGE_HOPS}" in flat
+        assert flat.endswith("WHERE c.next IS NULL")
 
     @pytest.mark.asyncio
     async def test_a_purged_thread_is_null(self, pool):
@@ -776,16 +815,7 @@ class TestBoardEdges:
             _article_row(latitude=6.45, longitude=3.39, country_code="NG"),
             _article_row(OTHER_ID, latitude=48.85, longitude=2.35, country_code="FR"),
         ]
-        pool.answers[board.THREADS_SQL] = [
-            {
-                "id": 8,
-                "title": None,
-                "lead_title": "",
-                "places": [],
-                "last_seen": NOW,
-                "top_entities": ["Bo Chan"],
-            }
-        ]
+        pool.answers[board.THREADS_SQL] = [_thread_row(8, top_entities=["Bo Chan"])]
         pool.answers[board.MENTIONS_SQL] = [{"name": "Ann Lee", "thread_id": 8}]
         pool.answers[board.PLACE_SQL] = [_place_row()]
 
@@ -808,6 +838,30 @@ class TestBoardEdges:
         assert pool.calls_to(board.MEMBERS_SQL) == [([ARTICLE_ID, OTHER_ID],)]
         assert pool.calls_to(board.THREADS_SQL) == [([8],)]
         assert pool.calls_to(board.MENTIONS_SQL) == [(["Ann Lee"], [8])]
+
+    @pytest.mark.asyncio
+    async def test_a_merged_thread_pin_connects_as_the_thread_it_joined(self, pool, names):
+        """Its articles moved to the winner; its own row is emptied and stale."""
+        pool.answers[board.MEMBERS_SQL] = [_member_row(ARTICLE_ID, 9, ["Bo Chan"])]
+        pool.answers[board.THREADS_SQL] = [
+            _thread_row(8, 9, top_entities=["Cy Diaz"]),  # thread 8 merged into 9
+            _thread_row(9, top_entities=["Cy Diaz"]),
+        ]
+        pool.answers[board.MENTIONS_SQL] = [{"name": "Ann Lee", "thread_id": 9}]
+
+        edges = await board.board_edges(_items(A1, "thread:8", ANN, "thread:9"), None, NOW)
+
+        assert edges == [
+            _edge(A1, "thread:8", "same_thread", "same thread"),
+            _edge(A1, "thread:9", "same_thread", "same thread"),
+            _edge("thread:8", ANN, "shared_entity", "shared: Ann Lee"),
+            # Two pins of what is now one thread.
+            _edge("thread:8", "thread:9", "same_thread", "same thread"),
+            _edge("thread:8", "thread:9", "shared_entity", "shared: Cy Diaz"),
+            _edge(ANN, "thread:9", "shared_entity", "shared: Ann Lee"),
+        ]
+        # The mention probes go to the thread the pins resolve to, once.
+        assert pool.calls_to(board.MENTIONS_SQL) == [(["Ann Lee"], [9])]
 
     @pytest.mark.asyncio
     async def test_without_the_listed_pairs_places_are_not_looked_up(self, pool, names):

@@ -28,6 +28,9 @@ class BoardSnapshot(BaseModel):
     lng: float | None = None
     time: datetime | None = None  # a story's; a place's newest; a thread's last
     url: str | None = None  # an article's link: http(s) only
+    # A thread pin whose thread merged into another: the winner's id ("thread:9"),
+    # whose data the snapshot shows, so the board can swap the pin. Else null.
+    resolved_as: str | None = None
 
 
 class ResolvedItem(BaseModel):

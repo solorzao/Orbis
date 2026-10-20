@@ -212,6 +212,70 @@ async def test_a_thread_resolves_to_its_title_and_first_place(conn):
     assert fallback["title"] == "zzboard lead headline"
     assert fallback["place"] is None
     assert gone is None
+    assert "resolved_as" not in titled
+
+
+async def _merge(conn, loser: int, winner: int) -> None:
+    """As the merge pass leaves a loser: emptied, pointing at the winner, its row
+    (title, places, top names) otherwise stale."""
+    await conn.execute(
+        "UPDATE threads SET merged_into = $1, n_stories = 0, n_sources = 0 WHERE id = $2",
+        winner,
+        loser,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_a_merged_thread_pin_resolves_to_the_thread_its_merges_end_in(conn):
+    winner_places = [
+        {"lat": -46.7, "lng": -119.6, "region": "Zzboard Winner, Spain", "country_code": "ES"}
+    ]
+    winner = await _thread(conn, title="zzboard winner", places=winner_places)
+    middle = await _thread(conn, title="zzboard stale middle")
+    first = await _thread(conn, title="zzboard stale first")
+    orphan = await _thread(conn, title="zzboard orphan")
+    await _merge(conn, middle, winner)
+    await _merge(conn, first, middle)  # a chain: first -> middle -> winner
+    await _merge(conn, orphan, 2**62)  # its winner was purged
+
+    once, twice, dangling = await _resolve(
+        f"thread:{middle}", f"thread:{first}", f"thread:{orphan}"
+    )
+
+    for merged in (once, twice):
+        assert merged["title"] == "zzboard winner"
+        assert merged["place"] == "Zzboard Winner, Spain"
+        assert merged["resolved_as"] == f"thread:{winner}"
+    assert dangling is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_an_ai_title_naming_no_story_gives_way_to_the_lead_headline(conn):
+    thread = await _thread(conn, title="No identifiable story", lead="zzboard real headline")
+
+    [snapshot] = await _resolve(f"thread:{thread}")
+
+    assert snapshot["title"] == "zzboard real headline"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("pool")
+async def test_a_merged_thread_pin_is_in_the_same_thread_as_the_winners_articles(conn):
+    """The merge moved the loser's articles to the winner."""
+    winner = await _thread(conn, top_entities=["Zzboard Bo"])
+    loser = await _thread(conn, top_entities=["Zzboard Stale"])
+    await _merge(conn, loser, winner)
+    moved = await _member(conn, winner, entities=["Zzboard Bo"])
+    article, pin = f"article:{moved}", f"thread:{loser}"
+
+    edges = await board.board_edges([board.parse_item(i) for i in (article, pin)], None, _now())
+
+    assert edges == [
+        _edge(article, pin, "same_thread", "same thread"),
+        _edge(article, pin, "shared_entity", "shared: Zzboard Bo"),
+    ]
 
 
 @pytest.mark.asyncio

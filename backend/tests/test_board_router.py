@@ -78,13 +78,26 @@ class TestResolve:
         assert resp.status_code == 200
         assert resp.json() == {
             "items": [
-                {"item": ARTICLE, "snapshot": SNAPSHOT_JSON},
+                {"item": ARTICLE, "snapshot": {**SNAPSHOT_JSON, "resolved_as": None}},
                 {"item": "thread:7", "snapshot": None},
             ]
         }
         [items, now] = resolve.await_args.args
         assert [i.id for i in items] == [ARTICLE, "thread:7"]
         assert now == NOW
+
+    @pytest.mark.asyncio
+    async def test_a_merged_threads_pin_keeps_its_id_and_names_the_thread_it_joined(
+        self, monkeypatch, resolve
+    ):
+        merged = {**SNAPSHOT, "url": None, "resolved_as": "thread:9"}
+        resolve.return_value = [merged]
+
+        resp = await _post(monkeypatch, "/api/board/resolve", {"items": ["thread:7"]})
+
+        [entry] = resp.json()["items"]
+        assert entry["item"] == "thread:7"
+        assert entry["snapshot"]["resolved_as"] == "thread:9"
 
     @pytest.mark.asyncio
     async def test_twenty_items_is_the_most(self, monkeypatch, resolve):

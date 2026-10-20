@@ -40,6 +40,7 @@ from app.services.country_centroids import centroid
 from app.services.database import _cell_box, get_pool
 from app.services.entities import newest_per_story, resolve_entity, top_places
 from app.services.places import display_place
+from app.services.thread_reads import merge_chain, shown_text
 from app.services.thread_synopsis import _acceptable, _clean_reply
 from app.services.threads import GENERIC_ENTITY_SHARE, GENERIC_SQL
 from app.services.titles import display_title
@@ -131,11 +132,16 @@ ARTICLES_SQL = """
     WHERE id = ANY($1::uuid[])
 """
 
-# Thread pins by primary key.
-THREADS_SQL = """
-    SELECT id, title, lead_title, places, last_seen, top_entities
-    FROM threads
-    WHERE id = ANY($1::bigint[])
+# Thread pins by primary key, each answering as the thread its merges end in
+# (thread_reads.merge_chain, as the detail does): a merged thread's own row is
+# emptied, with a stale title and places, and its articles have moved. A pin
+# whose merges end in a purged thread has no row.
+THREADS_SQL = f"""
+    WITH RECURSIVE {merge_chain("id = ANY($1::bigint[])")}
+    SELECT c.start AS pinned, t.id, t.title, t.lead_title, t.places, t.last_seen,
+           t.top_entities
+    FROM chain c JOIN threads t ON t.id = c.id
+    WHERE c.next IS NULL
 """
 
 # A cell's newest story in a window: what the cell is called now. Every story
@@ -233,10 +239,12 @@ async def _articles(pool, items: list[BoardItem]) -> dict[str, Any]:
 
 
 async def _threads(pool, items: list[BoardItem]) -> dict[int, Any]:
+    """Each thread pin's id to the row of the thread it resolves to (itself, unless
+    it merged into another)."""
     ids = [item.key for item in items if item.kind == "thread"]
     if not ids:
         return {}
-    return {row["id"]: row for row in await pool.fetch(THREADS_SQL, ids)}
+    return {row["pinned"]: row for row in await pool.fetch(THREADS_SQL, ids)}
 
 
 async def _place(conn, cell: tuple[int, int], now: datetime) -> Any | None:
@@ -329,18 +337,21 @@ def _article_snapshot(row: Any) -> dict:
 
 
 def _thread_snapshot(row: Any) -> dict:
-    title = row["title"] or row["lead_title"] or ""
+    """The thread a pin resolves to, titled as the threads list titles it (an AI
+    title that names no story gives way to the lead headline). A pin whose thread
+    merged into another also gets ``resolved_as``, the winner's id, so the board
+    can swap it."""
+    title = shown_text(row["title"], None)[0] or row["lead_title"] or ""
     places = _json(row["places"]) or []
-    if not places:
-        return snapshot(title, time=row["last_seen"])
-    first = places[0]  # the first report's place
-    return snapshot(
-        title,
-        _place_name(first.get("region"), first.get("country_code")),
-        first["lat"],
-        first["lng"],
-        row["last_seen"],
-    )
+    if places:
+        first = places[0]  # the first report's place
+        place = _place_name(first.get("region"), first.get("country_code"))
+        shown = snapshot(title, place, first["lat"], first["lng"], row["last_seen"])
+    else:
+        shown = snapshot(title, time=row["last_seen"])
+    if row["id"] != row["pinned"]:
+        shown["resolved_as"] = f"thread:{row['id']}"
+    return shown
 
 
 def _place_snapshot(cell: tuple[int, int], row: Any) -> dict | None:
@@ -570,7 +581,8 @@ async def board_edges(
     threads = await _threads(pool, items)
     names = await _entity_names(items, now)
     places = await _places(pool, items, now) if listed is not None else {}
-    mentions = await _mentions(pool, sorted(set(names.values())), sorted(threads))
+    resolved_threads = sorted({row["id"] for row in threads.values()})
+    mentions = await _mentions(pool, sorted(set(names.values())), resolved_threads)
     topical = sum(1 for item in items if item.kind in _TOPICAL)
     generic = await generic_names(pool) if topical >= 2 else frozenset()
 
@@ -579,8 +591,8 @@ async def board_edges(
         if item.kind == "article":
             facts[item.id] = _article_facts(articles.get(item.key), members.get(item.key))
         elif item.kind == "thread" and item.key in threads:
-            top = tuple(threads[item.key]["top_entities"] or ())
-            facts[item.id] = Facts(thread=item.key, entities=top)
+            row = threads[item.key]  # the thread it resolves to
+            facts[item.id] = Facts(thread=row["id"], entities=tuple(row["top_entities"] or ()))
         elif item.kind == "place":
             place = places.get(item.key)
             countries = _countries(place["country_code"]) if place else frozenset()
