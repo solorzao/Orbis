@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hmac
+import html
 import logging
 import re
 import time
+import unicodedata
 from collections import defaultdict
 from typing import Callable
 
@@ -171,11 +173,15 @@ def has_injection_pattern(text: str) -> bool:
     """Return True if *text* contains a likely prompt-injection phrase.
 
     Invisible characters can't hide one: the phrase is looked for with them
-    removed ("Ig<tag>nore") and read as spaces ("Ignore<tag>previous").
+    removed ("Ig<tag>nore") and read as spaces ("Ignore<tag>previous"). Nor can
+    lookalikes or entities: it is also looked for in an NFKC-normalised,
+    HTML-unescaped copy ("ｉｇｎｏｒｅ", "&#105;gnore"). *text* itself is unchanged.
     """
+    shown = unicodedata.normalize("NFKC", html.unescape(text))
     return any(
         _INJECTION_PATTERNS.search(variant)
-        for variant in (text, _INVISIBLE.sub("", text), _INVISIBLE.sub(" ", text))
+        for form in ((text,) if shown == text else (text, shown))
+        for variant in (form, _INVISIBLE.sub("", form), _INVISIBLE.sub(" ", form))
     )
 
 

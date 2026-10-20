@@ -19,10 +19,12 @@ geography box for a place, the entity index for names.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
@@ -622,9 +624,12 @@ def _when(time: datetime) -> str:
 
 
 def _clean(text: str | None, max_length: int) -> str:
-    """Pin text as one clean line: no control or invisible characters, single-spaced."""
+    """Pin text as one clean line: entities unescaped and compatibility forms folded
+    (NFKC, as display_title does for headlines: "ｉｇｎｏｒｅ" is "ignore", "＜/pins＞" is
+    "</pins>"), then no control or invisible characters, single-spaced."""
     if not text:
         return ""
+    text = unicodedata.normalize("NFKC", html.unescape(text))
     return " ".join(strip_invisible(sanitise_text(text, max_length=max_length)).split())
 
 
