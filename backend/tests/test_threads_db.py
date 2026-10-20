@@ -18,11 +18,14 @@ import random
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
 from app.services import threads
+
+MIGRATIONS = Path(__file__).resolve().parents[2] / "database" / "migrations"
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -36,6 +39,12 @@ HOUR = timedelta(hours=1)
 # runs it: 0.6 s on a CI runner. Before the fix, the planner's seq scan, parsing
 # each query vector once per pair, took 79 s there (and 4 minutes on production).
 SCORE_SECONDS = 5.0
+
+
+@pytest.fixture(autouse=True)
+def caught_up(monkeypatch):
+    """No catch-up merge pass unless a test asks for one (threads._caught_up)."""
+    monkeypatch.setattr(threads, "_caught_up", True)
 
 
 @pytest_asyncio.fixture
@@ -668,3 +677,195 @@ async def test_articles_left_by_a_time_budget_cut_are_assigned_next_cycle(conn, 
 
     assert await _thread_of(conn, left) is not None
     assert stats.assigned == 4
+
+
+# --- merges ----------------------------------------------------------------------------
+
+
+async def _story_thread(
+    conn, weights, n_stories, *, entities=(), first_story=0, last_seen=NOW - HOUR
+) -> int:
+    """A thread of *n_stories* stories along *weights*, from 3 outlets, left for the
+    aggregate step to count (aggregated_at NULL), with its centroid row."""
+    unit = _vector(weights, 512)
+    thread_id = await conn.fetchval(
+        "INSERT INTO threads (centroid_sum, first_seen, last_seen)"
+        " VALUES ($1::vector, $2, $2) RETURNING id",
+        _vector({dim: value * n_stories for dim, value in weights.items()}, 512),
+        last_seen,
+    )
+    for i in range(n_stories):
+        await conn.execute(
+            "INSERT INTO thread_members (article_id, thread_id, story_key, source_name,"
+            " published_at, latitude, longitude, entities, similarity)"
+            " VALUES ($1, $2, $3, $4, $5, 10.5, 20.5, $6, 0.9)",
+            uuid.uuid4(),
+            thread_id,
+            9500 + first_story + i,
+            f"zz-{i % 3}.test",
+            last_seen - i * timedelta(minutes=5),
+            list(entities),
+        )
+    await conn.execute(
+        "INSERT INTO thread_centroids (thread_id, last_seen, centroid)"
+        " VALUES ($1, $2, $3::halfvec(512))",
+        thread_id,
+        last_seen,
+        unit,
+    )
+    return thread_id
+
+
+async def _filler_threads(conn, n: int) -> None:
+    """*n* active threads with random centroids and no names: a name in two threads
+    is then specific (generic means in more than 1% of active threads)."""
+    await conn.execute(
+        """
+        WITH t AS (
+            INSERT INTO threads (centroid_sum, first_seen, last_seen, aggregated_at)
+            SELECT l2_normalize(
+                       ARRAY(SELECT random() - 0.5 FROM generate_series(1, 512) WHERE g > 0)::vector
+                   ), $1, $1, $1
+            FROM generate_series(1, $2::int) AS g
+            RETURNING id, centroid_sum, last_seen
+        )
+        INSERT INTO thread_centroids (thread_id, last_seen, centroid)
+        SELECT id, last_seen, centroid_sum::halfvec(512) FROM t
+        """,
+        NOW - 2 * HOUR,
+        n,
+    )
+
+
+async def _catch_up(conn, monkeypatch):
+    monkeypatch.setattr(threads, "_caught_up", False)
+    return await _assign(conn)
+
+
+@pytest.mark.asyncio
+async def test_two_threads_of_one_story_merge_into_the_larger(conn, monkeypatch):
+    big = await _story_thread(conn, {0: 1.0}, 5)
+    small = await _story_thread(conn, _direction(0.88), 3, first_story=10)
+    other = await _story_thread(conn, {9: 1.0}, 4, first_story=20)
+    big_sum = threads.parse_vector((await _thread(conn, big))["centroid_sum"])
+    small_sum = threads.parse_vector((await _thread(conn, small))["centroid_sum"])
+
+    stats = await _catch_up(conn, monkeypatch)
+
+    assert stats.merged == 1
+    winner, loser = await _thread(conn, big), await _thread(conn, small)
+    members = await conn.fetchval("SELECT count(*) FROM thread_members WHERE thread_id = $1", small)
+    assert members == 0  # every member now belongs to the winner
+    assert (winner["n_stories"], winner["n_sources"]) == (8, 3)
+    assert (loser["merged_into"], loser["n_stories"], loser["velocity"]) == (big, 0, 0)
+    assert await _centroid(conn, small) is None  # out of the index
+    combined = [a + b for a, b in zip(big_sum, small_sum)]
+    assert threads.parse_vector(winner["centroid_sum"]) == pytest.approx(combined, abs=0.01)
+    assert await _cos(conn, big, {0: 1.0}) > 0.95  # the winner's row was rewritten
+    assert (await _thread(conn, other))["merged_into"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_pair_below_merge_sim_needs_a_specific_shared_name(conn, monkeypatch):
+    await _filler_threads(conn, 300)
+    sharing = await _story_thread(conn, {0: 1.0}, 4, entities=("Zz Tiger Specific",))
+    joins = await _story_thread(
+        conn, _direction(0.82), 3, entities=("Zz Tiger Specific",), first_story=10
+    )
+    alone = await _story_thread(conn, {4: 1.0}, 4, first_story=20)
+    apart = await _story_thread(conn, _direction(0.82, other=5), 3, first_story=30)
+
+    await _catch_up(conn, monkeypatch)
+
+    assert (await _thread(conn, joins))["merged_into"] == sharing
+    assert (await _thread(conn, apart))["merged_into"] is None
+    assert (await _thread(conn, alone))["merged_into"] is None
+
+
+@pytest.mark.asyncio
+async def test_merges_chain_and_earlier_ids_follow_the_winner(conn, monkeypatch):
+    """A thread merged earlier into the loser now points at the winner too."""
+    big = await _story_thread(conn, {0: 1.0}, 6)
+    small = await _story_thread(conn, _direction(0.9), 3, first_story=10)
+    earlier = await _bare_thread(conn, NOW - 2 * HOUR)
+    await conn.execute("UPDATE threads SET merged_into = $1 WHERE id = $2", small, earlier)
+
+    await _catch_up(conn, monkeypatch)
+
+    assert (await _thread(conn, earlier))["merged_into"] == big
+
+
+@pytest.mark.asyncio
+async def test_a_story_joining_a_thread_merges_its_duplicate(conn):
+    """Without the catch-up: the threads a cycle touches look for their neighbour."""
+    big = await _story_thread(conn, {0: 1.0}, 5)
+    await _assign(conn)  # aggregates it
+    dup = await _story_thread(conn, _direction(0.9), 3, first_story=10)
+    await conn.execute("UPDATE threads SET aggregated_at = $1 WHERE id = $2", NOW, dup)
+    story = await _article(conn, _direction(0.95, other=1), NOW - HOUR / 2)
+
+    stats = await _assign(conn, [story])
+
+    assert stats.merged == 1
+    assert (await _thread(conn, dup))["merged_into"] == big
+
+
+@pytest.mark.asyncio
+async def test_neighbours_at_production_scale_take_the_hnsw_index_and_seconds(conn):
+    """1000 touched threads among 3000 active, under SCORE_SETTINGS only."""
+    await conn.execute(
+        """
+        WITH t AS (
+            INSERT INTO threads (centroid_sum, first_seen, last_seen)
+            SELECT l2_normalize(
+                       ARRAY(SELECT random() - 0.5 FROM generate_series(1, 512) WHERE g > 0)::vector
+                   ), $1, $1
+            FROM generate_series(1, 3000) AS g
+            RETURNING id, centroid_sum, last_seen
+        )
+        INSERT INTO thread_centroids (thread_id, last_seen, centroid)
+        SELECT id, last_seen, centroid_sum::halfvec(512) FROM t
+        """,
+        NOW - HOUR,
+    )
+    await conn.execute("ANALYZE thread_centroids")
+    rows = await conn.fetch("SELECT thread_id FROM thread_centroids LIMIT 1000")
+    ids = [r["thread_id"] for r in rows]
+
+    async with conn.transaction():
+        for setting in threads.SCORE_SETTINGS:
+            await conn.execute(setting)
+        plan = await _plan(conn, threads.NEIGHBOURS_SQL, ids, threads.MERGE_NEIGHBOURS)
+        began = time.perf_counter()
+        rows = await conn.fetch(threads.NEIGHBOURS_SQL, ids, threads.MERGE_NEIGHBOURS)
+        took = time.perf_counter() - began
+
+    assert "idx_thread_centroids_hnsw" in plan
+    assert "Seq Scan on thread_centroids" not in plan
+    assert len(rows) == len(ids) * threads.MERGE_NEIGHBOURS
+    assert all(r["id"] != r["other"] for r in rows)
+    assert took < SCORE_SECONDS, f"neighbours took {took:.1f} s"
+
+
+# --- digests ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_news_digests_are_never_threaded(conn):
+    digest = await _article(conn, title="AP News Summary at 6:14 a.m. EDT")
+    brief = await _article(
+        conn, published_at=NOW - 2 * HOUR, title="AP News in Brief at 12:04 a.m. EDT"
+    )
+    story = await _article(conn, published_at=NOW - 3 * HOUR)
+
+    stats = await _assign(conn, [digest])  # one this cycle's, one from the backlog
+
+    assert await _thread_of(conn, digest) is None
+    assert await _thread_of(conn, brief) is None
+    assert await _thread_of(conn, story) is not None
+    assert stats.assigned == 1
+
+
+def test_migration_019_removes_digest_threads_by_the_same_pattern():
+    sql = (MIGRATIONS / "019_thread_merges.sql").read_text(encoding="utf-8")
+    assert f"lead_title ~* '{threads.DIGEST_PATTERN}'" in sql

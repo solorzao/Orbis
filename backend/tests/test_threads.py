@@ -29,6 +29,12 @@ from app.services.threads import (
 T0 = datetime(2001, 1, 10, 12, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def caught_up(monkeypatch):
+    """No catch-up merge pass (test_thread_merges.py tests it)."""
+    monkeypatch.setattr(threads, "_caught_up", True)
+
+
 class FakeTransaction:
     def __init__(self, conn):
         self.conn = conn
@@ -631,7 +637,7 @@ async def test_logs_one_summary_line(caplog):
     # Each phase's time, so a slow one shows in the log.
     assert re.search(
         r" s \(load [\d.]+, score [\d.]+, place [\d.]+, finish [\d.]+ s\);"
-        r" 1 aggregated, 3 active\.$",
+        r" 1 aggregated, 0 merged, 3 active\.$",
         summary,
     ), summary
 

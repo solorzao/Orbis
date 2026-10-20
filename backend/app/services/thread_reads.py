@@ -51,8 +51,13 @@ _LEAD = """
     FROM {threads} t LEFT JOIN articles a ON a.id = t.lead_article_id
 """
 
+# A thread merged into another answers as that one: share links and the UI hold
+# thread ids (merges keep merged_into pointing at the final winner).
 DETAIL_SQL = f"""
-    WITH one AS (SELECT {_THREAD_COLUMNS} FROM threads WHERE id = $1)
+    WITH one AS (
+        SELECT {_THREAD_COLUMNS} FROM threads
+        WHERE id = (SELECT COALESCE(merged_into, id) FROM threads WHERE id = $1)
+    )
     {_LEAD.format(threads="one")}
 """
 
@@ -178,7 +183,8 @@ async def list_threads(now: datetime, hours: int, topic: str | None, limit: int)
 
 
 async def thread_detail(thread_id: int, offset: int, now: datetime) -> dict | None:
-    """One thread (a ThreadDetail), or None for an unknown id.
+    """One thread (a ThreadDetail), or None for an unknown id. A merged thread's id
+    answers as the thread it joined, with that thread's id.
 
     The thread's row first, so an unknown id costs one query; then its three
     parts at once, each on its own pool connection.
@@ -187,10 +193,11 @@ async def thread_detail(thread_id: int, offset: int, now: datetime) -> dict | No
     row = await pool.fetchrow(DETAIL_SQL, thread_id)
     if row is None:
         return None
+    resolved = row["id"]
     entities, timeline, articles = await asyncio.gather(
-        pool.fetch(ENTITIES_SQL, thread_id),
-        pool.fetch(TIMELINE_SQL, thread_id),
-        pool.fetch(ARTICLES_SQL, thread_id, DETAIL_ARTICLES, offset),
+        pool.fetch(ENTITIES_SQL, resolved),
+        pool.fetch(TIMELINE_SQL, resolved),
+        pool.fetch(ARTICLES_SQL, resolved, DETAIL_ARTICLES, offset),
     )
     return {
         **thread_item(row, now),

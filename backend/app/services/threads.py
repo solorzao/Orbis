@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.services.thread_reads import LISTED_SQL
 from app.services.titles import display_title
 
 logger = logging.getLogger("orbis.threads")
@@ -58,8 +59,30 @@ logger = logging.getLogger("orbis.threads")
 PREFIX_DIMS = 512  # text-embedding-3-small's Matryoshka prefix
 ACTIVE_HOURS = 72  # a thread with 2+ stories stays joinable this long after its last story
 SINGLETON_HOURS = 24  # a one-story thread stays joinable this long
+# Joining and merging, calibrated on production (2026-10-20). For each of the 444
+# listed active threads (of 10,021 active), its nearest other active centroid:
+#
+#   similarity   >= 0.90  0.85-0.90  0.80-0.85  0.75-0.80  0.70-0.75  0.65-0.70  < 0.65
+#   threads            0         24         54         50         47         58     211
+#
+# 0.85-0.90 were all one story split in two (the Alberta referendum, the Houthi
+# strike on a Yemen camp, Brent near a 5-month high, Storm Austen, ...); 0.80-0.85
+# mostly one story (Paris curfews, Dussehra greetings, the Google Cloud outage,
+# ...); 0.75-0.80 wasn't inspected, so nothing merges there.
+#
+# Centroids of one story sit closer than its articles do. With headlines alike at
+# rho, an article's cosine to a k-story centroid is k*rho / sqrt(k*(1 + (k-1)*rho)):
+# at rho = 0.7, 0.70 for k = 1 and 0.78 for k = 3, under JOIN_SIM; but two such
+# 3-story centroids are 0.88 apart. So a story's early articles can start a
+# duplicate thread that only a centroid-level merge (MERGE_SIM) catches. JOIN_SIM
+# stays: lowering it would join different stories as well as these.
 JOIN_SIM = 0.80  # join on similarity alone
 JOIN_SIM_WITH_ENTITY = 0.62  # join when sharing a specific person or org with the thread
+MERGE_SIM = 0.85  # merge two active threads on centroid similarity alone
+MERGE_SIM_WITH_ENTITY = 0.80  # ... or with a specific person or org in both top entities
+MERGE_NEIGHBOURS = 3  # nearest active threads checked per candidate
+MAX_MERGES = 200  # a cycle's merges at most
+CATCH_UP_LIMIT = 2000  # a process's first merge pass checks this many listed threads
 GENERIC_ENTITY_SHARE = 0.01  # in more than this share of active threads: generic, not shared
 MIN_TITLE_WORDS = 4  # shorter titles neither join nor seed a thread
 DECAY = 0.97  # each join multiplies centroid_sum by this before adding
@@ -85,6 +108,19 @@ HNSW_EF_SEARCH = 100  # so dead index entries can't crowd live candidates out
 # The same raw word count as Python's title_words: btrim drops spaces, \s+ splits.
 _TITLE_WORDS_SQL = r"array_length(regexp_split_to_array(btrim(a.title), '\s+'), 1)"
 
+# News digests: one page summarising many stories under a clock-stamped title
+# ("AP News Summary at 6:14 a.m. EDT", "AP News in Brief at 12:04 a.m. EDT"). They
+# embed alike, so they formed thread 129, "Developing news story with no
+# identifiable details" (15 stories, 16 outlets). They neither join nor seed a
+# thread. One pattern for Python (re, case-insensitive) and Postgres (~*): plain
+# ERE, no \b (a backspace there), no quotes.
+DIGEST_PATTERN = (
+    r"^\s*(ap news (summary|in brief)|news (summary|in brief|digest|roundup)"
+    r"|today in history|(morning|evening|daily|weekly) (briefing|digest|roundup)"
+    r"|top (stories|headlines))([^a-z]|$)"
+)
+_DIGEST = re.compile(DIGEST_PATTERN, re.IGNORECASE)
+
 # Not this cycle's own ids (they come anyway), and the oldest first: what a time
 # budget or a big embedding cycle left over goes before it ages out of the window.
 BACKLOG_SQL = f"""
@@ -94,6 +130,7 @@ BACKLOG_SQL = f"""
       AND NOT (a.id = ANY($4::uuid[]))
       AND NOT EXISTS (SELECT 1 FROM thread_members m WHERE m.article_id = a.id)
       AND {_TITLE_WORDS_SQL} >= $2
+      AND a.title !~* '{DIGEST_PATTERN}'
     ORDER BY a.published_at
     LIMIT $3
 """
@@ -330,6 +367,58 @@ AGGREGATE_SQL = f"""
     RETURNING t.id
 """
 
+# The merge pass: each candidate's nearest other active threads, on the HNSW
+# index (under SCORE_SETTINGS: centroids are halfvecs already, nothing to parse).
+NEIGHBOURS_SQL = """
+    SELECT t.thread_id AS id, n.thread_id AS other, n.sim
+    FROM thread_centroids t
+    CROSS JOIN LATERAL (
+        SELECT c.thread_id, -(c.centroid <#> t.centroid) AS sim
+        FROM thread_centroids c
+        WHERE c.thread_id <> t.thread_id
+        ORDER BY c.centroid <#> t.centroid
+        LIMIT $2
+    ) n
+    WHERE t.thread_id = ANY($1::bigint[])
+"""
+
+MERGE_INFO_SQL = "SELECT id, n_stories, top_entities FROM threads WHERE id = ANY($1::bigint[])"
+
+# A process's first pass also checks every listed active thread (idx_threads_listed),
+# so duplicates from before merges existed are caught once.
+CATCH_UP_SQL = f"""
+    SELECT t.id
+    FROM threads t
+    WHERE t.last_seen >= $1 AND {LISTED_SQL}
+      AND EXISTS (SELECT 1 FROM thread_centroids c WHERE c.thread_id = t.id)
+    ORDER BY t.last_seen DESC
+    LIMIT $2
+"""
+
+# One merge, loser ($2) into winner ($1), in one transaction: the members move;
+# the winner's sum adds the loser's (each a decayed sum of its stories' vectors)
+# and it is aggregated again; the loser keeps its row, emptied and pointing at the
+# winner (so its id still resolves), as do threads merged into it before; its
+# centroid row goes, and the winner's is rewritten once.
+MERGE_MEMBERS_SQL = "UPDATE thread_members SET thread_id = $1 WHERE thread_id = $2"
+MERGE_WINNER_SQL = """
+    UPDATE threads w
+    SET centroid_sum = w.centroid_sum + l.centroid_sum,
+        first_seen = LEAST(w.first_seen, l.first_seen),
+        last_seen = GREATEST(w.last_seen, l.last_seen),
+        aggregated_at = NULL
+    FROM threads l
+    WHERE w.id = $1 AND l.id = $2
+"""
+MERGE_LOSER_SQL = """
+    UPDATE threads
+    SET merged_into = $1, n_articles = 0, n_stories = 0, n_sources = 0, velocity = 0,
+        aggregated_at = $3
+    WHERE id = $2
+"""
+REPOINT_SQL = "UPDATE threads SET merged_into = $1 WHERE merged_into = $2"
+DROP_CENTROID_SQL = "DELETE FROM thread_centroids WHERE thread_id = $1"
+
 # The lead's title, from its article by primary key: one read per touched thread.
 LEAD_TITLES_SQL = """
     SELECT t.id, a.title
@@ -378,6 +467,16 @@ PURGE_THREADS_SQL = """
 """
 
 _WORDS = re.compile(r"\s+")
+
+
+def is_digest(title: str | None) -> bool:
+    """Whether *title* is a news digest's (DIGEST_PATTERN), not one story's."""
+    return bool(_DIGEST.match(title or ""))
+
+
+def threadable(title: str | None) -> bool:
+    """Whether an article may join or seed a thread: the backlog's SQL rule."""
+    return title_words(title) >= MIN_TITLE_WORDS and not is_digest(title)
 
 
 def title_words(title: str | None) -> int:
@@ -494,6 +593,7 @@ class ThreadStats:
     failed: int = 0
     deferred: int = 0  # left to the backlog: past MAX_BATCH, or by the time budget
     aggregated: int = 0  # threads the aggregate step recomputed
+    merged: int = 0  # threads merged into another
     active: int = 0
     seconds: float = 0.0
     # Each phase's seconds: the backlog and the load; generic entities, scoring,
@@ -536,6 +636,56 @@ class _Cycle:
     changed: set[int] = field(default_factory=set)  # centroids rewritten this cycle
 
 
+@dataclass
+class ThreadInfo:
+    """What deciding a merge needs of a thread."""
+
+    n_stories: int
+    entities: set[str]
+
+
+def plan_merges(
+    pairs: list[tuple[int, int, float]], infos: dict[int, ThreadInfo], generic: set[str]
+) -> list[tuple[int, int]]:
+    """The merges to make, in order, as (loser, winner): at most MAX_MERGES.
+
+    A pair (a, b, similarity) of active threads merges at MERGE_SIM, or at
+    MERGE_SIM_WITH_ENTITY when both have a specific (not generic) person or org in
+    their top entities. Most similar first; a merged group is one thread from then
+    on, with the stories of all its members. The smaller merges into the larger
+    (by stories, the older on a tie).
+    """
+    parent: dict[int, int] = {}
+    size = {thread_id: info.n_stories for thread_id, info in infos.items()}
+
+    def root(thread_id: int) -> int:
+        while parent.get(thread_id, thread_id) != thread_id:
+            thread_id = parent[thread_id]
+        return thread_id
+
+    def qualifies(a: int, b: int, sim: float) -> bool:
+        if sim >= MERGE_SIM:
+            return True
+        if sim < MERGE_SIM_WITH_ENTITY or a not in infos or b not in infos:
+            return False
+        return bool((infos[a].entities - generic) & (infos[b].entities - generic))
+
+    merges: list[tuple[int, int]] = []
+    for a, b, sim in sorted(pairs, key=lambda p: (-p[2], p[0], p[1])):
+        if len(merges) >= MAX_MERGES:
+            break
+        if a not in infos or b not in infos or not qualifies(a, b, sim):
+            continue
+        ra, rb = root(a), root(b)
+        if ra == rb:
+            continue
+        winner, loser = sorted((ra, rb), key=lambda t: (-size.get(t, 0), t))
+        parent[loser] = winner
+        size[winner] = size.get(winner, 0) + size.get(loser, 0)
+        merges.append((loser, winner))
+    return merges
+
+
 class _AlreadyAssigned(Exception):
     """The article became a member meanwhile: roll the new thread back."""
 
@@ -575,9 +725,7 @@ async def assign_threads(
             rows = await conn.fetch(LOAD_SQL, ids, MAX_BATCH)
             if len(rows) == MAX_BATCH:  # the newest past the batch wait for the backlog
                 stats.deferred += len(ids) - MAX_BATCH
-            articles = [
-                _Article.from_row(r) for r in rows if title_words(r["title"]) >= MIN_TITLE_WORDS
-            ]
+            articles = [_Article.from_row(r) for r in rows if threadable(r["title"])]
         stats.load_seconds = time.monotonic() - began
         if articles:
             await _assign(conn, articles, stats)
@@ -585,7 +733,8 @@ async def assign_threads(
     stats.seconds = time.monotonic() - began
     logger.info(
         "Threads: %d assigned (%d joined, %d started, %d copies) in %.1f s"
-        " (load %.1f, score %.1f, place %.1f, finish %.1f s); %d aggregated, %d active.",
+        " (load %.1f, score %.1f, place %.1f, finish %.1f s);"
+        " %d aggregated, %d merged, %d active.",
         stats.assigned,
         stats.joined,
         stats.started,
@@ -596,6 +745,7 @@ async def assign_threads(
         stats.place_seconds,
         stats.finish_seconds,
         stats.aggregated,
+        stats.merged,
         stats.active,
     )
     if stats.deferred or stats.failed:
@@ -736,17 +886,87 @@ async def _start(conn: Any, article: _Article) -> int | None:
     return thread_id
 
 
-async def _finish(conn: Any, stats: ThreadStats, now: datetime) -> None:
-    """Aggregates, lead titles, velocity and deactivation: every cycle, articles or not."""
-    began = time.monotonic()
-    active_since = now - timedelta(hours=ACTIVE_HOURS)
-    updated = [r["id"] for r in await conn.fetch(AGGREGATE_SQL, sorted(stats.touched), now)]
-    stats.aggregated = len(updated)
+# The order merge steps run in, one transaction per merge.
+MERGE_STEPS = (
+    MERGE_MEMBERS_SQL,
+    MERGE_WINNER_SQL,
+    MERGE_LOSER_SQL,
+    REPOINT_SQL,
+    DROP_CENTROID_SQL,
+    JOIN_CENTROID_SQL,
+)
+
+# Whether this process has made its first merge pass, the catch-up.
+_caught_up = False
+
+
+async def _aggregate(conn: Any, thread_ids: list[int], now: datetime) -> list[int]:
+    """Recompute *thread_ids*' aggregates (and any left unaggregated), and their lead
+    titles; the ids recomputed."""
+    updated = [r["id"] for r in await conn.fetch(AGGREGATE_SQL, thread_ids, now)]
     if updated:
         rows = await conn.fetch(LEAD_TITLES_SQL, updated)
         titles = [(r["id"], display_title(r["title"] or "")) for r in rows]
         if titles:
             await conn.executemany(LEAD_TITLE_SQL, titles)
+    return updated
+
+
+async def _merge_pass(conn: Any, stats: ThreadStats, now: datetime) -> set[int]:
+    """Merge the threads this cycle touched (all listed active ones on a process's
+    first pass) into their nearest active neighbour where plan_merges says so;
+    the winners, to aggregate again."""
+    global _caught_up
+    candidates = set(stats.touched)
+    if not _caught_up:
+        rows = await conn.fetch(CATCH_UP_SQL, now - timedelta(hours=ACTIVE_HOURS), CATCH_UP_LIMIT)
+        candidates |= {r["id"] for r in rows}
+        _caught_up = True
+    if not candidates:
+        return set()
+    async with conn.transaction():
+        for setting in SCORE_SETTINGS:
+            await conn.execute(setting)
+        rows = await conn.fetch(NEIGHBOURS_SQL, sorted(candidates), MERGE_NEIGHBOURS)
+    pairs = [(r["id"], r["other"], r["sim"]) for r in rows if r["sim"] >= MERGE_SIM_WITH_ENTITY]
+    if not pairs:
+        return set()
+    ids = sorted({a for a, _, _ in pairs} | {b for _, b, _ in pairs})
+    infos = {
+        r["id"]: ThreadInfo(r["n_stories"], set(r["top_entities"] or ()))
+        for r in await conn.fetch(MERGE_INFO_SQL, ids)
+    }
+    generic = {r["e"] for r in await conn.fetch(GENERIC_SQL, GENERIC_ENTITY_SHARE)}
+    winners: set[int] = set()
+    for loser, winner in plan_merges(pairs, infos, generic):
+        try:
+            async with conn.transaction():
+                await conn.execute(MERGE_MEMBERS_SQL, winner, loser)
+                await conn.execute(MERGE_WINNER_SQL, winner, loser)
+                await conn.execute(MERGE_LOSER_SQL, winner, loser, now)
+                await conn.execute(REPOINT_SQL, winner, loser)
+                await conn.execute(DROP_CENTROID_SQL, loser)
+                await conn.execute(JOIN_CENTROID_SQL, winner)
+        except Exception:
+            logger.warning("Merging thread %s into %s failed.", loser, winner, exc_info=True)
+            continue
+        stats.merged += 1
+        winners.add(winner)
+    return winners
+
+
+async def _finish(conn: Any, stats: ThreadStats, now: datetime) -> None:
+    """Aggregates, merges, lead titles, velocity and deactivation: every cycle,
+    articles or not."""
+    began = time.monotonic()
+    active_since = now - timedelta(hours=ACTIVE_HOURS)
+    # Merges decide on fresh counts and entities, then the winners are aggregated
+    # again with their new members.
+    updated = set(await _aggregate(conn, sorted(stats.touched), now))
+    winners = await _merge_pass(conn, stats, now)
+    if winners:
+        updated |= set(await _aggregate(conn, sorted(winners), now))
+    stats.aggregated = len(updated)
     await conn.execute(VELOCITY_SQL, now - timedelta(hours=VELOCITY_HOURS), active_since)
     await conn.execute(DEACTIVATE_SQL, active_since, now - timedelta(hours=SINGLETON_HOURS))
     stats.active = await conn.fetchval(ACTIVE_SQL)

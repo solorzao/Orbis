@@ -26,7 +26,7 @@ THREAD_COLUMNS = {
     "id", "centroid_sum", "first_seen", "last_seen", "n_articles", "n_stories",
     "n_sources", "velocity", "countries", "places", "top_entities", "topic",
     "lead_article_id", "lead_title", "title", "synopsis", "summarized_at",
-    "summarized_n", "aggregated_at", "created_at",
+    "summarized_n", "aggregated_at", "created_at", "merged_into",
 }  # fmt: skip
 CENTROID_COLUMNS = {"thread_id", "last_seen", "n_stories", "centroid"}
 MEMBER_COLUMNS = {

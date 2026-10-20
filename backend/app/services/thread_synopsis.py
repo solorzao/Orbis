@@ -74,13 +74,19 @@ SYSTEM_PROMPT = (
     "coverage or this request, and don't explain your choices. Don't speculate about "
     "causes, motives or blame, and never describe people, groups or events as "
     '"linked to" one another. Where the headlines disagree, keep to what they share.\n\n'
+    "If the headlines don't share one identifiable story (news digests or roundups, or "
+    "headlines that say nothing specific), don't describe them: answer with null for "
+    'both, {"title": null, "synopsis": null}.\n\n'
     'Reply with only this JSON object: {"title": "the title", "synopsis": "the synopsis"}'
 )
 
 # Structured outputs: the reply is this object (validated again here).
 SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {"title": {"type": "string"}, "synopsis": {"type": "string"}},
+    "properties": {
+        "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "synopsis": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    },
     "required": ["title", "synopsis"],
     "additionalProperties": False,
 }
@@ -141,13 +147,30 @@ def _clean_reply(text: str) -> str:
     return " ".join(_CONTROL.sub(" ", strip_invisible(text)).split())
 
 
+# The answer when the headlines share no identifiable story: written as nulls,
+# so the thread keeps its lead headline until it regrows.
+NOT_IDENTIFIABLE: tuple[None, None] = (None, None)
+
+# A reply that names no story though it was asked to answer null then (thread
+# 129: "Developing news story with no identifiable details", "The material
+# provided does not state what has happened ..."): taken as that null answer.
+_NO_STORY = re.compile(
+    r"no (identifiable|specific|clear) (story|stories|details|event|news)"
+    r"|(developing|unspecified|unidentified|generic) news (story|stories|event)"
+    r"|news (summary|roundup|digest|in brief)"
+    r"|(material|headlines?|information) (provided|given|supplied)",
+    re.IGNORECASE,
+)
+
+
 def _acceptable(text: str) -> bool:
     return not has_injection_pattern(text) and "linked to" not in text.lower()
 
 
-def parse_synopsis(reply: str) -> tuple[str, str] | None:
-    """The reply's (title, synopsis), cleaned, or None when it isn't exactly the
-    expected JSON object or fails validation."""
+def parse_synopsis(reply: str) -> tuple[str, str] | tuple[None, None] | None:
+    """The reply's (title, synopsis), cleaned; NOT_IDENTIFIABLE when it says the
+    headlines share no story; or None when it isn't exactly the expected JSON
+    object or fails validation."""
     try:
         data = json.loads(reply)
     except ValueError:
@@ -155,9 +178,13 @@ def parse_synopsis(reply: str) -> tuple[str, str] | None:
     if not isinstance(data, dict) or set(data) != {"title", "synopsis"}:
         return None
     title, synopsis = data["title"], data["synopsis"]
+    if title is None and synopsis is None:
+        return NOT_IDENTIFIABLE
     if not isinstance(title, str) or not isinstance(synopsis, str):
         return None
     title, synopsis = _clean_reply(title), _clean_reply(synopsis)
+    if _NO_STORY.search(title) or _NO_STORY.search(synopsis):
+        return NOT_IDENTIFIABLE
     if not (1 <= len(title) <= MAX_TITLE_CHARS and len(title.split()) <= MAX_TITLE_WORDS):
         return None
     if not MIN_SYNOPSIS_CHARS <= len(synopsis) <= MAX_SYNOPSIS_CHARS:
