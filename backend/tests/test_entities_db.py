@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from app.services import entities, search, thread_reads
+from app.services import entities, knowledge_graph, search, thread_reads
+from tests import search_fixture
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -172,9 +173,9 @@ async def _bulk_members(conn, count: int, entities_sql: str, story: str = "g") -
 
 
 async def _node(conn, type_: str, name: str) -> None:
-    await conn.execute(
-        "INSERT INTO kg_nodes (type, name) VALUES ($1, $2) ON CONFLICT DO NOTHING", type_, name
-    )
+    """A graph node as ingestion writes it: people and organisations also in the
+    narrow names table search and resolution read."""
+    await knowledge_graph.upsert_node(conn, type_, name, {})
 
 
 async def _dossier(name, type_="person", timespan="168h"):
@@ -502,57 +503,76 @@ async def test_search_counts_stories_among_the_capped_members_and_ranks_the_capp
     assert dossier["counts"]["d7"] == 99
 
 
+def _walk(node):
+    yield node
+    for child in node.get("Plans", []):
+        yield from _walk(child)
+
+
+async def _explain(conn, sql: str, *args) -> dict:
+    """The executed plan's buffers touched (hit + read), relations and indexes."""
+    raw = await conn.fetchval("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql, *args)
+    top = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Plan"]
+    nodes = list(_walk(top))
+    return {
+        "buffers": top.get("Shared Hit Blocks", 0) + top.get("Shared Read Blocks", 0),
+        "relations": {n["Relation Name"] for n in nodes if "Relation Name" in n},
+        "indexes": {n["Index Name"] for n in nodes if "Index Name" in n},
+    }
+
+
 @pytest.mark.asyncio
-async def test_names_are_matched_among_people_and_orgs_and_counted_from_members(conn):
-    # Headlines (ARTICLE nodes) that carry the name, which the full trigram index
-    # would match and recheck one by one, and many people.
-    await conn.execute(
-        "INSERT INTO kg_nodes (type, name)"
-        " SELECT 'ARTICLE', 'Markets fell sharply on Monday after Zzplanned spoke, report '"
-        " || g FROM generate_series(1, 2000) g"
+async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(conn):
+    """Production's shape: ~56K real-looking people and organisations among 150K
+    headlines in kg_nodes, and 100K thread members. No enable_seqscan here: these are
+    the planner's own choices.
+
+    On kg_nodes with name % q (before), "sunak" rechecked ~3,200 candidates on
+    ~2,500 kg_nodes pages, "hamas" ~4,700 on ~3,300: every name with a word
+    starting "Su" or "Ha". Now a word of the name must resemble q (<%), in a table
+    of people and organisations only, a few MB that stay cached.
+    """
+    await search_fixture.build(conn)
+    pages = await conn.fetchval(
+        "SELECT sum(pg_relation_size(c)) / 8192 FROM unnest("
+        "ARRAY['kg_entity_names', 'idx_kg_entity_names_trgm']::regclass[]) AS c"
     )
-    await conn.execute(
-        "INSERT INTO kg_nodes (type, name)"
-        " SELECT 'PERSON', 'Bulkperson ' || g FROM generate_series(1, 50000) g"
-    )
-    await _node(conn, "PERSON", "Zzplanned Person")
-    await _bulk_members(conn, 2000, "ARRAY['Zz Other ' || (g % 200)]")
-    # New GIN entries wait in a pending list that every scan reads in full, until
-    # (auto)vacuum or autoanalyze merges them; merge them now, as production's are.
-    for index in ("idx_kg_nodes_name_trgm", "idx_kg_nodes_entity_name_trgm"):
-        await conn.execute(f"SELECT gin_clean_pending_list('{index}')")
-    await conn.execute("ANALYZE kg_nodes")
-    await conn.execute("ANALYZE thread_members")
-    await conn.execute("SET LOCAL enable_seqscan = off")
+    expected = {
+        "sunak": "Rishi Sunak",
+        "hamas": "Hamas",
+        "biden": "Joe Biden",
+        "modi": "Narendra Modi",
+        "musk": "Elon Musk",
+        "starmer": "Keir Starmer",
+        "netanyahu": "Benjamin Netanyahu",
+        "pfizer": "Pfizer",
+        "netanyhu": "Benjamin Netanyahu",  # a typo still finds him
+    }
+    for q, name in expected.items():
+        args = (q, entities.like_escape(q) + "%")
+        plan = await _explain(conn, search._NAMES_SQL, *args)
+        assert plan["relations"] == {"kg_entity_names"}, (q, plan)
+        assert plan["buffers"] < min(pages, 400), (q, plan)
+        found = [r["name"] for r in await conn.fetch(search._NAMES_SQL, *args)]
+        assert name in found[:3], (q, found)
+
+    # Selective names: the trigram index, by the planner's own choice.
+    for q in ("biden", "netanyahu", "pfizer"):
+        plan = await _explain(conn, search._NAMES_SQL, q, q + "%")
+        assert "idx_kg_entity_names_trgm" in plan["indexes"], (q, plan)
+
+    # Counts: the members of each candidate, through the entity index.
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
-
-    candidates = await _plan(conn, search._CANDIDATES_SQL, "zzplanned", "zzplanned%", week_ago, 100)
-    resolve = await _plan(conn, entities._RESOLVE_SQL, "PERSON", "zzplanned person", week_ago, 100)
-    for plan in (candidates, resolve):
-        assert "idx_kg_nodes_entity_name_trgm" in plan, plan
-        assert not re.search(r"\bidx_kg_nodes_name_trgm\b", plan), plan
-        # Each name's count: thread members through the entity index.
-        assert "idx_thread_members_entities" in plan, plan
-        assert "kg_edges" not in plan, plan
-
-    # Plans made without the values (asyncpg reuses prepared statements, and
-    # after five runs PostgreSQL may keep a generic plan) can use the partial
-    # index only because each query names its predicate literally.
-    await conn.execute(
-        "PREPARE zz_candidates (text, text, timestamptz, bigint) AS " + search._CANDIDATES_SQL
+    counts = await _explain(
+        conn, search._COUNTS_SQL, ["Joe Biden", "Hunter Biden", "Jill Biden"], week_ago, 100
     )
-    await conn.execute(
-        "PREPARE zz_resolve (text, text, timestamptz, bigint) AS " + entities._RESOLVE_SQL
+    assert "idx_thread_members_entities" in counts["indexes"], counts
+    # Resolution: the narrow table too, never kg_nodes.
+    resolve = await _explain(
+        conn, entities._RESOLVE_SQL, "PERSON", "benjamin netanyahu", week_ago, 100
     )
-    await conn.execute("SET LOCAL plan_cache_mode = force_generic_plan")
-    for statement in (
-        "EXECUTE zz_candidates('zzplanned', 'zzplanned%', now(), 100)",
-        "EXECUTE zz_resolve('PERSON', 'zzplanned person', now(), 100)",
-    ):
-        plan = await _plan(conn, statement)
-        assert "$2" in plan, plan  # generic: planned without the values
-        assert "idx_kg_nodes_entity_name_trgm" in plan, plan
-        assert not re.search(r"\bidx_kg_nodes_name_trgm\b", plan), plan
+    assert "kg_nodes" not in resolve["relations"], resolve
+    assert "idx_kg_entity_names_trgm" in resolve["indexes"], resolve
 
 
 @pytest.mark.asyncio

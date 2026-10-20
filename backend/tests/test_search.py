@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,17 +11,23 @@ from app.routers.http_cache import EDGE_CACHE_CONTROL
 from app.services import entities, search, thread_reads
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
-MIGRATIONS = Path(__file__).resolve().parents[2] / "database" / "migrations"
 
 
 def _candidate(type_, name, n, sim=0.5, capped=False):
     """A candidate row: its distinct stories among the members read, and whether
     the member cap was hit."""
-    return {"type": type_, "name": name, "stories": n, "capped": capped, "sim": sim}
+    return {
+        "type": type_,
+        "name": name,
+        "stories": n,
+        "capped": capped,
+        "sim": sim,
+        "full_sim": sim,
+    }
 
 
 class _Pool:
-    """Answers search's queries: candidate names, then threads."""
+    """Answers search's queries: candidate names, their counts, then threads."""
 
     def __init__(self, candidates, threads=()):
         self.candidates, self.threads = candidates, list(threads)
@@ -30,11 +35,24 @@ class _Pool:
 
     async def fetch(self, sql, *args):
         self.calls.append((sql, args))
-        if "FROM kg_nodes" in sql:
-            return self.candidates
+        if "FROM kg_entity_names" in sql:
+            keys = ("type", "name", "sim", "full_sim")
+            return [{k: c[k] for k in keys} for c in self.candidates]
+        if "FROM unnest" in sql:
+            [names, *_] = args
+            return [
+                {"name": c["name"], "stories": c["stories"], "capped": c["capped"]}
+                for c in self.candidates
+                if c["name"] in names
+            ]
         if "FROM threads" in sql:
             return self.threads
         raise AssertionError(sql)
+
+
+def _call(pool, needle):
+    [call] = [c for c in pool.calls if needle in c[0]]
+    return " ".join(call[0].split()), call[1]
 
 
 async def _search(pool, q="abbas"):
@@ -92,41 +110,79 @@ class TestSearchService:
         ]
 
     @pytest.mark.asyncio
-    async def test_candidates_by_prefix_or_trigram_counted_from_thread_members(self):
-        pool = _Pool([])
-        await _search(pool, "Abbas")
-        sql, args = next(c for c in pool.calls if "FROM kg_nodes" in c[0])
-        flat = " ".join(sql.split())
-        # The literal type predicate lets every plan use the partial trigram index
-        # of people and organisations (migration 016), never the headlines'.
-        assert "WHERE type IN ('PERSON', 'ORG') AND (name ILIKE $2 OR name % $1)" in flat
-        assert "LIMIT 20" in flat
-        # Each candidate's stories this week from thread members, as the dossier
-        # counts them, reading at most 100 members.
-        mentions = " ".join(entities.member_mentions_sql("c.name", "$3", "$4").split())
-        assert (
-            f"SELECT c.type, c.name, c.sim, m.stories, m.capped FROM c CROSS JOIN LATERAL"
-            f" {mentions} m"
-        ) in flat
-        assert "kg_edges" not in flat
-        assert search.SEARCH_COUNT_CAP == 100
-        assert args == ("Abbas", "Abbas%", NOW - timedelta(days=7), search.SEARCH_COUNT_CAP)
+    async def test_names_by_prefix_or_word_similarity_in_the_narrow_names_table(self):
+        pool = _Pool([_candidate("PERSON", "Rishi Sunak", 3)])
+        await _search(pool, "Sunak")
 
-    def test_the_partial_index_is_on_the_predicate_the_queries_name(self):
-        migration = (MIGRATIONS / "016_kg_entity_name_trgm.sql").read_text(encoding="utf-8")
-        assert (
-            "ON kg_nodes USING gin (name gin_trgm_ops) WHERE type IN ('PERSON', 'ORG');"
-            in " ".join(migration.split())
+        sql, args = _call(pool, "FROM kg_entity_names")
+        # Only people and organisations, a few MB that stay cached, never kg_nodes'
+        # heap where names sit thinly among headlines. A word of the name must
+        # resemble q (<%, word similarity), not just share two trigrams with it as
+        # % allows: for "sunak", every name with a word starting "Su".
+        assert "FROM kg_entity_names WHERE name ILIKE $2 OR $1 <% name" in sql
+        assert "word_similarity($1, name) AS sim, similarity(name, $1) AS full_sim" in sql
+        assert sql.endswith("ORDER BY sim DESC, full_sim DESC, name LIMIT 20")
+        assert "kg_nodes" not in sql
+        assert args == ("Sunak", "Sunak%")
+
+    @pytest.mark.asyncio
+    async def test_the_candidates_are_counted_from_thread_members_in_one_query(self):
+        pool = _Pool(
+            [_candidate("PERSON", "Hamas", 40, 1.0), _candidate("ORG", "Hamas", 40, 1.0)]
+            + [_candidate("PERSON", "Hamad Das", 2, 0.6)]
         )
-        assert "type IN ('PERSON', 'ORG')" in " ".join(search._CANDIDATES_SQL.split())
-        assert "n.type IN ('PERSON', 'ORG')" in " ".join(entities._RESOLVE_SQL.split())
+        await _search(pool, "hamas")
+
+        sql, args = _call(pool, "FROM unnest")
+        # Each name once (members don't record types), as the dossier counts them,
+        # reading at most 100 members.
+        mentions = " ".join(entities.member_mentions_sql("c.name", "$2", "$3").split())
+        assert sql == (
+            f"SELECT c.name, m.stories, m.capped FROM unnest($1::text[]) AS c(name)"
+            f" CROSS JOIN LATERAL {mentions} m"
+        )
+        assert args == (
+            ["Hamad Das", "Hamas"],
+            NOW - timedelta(days=7),
+            search.SEARCH_COUNT_CAP,
+        )
+        assert search.SEARCH_COUNT_CAP == 100
+
+    @pytest.mark.asyncio
+    async def test_no_names_no_count_query(self):
+        pool = _Pool([])
+        assert (await _search(pool, "zzz"))["people"] == []
+        assert [c for c in pool.calls if "FROM unnest" in c[0]] == []
+
+    @pytest.mark.asyncio
+    async def test_a_slow_search_logs_each_phase(self, caplog):
+        pool = _Pool([_candidate("PERSON", "Rishi Sunak", 3)])
+        ticks = iter([0.0, 1.25, 1.5, 1.75])
+        with (
+            patch("app.services.search.time.perf_counter", side_effect=lambda: next(ticks)),
+            caplog.at_level("INFO", logger="app.services.search"),
+        ):
+            await _search(pool, "sunak")
+
+        [record] = caplog.records
+        assert record.levelname == "INFO"
+        assert record.getMessage() == (
+            "Search 'sunak' took 1.75s: names 1.25s (1 candidates), counts 0.25s, threads 0.25s"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_fast_search_logs_nothing(self, caplog):
+        pool = _Pool([_candidate("PERSON", "Rishi Sunak", 3)])
+        with caplog.at_level("INFO", logger="app.services.search"):
+            await _search(pool, "sunak")
+        assert caplog.records == []
 
     @pytest.mark.asyncio
     async def test_an_injection_looking_q_is_only_text(self):
         q = "%'; DROP TABLE kg_nodes; --_"
         pool = _Pool([])
         await _search(pool, q)
-        sql, args = next(c for c in pool.calls if "FROM kg_nodes" in c[0])
+        sql, args = next(c for c in pool.calls if "FROM kg_entity_names" in c[0])
         assert q not in sql and "DROP" not in sql
         assert args[:2] == (q, "\\%'; DROP TABLE kg\\_nodes; --\\_%")
 
