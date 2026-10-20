@@ -151,17 +151,22 @@ async def warm_links_24h() -> None:
     await cached_links(_window("24h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT)
 
 
+def _default_7d() -> tuple[Window, None, str, int]:
+    """The default 7-day /api/links request: the one warm_links_7d caches and
+    cached_links_7d reads, so the two always name the same key."""
+    return _window("168h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT
+
+
 async def warm_links_7d() -> None:
     """Cache the default 7-day /api/links answer: 4.7 s cold on production."""
-    await cached_links(_window("168h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT)
+    await cached_links(*_default_7d())
 
 
 async def cached_links_7d() -> list[Link] | None:
     """The default 7-day /api/links answer when it is cached (warm_links_7d fills it
     after each cycle), else None. Never computed here: the board's co-coverage edges
     read it, and skip themselves rather than run the 7-day query."""
-    key = _links_key(_window("168h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT)
-    cached = await get_cached(key)
+    cached = await get_cached(_links_key(*_default_7d()))
     return None if cached is None else [Link.model_validate(link) for link in cached]
 
 
