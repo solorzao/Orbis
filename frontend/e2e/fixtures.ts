@@ -590,6 +590,144 @@ export async function withThreads(page: Page) {
   );
 }
 
+// ── The entity tracker ──────────────────────────────────────────────
+
+/** /api/search's names: a person and an org with "{n}+" (capped) among them. */
+const SEARCH_PEOPLE = [
+  { type: "person", name: "Emmanuel Macron", n: 42, capped: false },
+  { type: "person", name: "Eun-ji Park", n: 3, capped: false },
+] as const;
+const SEARCH_ORGS = [
+  { type: "org", name: "European Union", n: 100, capped: true },
+  { type: "org", name: "Paris Saint-Germain", n: 12, capped: false },
+  { type: "org", name: "IAEA", n: 9, capped: false },
+] as const;
+
+/** A name matches a query when it, or one of its words, starts with it (as the trigram search finds). */
+const nameMatches = (name: string, q: string) =>
+  name
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .concat(name.toLowerCase())
+    .some((w) => w.startsWith(q));
+
+/** /api/search as the backend answers it: up to five of each, threads by title. */
+export function mockSearch(url: string) {
+  const q = (new URL(url).searchParams.get("q") ?? "").trim().toLowerCase();
+  return {
+    people: SEARCH_PEOPLE.filter((e) => nameMatches(e.name, q)),
+    orgs: SEARCH_ORGS.filter((e) => nameMatches(e.name, q)),
+    threads: MOCK_THREADS.filter((t) => t.title.toLowerCase().includes(q))
+      .slice(0, 5)
+      .map((t) => ({ id: t.id, title: t.title })),
+  };
+}
+
+/** A place in an entity's coverage. */
+const entityPlace = (
+  place: string,
+  country_code: string,
+  lat: number,
+  lng: number,
+  n: number,
+  tone: number,
+) => ({ lat, lng, place, country_code, n, tone });
+
+/** Seven daily buckets, oldest first. */
+const week = (counts: number[]) => counts.map((n, i) => ({ t: ago((7 - i) * 24 * 60), n }));
+
+/**
+ * /api/entities dossiers: Emmanuel Macron (Paris has a dot; Brussels and
+ * Berlin don't, so they get stand-ins) and the European Union, which his
+ * constellation pivots to (capped, and tracked for under a week: the ramp).
+ */
+export const MOCK_DOSSIERS = {
+  "person:emmanuel macron": {
+    name: "Emmanuel Macron",
+    type: "person",
+    counts: { h24: 12, d7: 140 },
+    trend: 1.5,
+    capped: false,
+    cap: 2000,
+    countries: [
+      { country_code: "FR", n: 90 },
+      { country_code: "BE", n: 25 },
+      { country_code: "DE", n: 18 },
+    ],
+    places: [
+      entityPlace("Paris, France", "FR", 48.85, 2.35, 60, -0.12),
+      entityPlace("Brussels, Belgium", "BE", 50.85, 4.35, 25, 0.05),
+      entityPlace("Berlin, Germany", "DE", 52.52, 13.4, 18, 0.21),
+    ],
+    timeline: week([14, 18, 22, 16, 25, 21, 24]),
+    co_mentions: [
+      { name: "European Union", n: 30, types: ["org"] },
+      { name: "Olaf Scholz", n: 12, types: ["person"] },
+      { name: "Paris", n: 9, types: [] },
+      { name: "NATO", n: 6, types: ["org"] },
+    ],
+    headlines: [
+      {
+        title: "Macron and Scholz meet in Berlin on energy prices",
+        source_name: "Reuters",
+        published_at: ago(25),
+        source_url: "https://example.com/macron-berlin",
+        place: "Berlin, Germany",
+      },
+      {
+        title: "Élysée sets out its plan for the EU summit",
+        source_name: "Le Monde",
+        published_at: ago(90),
+        source_url: "https://example.com/elysee-summit",
+        place: "Paris, France",
+      },
+    ],
+    since: ago(30 * 24 * 60),
+  },
+  "org:european union": {
+    name: "European Union",
+    type: "org",
+    counts: { h24: 120, d7: 2140 },
+    trend: 0.8,
+    capped: true,
+    cap: 2000,
+    countries: [
+      { country_code: "BE", n: 400 },
+      { country_code: "FR", n: 300 },
+    ],
+    places: [
+      entityPlace("Brussels, Belgium", "BE", 50.85, 4.35, 400, 0.02),
+      entityPlace("Paris, France", "FR", 48.85, 2.35, 300, -0.05),
+    ],
+    timeline: week([280, 300, 320, 310, 290, 330, 310]),
+    co_mentions: [{ name: "Emmanuel Macron", n: 30, types: ["person"] }],
+    headlines: [],
+    since: ago(3 * 24 * 60),
+  },
+} as const;
+
+/** Whether a request is for the Track search, or for a dossier. */
+export const isSearch = (url: URL) => url.pathname === "/api/search";
+export const isEntity = (url: URL) => /^\/api\/entities\/(person|org)\/.+/.test(url.pathname);
+
+/** A dossier by its type and name (any case), or null: the API's 404. */
+export function mockDossier(url: string) {
+  const [, , , type, ...rest] = new URL(url).pathname.split("/");
+  const name = decodeURIComponent(rest.join("/")).toLowerCase();
+  return (MOCK_DOSSIERS as Record<string, unknown>)[`${type}:${name}`] ?? null;
+}
+
+/** Mock the entity tracker's endpoints: the Track search, and each dossier (404 if unknown). */
+export async function mockEntityRoutes(page: Page) {
+  await page.route(isSearch, (route) => route.fulfill({ json: mockSearch(route.request().url()) }));
+  await page.route(isEntity, (route) => {
+    const dossier = mockDossier(route.request().url());
+    return dossier
+      ? route.fulfill({ json: dossier })
+      : route.fulfill({ status: 404, json: { detail: "No person or organisation of that name" } });
+  });
+}
+
 // ── Breaking stories ────────────────────────────────────────────────
 
 /** A breaking story's lead, as /api/news/breaking sends it. */
@@ -839,6 +977,9 @@ export async function mockAllApiRoutes(page: Page) {
 
   // The Threads layer
   await mockThreadRoutes(page);
+
+  // The entity tracker: the Track search and the dossiers
+  await mockEntityRoutes(page);
 
   // Breaking stories: none, as often (withBreaking adds some)
   await page.route(isBreaking, (route) => route.fulfill({ json: [] }));

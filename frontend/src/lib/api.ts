@@ -81,6 +81,17 @@ export interface ApiTopicCount {
   count: number;
 }
 
+/** A failed API answer, with its HTTP status (a 404 means no such thing). */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string,
+  ) {
+    super(`API ${status}: ${statusText}`);
+    this.name = "ApiError";
+  }
+}
+
 /** GET a same-origin /api route as JSON, with its query (empty values left out). */
 export async function apiFetch<T>(
   path: string,
@@ -95,7 +106,7 @@ export async function apiFetch<T>(
   }
   const res = await fetch(url.toString(), signal ? { signal } : undefined);
   if (!res.ok) {
-    throw new Error(`API ${res.status}: ${res.statusText}`);
+    throw new ApiError(res.status, res.statusText);
   }
   return res.json() as Promise<T>;
 }

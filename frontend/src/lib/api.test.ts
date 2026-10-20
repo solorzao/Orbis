@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  ApiError,
   fetchGlobeNews,
   fetchClusterArticles,
   fetchClusterSummary,
@@ -53,6 +54,14 @@ describe("fetchGlobeNews", () => {
   it("throws on non-OK response", async () => {
     mockFetch.mockReturnValue(jsonResponse(null, 500));
     await expect(fetchGlobeNews()).rejects.toThrow("API 500");
+  });
+
+  it("throws an ApiError carrying the status, so a caller can tell a 404", async () => {
+    mockFetch.mockReturnValue(jsonResponse(null, 404));
+    const err = await fetchGlobeNews().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.status).toBe(404);
   });
 
   it("calls the same-origin proxy and never sends an API key", async () => {

@@ -115,6 +115,26 @@ describe("LinkInspector", () => {
     expect(screen.getByText("Fetching stories…")).toBeVisible();
   });
 
+  it("makes the shared names Track buttons once something can track them; themes stay inert", () => {
+    const onTrack = vi.fn();
+    render(
+      <LinkInspector
+        entry={loaded()}
+        onClose={vi.fn()}
+        onMinimize={vi.fn()}
+        onExplain={vi.fn()}
+        onTrack={onTrack}
+      />,
+    );
+    const shared = within(screen.getByRole("group", { name: "Shared in coverage" }));
+    const iaea = shared.getByRole("button", { name: "Track IAEA" });
+    expect(iaea).toHaveTextContent("IAEA9");
+    fireEvent.click(iaea);
+    expect(onTrack).toHaveBeenCalledWith({ name: "IAEA", type: "org" });
+    expect(shared.queryByRole("button", { name: /sanctions/ })).toBeNull();
+    expect(shared.getByText("sanctions")).toHaveClass("pill", "pill-theme");
+  });
+
   it("shows the detail's readouts, shared names and themes, and its stories", () => {
     renderInspector(loaded());
     expect(screen.getByTestId("link-inspector")).not.toHaveAttribute("aria-busy");

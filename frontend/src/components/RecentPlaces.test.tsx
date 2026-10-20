@@ -155,4 +155,45 @@ describe("RecentPlaces", () => {
     );
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("puts the tracked entity first: pick it to see its dossier, × to stop tracking", () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <RecentPlaces
+        places={[PLACES[0]]}
+        entity={{ id: "entity", name: "Emmanuel Macron" }}
+        activeId="entity"
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+    const group = screen.getByRole("group", { name: "Recent places and links" });
+    const picks = within(group)
+      .getAllByRole("button")
+      .filter((b) => b.hasAttribute("aria-pressed"));
+    expect(picks[0]).toHaveAccessibleName("Tracking Emmanuel Macron");
+    expect(picks[0]).toHaveAttribute("aria-pressed", "true");
+    expect(picks[0]).toHaveAttribute("data-place", "entity");
+    fireEvent.click(picks[0]);
+    expect(onSelect).toHaveBeenCalledWith("entity");
+    fireEvent.click(screen.getByRole("button", { name: "Stop tracking Emmanuel Macron" }));
+    expect(onClose).toHaveBeenCalledWith("entity");
+  });
+
+  it("shows the tracked entity even with nothing else open", () => {
+    render(
+      <RecentPlaces
+        places={[]}
+        entity={{ id: "entity", name: "IAEA" }}
+        activeId={null}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Tracking IAEA" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
 });
