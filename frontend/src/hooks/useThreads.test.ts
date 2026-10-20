@@ -182,6 +182,25 @@ describe("useThread", () => {
     expect(result.current.detail).toBeNull();
   });
 
+  it("adopts the thread a merged id now answers as", async () => {
+    // Thread 7 was merged into 9: the API answers with 9, the thread to select.
+    mockOne.mockResolvedValue(apiDetail(9));
+    const onMerged = vi.fn();
+    const { result } = renderHook(() => useThread(7, onMerged));
+    await act(async () => {});
+    expect(onMerged).toHaveBeenCalledTimes(1);
+    expect(onMerged).toHaveBeenCalledWith(9);
+    expect(result.current.detail?.id).toBe(9);
+  });
+
+  it("calls back only when the id changed", async () => {
+    mockOne.mockResolvedValue(apiDetail(7));
+    const onMerged = vi.fn();
+    renderHook(() => useThread(7, onMerged));
+    await act(async () => {});
+    expect(onMerged).not.toHaveBeenCalled();
+  });
+
   it("reports a thread that couldn't load", async () => {
     mockOne.mockRejectedValue(new Error("API 404"));
     const { result } = renderOne(99);

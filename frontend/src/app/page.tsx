@@ -153,7 +153,12 @@ export default function Home() {
     ...threadsResult,
   });
   // The selected thread's detail, and its spread: the list's places until the detail lands.
-  const { detail: threadDetail } = useThread(selectedThread?.id ?? null);
+  // A thread merged into another answers as it: select that one, so its row and links show.
+  const adoptMergedThread = useCallback(
+    (id: number) => setSelectedThread((t) => (t ? { ...t, id } : t)),
+    [],
+  );
+  const { detail: threadDetail } = useThread(selectedThread?.id ?? null, adoptMergedThread);
   const selectedId = selectedThread?.id ?? null;
   const listedThread = threadsResult.threads.find((t) => t.id === selectedId);
   const spread = threadDetail?.spread ?? listedThread?.places;
