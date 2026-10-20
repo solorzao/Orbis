@@ -5,6 +5,8 @@ The SQL itself runs in tests/test_threads_db.py against a real PostgreSQL.
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import logging
 import re
 import uuid
@@ -27,8 +29,11 @@ from app.services.threads import (
     threadable,
     title_words,
 )
+from app.services.titles import display_title
 
 T0 = datetime(2001, 1, 10, 12, tzinfo=timezone.utc)
+# display_title's source, as shown_title_sql mirrors it.
+DISPLAY_TITLE_SHA256 = "3f8ddc927aa4be628776f9ecfd7d0ce80dd018f1ee19617910c75f5b5178d0ae"
 
 
 @pytest.fixture(autouse=True)
@@ -154,7 +159,7 @@ def test_the_backlog_judges_the_title_as_shown_with_the_same_rule():
     crowd the backlog (tests/test_threads_db.py runs both on the same titles)."""
     sql = " ".join(threads.BACKLOG_SQL.split())
     assert " ".join(threads.shown_title_sql("a.title").split()) in sql
-    assert " ".join(threads.threadable_sql("st.shown", "$2").split()) in sql
+    assert " ".join(threads.threadable_sql("st.shown", "$2", "a.persons || a.orgs").split()) in sql
     assert "a.title !~*" not in sql
 
 
@@ -192,6 +197,52 @@ def test_stories_are_threadable_as_shown(title):
 
 
 @pytest.mark.parametrize(
+    ("title", "persons", "orgs"),
+    [
+        ("Queen Elizabeth dies - BBC News", ["Queen Elizabeth"], []),
+        ("Biden drops out - Reuters", ["Joe Biden"], []),
+        ("Fed holds rates | CNBC", [], ["Federal Reserve"]),
+    ],
+)
+def test_three_words_shown_thread_when_the_article_names_someone(title, persons, orgs):
+    """Short headlines about someone ("Biden drops out") are stories; "Police arrest
+    man" isn't. Before #102 the outlet's name padded them to MIN_TITLE_WORDS."""
+    assert threadable(title, persons, orgs)
+
+
+@pytest.mark.parametrize(
+    ("title", "persons", "orgs"),
+    [
+        ("Biden drops out - Reuters", [], []),  # no one named
+        ("Police arrest man - BBC News", [], []),
+        ("Police arrest man - BBC News", [""], [""]),  # empty names name no one
+        ("Trump indicted | CNN", ["Donald Trump"], []),  # two words: never
+        ("Top News Today - CNN", [], ["CNN"]),  # a section label
+        ("News in Brief - AP", [], ["AP"]),  # a digest
+    ],
+)
+def test_short_titles_shown_stay_out_otherwise(title, persons, orgs):
+    assert not threadable(title, persons, orgs)
+
+
+def test_shown_title_sql_mirrors_this_display_title():
+    """shown_title_sql repeats display_title's steps in SQL (tests/test_threads_db.py
+    compares them, on PostgreSQL only): a change to one needs the other."""
+    source = inspect.getsource(display_title)
+    assert hashlib.sha256(source.encode()).hexdigest() == DISPLAY_TITLE_SHA256, (
+        "display_title changed: update shown_title_sql to match"
+    )
+
+
+def test_the_sql_whitespace_is_pythons():
+    """display_title collapses Python's \\s (str.isspace); Postgres' own \\s follows the
+    database's locale, so shown_title_sql spells Python's out."""
+    spaces = {c for c in map(chr, range(0x110000)) if c.isspace()}
+    assert spaces == {c for c in map(chr, range(0x110000)) if re.fullmatch(r"\s", c)}
+    assert set(threads.SPACE_CHARS) == spaces
+
+
+@pytest.mark.parametrize(
     "title",
     [
         "National",
@@ -206,6 +257,7 @@ def test_stories_are_threadable_as_shown(title):
         "Breaking News",
         "News & Updates",
         "Latest News and Updates",
+        "Top News Headlines Today",
         "  world news  ",
     ],
 )
@@ -323,6 +375,18 @@ async def test_articles_are_placed_in_published_order_with_the_id_tie_break():
     await _assign(conn, [second["id"], first["id"]])
 
     assert [m[0] for m in _member_threads(conn)] == [first["id"], second["id"]]
+
+
+@pytest.mark.asyncio
+async def test_a_three_word_title_naming_someone_seeds_a_thread():
+    named = _row(title="Biden drops out - Reuters", persons=["Joe Biden"])
+    unnamed = _row(title="Police arrest man - BBC News")
+    conn = _conn([named, unnamed])
+
+    stats = await _assign(conn, [named["id"], unnamed["id"]])
+
+    assert [m[0] for m in _member_threads(conn)] == [named["id"]]
+    assert stats.started == 1
 
 
 @pytest.mark.asyncio
