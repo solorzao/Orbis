@@ -115,6 +115,10 @@ MERGE_NEIGHBOURS = 3  # nearest active threads checked per candidate
 MERGE_ROUNDS = 3  # a pass's rounds: each round's winners look for their nearest again
 MAX_MERGES = 200  # a cycle's merges at most
 MERGE_AUDIT_LINES = 50  # "Thread merge:" lines a pass logs; then a count of the rest
+# A pass starts no new round, and no new merge but its first, after this: the
+# first after a deploy may take 10-40 s, a minute under embedding I/O, and the
+# step has no other time bound. The rest wait for the catch-up next cycle.
+MERGE_TIME_BUDGET_S = 30
 # A cycle's moved members at most (each a non-HOT update into five indexes, some
 # 16 GIN entries): one merge always goes ahead, and the rest wait for the next.
 MAX_MOVED_MEMBERS = 5000
@@ -980,10 +984,17 @@ async def _merge_pass(conn: Any, stats: ThreadStats, now: datetime) -> set[int]:
     if not _caught_up:
         rows = await conn.fetch(CATCH_UP_SQL, now - timedelta(hours=ACTIVE_HOURS), CATCH_UP_LIMIT)
         candidates |= {r["id"] for r in rows}
-    budget = _MergeBudget(MAX_MERGES, MAX_MOVED_MEMBERS)
+    budget = _MergeBudget(MAX_MERGES, MAX_MOVED_MEMBERS, began=time.monotonic())
     aggregated: set[int] = set()
     complete = False
     for round_no in range(1, MERGE_ROUNDS + 1):
+        if round_no > 1 and budget.out_of_time():
+            logger.info(
+                "Threads: merge time budget of %d s reached before round %d; the rest wait.",
+                MERGE_TIME_BUDGET_S,
+                round_no,
+            )
+            break
         winners: set[int] = set()
         done = await _merge(conn, stats, candidates, winners, budget, now, round_no)
         if winners:
@@ -1009,6 +1020,11 @@ class _MergeBudget:
     used: bool = False  # whether a merge has been made
     made: int = 0  # merges made this pass
     logged: int = 0  # of them, "Thread merge:" lines logged (MERGE_AUDIT_LINES)
+    began: float = 0.0  # time.monotonic() at the pass's start
+    generic: set[str] | None = None  # generic names, read once a pass when needed
+
+    def out_of_time(self) -> bool:
+        return time.monotonic() - self.began > MERGE_TIME_BUDGET_S
 
 
 async def _merge(
@@ -1037,8 +1053,9 @@ async def _merge(
         r["id"]: ThreadInfo(r["n_stories"], set(r["top_entities"] or ()), r["n_articles"])
         for r in await conn.fetch(MERGE_INFO_SQL, ids)
     }
-    generic = {r["e"] for r in await conn.fetch(GENERIC_SQL, GENERIC_ENTITY_SHARE)}
-    plan = _planned(pairs, infos, generic, budget.merges)
+    if budget.generic is None:
+        budget.generic = {r["e"] for r in await conn.fetch(GENERIC_SQL, GENERIC_ENTITY_SHARE)}
+    plan = _planned(pairs, infos, budget.generic, budget.merges)
     members = {thread_id: info.n_articles for thread_id, info in infos.items()}
     complete = len(plan) < budget.merges
     for loser, winner, sim, shared in plan:
@@ -1046,6 +1063,13 @@ async def _merge(
             logger.info(
                 "Threads: merge budget of %d moved members reached; the rest wait.",
                 MAX_MOVED_MEMBERS,
+            )
+            return False
+        if budget.used and budget.out_of_time():  # the first merge always goes ahead
+            logger.info(
+                "Threads: merge time budget of %d s reached in round %d; the rest wait.",
+                MERGE_TIME_BUDGET_S,
+                round_no,
             )
             return False
         try:

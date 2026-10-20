@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -539,3 +540,123 @@ async def test_the_audit_log_is_capped_per_pass_with_a_count_beyond(monkeypatch,
         "Thread merge: 1 -> 2 sim=0.900 shared=0 round=1",
         "Thread merge: 2 more not listed.",
     ]
+
+
+# --- budgets across rounds, and time ----------------------------------------------------
+
+
+def _three_threads(**results):
+    """548 (3 stories) close to 448 (6); 514 (4) close to 448 once 548 has joined it."""
+    merged: set[int] = set()
+
+    def neighbours(ids, _k):
+        pairs = [(548, 448, 0.9)] if 548 in ids else []
+        if ids == [448]:
+            pairs = [(448, 514, 0.83)]
+        return [
+            {"id": a, "other": b, "sim": sim}
+            for a, b, sim in pairs
+            if a not in merged and b not in merged
+        ]
+
+    def drop(loser):
+        merged.add(loser)
+        return "DELETE 1"
+
+    article = _row()
+    answers = {
+        threads.LOAD_SQL: [article],
+        threads.NEW_THREAD_SQL: 548,
+        threads.NEIGHBOURS_SQL: neighbours,
+        threads.DROP_CENTROID_SQL: drop,
+        threads.MERGE_INFO_SQL: [
+            {"id": i, "n_stories": n, "n_articles": n, "top_entities": []}
+            for i, n in ((448, 6), (548, 3), (514, 4))
+        ],
+    }
+    answers.update(results)
+    return _merging_conn(**answers), article
+
+
+@pytest.mark.asyncio
+async def test_generic_names_are_read_once_a_pass():
+    conn, article = _three_threads()
+
+    stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    assert stats.merged == 2  # over two rounds
+    # Once for placement, once for the whole merge pass.
+    assert len(conn.args_of(threads.GENERIC_SQL)) == 2
+
+
+@pytest.mark.asyncio
+async def test_round_two_spends_what_round_one_left_of_the_member_budget(monkeypatch):
+    monkeypatch.setattr(threads, "MAX_MOVED_MEMBERS", 4)
+    conn, article = _three_threads()
+
+    stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    # 548's 3 members moved in round 1; 514's 4 are over the 1 left.
+    assert conn.args_of(threads.MERGE_MEMBERS_SQL) == [(448, 548)]
+    assert stats.merged == 1
+    assert threads._caught_up is False
+
+
+@pytest.mark.asyncio
+async def test_round_two_spends_what_round_one_left_of_the_merge_budget(monkeypatch):
+    monkeypatch.setattr(threads, "MAX_MERGES", 2)
+    conn, article = _three_threads()
+
+    stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    assert stats.merged == 2  # the second, in round 2, used the last of the budget
+    assert threads._caught_up is False
+
+
+@pytest.mark.asyncio
+async def test_no_round_starts_after_the_time_budget(monkeypatch, caplog):
+    clock = [0.0]
+    monkeypatch.setattr(threads, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def slow_aggregate(*_args):  # round 1's winners, aggregated, take the budget
+        clock[0] += threads.MERGE_TIME_BUDGET_S + 1
+        return [{"id": 448}]
+
+    conn, article = _three_threads(**{threads.AGGREGATE_SQL: slow_aggregate})
+    with caplog.at_level(logging.INFO, logger="orbis.threads"):
+        stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    assert conn.args_of(threads.MERGE_MEMBERS_SQL) == [(448, 548)]
+    assert stats.merged == 1
+    assert threads._caught_up is False
+    assert "merge time budget" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_no_merge_starts_after_the_time_budget_but_the_first(monkeypatch, caplog):
+    clock = [0.0]
+    monkeypatch.setattr(threads, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def slow_neighbours(ids, _k):
+        clock[0] += threads.MERGE_TIME_BUDGET_S + 1
+        return [{"id": 1, "other": 2, "sim": 0.9}, {"id": 3, "other": 4, "sim": 0.88}]
+
+    article = _row()
+    conn = _merging_conn(
+        **{
+            threads.LOAD_SQL: [article],
+            threads.NEW_THREAD_SQL: 1,
+            threads.NEIGHBOURS_SQL: slow_neighbours,
+            threads.MERGE_INFO_SQL: [
+                {"id": i, "n_stories": n, "n_articles": n, "top_entities": []}
+                for i, n in ((1, 3), (2, 9), (3, 3), (4, 9))
+            ],
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="orbis.threads"):
+        stats = await threads.assign_threads(conn, [article["id"]], now=T0)
+
+    assert conn.args_of(threads.MERGE_MEMBERS_SQL) == [(2, 1)]  # progress, then the stop
+    assert stats.merged == 1
+    assert threads._caught_up is False
+    assert "merge time budget" in caplog.text
