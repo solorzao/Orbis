@@ -64,7 +64,15 @@ GENERIC_ENTITY_SHARE = 0.01  # in more than this share of active threads: generi
 MIN_TITLE_WORDS = 4  # shorter titles neither join nor seed a thread
 DECAY = 0.97  # each join multiplies centroid_sum by this before adding
 CANDIDATES = 15  # nearest active threads scored per story
-TIME_BUDGET_S = 60  # stop starting new articles after this; the backlog takes the rest
+# Placement stops starting new articles after this (counted from its start, not
+# the cycle's: setup must never starve it), once MIN_PLACED, the oldest, are
+# placed; the backlog takes the rest.
+TIME_BUDGET_S = 60
+MIN_PLACED = 100
+# Articles a cycle takes at most (this cycle's and the backlog's, oldest first),
+# so its setup scales and a backlog drains over a few cycles. About what
+# placement does in TIME_BUDGET_S (999 took 41.9 s on production).
+MAX_BATCH = 1200
 
 BACKLOG_HOURS = 6  # also take unassigned embedded articles this recent
 BACKLOG_LIMIT = 500
@@ -103,6 +111,7 @@ LOAD_SQL = f"""
     FROM articles a
     WHERE a.id = ANY($1::uuid[]) AND a.embedding IS NOT NULL
     ORDER BY a.published_at, a.id
+    LIMIT $2
 """
 
 GENERIC_SQL = """
@@ -112,16 +121,38 @@ GENERIC_SQL = """
     HAVING count(*) > GREATEST(1, $1::float8 * (SELECT count(*) FROM thread_centroids))
 """
 
+# Each query vector is parsed from text once, in the materialized CTE: cast
+# inside the LATERAL, it was parsed again for every (article, centroid) pair a
+# seq scan visits, 2M parses a cycle, and scoring took 4 minutes on production
+# (2026-10-19). SCORE_SETTINGS make the HNSW index the plan: a seq scan computes
+# every pair, which grows with the active threads (tens of thousands a day).
 SCORE_SQL = f"""
-    SELECT a.ord, c.thread_id, c.sim
-    FROM unnest($1::int[], $2::text[]) AS a(ord, t)
+    WITH q AS MATERIALIZED (
+        SELECT a.ord, a.t::halfvec({PREFIX_DIMS}) AS v
+        FROM unnest($1::int[], $2::text[]) AS a(ord, t)
+    )
+    SELECT q.ord, c.thread_id, c.sim
+    FROM q
     CROSS JOIN LATERAL (
-        SELECT thread_id, -(centroid <#> a.t::halfvec({PREFIX_DIMS})) AS sim
+        SELECT thread_id, -(centroid <#> q.v) AS sim
         FROM thread_centroids
-        ORDER BY centroid <#> a.t::halfvec({PREFIX_DIMS})
+        ORDER BY centroid <#> q.v
         LIMIT $3
     ) c
 """
+
+# Inside SCORE_SQL's transaction, the only place it runs. ef_search: so dead
+# index entries can't crowd live candidates out of the top CANDIDATES.
+# enable_seqscan: the planner prefers a seq scan and top-N sort to HNSW for a
+# few thousand rows, computing every pair (900 x 1100 took 79 s on a CI runner
+# with the old query, 0.5 s with this one). plan_cache_mode: asyncpg prepares
+# the query, and a cached generic plan keeps the settings it was planned under
+# (a generic plan with LIMIT $3 chose the seq scan at 5000 rows: over 150 s).
+SCORE_SETTINGS = (
+    f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}",
+    "SET LOCAL enable_seqscan = off",
+    "SET LOCAL plan_cache_mode = force_custom_plan",
+)
 
 CANDIDATE_ENTITIES_SQL = "SELECT id, top_entities FROM threads WHERE id = ANY($1::bigint[])"
 
@@ -464,7 +495,13 @@ class ThreadStats:
     deferred: int = 0  # left to the backlog by the time budget
     active: int = 0
     seconds: float = 0.0
-    finish_seconds: float = 0.0  # aggregates, velocity and deactivation
+    # Each phase's seconds: the backlog and the load; generic entities, scoring,
+    # candidates' entities and copies' threads; placement; aggregates, velocity
+    # and deactivation.
+    load_seconds: float = 0.0
+    score_seconds: float = 0.0
+    place_seconds: float = 0.0
+    finish_seconds: float = 0.0
     touched: set[int] = field(default_factory=set)
 
 
@@ -532,22 +569,29 @@ async def assign_threads(
             list(article_ids),
         )
         ids = list(dict.fromkeys([*article_ids, *(r["id"] for r in backlog)]))
+        articles = []
         if ids:
-            rows = await conn.fetch(LOAD_SQL, ids)
+            rows = await conn.fetch(LOAD_SQL, ids, MAX_BATCH)
             articles = [
                 _Article.from_row(r) for r in rows if title_words(r["title"]) >= MIN_TITLE_WORDS
             ]
-            if articles:
-                await _assign(conn, articles, stats, began)
+        stats.load_seconds = time.monotonic() - began
+        if articles:
+            await _assign(conn, articles, stats)
         await _finish(conn, stats, now)
     stats.seconds = time.monotonic() - began
     logger.info(
-        "Threads: %d assigned (%d joined, %d started, %d copies) in %.1f s; %d active.",
+        "Threads: %d assigned (%d joined, %d started, %d copies) in %.1f s"
+        " (load %.1f, score %.1f, place %.1f, finish %.1f s); %d active.",
         stats.assigned,
         stats.joined,
         stats.started,
         stats.copies,
         stats.seconds,
+        stats.load_seconds,
+        stats.score_seconds,
+        stats.place_seconds,
+        stats.finish_seconds,
         stats.active,
     )
     if stats.deferred or stats.failed:
@@ -559,10 +603,12 @@ async def assign_threads(
     return stats
 
 
-async def _assign(conn: Any, articles: list[_Article], stats: ThreadStats, began: float) -> None:
+async def _assign(conn: Any, articles: list[_Article], stats: ThreadStats) -> None:
+    began = time.monotonic()
     generic = {r["e"] for r in await conn.fetch(GENERIC_SQL, GENERIC_ENTITY_SHARE)}
     async with conn.transaction():
-        await conn.execute(f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}")
+        for setting in SCORE_SETTINGS:
+            await conn.execute(setting)
         scored = await conn.fetch(
             SCORE_SQL, list(range(len(articles))), [a.v for a in articles], CANDIDATES
         )
@@ -580,9 +626,13 @@ async def _assign(conn: Any, articles: list[_Article], stats: ThreadStats, began
         for r in await conn.fetch(STORY_THREADS_SQL, keys):
             story_threads[r["story_key"]] = r["thread_id"]
     cycle = _Cycle(candidates, thread_entities, story_threads, generic)
+    placing = time.monotonic()
+    stats.score_seconds = placing - began
 
+    # Oldest first (LOAD_SQL's order); the budget counts placement only, and the
+    # oldest MIN_PLACED are always placed, so the backlog always drains.
     for ord_, article in enumerate(articles):
-        if time.monotonic() - began > TIME_BUDGET_S:
+        if ord_ >= MIN_PLACED and time.monotonic() - placing > TIME_BUDGET_S:
             stats.deferred = len(articles) - ord_
             break
         try:
@@ -590,6 +640,7 @@ async def _assign(conn: Any, articles: list[_Article], stats: ThreadStats, began
         except Exception:
             stats.failed += 1
             logger.warning("Thread assignment failed for article %s.", article.id, exc_info=True)
+    stats.place_seconds = time.monotonic() - placing
 
 
 async def _place(
@@ -695,11 +746,6 @@ async def _finish(conn: Any, stats: ThreadStats, now: datetime) -> None:
     await conn.execute(DEACTIVATE_SQL, active_since, now - timedelta(hours=SINGLETON_HOURS))
     stats.active = await conn.fetchval(ACTIVE_SQL)
     stats.finish_seconds = time.monotonic() - began
-    logger.info(
-        "Threads: aggregates, velocity and deactivation in %.1f s (%d threads aggregated).",
-        stats.finish_seconds,
-        len(updated),
-    )
 
 
 async def purge_threads(db: Any, retention_days: int, now: datetime | None = None) -> None:

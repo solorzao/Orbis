@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,10 @@ pytestmark = pytest.mark.skipif(
 
 NOW = datetime(2101, 1, 10, tzinfo=timezone.utc)
 HOUR = timedelta(hours=1)
+# CI's bound on scoring 1100 articles against 900 threads, SCORE_SQL as _assign
+# runs it: 0.6 s on a CI runner. Before the fix, the planner's seq scan, parsing
+# each query vector once per pair, took 79 s there (and 4 minutes on production).
+SCORE_SECONDS = 5.0
 
 
 @pytest_asyncio.fixture
@@ -159,6 +164,12 @@ async def _cos(conn, thread_id, weights) -> float:
     )
 
 
+def _random_unit(rng: random.Random) -> str:
+    values = [rng.gauss(0, 1) for _ in range(512)]
+    norm = math.sqrt(sum(v * v for v in values))
+    return "[" + ",".join(f"{v / norm:.6f}" for v in values) + "]"
+
+
 async def _plan(conn, sql, *args) -> str:
     return "\n".join(r[0] for r in await conn.fetch("EXPLAIN " + sql, *args))
 
@@ -167,17 +178,44 @@ async def _plan(conn, sql, *args) -> str:
 
 
 @pytest.mark.asyncio
-async def test_the_batched_score_query_uses_the_hnsw_index(conn):
-    """The exact text-parameter form: vectors travel as text, cast in the LATERAL."""
-    await _assign(conn, [await _article(conn)])
-    await conn.execute("SET LOCAL enable_seqscan = off")
-    await conn.execute("SET LOCAL hnsw.ef_search = 100")
-
-    plan = await _plan(
-        conn, threads.SCORE_SQL, [0, 1], [_vector({0: 1.0}, 512), _vector({1: 1.0}, 512)], 15
+async def test_scoring_at_production_scale_takes_the_hnsw_index_and_seconds(conn):
+    """The 2026-10-19 stall: 1129 articles against 861 active threads. With the
+    planner's own choice, a seq scan parsed every query vector once per pair,
+    and scoring took 4 minutes on production. Here, with only the settings
+    _assign applies (no test-only enable_seqscan), the plan must be the HNSW
+    index, each query vector parsed once."""
+    rng = random.Random(7)
+    await conn.execute(
+        """
+        WITH t AS (
+            INSERT INTO threads (centroid_sum, first_seen, last_seen)
+            SELECT l2_normalize(
+                       ARRAY(SELECT random() - 0.5 FROM generate_series(1, 512) WHERE g > 0)::vector
+                   ), $1, $1
+            FROM generate_series(1, 900) AS g
+            RETURNING id, centroid_sum, last_seen
+        )
+        INSERT INTO thread_centroids (thread_id, last_seen, centroid)
+        SELECT id, last_seen, centroid_sum::halfvec(512) FROM t
+        """,
+        NOW - HOUR,
     )
+    await conn.execute("ANALYZE thread_centroids")  # as autovacuum would have
+    queries = [_random_unit(rng) for _ in range(1100)]
+    args = (list(range(len(queries))), queries, threads.CANDIDATES)
+
+    async with conn.transaction():
+        for setting in threads.SCORE_SETTINGS:
+            await conn.execute(setting)
+        plan = await _plan(conn, threads.SCORE_SQL, *args)
+        began = time.perf_counter()
+        rows = await conn.fetch(threads.SCORE_SQL, *args)
+        took = time.perf_counter() - began
 
     assert "idx_thread_centroids_hnsw" in plan
+    assert "Seq Scan on thread_centroids" not in plan
+    assert len(rows) == len(queries) * threads.CANDIDATES
+    assert took < SCORE_SECONDS, f"scoring took {took:.1f} s"
 
 
 @pytest.mark.asyncio
@@ -190,7 +228,7 @@ async def test_assignment_never_scans_the_articles_heap(conn):
         "backlog": await _plan(
             conn, threads.BACKLOG_SQL, NOW - 6 * HOUR, threads.MIN_TITLE_WORDS, 500, [uuid.uuid4()]
         ),
-        "load": await _plan(conn, threads.LOAD_SQL, [uuid.uuid4()]),
+        "load": await _plan(conn, threads.LOAD_SQL, [uuid.uuid4()], threads.MAX_BATCH),
         "lead titles": await _plan(conn, threads.LEAD_TITLES_SQL, [1, 2]),
     }
 
@@ -443,8 +481,10 @@ async def test_a_thread_left_unaggregated_by_a_failed_cycle_is_repaired(conn):
     thread = await _thread_of(conn, seed)
     story = await _article(conn, _direction(0.9), NOW - 3 * HOUR)  # older than the last run
     # A cycle that placed the story, then failed before its aggregate step:
-    articles = [threads._Article.from_row(r) for r in await conn.fetch(threads.LOAD_SQL, [story])]
-    await threads._assign(conn, articles, threads.ThreadStats(), time.monotonic())
+    articles = [
+        threads._Article.from_row(r) for r in await conn.fetch(threads.LOAD_SQL, [story], 10)
+    ]
+    await threads._assign(conn, articles, threads.ThreadStats())
 
     await _assign(conn)
 
@@ -594,11 +634,25 @@ async def test_short_titles_cannot_starve_the_backlog(conn):
 
 
 @pytest.mark.asyncio
+async def test_a_backlog_bigger_than_a_batch_drains_oldest_first(conn, monkeypatch):
+    monkeypatch.setattr(threads, "MAX_BATCH", 3)
+    ids = [await _article(conn, {i: 1.0}, NOW - (5 - i) * HOUR) for i in range(5)]
+
+    first = await _assign(conn)
+    assert [await _thread_of(conn, i) is not None for i in ids] == [True] * 3 + [False] * 2
+    second = await _assign(conn)
+
+    assert all([await _thread_of(conn, i) for i in ids])
+    assert (first.assigned, second.assigned) == (3, 2)
+
+
+@pytest.mark.asyncio
 async def test_articles_left_by_a_time_budget_cut_are_assigned_next_cycle(conn, monkeypatch):
     """The backlog skips the cycle's own ids and takes the oldest first, so newer
     articles can't keep crowding the leftovers out until they age past 6 hours."""
     left = await _article(conn, {0: 1.0}, NOW - 5 * HOUR)
     monkeypatch.setattr(threads, "TIME_BUDGET_S", -1)  # out of time before the first
+    monkeypatch.setattr(threads, "MIN_PLACED", 0)  # and no minimum, to cut at the first
     cut = await _assign(conn, [left])
     assert (cut.assigned, cut.deferred) == (0, 1)
     assert await _thread_of(conn, left) is None
