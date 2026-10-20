@@ -9,8 +9,8 @@ is bounded, in three phases:
   its thread members, through idx_thread_members_entities, as the dossier
   counts them;
 - threads: listed threads whose title contains q.
-A search slower than a second logs each phase's time (INFO), so production
-can be checked without database access.
+A search slower than a second logs each phase's time and the query's length,
+never its text (INFO), so production can be checked without database access.
 """
 
 from __future__ import annotations
@@ -94,9 +94,11 @@ async def search(q: str, now: datetime) -> dict:
     threads = await _threads(pool, q, now - _THREAD_WINDOW)
     done = time.perf_counter()
     if done - started > _SLOW_SEARCH_S:
+        # The query's length, never its text: it is what a visitor typed.
         logger.info(
-            "Search %r took %.2fs: names %.2fs (%d candidates), counts %.2fs, threads %.2fs",
-            q,
+            "Search of %d characters took %.2fs: names %.2fs (%d candidates), counts %.2fs,"
+            " threads %.2fs",
+            len(q),
             done - started,
             named - started,
             len(names),

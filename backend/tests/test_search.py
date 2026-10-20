@@ -166,9 +166,12 @@ class TestSearchService:
 
         [record] = caplog.records
         assert record.levelname == "INFO"
+        # The query's length, never its text: it's what a visitor typed.
         assert record.getMessage() == (
-            "Search 'sunak' took 1.75s: names 1.25s (1 candidates), counts 0.25s, threads 0.25s"
+            "Search of 5 characters took 1.75s: names 1.25s (1 candidates), counts 0.25s,"
+            " threads 0.25s"
         )
+        assert "sunak" not in record.getMessage()
 
     @pytest.mark.asyncio
     async def test_a_fast_search_logs_nothing(self, caplog):
