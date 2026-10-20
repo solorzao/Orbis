@@ -12,9 +12,24 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from app.models.board import BoardEdge, BoardItems, BoardLinks, BoardResolution, ResolvedItem
+from app.models.board import (
+    BoardAnalysis,
+    BoardAnalyzeRequest,
+    BoardEdge,
+    BoardItems,
+    BoardLinks,
+    BoardResolution,
+    ResolvedItem,
+)
 from app.routers.links import cached_links_7d
-from app.services.board import EDGE_KINDS, BoardItem, board_edges, parse_items, resolve_items
+from app.services.board import (
+    EDGE_KINDS,
+    BoardItem,
+    analyze_board,
+    board_edges,
+    parse_items,
+    resolve_items,
+)
 from app.services.cache import get_cached, set_cached
 
 router = APIRouter(prefix="/api/board", tags=["board"])
@@ -90,3 +105,20 @@ def _in_board_order(edges: list[dict], items: list[BoardItem]) -> list[BoardEdge
     ]
     turned.sort(key=lambda e: (index[e["a"]], index[e["b"]], EDGE_KINDS.index(e["kind"])))
     return [BoardEdge(**edge) for edge in turned]
+
+
+@router.post("/analyze", response_model=BoardAnalysis)
+async def analyze(body: BoardAnalyzeRequest) -> BoardAnalysis:
+    """A Haiku memo on the pins, 150-250 words in three sections (Possible
+    connections, Contradictions, Open questions), citing pins as [1]..[n] in
+    the request's order; ``citations`` maps each cited number to its item.
+
+    The prompt is built from server data for pins that still resolve; an
+    expired pin may bring its saved snapshot's text. Rate group ``ai``. Cached
+    for an hour by the pins and that text. When there's no memo (the daily cap
+    reached, Claude failing, fewer than two pins with text), ``message`` says
+    so, and nothing is cached.
+    """
+    items = _parse([entry.item for entry in body.items])
+    saved = [None if e.snapshot is None else e.snapshot.model_dump() for e in body.items]
+    return BoardAnalysis(**await analyze_board(items, saved, _now()))

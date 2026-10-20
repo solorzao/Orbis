@@ -339,10 +339,10 @@ async def _production_week(conn, now: datetime) -> dict:
         """
         INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources,
                              lead_title, top_entities)
-        SELECT v, $1 - make_interval(hours => g % 168), $1 - make_interval(hours => g % 24),
+        SELECT v, t0 - make_interval(hours => g % 168), t0 - make_interval(hours => g % 24),
                3, 3, 'zzplan', ARRAY['Zzplan Mid ' || (g % 500), 'Zzplan Heavy ' || (g % 5)]
         FROM generate_series(1, 5000) g,
-             (SELECT array_fill(0.01::real, ARRAY[512])::vector AS v) one
+             (SELECT array_fill(0.01::real, ARRAY[512])::vector AS v, $1::timestamptz AS t0) one
         """,
         now,
     )
@@ -352,7 +352,7 @@ async def _production_week(conn, now: datetime) -> dict:
                                     published_at, latitude, longitude, region, country_code,
                                     entities, tone, similarity)
         SELECT gen_random_uuid(), t.ids[1 + g % 5000], g / 2, 'outlet' || g % 900 || '.test',
-               $1 - make_interval(secs => (100000 - g) * 6.048),
+               $1::timestamptz - make_interval(secs => (100000 - g) * 6.048),
                -60 + (g::bigint * 7919 % 130000) / 1000.0,
                -170 + (g::bigint * 104729 % 340000) / 1000.0,
                'Zzplan Region', 'US',
@@ -372,7 +372,7 @@ async def _production_week(conn, now: datetime) -> dict:
                               longitude, location, region, country_code, summary, persons,
                               orgs, themes)
         SELECT 'zzplan story ' || g, 'https://zzplan.test/' || g, 'outlet' || g % 900 || '.test',
-               $1 - make_interval(secs => (60000 - g) * 10.08), p.lat, p.lng,
+               $1::timestamptz - make_interval(secs => (60000 - g) * 10.08), p.lat, p.lng,
                ST_SetSRID(ST_MakePoint(p.lng, p.lat), 4326)::geography,
                'Zzplan Region ' || g % 1000, 'US', repeat('zzplan summary ', 60),
                ARRAY['Zzplan Heavy ' || g % 5], ARRAY['Zzplan Org'], ARRAY['TAX_FNCACT']
@@ -395,9 +395,10 @@ async def _production_week(conn, now: datetime) -> dict:
         INSERT INTO articles (title, source_url, source_name, published_at, latitude,
                               longitude, location, region, country_code)
         SELECT 'zzplan old ' || g, 'https://zzplan.test/old/' || g, 'old.test',
-               $1 - interval '3 days', $2 + 0.5, $3 + 0.5,
-               ST_SetSRID(ST_MakePoint($3 + 0.5, $2 + 0.5), 4326)::geography, 'Zzplan Old', 'AQ'
-        FROM generate_series(1, 20) g
+               c.t0 - interval '3 days', c.lat, c.lng,
+               ST_SetSRID(ST_MakePoint(c.lng, c.lat), 4326)::geography, 'Zzplan Old', 'AQ'
+        FROM generate_series(1, 20) g,
+             (SELECT $1::timestamptz AS t0, $2::float8 + 0.5 AS lat, $3::float8 + 0.5 AS lng) c
         """,
         now,
         *_OLD_CELL,

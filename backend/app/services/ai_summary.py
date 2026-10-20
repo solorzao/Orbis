@@ -234,6 +234,7 @@ async def _call_claude(
     json_schema: dict | None = None,
     timeout: float = CALL_TIMEOUT_S,
     max_retries: int = CALL_MAX_RETRIES,
+    max_tokens: int = 1024,
 ) -> str:
     """Call the Anthropic messages API.  Returns the text response.
 
@@ -242,6 +243,8 @@ async def _call_claude(
     (structured outputs); the caller still parses and validates it.
     ``timeout`` bounds each attempt in seconds and ``max_retries`` the retries:
     the visitor-facing defaults above; background synopses pass a longer one.
+    ``max_tokens`` caps the reply, thinking included: room for low-effort
+    thinking and a short summary by default; a longer reply asks for more.
     A call that times out has no response, so nothing is recorded against the
     budget, and the caller gets the usual fallback (``SummaryUnavailable``).
     Raises ``SummaryUnavailable`` when there is no summary to return.
@@ -265,7 +268,7 @@ async def _call_claude(
         )
         response = await client.messages.create(
             model=settings.haiku_model_id,
-            max_tokens=1024,  # room for adaptive thinking plus the short summary
+            max_tokens=max_tokens,
             output_config=output_config,
             system=system or _SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],

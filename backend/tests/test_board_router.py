@@ -270,3 +270,94 @@ class TestLinks:
 
         assert resp.status_code == 500
         links.set_cached.assert_not_awaited()
+
+
+# --- /api/board/analyze -----------------------------------------------------------
+
+MEMO = {
+    "sections": [
+        {"heading": "Possible connections", "text": "The strikes [1] may be the thread [2]."},
+        {"heading": "Contradictions", "text": "None apparent [1]."},
+        {"heading": "Open questions", "text": "It is unclear whether [2] continues."},
+    ],
+    "citations": [{"n": 1, "item": ARTICLE}, {"n": 2, "item": "thread:7"}],
+    "message": None,
+}
+
+
+@pytest.fixture
+def analyze(monkeypatch):
+    import app.routers.board as board_router
+
+    monkeypatch.setattr(board_router, "_now", lambda: NOW)
+    with patch("app.routers.board.analyze_board", AsyncMock(return_value=MEMO)) as mock:
+        yield mock
+
+
+class TestAnalyze:
+    @pytest.mark.asyncio
+    async def test_the_memo_with_its_sections_and_citations(self, monkeypatch, analyze):
+        body = {"items": [{"item": ARTICLE}, {"item": "thread:7", "snapshot": None}]}
+
+        resp = await _post(monkeypatch, "/api/board/analyze", body)
+
+        assert resp.status_code == 200
+        assert resp.json() == MEMO
+        [items, saved, now] = analyze.await_args.args
+        assert [i.id for i in items] == [ARTICLE, "thread:7"]
+        assert saved == [None, None]
+        assert now == NOW
+
+    @pytest.mark.asyncio
+    async def test_a_message_instead_of_a_memo(self, monkeypatch, analyze):
+        paused = "AI summaries are paused until 00:00 UTC (daily limit reached)."
+        analyze.return_value = {"sections": [], "citations": [], "message": paused}
+
+        resp = await _post(
+            monkeypatch, "/api/board/analyze", {"items": [{"item": ARTICLE}, {"item": "thread:7"}]}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"sections": [], "citations": [], "message": paused}
+
+    @pytest.mark.asyncio
+    async def test_saved_snapshots_pass_their_title_place_and_time_only(self, monkeypatch, analyze):
+        snapshot = {**SNAPSHOT_JSON, "extra": "ignored"}  # as resolve gave it, and more
+
+        await _post(
+            monkeypatch,
+            "/api/board/analyze",
+            {"items": [{"item": "thread:7"}, {"item": ARTICLE, "snapshot": snapshot}]},
+        )
+
+        [_, saved, _] = analyze.await_args.args
+        assert saved == [
+            None,
+            {
+                "title": "Strikes spread across France",
+                "place": "Paris, France",
+                "time": datetime(2026, 10, 20, 9, tzinfo=timezone.utc),
+            },
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"items": []},
+            {"items": ["thread:7", "thread:8"]},  # items are objects here
+            {"items": [{"item": "thread:07"}]},
+            {"items": [{"item": "thread:7"}, {"item": "thread:7"}]},
+            {"items": [{"item": f"thread:{n}"} for n in range(1, 22)]},
+            {"items": [{"item": "thread:7", "snapshot": {"place": "Paris"}}]},
+            {"items": [{"item": "thread:7", "snapshot": {"title": "x" * 501}}]},
+            {"items": [{"item": "thread:7", "snapshot": {"title": "x", "place": "y" * 201}}]},
+            {"items": [{"item": "thread:7", "snapshot": {"title": "x", "time": "soon"}}]},
+        ],
+    )
+    async def test_a_malformed_request_is_a_422_and_calls_no_one(self, monkeypatch, analyze, body):
+        resp = await _post(monkeypatch, "/api/board/analyze", body)
+
+        assert resp.status_code == 422
+        analyze.assert_not_awaited()
