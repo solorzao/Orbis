@@ -492,7 +492,8 @@ class ThreadStats:
     started: int = 0
     copies: int = 0
     failed: int = 0
-    deferred: int = 0  # left to the backlog by the time budget
+    deferred: int = 0  # left to the backlog: past MAX_BATCH, or by the time budget
+    aggregated: int = 0  # threads the aggregate step recomputed
     active: int = 0
     seconds: float = 0.0
     # Each phase's seconds: the backlog and the load; generic entities, scoring,
@@ -572,6 +573,8 @@ async def assign_threads(
         articles = []
         if ids:
             rows = await conn.fetch(LOAD_SQL, ids, MAX_BATCH)
+            if len(rows) == MAX_BATCH:  # the newest past the batch wait for the backlog
+                stats.deferred += len(ids) - MAX_BATCH
             articles = [
                 _Article.from_row(r) for r in rows if title_words(r["title"]) >= MIN_TITLE_WORDS
             ]
@@ -582,7 +585,7 @@ async def assign_threads(
     stats.seconds = time.monotonic() - began
     logger.info(
         "Threads: %d assigned (%d joined, %d started, %d copies) in %.1f s"
-        " (load %.1f, score %.1f, place %.1f, finish %.1f s); %d active.",
+        " (load %.1f, score %.1f, place %.1f, finish %.1f s); %d aggregated, %d active.",
         stats.assigned,
         stats.joined,
         stats.started,
@@ -592,11 +595,12 @@ async def assign_threads(
         stats.score_seconds,
         stats.place_seconds,
         stats.finish_seconds,
+        stats.aggregated,
         stats.active,
     )
     if stats.deferred or stats.failed:
         logger.warning(
-            "Threads: %d left to the backlog by the time budget, %d failed.",
+            "Threads: %d left to the backlog (the batch or the time budget), %d failed.",
             stats.deferred,
             stats.failed,
         )
@@ -633,7 +637,7 @@ async def _assign(conn: Any, articles: list[_Article], stats: ThreadStats) -> No
     # oldest MIN_PLACED are always placed, so the backlog always drains.
     for ord_, article in enumerate(articles):
         if ord_ >= MIN_PLACED and time.monotonic() - placing > TIME_BUDGET_S:
-            stats.deferred = len(articles) - ord_
+            stats.deferred += len(articles) - ord_
             break
         try:
             await _place(conn, cycle, ord_, article, stats)
@@ -737,6 +741,7 @@ async def _finish(conn: Any, stats: ThreadStats, now: datetime) -> None:
     began = time.monotonic()
     active_since = now - timedelta(hours=ACTIVE_HOURS)
     updated = [r["id"] for r in await conn.fetch(AGGREGATE_SQL, sorted(stats.touched), now)]
+    stats.aggregated = len(updated)
     if updated:
         rows = await conn.fetch(LEAD_TITLES_SQL, updated)
         titles = [(r["id"], display_title(r["title"] or "")) for r in rows]

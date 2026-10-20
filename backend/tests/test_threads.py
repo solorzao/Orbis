@@ -604,9 +604,23 @@ def test_the_repair_pick_up_is_every_unaggregated_thread():
 
 
 @pytest.mark.asyncio
+async def test_articles_past_the_batch_count_as_left_to_the_backlog(monkeypatch, caplog):
+    monkeypatch.setattr(threads, "MAX_BATCH", 2)
+    a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    rows = [_row(id=a), _row(id=b)]  # LOAD_SQL's oldest two
+    conn = _conn(rows, **{threads.BACKLOG_SQL: [{"id": c}]})
+
+    with caplog.at_level(logging.WARNING, logger="orbis.threads"):
+        stats = await _assign(conn, [a, b])
+
+    assert (stats.assigned, stats.deferred) == (2, 1)
+    assert "1 left to the backlog" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_logs_one_summary_line(caplog):
     article = _row()
-    conn = _conn([article], **{threads.ACTIVE_SQL: 3})
+    conn = _conn([article], **{threads.ACTIVE_SQL: 3, threads.AGGREGATE_SQL: [{"id": 101}]})
 
     with caplog.at_level(logging.INFO, logger="orbis.threads"):
         await _assign(conn, [article["id"]])
@@ -616,7 +630,8 @@ async def test_logs_one_summary_line(caplog):
     assert summary.startswith("Threads: 1 assigned (0 joined, 1 started, 0 copies) in ")
     # Each phase's time, so a slow one shows in the log.
     assert re.search(
-        r" s \(load [\d.]+, score [\d.]+, place [\d.]+, finish [\d.]+ s\); 3 active\.$",
+        r" s \(load [\d.]+, score [\d.]+, place [\d.]+, finish [\d.]+ s\);"
+        r" 1 aggregated, 3 active\.$",
         summary,
     ), summary
 
