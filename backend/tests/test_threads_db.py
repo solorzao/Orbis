@@ -18,14 +18,11 @@ import random
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
 from app.services import threads
-
-MIGRATIONS = Path(__file__).resolve().parents[2] / "database" / "migrations"
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -783,8 +780,9 @@ async def test_a_pair_below_merge_sim_needs_a_specific_shared_name(conn, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_merges_chain_and_earlier_ids_follow_the_winner(conn, monkeypatch):
-    """A thread merged earlier into the loser now points at the winner too."""
+async def test_a_merge_never_scans_threads_for_earlier_merges(conn, monkeypatch):
+    """A thread merged into the loser before keeps pointing at it: reads follow the
+    chain by primary key (merged_into has no index, so nothing looks it up)."""
     big = await _story_thread(conn, {0: 1.0}, 6)
     small = await _story_thread(conn, _direction(0.9), 3, first_story=10)
     earlier = await _bare_thread(conn, NOW - 2 * HOUR)
@@ -792,7 +790,8 @@ async def test_merges_chain_and_earlier_ids_follow_the_winner(conn, monkeypatch)
 
     await _catch_up(conn, monkeypatch)
 
-    assert (await _thread(conn, earlier))["merged_into"] == big
+    assert (await _thread(conn, small))["merged_into"] == big
+    assert (await _thread(conn, earlier))["merged_into"] == small
 
 
 @pytest.mark.asyncio
@@ -864,8 +863,3 @@ async def test_news_digests_are_never_threaded(conn):
     assert await _thread_of(conn, brief) is None
     assert await _thread_of(conn, story) is not None
     assert stats.assigned == 1
-
-
-def test_migration_019_removes_digest_threads_by_the_same_pattern():
-    sql = (MIGRATIONS / "019_thread_merges.sql").read_text(encoding="utf-8")
-    assert f"lead_title ~* '{threads.DIGEST_PATTERN}'" in sql

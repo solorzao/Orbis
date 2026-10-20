@@ -183,7 +183,6 @@ async def test_the_cycles_touched_threads_merge_after_aggregation(caplog):
         (threads.MERGE_MEMBERS_SQL, (winner, loser)),
         (threads.MERGE_WINNER_SQL, (winner, loser)),
         (threads.MERGE_LOSER_SQL, (winner, loser, T0)),
-        (threads.REPOINT_SQL, (winner, loser)),
         (threads.DROP_CENTROID_SQL, (loser,)),
         (threads.JOIN_CENTROID_SQL, (winner,)),
     ]

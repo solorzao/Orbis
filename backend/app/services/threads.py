@@ -398,8 +398,10 @@ CATCH_UP_SQL = f"""
 # One merge, loser ($2) into winner ($1), in one transaction: the members move;
 # the winner's sum adds the loser's (each a decayed sum of its stories' vectors)
 # and it is aggregated again; the loser keeps its row, emptied and pointing at the
-# winner (so its id still resolves), as do threads merged into it before; its
-# centroid row goes, and the winner's is rewritten once.
+# winner (so its id still resolves; reads follow merged_into through later merges,
+# so threads merged into the loser before need no update, and nothing looks
+# merged_into up, which has no index); its centroid row goes, and the winner's is
+# rewritten once.
 MERGE_MEMBERS_SQL = "UPDATE thread_members SET thread_id = $1 WHERE thread_id = $2"
 MERGE_WINNER_SQL = """
     UPDATE threads w
@@ -416,7 +418,6 @@ MERGE_LOSER_SQL = """
         aggregated_at = $3
     WHERE id = $2
 """
-REPOINT_SQL = "UPDATE threads SET merged_into = $1 WHERE merged_into = $2"
 DROP_CENTROID_SQL = "DELETE FROM thread_centroids WHERE thread_id = $1"
 
 # The lead's title, from its article by primary key: one read per touched thread.
@@ -891,7 +892,6 @@ MERGE_STEPS = (
     MERGE_MEMBERS_SQL,
     MERGE_WINNER_SQL,
     MERGE_LOSER_SQL,
-    REPOINT_SQL,
     DROP_CENTROID_SQL,
     JOIN_CENTROID_SQL,
 )
@@ -944,7 +944,6 @@ async def _merge_pass(conn: Any, stats: ThreadStats, now: datetime) -> set[int]:
                 await conn.execute(MERGE_MEMBERS_SQL, winner, loser)
                 await conn.execute(MERGE_WINNER_SQL, winner, loser)
                 await conn.execute(MERGE_LOSER_SQL, winner, loser, now)
-                await conn.execute(REPOINT_SQL, winner, loser)
                 await conn.execute(DROP_CENTROID_SQL, loser)
                 await conn.execute(JOIN_CENTROID_SQL, winner)
         except Exception:

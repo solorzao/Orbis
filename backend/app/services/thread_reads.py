@@ -51,12 +51,22 @@ _LEAD = """
     FROM {threads} t LEFT JOIN articles a ON a.id = t.lead_article_id
 """
 
-# A thread merged into another answers as that one: share links and the UI hold
-# thread ids (merges keep merged_into pointing at the final winner).
+# A thread merged into another answers as the thread its merges end in (share
+# links and the UI hold thread ids): merged_into is followed by primary key,
+# through later merges, at most MERGE_HOPS. One that ends in a purged thread
+# (merged_into has no foreign key) is unknown.
+MERGE_HOPS = 10
 DETAIL_SQL = f"""
-    WITH one AS (
+    WITH RECURSIVE chain (id, next, hops) AS (
+        SELECT id, merged_into, 0 FROM threads WHERE id = $1
+        UNION ALL
+        SELECT t.id, t.merged_into, c.hops + 1
+        FROM chain c JOIN threads t ON t.id = c.next
+        WHERE c.hops < {MERGE_HOPS}
+    ),
+    one AS (
         SELECT {_THREAD_COLUMNS} FROM threads
-        WHERE id = (SELECT COALESCE(merged_into, id) FROM threads WHERE id = $1)
+        WHERE id = (SELECT id FROM chain WHERE next IS NULL)
     )
     {_LEAD.format(threads="one")}
 """
