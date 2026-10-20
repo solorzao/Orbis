@@ -122,17 +122,26 @@ async def test_the_fastest_six_go_first(conn):
 
 @pytest.mark.asyncio
 async def test_eligibility_reads_listed_threads_by_the_partial_index(conn):
-    """Not every active thread: mostly single-story ones, never listed."""
+    """Not every active thread: mostly single-story ones, never listed. The planner's
+    own choice, on statistics this test sets for both tables the query reads: with
+    thread_centroids' left to earlier tests, a near-empty estimate could drive the
+    semi-join from it instead."""
     await conn.execute(
-        "INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources)"
-        " SELECT array_fill(0.01, ARRAY[512])::vector, $1::timestamptz,"
-        " $1::timestamptz - i * interval '10 minutes',"
-        " CASE WHEN i <= 3 THEN 6 ELSE 1 END, CASE WHEN i <= 3 THEN 6 ELSE 1 END"
-        " FROM generate_series(1, 300) AS i",
+        """
+        WITH t AS (
+            INSERT INTO threads (centroid_sum, first_seen, last_seen, n_stories, n_sources)
+            SELECT array_fill(0.01, ARRAY[512])::vector, $1::timestamptz,
+                   $1::timestamptz - i * interval '2 minutes',
+                   CASE WHEN i <= 10 THEN 6 ELSE 1 END, CASE WHEN i <= 10 THEN 6 ELSE 1 END
+            FROM generate_series(1, 2000) AS i
+            RETURNING id, last_seen
+        )
+        INSERT INTO thread_centroids (thread_id, last_seen, centroid)
+        SELECT id, last_seen, l2_normalize(array_fill(0.01, ARRAY[512])::vector)::halfvec FROM t
+        """,
         NOW,
     )
-    await conn.execute("ANALYZE threads")
-    await conn.execute("SET LOCAL enable_seqscan = off")
+    await conn.execute("ANALYZE threads, thread_centroids")
 
     plan = "\n".join(
         r[0]
