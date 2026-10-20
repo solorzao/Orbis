@@ -399,9 +399,23 @@ _SYNTHESIS_SCREEN_GUIDE = (
 )
 
 
-def _get_anthropic_client() -> anthropic.AsyncAnthropic:
-    """Return an async Anthropic client."""
-    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+# A visitor waits on an answer, behind the frontend's /api proxy, a Vercel
+# function that gives up at 120 s (maxDuration). The planner (low effort, a
+# short JSON plan) and the synthesis (medium effort, the cited answer) run one
+# after the other with retrieval between (page reads take 5 s each), so they
+# get 15 s and 35 s an attempt and one retry: 100 s at the very worst. The SDK
+# default is 10 minutes an attempt, retried twice. A planner that times out
+# falls back to keyword search; a synthesis, to a polite apology.
+PLAN_TIMEOUT_S = 15.0
+SYNTHESIS_TIMEOUT_S = 35.0
+CLAUDE_MAX_RETRIES = 1
+
+
+def _get_anthropic_client(*, timeout: float, max_retries: int) -> anthropic.AsyncAnthropic:
+    """Return an async Anthropic client whose attempts end after *timeout* seconds."""
+    return anthropic.AsyncAnthropic(
+        api_key=settings.anthropic_api_key, timeout=timeout, max_retries=max_retries
+    )
 
 
 # The links the router's _save_history appends to each stored answer, for
@@ -672,7 +686,7 @@ async def _plan(
     messages.append({"role": "user", "content": f"{line}\n\n{question}" if line else question})
 
     try:
-        client = _get_anthropic_client()
+        client = _get_anthropic_client(timeout=PLAN_TIMEOUT_S, max_retries=CLAUDE_MAX_RETRIES)
         response = await client.messages.create(
             model=settings.haiku_model_id,
             max_tokens=2048,  # room for adaptive thinking plus the JSON plan
@@ -935,7 +949,7 @@ async def synthesize_answer(
     messages.append({"role": "user", "content": content})
 
     try:
-        client = _get_anthropic_client()
+        client = _get_anthropic_client(timeout=SYNTHESIS_TIMEOUT_S, max_retries=CLAUDE_MAX_RETRIES)
         response = await client.messages.create(
             model=settings.haiku_model_id,
             max_tokens=8192,  # room for adaptive thinking plus the cited answer

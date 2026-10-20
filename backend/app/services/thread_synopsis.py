@@ -48,7 +48,8 @@ REGROWTH = 1.5  # summarised again at 1.5 times the stories the last synopsis co
 ACTIVE_WINDOW = timedelta(hours=ACTIVE_HOURS)
 # Seconds each attempt of a call may take (the SDK default is 10 minutes, and a
 # cycle 15): a call the next cycle cancels mid-flight is billed but never
-# recorded, so it must be short.
+# recorded, so it must be short. Longer than a visitor's (ai_summary): no one
+# waits on it. Retried once, as _call_claude does by default.
 CALL_TIMEOUT_S = 30
 
 MAX_TITLE_CHARS = 80

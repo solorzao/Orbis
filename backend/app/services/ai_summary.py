@@ -216,20 +216,34 @@ async def summarise_selection(
     return client_msg
 
 
+# Visitors wait on these calls. The smallest ceiling in front of them is the
+# frontend's /api proxy, a Vercel function that gives up at 120 s
+# (maxDuration); the browser's fetch sets none, and the Container Apps ingress
+# allows 240 s. So each attempt gets 20 s and one retry: about 41 s at worst,
+# which leaves the endpoint's own queries (a 7-day link explanation's can take
+# 20 s cold) room under 120 s. A low-effort summary takes a few seconds. The
+# SDK default is 10 minutes an attempt, retried twice.
+CALL_TIMEOUT_S = 20.0
+CALL_MAX_RETRIES = 1
+
+
 async def _call_claude(
     user_message: str,
     system: str | None = None,
     budget_share: float = 1.0,
     json_schema: dict | None = None,
-    timeout: float | None = None,
+    timeout: float = CALL_TIMEOUT_S,
+    max_retries: int = CALL_MAX_RETRIES,
 ) -> str:
     """Call the Anthropic messages API.  Returns the text response.
 
     ``budget_share`` is the share of the daily cap this call may draw on.
     ``json_schema``, when given, constrains the reply to JSON matching it
     (structured outputs); the caller still parses and validates it.
-    ``timeout``, when given, bounds each attempt in seconds (the SDK's default
-    is 10 minutes, retried twice).
+    ``timeout`` bounds each attempt in seconds and ``max_retries`` the retries:
+    the visitor-facing defaults above; background synopses pass a longer one.
+    A call that times out has no response, so nothing is recorded against the
+    budget, and the caller gets the usual fallback (``SummaryUnavailable``).
     Raises ``SummaryUnavailable`` when there is no summary to return.
     """
     if not settings.anthropic_api_key:
@@ -245,16 +259,16 @@ async def _call_claude(
     output_config: dict = {"effort": "low"}
     if json_schema is not None:
         output_config["format"] = {"type": "json_schema", "schema": json_schema}
-    options: dict = {} if timeout is None else {"timeout": timeout}
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key, timeout=timeout, max_retries=max_retries
+        )
         response = await client.messages.create(
             model=settings.haiku_model_id,
             max_tokens=1024,  # room for adaptive thinking plus the short summary
             output_config=output_config,
             system=system or _SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
-            **options,
         )
         # Before response_text: refusals are billed too.
         await llm_budget.record(response.usage, response.model)
@@ -262,6 +276,13 @@ async def _call_claude(
     except anthropic.RateLimitError:
         logger.warning("Anthropic rate-limited — returning fallback.")
         raise SummaryUnavailable("Summary temporarily unavailable due to rate limits.")
+    except anthropic.APITimeoutError:
+        logger.warning(
+            "Claude timed out (%.0f s an attempt, %d retries); returning fallback.",
+            timeout,
+            max_retries,
+        )
+        raise SummaryUnavailable("Summary generation failed.")
     except Exception:
         logger.error("Anthropic API call failed.", exc_info=True)
         raise SummaryUnavailable("Summary generation failed.")
