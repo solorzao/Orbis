@@ -49,7 +49,7 @@ def test_column_migration_adds_columns_without_a_table_rewrite(name, expected):
 
 # Migrations that only create new tables: they must fail fast on locks and
 # leave the live articles table alone (it is rewritten on every embedding).
-TABLE_MIGRATIONS = ["013_threads.sql", "015_thread_indexes.sql"]
+TABLE_MIGRATIONS = ["013_threads.sql", "015_thread_indexes.sql", "017_kg_entity_names.sql"]
 
 
 @pytest.mark.parametrize("name", TABLE_MIGRATIONS)

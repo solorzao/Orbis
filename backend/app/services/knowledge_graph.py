@@ -25,16 +25,30 @@ def _node_upsert_sql(on_conflict: str) -> str:
     began isn't there, and upsert_node reads it again in a new statement.
     Ingestion is the only writer (one cycle at a time, under its lock), so that
     happens only if two backends overlap, as during a deploy.
+
+    A person or organisation is also kept in kg_entity_names (migration 017),
+    the narrow table search reads: added when new, or when a node stored
+    before the table (or by the previous backend during a deploy) is mentioned
+    again. A row already there costs a primary-key probe; DO NOTHING writes
+    nothing. (In the rare re-read case above, the next mention adds it.)
     """
     return f"""
         WITH up AS (
             INSERT INTO kg_nodes (type, name, metadata) VALUES ($1, $2, $3::jsonb)
             ON CONFLICT (type, name) {on_conflict}
             RETURNING id
+        ),
+        node AS (
+            SELECT id FROM up
+            UNION ALL
+            SELECT id FROM kg_nodes WHERE type = $1 AND name = $2 AND NOT EXISTS (SELECT 1 FROM up)
+        ),
+        named AS (
+            INSERT INTO kg_entity_names (node_id, type, name)
+            SELECT id, $1, $2 FROM node WHERE $1 IN ('PERSON', 'ORG')
+            ON CONFLICT (node_id) DO NOTHING
         )
-        SELECT id FROM up
-        UNION ALL
-        SELECT id FROM kg_nodes WHERE type = $1 AND name = $2 AND NOT EXISTS (SELECT 1 FROM up)
+        SELECT id FROM node
     """
 
 
@@ -224,8 +238,25 @@ async def populate_graph(articles: list[dict]) -> int:
     return edge_count
 
 
+# Orphaned nodes, and the kg_entity_names rows of the people and
+# organisations among them, by key, in one statement.
+_PURGE_ORPHANS_SQL = """
+    WITH gone AS (
+        DELETE FROM kg_nodes n
+        WHERE NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.source_node_id = n.id)
+          AND NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.target_node_id = n.id)
+        RETURNING n.id
+    ),
+    names AS (
+        DELETE FROM kg_entity_names e USING gone WHERE e.node_id = gone.id
+    )
+    SELECT count(*) FROM gone
+"""
+
+
 async def purge_orphaned_nodes() -> int:
-    """Delete kg_nodes that have no edges pointing to or from them.
+    """Delete kg_nodes that have no edges pointing to or from them, and their
+    kg_entity_names rows.
 
     NOT EXISTS lets each node probe the source and target indexes. The old
     NOT IN (… UNION …) form could not hash every edge id in 4 MB of work_mem,
@@ -234,12 +265,7 @@ async def purge_orphaned_nodes() -> int:
     Returns the number of nodes deleted.
     """
     pool = await get_pool()
-    status = await pool.execute(
-        "DELETE FROM kg_nodes n "
-        "WHERE NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.source_node_id = n.id) "
-        "AND NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.target_node_id = n.id)"
-    )
-    count = int(status.split()[-1])
+    count = await pool.fetchval(_PURGE_ORPHANS_SQL)
     if count:
         logger.info("Purged %d orphaned KG nodes.", count)
     return count

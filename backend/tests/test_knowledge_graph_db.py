@@ -185,3 +185,75 @@ async def test_a_cycle_writes_its_edges_and_leaves_known_nodes_alone(conn):
         ("ORG", "Zz Graph Org", "MENTIONED_IN", "zzgraph-Two"),
         ("PERSON", "Zz Graph Person", "MENTIONED_IN", "zzgraph-Two"),
     ]
+
+
+# ── the narrow names table (migration 017) ─────────────────────────────
+
+
+async def _names(conn, name: str) -> list[tuple]:
+    rows = await conn.fetch(
+        "SELECT e.node_id, e.type, e.name FROM kg_entity_names e WHERE e.name = $1 ORDER BY e.type",
+        name,
+    )
+    return [tuple(r) for r in rows]
+
+
+@pytest.mark.asyncio
+async def test_people_and_orgs_are_kept_in_the_names_table_and_nothing_else(conn):
+    person = await _upsert(conn, "PERSON", "Zz Synced", {})
+    org = await _upsert(conn, "ORG", "Zz Synced", {})
+    for node_type, metadata in (
+        ("ARTICLE", {"url": "https://zz.test"}),
+        ("LOCATION", {"lat": 1.0}),
+        ("TOPIC", {}),
+    ):
+        await _upsert(conn, node_type, "Zz Synced", metadata)
+    await _upsert(conn, "PERSON", "Zz Synced", {})  # again: still one row
+
+    assert await _names(conn, "Zz Synced") == [
+        (org, "ORG", "Zz Synced"),
+        (person, "PERSON", "Zz Synced"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_known_node_missing_from_the_names_table_is_added_when_mentioned(conn):
+    # Written before the table existed (or by the previous backend during a deploy).
+    node = await conn.fetchval(
+        "INSERT INTO kg_nodes (type, name) VALUES ('PERSON', 'Zz Before') RETURNING id"
+    )
+    before = await _version(conn, "PERSON", "Zz Before")
+    assert await _upsert(conn, "PERSON", "Zz Before", {}) == node
+    after = await _version(conn, "PERSON", "Zz Before")
+
+    assert await _names(conn, "Zz Before") == [(node, "PERSON", "Zz Before")]
+    assert (after["xmin"], after["ctid"]) == (before["xmin"], before["ctid"])  # node untouched
+
+
+@pytest.mark.asyncio
+async def test_a_purged_node_leaves_the_names_table(conn):
+    kept = await _upsert(conn, "PERSON", "Zz Kept", {})
+    await _upsert(conn, "PERSON", "Zz Orphan", {})
+    await _upsert(conn, "ORG", "Zz Orphan Org", {})
+    article = await _article(conn, "zzgraph-Keeper")
+    target = await _upsert(conn, "ARTICLE", "zzgraph-Keeper", {"url": "https://zz.test/k"})
+    await conn.execute(
+        "INSERT INTO kg_edges (source_node_id, target_node_id, rel_type, article_id)"
+        " VALUES ($1, $2, 'MENTIONED_IN', $3)",
+        kept,
+        target,
+        article,
+    )
+
+    class _PurgePool:
+        async def fetchval(self, sql, *args):
+            return await conn.fetchval(sql, *args)
+
+    with patch.object(
+        knowledge_graph, "get_pool", new_callable=AsyncMock, return_value=_PurgePool()
+    ):
+        assert await knowledge_graph.purge_orphaned_nodes() >= 2
+
+    assert await _names(conn, "Zz Kept") == [(kept, "PERSON", "Zz Kept")]
+    assert await _names(conn, "Zz Orphan") == []
+    assert await _names(conn, "Zz Orphan Org") == []
