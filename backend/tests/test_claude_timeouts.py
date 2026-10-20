@@ -161,6 +161,35 @@ async def test_synopses_override_the_timeout(claude):
 
 
 @pytest.mark.asyncio
+async def test_a_call_allows_1024_tokens_unless_its_caller_needs_more(claude):
+    await ai_summary._call_claude("Headlines")
+    await ai_summary._call_claude("<pins>...</pins>", max_tokens=2048)
+
+    sizes = [c.kwargs["max_tokens"] for c in claude.client.messages.create.await_args_list]
+    assert sizes == [1024, 2048]
+
+
+@pytest.mark.asyncio
+async def test_board_memos_are_bounded_with_room_for_the_memo(claude, monkeypatch):
+    from app.services import board
+
+    monkeypatch.setattr(board, "get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr(board, "set_cached", AsyncMock())
+    snapshot = {"title": "Strikes spread", "place": None, "lat": None, "lng": None}
+    monkeypatch.setattr(
+        board,
+        "resolve_items",
+        AsyncMock(return_value=[{**snapshot, "time": None, "url": None}] * 2),
+    )
+    items = [board.parse_item("thread:7"), board.parse_item("thread:8")]
+
+    await board.analyze_board(items, [None, None], datetime(2026, 10, 20, tzinfo=timezone.utc))
+
+    assert _bound(claude.cls) == VISITOR_BOUND
+    assert claude.client.messages.create.await_args.kwargs["max_tokens"] == board.MEMO_MAX_TOKENS
+
+
+@pytest.mark.asyncio
 async def test_the_agents_calls_are_bounded():
     with patch("app.services.agent.anthropic.AsyncAnthropic") as cls:
         agent._get_anthropic_client(timeout=12.5, max_retries=1)

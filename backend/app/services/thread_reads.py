@@ -57,14 +57,32 @@ _LEAD = """
 # through later merges, at most MERGE_HOPS. One that ends in a purged thread
 # (merged_into has no foreign key) is unknown.
 MERGE_HOPS = 10
-DETAIL_SQL = f"""
-    WITH RECURSIVE chain (id, next, hops) AS (
-        SELECT id, merged_into, 0 FROM threads WHERE id = $1
+
+
+def merge_chain(start: str) -> str:
+    """A recursive CTE, ``chain (start, id, next, hops)``, for WITH RECURSIVE: from each
+    thread *start* selects (a condition on threads), merged_into followed by primary
+    key, at most MERGE_HOPS. A start's row with ``next IS NULL`` is the thread its
+    merges end in; a start with none ends in a purged thread and is unknown. The
+    detail reads one id through it, the board each pinned thread.
+
+    Each hop is a probe by primary key (LATERAL with LIMIT 1, which can't be
+    flattened into a join): from 20 starts, a plain join was planned as a hash
+    join over a scan of every thread."""
+    return f"""chain (start, id, next, hops) AS (
+        SELECT id, id, merged_into, 0 FROM threads WHERE {start}
         UNION ALL
-        SELECT t.id, t.merged_into, c.hops + 1
-        FROM chain c JOIN threads t ON t.id = c.next
+        SELECT c.start, t.id, t.merged_into, c.hops + 1
+        FROM chain c
+        CROSS JOIN LATERAL (
+            SELECT id, merged_into FROM threads WHERE id = c.next LIMIT 1
+        ) t
         WHERE c.hops < {MERGE_HOPS}
-    ),
+    )"""
+
+
+DETAIL_SQL = f"""
+    WITH RECURSIVE {merge_chain("id = $1")},
     one AS (
         SELECT {_THREAD_COLUMNS} FROM threads
         WHERE id = (SELECT id FROM chain WHERE next IS NULL)
