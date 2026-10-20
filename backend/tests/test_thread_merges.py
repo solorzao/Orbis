@@ -72,7 +72,7 @@ def test_stories_are_not_digests(title):
 def test_the_backlog_skips_digests_with_the_same_pattern():
     """As for short titles: a headline Python drops but SQL keeps would come back
     every cycle and crowd the backlog."""
-    assert f"a.title !~* '{threads.DIGEST_PATTERN}'" in threads.BACKLOG_SQL
+    assert f"st.shown !~* '{threads.DIGEST_PATTERN}'" in threads.BACKLOG_SQL
 
 
 def test_the_pattern_is_the_same_in_postgres_and_python():

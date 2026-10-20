@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 
 from app.services import threads
+from app.services.titles import display_title
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -892,3 +893,82 @@ async def test_news_digests_are_never_threaded(conn):
     assert await _thread_of(conn, brief) is None
     assert await _thread_of(conn, story) is not None
     assert stats.assigned == 1
+
+
+# --- titles as shown -----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_section_labels_and_short_titles_as_shown_are_never_threaded(conn):
+    """Thread 9574, "National", grew from headlines display_title shows as "National",
+    "Health" and "World". Judged as shown, in the backlog's SQL too."""
+    label = await _article(conn, title="National - The Hindu")
+    older = [
+        await _article(conn, published_at=NOW - 2 * HOUR, title=title)
+        for title in (
+            "World | Reuters",
+            "Police arrest man - BBC News",
+            "Latest News and Updates - The Hindu",
+        )
+    ]
+    story = await _article(
+        conn, published_at=NOW - 3 * HOUR, title="Floods kill twenty in Sindh - The Hindu"
+    )
+
+    backlog = await conn.fetch(
+        threads.BACKLOG_SQL, NOW - 6 * HOUR, threads.MIN_TITLE_WORDS, 500, []
+    )
+    stats = await _assign(conn, [label])
+
+    assert [r["id"] for r in backlog] == [story]
+    assert [await _thread_of(conn, a) for a in (label, *older)] == [None] * 4
+    assert await _thread_of(conn, story) is not None
+    assert stats.assigned == 1
+
+
+def _fullwidth(text: str) -> str:
+    return "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in text)
+
+
+SHOWN = [
+    "National - The Hindu",
+    "Health | Reuters",
+    f"World {chr(0x2013)} BBC News",
+    f"Oil rises {chr(0x2212)} and falls {chr(0x2014)} Reuters",
+    f"Storm{chr(0xA0)}Austen hits the coast - Met Office",
+    _fullwidth("National | The Hindu"),
+    "Police arrest man - BBC News",
+    "LIVE: Top stories this morning - CNN",
+    "UPDATE 2-Oil rises on supply fears - Reuters",
+    "Breaking News: Quake hits Kathmandu valley | Reuters",
+    "Live updates - Storm Austen hits the coast",
+    "Watch: Video: Crowds gather in central Paris - France 24",
+    "Update: World - Reuters",
+    "Opinion | Why the Fed should wait for more data",
+    "Latest News and Updates - The Hindu",
+    "Sports & Business News - Times of India",
+    "Trump - Xi summit - what we know so far",
+    "Markets slide as investors weigh rates - and the outlook for the rest of the year",
+    "Live-action remake tops the box office",
+    "AP News Summary at 6:14 a.m. EDT",
+    "Sports: India beat Pakistan in the final",
+    "  Leading and trailing spaces here  ",
+    "",
+]
+
+
+@pytest.mark.asyncio
+async def test_the_backlog_shows_and_judges_titles_as_python_does(conn):
+    """display_title and threadable in SQL, title by title. Ingestion's titles are
+    unescaped already (gdelt._clean_title), so the SQL skips html.unescape."""
+    rows = await conn.fetch(
+        f"SELECT st.shown, {threads.threadable_sql('st.shown', '$2')} AS threadable"
+        " FROM unnest($1::text[]) WITH ORDINALITY AS u(title, n)"
+        f" {threads.shown_title_sql('u.title')}"
+        " ORDER BY u.n",
+        SHOWN,
+        threads.MIN_TITLE_WORDS,
+    )
+
+    assert [r["shown"] for r in rows] == [display_title(t) for t in SHOWN]
+    assert [r["threadable"] for r in rows] == [threads.threadable(t) for t in SHOWN]
