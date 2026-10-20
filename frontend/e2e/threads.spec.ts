@@ -26,8 +26,10 @@ const SPREAD_ARCS = String(RED_SEA_SPREAD.length - 1);
 
 /** Threads on and the Red Sea thread open, its arcs drawn: the ready signal. */
 async function openRedSea(page: Page) {
-  await threadsToggle(page).click();
-  await rows(page).first().click();
+  // From the keyboard: a press needs no frames to settle, a click does, and each
+  // frame of the software-rendered globe is slow on CI's runners.
+  await threadsToggle(page).press("Enter");
+  await rows(page).first().press("Enter");
   await expect(rows(page).first()).toHaveAttribute("aria-expanded", "true");
   await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
 }
@@ -194,45 +196,57 @@ test.describe("A thread's detail, arcs and replay", () => {
     await expect(globe(page)).toHaveAttribute("data-arc-dashed", "false");
   });
 
-  /** Links on, and the US-Iran link opened from the Inspect tab's list. */
+  /**
+   * Links on, and the US-Iran link opened from the Inspect tab's list, from the
+   * keyboard (see openRedSea), ready once its arc is drawn highlighted.
+   */
   async function inspectUsIran(page: Page) {
-    await page.getByRole("button", { name: "Links", exact: true }).click();
-    await page.getByTestId("side-tab-inspect").click();
+    await page.getByRole("button", { name: "Links", exact: true }).press("Enter");
+    await page.getByTestId("side-tab-inspect").press("Enter");
     await page
       .getByRole("list", { name: "Links on the globe" })
       .getByRole("button", { name: /^United States and Iran/ })
-      .click();
-    await expect(page.getByTestId("link-inspector")).toBeVisible();
+      .press("Enter");
+    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
   }
 
+  // Links, the link inspector and a thread together: each step waits on a frame of
+  // the software-rendered globe, about 2 s a step on CI's runners (two tries ran
+  // out of 30 s), so these two get the slow budget.
   test("selecting a thread draws its arcs instead of an inspected link's highlight", async ({
     page,
   }) => {
+    test.slow();
     await gotoStillGlobe(page);
     await inspectUsIran(page);
-    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
 
-    await threadsToggle(page).click();
-    await rows(page).first().click();
+    await threadsToggle(page).press("Enter");
+    await rows(page).first().press("Enter");
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", SPREAD_ARCS);
     await expect(globe(page)).toHaveAttribute("data-arc-highlight", "");
     // Closed, the thread gives the inspected link its highlight back.
-    await rows(page).first().click();
+    await rows(page).first().press("Enter");
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
     await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
-    // What is drawn, not what is inspected: with Links off there is no arc to highlight.
-    await page.getByRole("button", { name: "Links", exact: true }).click();
-    await expect(page.getByTestId("link-inspector")).toBeVisible();
-    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "");
   });
 
   test("opening a link closes the selected thread", async ({ page }) => {
+    test.slow();
     await gotoStillGlobe(page);
     await openRedSea(page);
     await inspectUsIran(page);
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
-    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
     await expect(rows(page).first()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("the highlight signal is the arc drawn, not the link inspected", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await inspectUsIran(page);
+    // Links off: the inspector stays open, but no arc is drawn to highlight.
+    await page.getByRole("button", { name: "Links", exact: true }).press("Enter");
+    await expect(globe(page)).toHaveAttribute("data-arcs", "0");
+    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "");
+    await expect(page.getByTestId("link-inspector")).toBeVisible();
   });
 
   test("a range closes the selected thread: threads follow the live windows", async ({ page }) => {
