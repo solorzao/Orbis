@@ -127,11 +127,11 @@ def member_mentions_sql(name: str, since: str, cap: str) -> str:
 
 
 # A name of that type, in any case, as stored. Without wildcards (escaped),
-# ILIKE is a case-insensitive equality. The literal type predicate lets every
-# plan use idx_kg_nodes_entity_name_trgm (migration 016), which holds only
-# people and organisations; $1 alone would match it only in a custom plan.
-# Stored spellings that differ only in case resolve to the one with the most
-# coverage this week in thread members ($3, reading at most $4), which the
+# ILIKE is a case-insensitive equality, served by the trigram index of
+# kg_entity_names (migration 017): people and organisations only, a few MB
+# that stay cached, where search finds names too. Stored spellings that
+# differ only in case resolve to the one with the most coverage this week in
+# thread members ($3, reading at most $4), which the
 # dossier reads by that spelling: capped spellings first, as search ranks
 # names, then the rest by stories, then by name. A capped spelling's stories
 # are a sample and case variants are equally close to the name, so capped ones
@@ -139,8 +139,8 @@ def member_mentions_sql(name: str, since: str, cap: str) -> str:
 # cache key does.
 _RESOLVE_SQL = f"""
     SELECT n.name
-    FROM kg_nodes n CROSS JOIN LATERAL {member_mentions_sql("n.name", "$3", "$4")} m
-    WHERE n.type IN ('PERSON', 'ORG') AND n.type = $1 AND n.name ILIKE $2
+    FROM kg_entity_names n CROSS JOIN LATERAL {member_mentions_sql("n.name", "$3", "$4")} m
+    WHERE n.type = $1 AND n.name ILIKE $2
     ORDER BY m.capped DESC, CASE WHEN m.capped THEN 0 ELSE m.stories END DESC, n.name
     LIMIT 1
 """

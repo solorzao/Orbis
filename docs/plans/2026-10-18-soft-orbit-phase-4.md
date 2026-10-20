@@ -370,14 +370,14 @@ In the place panel (`NewsPanel`), an article whose cluster row carries `thread` 
 ## PR 17a: Entity API
 
 Branch: `claude/p4-entities-api`. It merges after 15b.
-- **Names** come from the knowledge graph: `kg_nodes` PERSON and ORG (`idx_kg_nodes_entity_name_trgm`, migration 016, a trigram index of people and orgs only), with recent coverage counted from `thread_members` (`idx_thread_members_entities`), as the dossier counts it.
+- **Names** come from the knowledge graph's people and organisations, kept in the narrow `kg_entity_names` table (migration 017, its own trigram index; a few MB that stay cached, filled by the migration, synced by `knowledge_graph.upsert_node` and the orphan purge, repaired by `scripts/reconcile_entity_names.py`; migration 018 drops 016's partial index), with recent coverage counted from `thread_members` (`idx_thread_members_entities`), as the dossier counts it.
 - **Dossiers** read `thread_members` through its GIN `entities` index, joining articles by primary key only for the 10 headlines.
 
 ### Task 17a.1: `GET /api/search?q=` (`app/routers/search.py`, `app/services/search.py`)
 
 - **Query:** `q` is 2–80 characters after `strip_invisible` and trim; anything else is 422.
 - **People and orgs:**
-  - match `kg_nodes` of type PERSON or ORG with `name ILIKE $q || '%' OR name % $q` (trigram), up to 20 candidates, naming `type IN ('PERSON', 'ORG')` literally so every plan can use the partial index;
+  - match `kg_entity_names` with `name ILIKE $q || '%' OR $q <% name` (word similarity, at least 0.6: a word of the name must resemble q; plain `%` let a short q match every name sharing its first two letters), up to 20 candidates, the closest first;
   - count each candidate's coverage in the last 7 days from at most 100 thread members (`SEARCH_COUNT_CAP`): `n` is the distinct stories among the members read, and `capped` says the cap was reached, so the name has at least `n` stories;
   - rank capped names first, by similarity among themselves (their `n` is a sample of whichever members the scan met first), then the rest by `n`, then similarity;
   - return up to 5 each, as `{type: "person"|"org", name, n, capped}`; 17b renders a capped result as "{n}+";

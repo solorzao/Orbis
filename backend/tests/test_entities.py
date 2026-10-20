@@ -323,14 +323,16 @@ class TestResolveEntity:
 
         sql, *args = pool.fetchval.await_args.args
         flat = " ".join(sql.split())
-        # The literal type predicate: the partial trigram index of people and orgs.
-        assert "WHERE n.type IN ('PERSON', 'ORG') AND n.type = $1 AND n.name ILIKE $2" in flat
+        # The narrow names table (people and organisations only) and its trigram
+        # index, as search: never kg_nodes' heap.
+        assert "WHERE n.type = $1 AND n.name ILIKE $2" in flat
+        assert "kg_nodes" not in flat
         # Spellings that differ only in case: the most coverage this week in thread
         # members, which the dossier reads by that spelling, ranked as search ranks
         # names, then by name. Nothing depends on the request's case, so the dossier
         # cached under the lowercased name is the same whichever case asks.
         mentions = " ".join(entities.member_mentions_sql("n.name", "$3", "$4").split())
-        assert f"FROM kg_nodes n CROSS JOIN LATERAL {mentions} m WHERE" in flat
+        assert f"FROM kg_entity_names n CROSS JOIN LATERAL {mentions} m WHERE" in flat
         # Capped variants' stories are a sample, so among them, by name.
         assert (
             "ORDER BY m.capped DESC, CASE WHEN m.capped THEN 0 ELSE m.stories END DESC, n.name"

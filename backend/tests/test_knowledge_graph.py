@@ -245,7 +245,7 @@ class TestPurgeOrphanedNodes:
         from app.services.knowledge_graph import purge_orphaned_nodes
 
         pool = AsyncMock()
-        pool.execute = AsyncMock(return_value="DELETE 5")
+        pool.fetchval = AsyncMock(return_value=5)
 
         with patch(
             "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
@@ -253,8 +253,8 @@ class TestPurgeOrphanedNodes:
             count = await purge_orphaned_nodes()
 
         assert count == 5
-        pool.execute.assert_called_once()
-        call_sql = pool.execute.call_args[0][0]
+        pool.fetchval.assert_called_once()
+        call_sql = pool.fetchval.call_args[0][0]
         assert "DELETE FROM kg_nodes" in call_sql
 
     @pytest.mark.asyncio
@@ -263,24 +263,43 @@ class TestPurgeOrphanedNodes:
         from app.services.knowledge_graph import purge_orphaned_nodes
 
         pool = AsyncMock()
-        pool.execute = AsyncMock(return_value="DELETE 0")
+        pool.fetchval = AsyncMock(return_value=0)
 
         with patch(
             "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
         ):
             await purge_orphaned_nodes()
 
-        sql = " ".join(pool.execute.call_args[0][0].split())
+        sql = " ".join(pool.fetchval.call_args[0][0].split())
         assert "NOT IN" not in sql
         assert "NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.source_node_id = n.id)" in sql
         assert "NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.target_node_id = n.id)" in sql
+
+    @pytest.mark.asyncio
+    async def test_a_purged_person_or_org_leaves_the_names_table_too(self):
+        from app.services.knowledge_graph import purge_orphaned_nodes
+
+        pool = AsyncMock()
+        pool.fetchval = AsyncMock(return_value=3)
+
+        with patch(
+            "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
+        ):
+            assert await purge_orphaned_nodes() == 3
+
+        sql = " ".join(pool.fetchval.call_args[0][0].split())
+        # One statement: the deleted nodes' ids, then their names rows by key.
+        assert "WITH gone AS ( DELETE FROM kg_nodes n" in sql
+        assert "RETURNING n.id )" in sql
+        assert "DELETE FROM kg_entity_names e USING gone WHERE e.node_id = gone.id" in sql
+        assert sql.endswith("SELECT count(*) FROM gone")
 
     @pytest.mark.asyncio
     async def test_returns_zero_when_no_orphans(self):
         from app.services.knowledge_graph import purge_orphaned_nodes
 
         pool = AsyncMock()
-        pool.execute = AsyncMock(return_value="DELETE 0")
+        pool.fetchval = AsyncMock(return_value=0)
 
         with patch(
             "app.services.knowledge_graph.get_pool", new_callable=AsyncMock, return_value=pool
@@ -340,10 +359,30 @@ class TestUpsertNode:
 
         sql = _flat(conn.fetchval.await_args.args[0])
         assert sql.startswith("WITH up AS ( INSERT INTO kg_nodes (type, name, metadata)")
-        assert sql.endswith(
-            ") SELECT id FROM up UNION ALL SELECT id FROM kg_nodes"
-            " WHERE type = $1 AND name = $2 AND NOT EXISTS (SELECT 1 FROM up)"
-        )
+        assert (
+            "node AS ( SELECT id FROM up UNION ALL SELECT id FROM kg_nodes"
+            " WHERE type = $1 AND name = $2 AND NOT EXISTS (SELECT 1 FROM up) )"
+        ) in sql
+        assert sql.endswith(") SELECT id FROM node")
+        conn.fetchval.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("metadata", [{}, {"lat": 1.0}])
+    async def test_a_person_or_org_is_kept_in_the_names_table_in_the_same_statement(self, metadata):
+        from app.services.knowledge_graph import upsert_node
+
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=NODE)
+        await upsert_node(conn, "PERSON", "Alice Smith", metadata)
+
+        sql = _flat(conn.fetchval.await_args.args[0])
+        # New or not: a node mentioned again heals a missing names row, and a
+        # present one costs a primary-key probe (DO NOTHING writes nothing).
+        assert (
+            "named AS ( INSERT INTO kg_entity_names (node_id, type, name)"
+            " SELECT id, $1, $2 FROM node WHERE $1 IN ('PERSON', 'ORG')"
+            " ON CONFLICT (node_id) DO NOTHING )"
+        ) in sql
         conn.fetchval.assert_awaited_once()
 
     @pytest.mark.asyncio

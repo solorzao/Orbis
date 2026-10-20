@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -22,7 +21,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from app.services import entities, search, thread_reads
+from app.services import entities, knowledge_graph, search, thread_reads
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -172,9 +171,9 @@ async def _bulk_members(conn, count: int, entities_sql: str, story: str = "g") -
 
 
 async def _node(conn, type_: str, name: str) -> None:
-    await conn.execute(
-        "INSERT INTO kg_nodes (type, name) VALUES ($1, $2) ON CONFLICT DO NOTHING", type_, name
-    )
+    """A graph node as ingestion writes it: people and organisations also in the
+    narrow names table search and resolution read."""
+    await knowledge_graph.upsert_node(conn, type_, name, {})
 
 
 async def _dossier(name, type_="person", timespan="168h"):
@@ -500,59 +499,6 @@ async def test_search_counts_stories_among_the_capped_members_and_ranks_the_capp
     ]
     dossier = await entities.get_entity_dossier("Zz Cap Under", "person", "168h", now)
     assert dossier["counts"]["d7"] == 99
-
-
-@pytest.mark.asyncio
-async def test_names_are_matched_among_people_and_orgs_and_counted_from_members(conn):
-    # Headlines (ARTICLE nodes) that carry the name, which the full trigram index
-    # would match and recheck one by one, and many people.
-    await conn.execute(
-        "INSERT INTO kg_nodes (type, name)"
-        " SELECT 'ARTICLE', 'Markets fell sharply on Monday after Zzplanned spoke, report '"
-        " || g FROM generate_series(1, 2000) g"
-    )
-    await conn.execute(
-        "INSERT INTO kg_nodes (type, name)"
-        " SELECT 'PERSON', 'Bulkperson ' || g FROM generate_series(1, 50000) g"
-    )
-    await _node(conn, "PERSON", "Zzplanned Person")
-    await _bulk_members(conn, 2000, "ARRAY['Zz Other ' || (g % 200)]")
-    # New GIN entries wait in a pending list that every scan reads in full, until
-    # (auto)vacuum or autoanalyze merges them; merge them now, as production's are.
-    for index in ("idx_kg_nodes_name_trgm", "idx_kg_nodes_entity_name_trgm"):
-        await conn.execute(f"SELECT gin_clean_pending_list('{index}')")
-    await conn.execute("ANALYZE kg_nodes")
-    await conn.execute("ANALYZE thread_members")
-    await conn.execute("SET LOCAL enable_seqscan = off")
-    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
-
-    candidates = await _plan(conn, search._CANDIDATES_SQL, "zzplanned", "zzplanned%", week_ago, 100)
-    resolve = await _plan(conn, entities._RESOLVE_SQL, "PERSON", "zzplanned person", week_ago, 100)
-    for plan in (candidates, resolve):
-        assert "idx_kg_nodes_entity_name_trgm" in plan, plan
-        assert not re.search(r"\bidx_kg_nodes_name_trgm\b", plan), plan
-        # Each name's count: thread members through the entity index.
-        assert "idx_thread_members_entities" in plan, plan
-        assert "kg_edges" not in plan, plan
-
-    # Plans made without the values (asyncpg reuses prepared statements, and
-    # after five runs PostgreSQL may keep a generic plan) can use the partial
-    # index only because each query names its predicate literally.
-    await conn.execute(
-        "PREPARE zz_candidates (text, text, timestamptz, bigint) AS " + search._CANDIDATES_SQL
-    )
-    await conn.execute(
-        "PREPARE zz_resolve (text, text, timestamptz, bigint) AS " + entities._RESOLVE_SQL
-    )
-    await conn.execute("SET LOCAL plan_cache_mode = force_generic_plan")
-    for statement in (
-        "EXECUTE zz_candidates('zzplanned', 'zzplanned%', now(), 100)",
-        "EXECUTE zz_resolve('PERSON', 'zzplanned person', now(), 100)",
-    ):
-        plan = await _plan(conn, statement)
-        assert "$2" in plan, plan  # generic: planned without the values
-        assert "idx_kg_nodes_entity_name_trgm" in plan, plan
-        assert not re.search(r"\bidx_kg_nodes_name_trgm\b", plan), plan
 
 
 @pytest.mark.asyncio
