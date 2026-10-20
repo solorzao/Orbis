@@ -8,10 +8,12 @@ function Harness({
   initialTab = "copilot",
   initialOpen = true,
   inspectCount,
+  threads,
 }: {
   initialTab?: SideTab;
   initialOpen?: boolean;
   inspectCount?: number;
+  threads?: boolean;
 }) {
   const [tab, setTab] = useState<SideTab>(initialTab);
   const [open, setOpen] = useState(initialOpen);
@@ -24,6 +26,7 @@ function Harness({
       copilot={<p>Co-pilot content</p>}
       inspect={<p>Inspect content</p>}
       inspectCount={inspectCount}
+      threads={threads ? <p>Threads content</p> : undefined}
     />
   );
 }
@@ -41,6 +44,23 @@ describe("SidePanel", () => {
     expect(screen.getByRole("tablist")).toHaveClass("seg");
     expect(screen.getByTestId("side-tab-copilot")).toBe(tab("Co-pilot"));
     expect(screen.getByTestId("side-tab-inspect")).toBe(tab("Inspect"));
+  });
+
+  it("adds a Threads tab after Inspect when given one (the sheet, below 1180px)", () => {
+    render(<Harness threads />);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "Co-pilot",
+      "Inspect",
+      "Threads",
+    ]);
+    expect(screen.getByTestId("side-tab-threads")).toBe(tab("Threads"));
+    expect(screen.queryByText("Threads content")).not.toBeVisible();
+    fireEvent.click(tab("Threads"));
+    expect(tab("Threads")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Threads content")).toBeVisible();
+    expect(screen.getByRole("tabpanel", { name: "Threads" })).toContainElement(
+      screen.getByText("Threads content"),
+    );
   });
 
   it("marks the active tab selected, with a roving tabindex", () => {

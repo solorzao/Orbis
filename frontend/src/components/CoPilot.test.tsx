@@ -304,6 +304,19 @@ describe("CoPilot", () => {
       expect(link).toHaveAttribute("target", "_blank");
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
     });
+
+    it("link only to the web: any other link in the answer stays plain text", () => {
+      renderCoPilot({
+        messages: answer({
+          content:
+            "See [a script](javascript:alert(1)), [a mail](mailto:x@example.com) and [the report](https://example.com/report).",
+        }),
+      });
+      expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual(["the report"]);
+      expect(screen.getByText("a script")).toBeInTheDocument();
+      expect(screen.getByText("a mail")).toBeInTheDocument();
+      expect(document.querySelector('a[href^="javascript:"], a[href^="mailto:"]')).toBeNull();
+    });
   });
 
   describe("action pills", () => {

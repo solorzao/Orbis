@@ -13,13 +13,15 @@ function renderSwitcher(over: Partial<Props> = {}) {
     onLinksChange: () => {},
     rank: "lift",
     onRankChange: () => {},
+    threads: false,
+    onThreadsChange: () => {},
     ...over,
   };
   return render(<LayerSwitcher {...props} />);
 }
 
 describe("LayerSwitcher", () => {
-  it("is a labelled group of the base layers, then the Links overlay after a divider", () => {
+  it("is a labelled group of the base layers, then the Links and Threads overlays after a divider", () => {
     renderSwitcher();
     const group = screen.getByRole("group", { name: "Globe layers" });
     expect(group).toHaveAttribute("data-testid", "layer-switcher");
@@ -28,10 +30,37 @@ describe("LayerSwitcher", () => {
       within(group)
         .getAllByRole("button")
         .map((b) => b.textContent),
-    ).toEqual(["Dots", "Intensity", "Links"]);
+    ).toEqual(["Dots", "Intensity", "Links", "Threads"]);
     expect(LAYERS.map((l) => l.id)).toEqual(["dots", "intensity"]);
     expect(group.querySelector(".sep")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Links" })).toHaveClass("tg");
+    expect(screen.getByRole("button", { name: "Threads" })).toHaveClass("tg");
+  });
+
+  it("toggles the Threads overlay; Links and Threads may both be on", () => {
+    const onThreadsChange = vi.fn();
+    const { rerender } = renderSwitcher({ links: true, onThreadsChange });
+    const threads = screen.getByRole("button", { name: "Threads" });
+    expect(threads).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(threads);
+    expect(onThreadsChange).toHaveBeenCalledWith(true);
+
+    rerender(
+      <LayerSwitcher
+        layer="dots"
+        onChange={() => {}}
+        links
+        onLinksChange={() => {}}
+        rank="lift"
+        onRankChange={() => {}}
+        threads
+        onThreadsChange={onThreadsChange}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Threads" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Links" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
+    expect(onThreadsChange).toHaveBeenLastCalledWith(false);
   });
 
   it("marks only the active base layer as pressed", () => {
@@ -44,6 +73,8 @@ describe("LayerSwitcher", () => {
 
     rerender(
       <LayerSwitcher
+        threads={false}
+        onThreadsChange={() => {}}
         layer="intensity"
         onChange={() => {}}
         links={false}
@@ -92,6 +123,8 @@ describe("LayerSwitcher", () => {
 
     rerender(
       <LayerSwitcher
+        threads={false}
+        onThreadsChange={() => {}}
         layer="intensity"
         onChange={onChange}
         links
@@ -116,6 +149,8 @@ describe("LayerSwitcher", () => {
 
     rerender(
       <LayerSwitcher
+        threads={false}
+        onThreadsChange={() => {}}
         layer="dots"
         onChange={() => {}}
         links
@@ -151,6 +186,8 @@ describe("LayerSwitcher", () => {
 
     rerender(
       <LayerSwitcher
+        threads={false}
+        onThreadsChange={() => {}}
         layer="dots"
         onChange={() => {}}
         links
@@ -164,6 +201,8 @@ describe("LayerSwitcher", () => {
 
     rerender(
       <LayerSwitcher
+        threads={false}
+        onThreadsChange={() => {}}
         layer="dots"
         onChange={() => {}}
         links={false}

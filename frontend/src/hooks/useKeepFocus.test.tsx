@@ -119,4 +119,37 @@ describe("useKeepFocus", () => {
     press("Go");
     expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
   });
+
+  it("catches focus a change takes from another region (a tab the change hides)", () => {
+    function Tabs() {
+      const regionRef = useRef<HTMLDivElement>(null);
+      const sourceRef = useRef<HTMLDivElement>(null);
+      const keepFocus = useKeepFocus(regionRef, sourceRef);
+      const [tab, setTab] = useState<"threads" | "inspect">("threads");
+      return (
+        <>
+          <div ref={sourceRef} hidden={tab !== "threads"}>
+            <button
+              type="button"
+              onClick={() => {
+                keepFocus(null);
+                setTab("inspect");
+              }}
+            >
+              All stories
+            </button>
+          </div>
+          <div ref={regionRef} tabIndex={-1} hidden={tab !== "inspect"} data-testid="inspect">
+            Stories
+          </div>
+        </>
+      );
+    }
+    render(<Tabs />);
+    const button = screen.getByRole("button", { name: "All stories" });
+    button.focus();
+    fireEvent.click(button);
+    // Still on the button, but in a hidden tab: lost all the same.
+    expect(screen.getByTestId("inspect")).toHaveFocus();
+  });
 });

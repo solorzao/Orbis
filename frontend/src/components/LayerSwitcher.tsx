@@ -6,9 +6,9 @@ import type { LinkRank } from "@/lib/links";
 export type GlobeLayer = "dots" | "intensity";
 
 /**
- * The globe's base layers, one at a time. Mood and Threads join when their
- * data exists (PRs 12 and 16); Phase 2 shows only working layers. Links is
- * an overlay on either base layer, after the divider.
+ * The globe's base layers, one at a time (Mood joins when its data exists).
+ * Links and Threads are overlays on either base layer, after the divider,
+ * and may both be on.
  */
 export const LAYERS: readonly { id: GlobeLayer; label: string }[] = [
   { id: "dots", label: "Dots" },
@@ -33,6 +33,9 @@ interface LayerSwitcherProps {
   onRankChange: (rank: LinkRank) => void;
   /** While Links is on: why it draws nothing ("No links in this window"), or null. */
   linksStatus?: string | null;
+  /** The Threads overlay: the developing stories' rail, and the selected one's spread. */
+  threads: boolean;
+  onThreadsChange: (on: boolean) => void;
 }
 
 /**
@@ -51,6 +54,8 @@ export default function LayerSwitcher({
   rank,
   onRankChange,
   linksStatus = null,
+  threads,
+  onThreadsChange,
 }: LayerSwitcherProps) {
   const id = useId();
   return (
@@ -82,15 +87,26 @@ export default function LayerSwitcher({
           })}
         </div>
         <span className="sep" aria-hidden="true" />
-        <button
-          type="button"
-          className="tg"
-          aria-pressed={links}
-          title="Countries covered in the same stories"
-          onClick={() => onLinksChange(!links)}
-        >
-          Links
-        </button>
+        <span className="overlays">
+          <button
+            type="button"
+            className="tg"
+            aria-pressed={links}
+            title="Countries covered in the same stories"
+            onClick={() => onLinksChange(!links)}
+          >
+            Links
+          </button>
+          <button
+            type="button"
+            className="tg"
+            aria-pressed={threads}
+            title="The same developing story across outlets and places"
+            onClick={() => onThreadsChange(!threads)}
+          >
+            Threads
+          </button>
+        </span>
         {LAYERS.map(
           (l) =>
             unavailable[l.id] && (

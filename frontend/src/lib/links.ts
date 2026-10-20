@@ -71,15 +71,19 @@ export interface ArcColors {
   flowMs: number;
 }
 
-/** One arc as globe.gl draws it. */
+/** One arc as globe.gl draws it: a link's, or a thread's spread (lib/threads). */
 export interface GlobeArc {
-  link: CountryLink;
+  /** The link it draws (Links layer); none for a thread's arc. */
+  link?: CountryLink;
+  /** The thread whose spread it draws. */
+  thread?: number;
   key: string;
   startLat: number;
   startLng: number;
   endLat: number;
   endLng: number;
-  color: string;
+  /** One colour, or a gradient from start to end (the aurora). */
+  color: string | string[];
   stroke: number;
   dashLength: number;
   dashGap: number;
