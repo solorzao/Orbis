@@ -87,6 +87,8 @@ interface GlobeProps {
   thread?: { id: number; spread: readonly ThreadPlace[] } | null;
   /** While its spread replays, the places lit so far: only their arcs show (null: all). */
   threadLit?: number | null;
+  /** The visitor pressed or scrolled the globe (to leave the camera where they put it). */
+  onGrab?: () => void;
 }
 
 interface LandFeature {
@@ -140,6 +142,7 @@ export default function Globe({
   onArcClick,
   thread = null,
   threadLit = null,
+  onGrab,
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -161,6 +164,9 @@ export default function Globe({
 
   const onArcClickRef = useRef(onArcClick);
   onArcClickRef.current = onArcClick;
+
+  const onGrabRef = useRef(onGrab);
+  onGrabRef.current = onGrab;
 
   // The tokens the scene was built with, for the effects that redraw it.
   const tokensRef = useRef<ReturnType<typeof readGlobeTokens> | null>(null);
@@ -348,6 +354,7 @@ export default function Globe({
     // visitor touches the globe. Never with reduced motion or in low-power mode.
     const stopDrift = () => {
       driftStoppedRef.current = true;
+      onGrabRef.current?.();
     };
     container.addEventListener("pointerdown", stopDrift);
     // A press on the globe may become a drag: the arcs pause until it ends, wherever.
@@ -504,7 +511,9 @@ export default function Globe({
     if (container) {
       // read by the e2e tests: WebGL arcs can't be found in the DOM
       container.dataset.arcs = String(linked.length);
-      container.dataset.arcHighlight = inspectedLink ?? "";
+      // The arc drawn highlighted, if any (not the inspected link, which may not be drawn).
+      container.dataset.arcHighlight =
+        linked.find((a) => a.color === tokens.arcs.highlight)?.key ?? "";
       container.dataset.threadArcs = String(spread.length);
       // Each replay step as drawn, "1:0,2:1,…": a step at or before the last starts a new replay.
       if (thread && threadLit !== null) {

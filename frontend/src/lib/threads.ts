@@ -329,8 +329,12 @@ export function spreadView(
   const length = Math.hypot(...sum);
   if (length < 0.01) return { lat: first.lat, lng: first.lng, altitude: HOME_VIEW.altitude };
   const mid = sum.map((c) => c / length);
+  // Clamped both ways: a place opposite the others' middle rounds below -1 (acos: NaN).
   const radius = Math.max(
-    ...unit.map((v) => Math.acos(Math.min(1, v[0] * mid[0] + v[1] * mid[1] + v[2] * mid[2])) / RAD),
+    ...unit.map(
+      (v) =>
+        Math.acos(Math.max(-1, Math.min(1, v[0] * mid[0] + v[1] * mid[1] + v[2] * mid[2]))) / RAD,
+    ),
   );
   return {
     lat: Math.asin(mid[2]) / RAD,
@@ -339,13 +343,18 @@ export function spreadView(
   };
 }
 
+/** Where a spread replay is: not run (or stopped), lighting places, or every place shown. */
+export type ReplayPhase = "idle" | "started" | "done";
+
 /**
- * What a screen reader hears as a replay lights a place: "Suez, Egypt: place
- * 2 of 4", and at the last "… Every place shown." (all a reduced-motion
- * replay, one step, says). Nothing when not replaying.
+ * What a screen reader hears of a replay: "Replaying 4 places" as it starts
+ * (once, not once per place: a thread may reach 30), then "Mombasa, Kenya:
+ * place 4 of 4. Every place shown." (all a reduced-motion replay, one step,
+ * says), which stays until the next replay. Nothing otherwise.
  */
-export function replayAnnouncement(spread: readonly ThreadPlace[], lit: number | null): string {
-  if (lit === null || lit < 1 || lit > spread.length) return "";
-  const said = `${spread[lit - 1].place}: place ${lit} of ${spread.length}`;
-  return lit === spread.length ? `${said}. Every place shown.` : said;
+export function replayAnnouncement(spread: readonly ThreadPlace[], phase: ReplayPhase): string {
+  const n = spread.length;
+  if (phase === "idle" || n === 0) return "";
+  if (phase === "started") return `Replaying ${n} places`;
+  return `${spread[n - 1].place}: place ${n} of ${n}. Every place shown.`;
 }

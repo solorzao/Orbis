@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import type {
   ArticleThread,
@@ -39,7 +39,6 @@ import {
   THREAD_PAGE,
   fetchThread,
   replayAnnouncement,
-  spreadView,
   threadsStatus,
   toThreadArticles,
   type ThreadArticle,
@@ -56,6 +55,7 @@ import { useMotionPrefs } from "@/hooks/useMotionPrefs";
 import { useSidePanel, useWideScreen } from "@/hooks/useSidePanel";
 import { useThread, useThreads } from "@/hooks/useThreads";
 import { useSpreadReplay } from "@/hooks/useSpreadReplay";
+import { useFlyToThread, type ThreadView } from "@/hooks/useFlyToThread";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
 import { useHoverCard, useTouchOnly } from "@/hooks/useHoverCard";
 import { rememberBrief, useHoverPreview } from "@/hooks/useHoverPreview";
@@ -208,32 +208,35 @@ export default function Home() {
 
   // The same window again (a preset clicked twice) keeps its dots: no refetch.
   // A range (or a day replay's) has no threads: the selected one and its arcs go.
-  const changeWindow = useCallback(
+  const changeWindow = useCallback((next: TimeWindow) => {
+    setTimeWindow((prev) => (sameWindow(prev, next) ? prev : next));
+  }, []);
+
+  // A range the visitor chose has no threads (they follow the live windows):
+  // the selected one and its arcs go. A day replay's days don't count: a
+  // thread selected then stops the replay (TimelineCapsule) instead.
+  const handleWindowChosen = useCallback(
     (next: TimeWindow) => {
-      setTimeWindow((prev) => (sameWindow(prev, next) ? prev : next));
-      if (next.kind !== "live") {
-        resetSpreadReplay();
-        setSelectedThread(null);
-      }
+      if (next.kind === "live") return;
+      resetSpreadReplay();
+      setSelectedThread(null);
     },
     [resetSpreadReplay],
   );
 
   // A thread selected: the globe goes to the middle of its places, framing them
-  // (spreadView), at once with reduced motion. Once per selection: the same
-  // thread chosen again (a chip) stays where the visitor has the globe.
-  const flownRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (selectedId === null) {
-      flownRef.current = null;
-      return;
-    }
-    if (flownRef.current === selectedId || !globeThread) return;
-    const view = spreadView(globeThread.spread);
-    if (!view) return;
-    flownRef.current = selectedId;
-    globeControlsRef.current?.flyTo(view.lat, view.lng, view.altitude, reduced ? 0 : undefined);
-  }, [selectedId, globeThread, reduced]);
+  // (spreadView), at once with reduced motion; once per selection, and not
+  // after the visitor has turned the globe themselves (useFlyToThread).
+  const grabsRef = useRef(0);
+  const handleGrab = useCallback(() => {
+    grabsRef.current += 1;
+  }, []);
+  const flyToThread = useCallback(
+    (view: ThreadView) =>
+      globeControlsRef.current?.flyTo(view.lat, view.lng, view.altitude, reduced ? 0 : undefined),
+    [reduced],
+  );
+  useFlyToThread(selectedId, globeThread?.spread, flyToThread, grabsRef);
 
   const handleGlobeAction = useCallback((action: GlobeAction) => {
     globeControlsRef.current?.flyTo(action.lat, action.lng, 2.0);
@@ -410,8 +413,11 @@ export default function Home() {
 
   // Show: the window from the last visit (floored, as the strip counts it) to now.
   const handleSinceShow = useCallback(() => {
-    if (lastVisit !== null) changeWindow(sinceRange(lastVisit, Date.now()));
-  }, [lastVisit, changeWindow]);
+    if (lastVisit === null) return;
+    const range = sinceRange(lastVisit, Date.now());
+    changeWindow(range);
+    handleWindowChosen(range);
+  }, [lastVisit, changeWindow, handleWindowChosen]);
 
   // A place new since the visit: fly there and open it, as a breaking story.
   const handleSinceOpen = useCallback(
@@ -776,6 +782,7 @@ export default function Home() {
         onArcClick={handleLinkOpen}
         thread={globeThread}
         threadLit={spreadReplay.lit}
+        onGrab={handleGrab}
       />
 
       {/* Orbital rings around the globe */}
@@ -900,6 +907,7 @@ export default function Home() {
         <TimelineCapsule
           timeWindow={timeWindow}
           onChange={changeWindow}
+          onChoose={handleWindowChosen}
           onReplayChange={setReplaying}
           stories={points.reduce((sum, p) => sum + p.count, 0)}
           places={points.length}
@@ -907,7 +915,7 @@ export default function Home() {
           playRef={playRef}
           lastVisit={lastVisit}
           spread={
-            selectedThread && globeThread
+            selectedThread
               ? {
                   title: threadDetail?.title ?? selectedThread.title,
                   playing: spreadReplay.playing,
@@ -925,7 +933,7 @@ export default function Home() {
       <p className="sr-only" aria-live="polite" data-testid="hover-announcer">
         <span>{cardPoint ? cardLabel(cardPoint) : ""}</span>
         <span>{linksNote ?? ""}</span>
-        <span>{replayAnnouncement(globeThread?.spread ?? [], spreadReplay.lit)}</span>
+        <span>{replayAnnouncement(globeThread?.spread ?? [], spreadReplay.phase)}</span>
       </p>
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}

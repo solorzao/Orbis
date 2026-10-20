@@ -220,6 +220,10 @@ test.describe("A thread's detail, arcs and replay", () => {
     await rows(page).first().click();
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", "0");
     await expect(globe(page)).toHaveAttribute("data-arc-highlight", "IR-US");
+    // What is drawn, not what is inspected: with Links off there is no arc to highlight.
+    await page.getByRole("button", { name: "Links", exact: true }).click();
+    await expect(page.getByTestId("link-inspector")).toBeVisible();
+    await expect(globe(page)).toHaveAttribute("data-arc-highlight", "");
   });
 
   test("opening a link closes the selected thread", async ({ page }) => {
@@ -279,6 +283,44 @@ test.describe("The Part of chip", () => {
     const row = rows(page).filter({ hasText: "EU summit on energy prices" });
     await expect(row).toHaveAttribute("aria-expanded", "true");
     await expect(globe(page)).toHaveAttribute("data-thread-arcs", "2");
+  });
+});
+
+test.describe("The Part of chip and the time window", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  const chip = (page: Page) =>
+    page
+      .getByTestId("news-panel")
+      .getByRole("button", { name: /^Part of: EU summit on energy prices/ });
+
+  test("a thread chosen during a day replay stops it, back on the live window", async ({
+    page,
+  }) => {
+    await gotoStillGlobe(page, withThreads);
+    await clickPlace(page, PARIS);
+    await play(page).click();
+    await expect(page.getByTestId("timeline-label")).toHaveText(/^Replay/);
+
+    await chip(page).click();
+    await expect(page.getByTestId("timeline-label")).toHaveText("Last 24 h, live");
+    await expect(play(page)).toHaveAccessibleName("Replay how EU summit on energy prices spread");
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "2");
+  });
+
+  test("a thread chosen under a chosen range stays chosen", async ({ page }) => {
+    await gotoStillGlobe(page, withThreads);
+    await clickPlace(page, PARIS);
+    await page.getByRole("slider", { name: "Window start" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("timeline-label")).not.toHaveText(/live/);
+
+    await chip(page).click();
+    await expect(globe(page)).toHaveAttribute("data-thread-arcs", "2");
+    await expect(rows(page).filter({ hasText: "EU summit on energy prices" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 });
 

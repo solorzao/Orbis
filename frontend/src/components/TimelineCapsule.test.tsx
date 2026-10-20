@@ -363,3 +363,45 @@ describe("TimelineCapsule with a thread selected", () => {
     expect(screen.getByRole("button", { name: "Replay the last 7 days" })).toBeInTheDocument();
   });
 });
+
+describe("TimelineCapsule's choices and a selected thread", () => {
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  it("tells the page which windows the visitor chose, not a replay's days", async () => {
+    const onChoose = vi.fn();
+    render(
+      <TimelineCapsule
+        timeWindow={DEFAULT_WINDOW}
+        onChange={vi.fn()}
+        onChoose={onChoose}
+        stories={0}
+        places={0}
+      />,
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
+    await advance(3 * 1600);
+    expect(onChoose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "6h" }));
+    expect(onChoose).toHaveBeenCalledWith({ kind: "live", hours: 6 });
+  });
+
+  it("stops a day replay when a thread is selected, back on the window from before", async () => {
+    const onChange = vi.fn();
+    const props = { timeWindow: DEFAULT_WINDOW, onChange, stories: 0, places: 0 };
+    const { rerender } = render(<TimelineCapsule {...props} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Replay the last 7 days" }));
+    await advance(1600);
+    const spread = { title: "EU summit", playing: false, onPlay: vi.fn(), onStop: vi.fn() };
+    rerender(<TimelineCapsule {...props} spread={spread} />);
+    expect(onChange).toHaveBeenLastCalledWith(DEFAULT_WINDOW);
+    expect(screen.getByRole("button", { name: "Replay how EU summit spread" })).toBeInTheDocument();
+    const calls = onChange.mock.calls.length;
+    await advance(5 * 1600);
+    expect(onChange).toHaveBeenCalledTimes(calls); // no more days
+  });
+});

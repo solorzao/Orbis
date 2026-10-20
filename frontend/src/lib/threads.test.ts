@@ -323,18 +323,64 @@ describe("spreadView", () => {
   it("has nowhere to go without places", () => {
     expect(spreadView([])).toBeNull();
   });
+
+  it("stays finite with a place opposite the others' middle (dot rounds below -1)", () => {
+    // Two places at A and one at its antipode: their middle is A, the third is
+    // exactly opposite, and the rounded dot product comes out under -1.
+    for (const [lat, lng] of [
+      [10, 20],
+      [45, -120],
+      [-33, 151],
+      [0.5, 179.5],
+    ]) {
+      const view = spreadView([
+        at(lat, lng),
+        at(lat, lng),
+        at(-lat, lng > 0 ? lng - 180 : lng + 180),
+      ])!;
+      expect(Number.isFinite(view.altitude), `${lat},${lng}`).toBe(true);
+      expect(view.altitude).toBe(2.5); // 180 degrees out: the home view's height
+    }
+  });
+
+  it("always gives a finite view, wherever the places are (a seeded sweep)", () => {
+    let seed = 42;
+    const random = () => (seed = (seed * 1664525 + 1013904223) % 2 ** 32) / 2 ** 32;
+    const place = () => at(Math.round(random() * 180 - 90), Math.round(random() * 360 - 180));
+    for (let i = 0; i < 2000; i++) {
+      const n = 1 + Math.floor(random() * 6);
+      const places = Array.from({ length: n }, place);
+      // Half the time, a place opposite another, the reviewer's NaN case.
+      if (i % 2 === 0) {
+        const p = places[0];
+        places.push(at(-p.lat, p.lng > 0 ? p.lng - 180 : p.lng + 180));
+      }
+      const view = spreadView(places)!;
+      expect(
+        [view.lat, view.lng, view.altitude].every(Number.isFinite),
+        JSON.stringify(places),
+      ).toBe(true);
+      expect(view.altitude).toBeGreaterThanOrEqual(1.5);
+      expect(view.altitude).toBeLessThanOrEqual(2.5);
+    }
+  });
 });
 
 describe("replayAnnouncement", () => {
   const spread = toThread(apiThread()).places; // Yemen, Egypt, Netherlands
 
-  it("names each place as the replay lights it, and nothing otherwise", () => {
-    expect(replayAnnouncement(spread, null)).toBe("");
-    expect(replayAnnouncement(spread, 1)).toBe("Yemen: place 1 of 3");
-    expect(replayAnnouncement(spread, 2)).toBe("Egypt: place 2 of 3");
+  it("says nothing before a replay", () => {
+    expect(replayAnnouncement(spread, "idle")).toBe("");
+  });
+
+  it("says once that it replays, not once per place (a thread may reach 30)", () => {
+    expect(replayAnnouncement(spread, "started")).toBe("Replaying 3 places");
   });
 
   it("says when every place is shown (all a reduced-motion replay says)", () => {
-    expect(replayAnnouncement(spread, 3)).toBe("Netherlands: place 3 of 3. Every place shown.");
+    expect(replayAnnouncement(spread, "done")).toBe(
+      "Netherlands: place 3 of 3. Every place shown.",
+    );
+    expect(replayAnnouncement([], "done")).toBe("");
   });
 });

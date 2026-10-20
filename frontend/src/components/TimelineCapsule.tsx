@@ -77,6 +77,8 @@ function windowSpan(w: TimeWindow, now: number): { from: number; to: number } {
 interface TimelineCapsuleProps {
   timeWindow: TimeWindow;
   onChange: (timeWindow: TimeWindow) => void;
+  /** A window the visitor chose (a preset, a drag or the range inputs), not a replay's day. */
+  onChoose?: (timeWindow: TimeWindow) => void;
   /** True when a replay starts, false when it ends (for the status pill). */
   onReplayChange?: (playing: boolean) => void;
   /** Stories and places on the globe for the window. */
@@ -107,6 +109,7 @@ interface TimelineCapsuleProps {
 export default function TimelineCapsule({
   timeWindow,
   onChange,
+  onChoose,
   onReplayChange,
   stories,
   places,
@@ -178,7 +181,16 @@ export default function TimelineCapsule({
   const choose = (next: TimeWindow) => {
     replay.stop(false);
     onChange(next);
+    onChoose?.(next);
   };
+
+  // A thread selected while the days replay: the replay stops, back on the
+  // window from before it, and the button replays the thread instead.
+  const threadSelected = spread !== null;
+  const { playing: dayReplaying, stop: stopDays } = replay;
+  useEffect(() => {
+    if (threadSelected && dayReplaying) stopDays();
+  }, [threadSelected, dayReplaying, stopDays]);
   const replayStart = replay.step?.kind === "range" ? Date.parse(replay.step.startTime) : null;
   const replayDay =
     replayStart === null
