@@ -205,6 +205,27 @@ class TestGetLinks:
         assert resp.json() == cached
         db.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_the_board_reads_the_warmed_7_day_list_and_never_computes_it(
+        self, monkeypatch, db
+    ):
+        """cached_links_7d (the board's co-coverage) reads warm_links_7d's entry."""
+        from app.routers import links as links_router
+
+        with patch("app.routers.links.set_cached", new_callable=AsyncMock) as mock_set:
+            await links_router.warm_links_7d()
+        warmed_key, warmed, _ = mock_set.await_args.args
+
+        with patch(
+            "app.routers.links.get_cached", new_callable=AsyncMock, return_value=None
+        ) as get:
+            assert await links_router.cached_links_7d() is None
+        get.assert_awaited_once_with(warmed_key)
+        with patch("app.routers.links.get_cached", new_callable=AsyncMock, return_value=warmed):
+            [link] = await links_router.cached_links_7d()
+        assert (link.a.iso, link.b.iso) == ("IR", "US")
+        db.assert_awaited_once()  # the warm's query only
+
 
 def _article_row(i: int, title: str | None = None) -> dict:
     return {

@@ -456,3 +456,215 @@ class TestResolveLinksAndOrder:
             "Strikes spread across France",
             None,
         ]
+
+
+# --- Edges ------------------------------------------------------------------------
+
+A1 = f"article:{ARTICLE_ID}"
+A2 = f"article:{OTHER_ID}"
+ANN = "entity:person:ann lee"
+
+
+def _connect(ids, facts, mentions=(), listed=None):
+    return board.connect(_items(*ids), facts, set(mentions), listed)
+
+
+def _edge(a, b, kind, label):
+    return {"a": a, "b": b, "kind": kind, "label": label}
+
+
+class TestConnect:
+    def test_articles_in_one_thread_and_an_article_and_its_thread(self):
+        facts = {
+            A1: board.Facts(thread=7),
+            A2: board.Facts(thread=7),
+            "thread:7": board.Facts(thread=7),
+            "thread:8": board.Facts(thread=8),
+        }
+
+        edges = _connect([A1, A2, "thread:7", "thread:8"], facts)
+
+        assert edges == [
+            _edge(A1, A2, "same_thread", "same thread"),
+            _edge(A1, "thread:7", "same_thread", "same thread"),
+            _edge(A2, "thread:7", "same_thread", "same thread"),
+        ]
+
+    def test_articles_without_a_thread_are_not_in_the_same_one(self):
+        assert _connect([A1, A2], {A1: board.Facts(), A2: board.Facts()}) == []
+
+    def test_shared_names_label_up_to_three_in_the_first_pins_order(self):
+        facts = {
+            A1: board.Facts(entities=("Ann Lee", "Bo Chan", "Cy Diaz", "Di Ekwe", "Ed Fox")),
+            A2: board.Facts(entities=("Ed Fox", "Di Ekwe", "Cy Diaz", "Bo Chan", "Zed")),
+            "thread:7": board.Facts(thread=7, entities=("Zed", "Ann Lee")),
+        }
+
+        edges = _connect([A1, A2, "thread:7"], facts)
+
+        assert edges == [
+            _edge(A1, A2, "shared_entity", "shared: Bo Chan, Cy Diaz, Di Ekwe"),
+            _edge(A1, "thread:7", "shared_entity", "shared: Ann Lee"),
+            _edge(A2, "thread:7", "shared_entity", "shared: Zed"),
+        ]
+
+    def test_an_entity_pin_and_the_article_or_thread_that_names_it(self):
+        facts = {
+            ANN: board.Facts(name="Ann Lee"),
+            A1: board.Facts(entities=("Ann Lee",)),
+            A2: board.Facts(entities=("Bo Chan",)),
+            "thread:7": board.Facts(thread=7, entities=("Bo Chan",)),
+            "thread:8": board.Facts(thread=8),
+        }
+        mentions = {("Ann Lee", 7)}  # a member of thread 7 names her
+
+        edges = _connect([ANN, A1, A2, "thread:7", "thread:8"], facts, mentions)
+
+        assert [e for e in edges if ANN in (e["a"], e["b"])] == [
+            _edge(ANN, A1, "shared_entity", "shared: Ann Lee"),
+            _edge(ANN, "thread:7", "shared_entity", "shared: Ann Lee"),
+        ]
+
+    def test_an_entity_the_graph_doesnt_know_connects_to_nothing(self):
+        facts = {ANN: board.Facts(), A1: board.Facts(entities=("Ann Lee",))}
+
+        assert _connect([ANN, A1], facts) == []
+
+    def test_places_and_articles_in_one_cell(self):
+        facts = {
+            "place:6:3": board.Facts(cell=(6, 3)),
+            A1: board.Facts(cell=(6, 3)),
+            A2: board.Facts(cell=(9, 7)),
+            "thread:7": board.Facts(thread=7),
+        }
+
+        edges = _connect(["place:6:3", A1, A2, "thread:7"], facts)
+
+        assert edges == [_edge("place:6:3", A1, "same_place", "same place")]
+
+    def test_pins_whose_countries_are_a_listed_pair_were_covered_together(self):
+        facts = {
+            "place:6:3": board.Facts(cell=(6, 3), countries=frozenset({"NG"})),
+            A1: board.Facts(cell=(48, 2), countries=frozenset({"FR"})),
+            "link:DE-US": board.Facts(countries=frozenset({"DE", "US"})),
+            A2: board.Facts(cell=(6, 3), countries=frozenset({"NG"})),
+        }
+        listed = {frozenset({"FR", "NG"}), frozenset({"DE", "FR"})}
+
+        edges = _connect(["place:6:3", A1, "link:DE-US", A2], facts, listed=listed)
+
+        assert [e for e in edges if e["kind"] == "co_covered"] == [
+            _edge("place:6:3", A1, "co_covered", "covered together: France and Nigeria"),
+            _edge(A1, "link:DE-US", "co_covered", "covered together: Germany and France"),
+            _edge(A1, A2, "co_covered", "covered together: France and Nigeria"),
+        ]
+        # The same country on both sides is no pair; the same cell is.
+        assert [e for e in edges if {e["a"], e["b"]} == {"place:6:3", A2}] == [
+            _edge("place:6:3", A2, "same_place", "same place")
+        ]
+
+    def test_without_the_listed_pairs_no_co_coverage(self):
+        facts = {
+            A1: board.Facts(countries=frozenset({"FR"})),
+            A2: board.Facts(countries=frozenset({"NG"})),
+        }
+
+        assert _connect([A1, A2], facts, listed=None) == []
+
+    def test_one_pair_of_pins_can_have_an_edge_of_each_kind_in_kind_order(self):
+        common = {"thread": 7, "entities": ("Ann Lee",), "cell": (6, 3)}
+        facts = {
+            A1: board.Facts(**common, countries=frozenset({"NG"})),
+            A2: board.Facts(**common, countries=frozenset({"FR"})),
+        }
+
+        edges = _connect([A1, A2], facts, listed={frozenset({"FR", "NG"})})
+
+        assert [e["kind"] for e in edges] == [
+            "same_thread",
+            "shared_entity",
+            "same_place",
+            "co_covered",
+        ]
+
+
+def _member_row(article_id, thread_id, entities):
+    return {"article_id": uuid.UUID(article_id), "thread_id": thread_id, "entities": entities}
+
+
+class TestBoardEdges:
+    @pytest.fixture
+    def names(self):
+        stored = {("person", "ann lee"): "Ann Lee"}
+
+        async def resolve(entity_type, name, now):
+            return stored.get((entity_type, name.lower()))
+
+        with patch("app.services.board.resolve_entity", AsyncMock(side_effect=resolve)) as mock:
+            yield mock
+
+    @pytest.mark.asyncio
+    async def test_facts_come_from_bounded_reads_and_make_the_edges(self, pool, names):
+        pool.answers[board.MEMBERS_SQL] = [
+            _member_row(ARTICLE_ID, 7, ["Ann Lee", "Bo Chan"]),
+            _member_row(OTHER_ID, 7, ["Bo Chan"]),
+        ]
+        pool.answers[board.ARTICLES_SQL] = [
+            _article_row(latitude=6.45, longitude=3.39, country_code="NG"),
+            _article_row(OTHER_ID, latitude=48.85, longitude=2.35, country_code="FR"),
+        ]
+        pool.answers[board.THREADS_SQL] = [
+            {
+                "id": 8,
+                "title": None,
+                "lead_title": "",
+                "places": [],
+                "last_seen": NOW,
+                "top_entities": ["Bo Chan"],
+            }
+        ]
+        pool.answers[board.MENTIONS_SQL] = [{"name": "Ann Lee", "thread_id": 8}]
+        pool.answers[board.PLACE_SQL] = [_place_row()]
+
+        edges = await board.board_edges(
+            _items(A1, A2, "thread:8", ANN, "place:6:3"), {frozenset({"FR", "NG"})}, NOW
+        )
+
+        nigeria_france = "covered together: France and Nigeria"
+        assert edges == [
+            _edge(A1, A2, "same_thread", "same thread"),
+            _edge(A1, A2, "shared_entity", "shared: Bo Chan"),
+            _edge(A1, A2, "co_covered", nigeria_france),
+            _edge(A1, "thread:8", "shared_entity", "shared: Bo Chan"),
+            _edge(A1, ANN, "shared_entity", "shared: Ann Lee"),
+            _edge(A1, "place:6:3", "same_place", "same place"),
+            _edge(A2, "thread:8", "shared_entity", "shared: Bo Chan"),
+            _edge(A2, "place:6:3", "co_covered", nigeria_france),
+            _edge("thread:8", ANN, "shared_entity", "shared: Ann Lee"),
+        ]
+        assert pool.calls_to(board.MEMBERS_SQL) == [([ARTICLE_ID, OTHER_ID],)]
+        assert pool.calls_to(board.THREADS_SQL) == [([8],)]
+        assert pool.calls_to(board.MENTIONS_SQL) == [(["Ann Lee"], [8])]
+
+    @pytest.mark.asyncio
+    async def test_without_the_listed_pairs_places_are_not_looked_up(self, pool, names):
+        await board.board_edges(_items("place:6:3", "place:9:7", A1), None, NOW)
+
+        assert pool.calls_to(board.PLACE_SQL) == []
+
+    @pytest.mark.asyncio
+    async def test_mentions_are_read_only_with_names_and_threads_to_match(self, pool, names):
+        await board.board_edges(_items(ANN, A1), set(), NOW)
+        await board.board_edges(_items("thread:8", A1), set(), NOW)
+
+        assert pool.calls_to(board.MENTIONS_SQL) == []
+
+    def test_reads_go_by_primary_key_and_the_member_indexes(self):
+        flat = " ".join(board.MENTIONS_SQL.split())
+
+        assert "unnest($1::text[]) AS e(name) CROSS JOIN unnest($2::bigint[]) AS t(id)" in flat
+        # A LATERAL probe that stops at the first match: never flattened into a
+        # semi-join that could hash a whole scan of the members.
+        assert "CROSS JOIN LATERAL ( SELECT 1 FROM thread_members m" in flat
+        assert "WHERE m.thread_id = t.id AND m.entities @> ARRAY[e.name]::text[] LIMIT 1" in flat
+        assert "WHERE article_id = ANY($1::uuid[])" in board.MEMBERS_SQL

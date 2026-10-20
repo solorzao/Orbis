@@ -19,7 +19,9 @@ geography box for a place, the entity index for names.
 from __future__ import annotations
 
 import json
+import math
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 from urllib.parse import urlsplit
@@ -27,7 +29,7 @@ from urllib.parse import urlsplit
 from app.middleware.security import strip_invisible
 from app.services.country_centroids import centroid
 from app.services.database import _cell_box, get_pool
-from app.services.entities import STORY_SQL, newest_per_story, resolve_entity, top_places
+from app.services.entities import newest_per_story, resolve_entity, top_places
 from app.services.places import display_place
 from app.services.titles import display_title
 
@@ -146,12 +148,12 @@ PLACE_WINDOWS = (timedelta(hours=6), timedelta(days=7))
 # search counts names), so a heavy name costs no more.
 ENTITY_SAMPLE = 100
 ENTITY_WINDOW = timedelta(days=7)
-ENTITY_SAMPLE_SQL = f"""
+ENTITY_SAMPLE_SQL = """
     SELECT c.name, s.*
     FROM unnest($1::text[]) AS c(name)
     CROSS JOIN LATERAL (
         SELECT article_id, story_key, published_at, latitude, longitude, region, country_code,
-               tone, {STORY_SQL} AS story
+               tone
         FROM thread_members
         WHERE entities @> ARRAY[c.name]::text[] AND published_at >= $2
         LIMIT $3
@@ -327,3 +329,197 @@ def _entity_snapshot(name: str, place: dict | None) -> dict:
     if place is None:
         return snapshot(name)
     return snapshot(name, place["place"] or None, place["lat"], place["lng"])
+
+
+# ---------------------------------------------------------------------------
+# Edges between pins (/api/board/links)
+# ---------------------------------------------------------------------------
+
+# Edge kinds, in the order a pair of pins lists them.
+EDGE_KINDS = ("same_thread", "shared_entity", "same_place", "co_covered")
+# Shared names an edge's label lists, at most.
+LABEL_NAMES = 3
+
+# Article pins' thread and names, by the members' primary key.
+MEMBERS_SQL = """
+    SELECT article_id, thread_id, entities
+    FROM thread_members
+    WHERE article_id = ANY($1::uuid[])
+"""
+
+# Which pinned threads have a member naming a pinned entity: one probe per
+# (name, thread), each stopping at its first match, through the member
+# indexes (the thread's members, or the name's through the entity index). A
+# LATERAL with LIMIT 1, not EXISTS: the planner may flatten EXISTS into a
+# semi-join that hashes a scan of every member.
+MENTIONS_SQL = """
+    SELECT e.name, t.id AS thread_id
+    FROM unnest($1::text[]) AS e(name) CROSS JOIN unnest($2::bigint[]) AS t(id)
+    CROSS JOIN LATERAL (
+        SELECT 1 FROM thread_members m
+        WHERE m.thread_id = t.id AND m.entities @> ARRAY[e.name]::text[]
+        LIMIT 1
+    ) hit
+"""
+
+_TOPICAL = frozenset({"article", "thread"})  # pins with a thread and names
+_LOCATED = frozenset({"article", "place"})  # pins in one cell
+_COUNTRIED = frozenset({"article", "place", "link"})  # pins with countries
+
+
+@dataclass(frozen=True)
+class Facts:
+    """What a pin's edges are made of.
+
+    ``thread``: an article's thread, or a thread pin's own id; ``entities``: an
+    article's names (its member row), or a thread's top names; ``cell``: an
+    article's or a place's 1° cell; ``countries``: an article's or a place's
+    country, or a link's two; ``name``: an entity pin's stored name.
+    """
+
+    thread: int | None = None
+    entities: tuple[str, ...] = ()
+    cell: tuple[int, int] | None = None
+    countries: frozenset[str] = frozenset()
+    name: str | None = None
+
+
+def _edge(a: BoardItem, b: BoardItem, kind: str, label: str) -> dict:
+    return {"a": a.id, "b": b.id, "kind": kind, "label": label}
+
+
+def _shared(names: list[str]) -> str:
+    return "shared: " + ", ".join(names[:LABEL_NAMES])
+
+
+def _names_it(entity: Facts, other: BoardItem, facts: Facts, mentions: set) -> bool:
+    """Whether an article (its names) or a thread (a member's) names the entity."""
+    if entity.name is None:
+        return False
+    if other.kind == "article":
+        return entity.name in facts.entities
+    return (entity.name, facts.thread) in mentions
+
+
+def _pair_edges(
+    a: BoardItem,
+    b: BoardItem,
+    fa: Facts,
+    fb: Facts,
+    mentions: set[tuple[str, int]],
+    listed: set[frozenset[str]] | None,
+) -> list[dict]:
+    edges = []
+    if a.kind in _TOPICAL and b.kind in _TOPICAL:
+        if fa.thread is not None and fa.thread == fb.thread:
+            edges.append(_edge(a, b, "same_thread", "same thread"))
+        theirs = set(fb.entities)
+        shared = [name for name in fa.entities if name in theirs]
+        if shared:
+            edges.append(_edge(a, b, "shared_entity", _shared(shared)))
+    elif a.kind == "entity" and b.kind in _TOPICAL and _names_it(fa, b, fb, mentions):
+        edges.append(_edge(a, b, "shared_entity", _shared([fa.name])))
+    elif b.kind == "entity" and a.kind in _TOPICAL and _names_it(fb, a, fa, mentions):
+        edges.append(_edge(a, b, "shared_entity", _shared([fb.name])))
+    if a.kind in _LOCATED and b.kind in _LOCATED and fa.cell is not None and fa.cell == fb.cell:
+        edges.append(_edge(a, b, "same_place", "same place"))
+    if listed is not None and a.kind in _COUNTRIED and b.kind in _COUNTRIED:
+        pairs = sorted(
+            {
+                (min(x, y), max(x, y))
+                for x in fa.countries
+                for y in fb.countries
+                if x != y and frozenset((x, y)) in listed
+            }
+        )
+        if pairs:
+            edges.append(_edge(a, b, "co_covered", "covered together: " + link_title(*pairs[0])))
+    return edges
+
+
+def connect(
+    items: list[BoardItem],
+    facts: dict[str, Facts],
+    mentions: set[tuple[str, int]],
+    listed: set[frozenset[str]] | None,
+) -> list[dict]:
+    """The edges between every two pins, each from the earlier pin, by pins then kind.
+
+    - ``same_thread``: two articles in one thread, or an article and its thread;
+    - ``shared_entity``: articles and threads sharing names (up to 3 in the
+      label, in the earlier pin's order), or an entity pin and an article or
+      thread naming it (*mentions*: the (name, thread) pairs a member names);
+    - ``same_place``: places and articles in one 1° cell;
+    - ``co_covered``: places, articles and links whose countries make a pair
+      in *listed* (the 7-day /api/links list); none when *listed* is None.
+    """
+    edges = []
+    for i, a in enumerate(items):
+        for b in items[i + 1 :]:
+            fa, fb = facts.get(a.id, Facts()), facts.get(b.id, Facts())
+            edges += _pair_edges(a, b, fa, fb, mentions, listed)
+    return edges
+
+
+def _cell(lat: float, lng: float) -> tuple[int, int]:
+    return math.floor(lat), math.floor(lng)
+
+
+def _countries(code: str | None) -> frozenset[str]:
+    return frozenset({code}) if code else frozenset()
+
+
+async def _members(pool, items: list[BoardItem]) -> dict[str, Any]:
+    ids = [item.key for item in items if item.kind == "article"]
+    if not ids:
+        return {}
+    return {str(row["article_id"]): row for row in await pool.fetch(MEMBERS_SQL, ids)}
+
+
+async def _mentions(pool, names: list[str], threads: list[int]) -> set[tuple[str, int]]:
+    if not names or not threads:
+        return set()
+    rows = await pool.fetch(MENTIONS_SQL, names, threads)
+    return {(row["name"], row["thread_id"]) for row in rows}
+
+
+def _article_facts(article: Any | None, member: Any | None) -> Facts:
+    return Facts(
+        thread=member["thread_id"] if member else None,
+        entities=tuple(member["entities"] or ()) if member else (),
+        cell=_cell(article["latitude"], article["longitude"]) if article else None,
+        countries=_countries(article["country_code"]) if article else frozenset(),
+    )
+
+
+async def board_edges(
+    items: list[BoardItem], listed: set[frozenset[str]] | None, now: datetime
+) -> list[dict]:
+    """The edges between *items* (see ``connect``), from bounded reads: articles,
+    members and threads by primary key, entity names as the dossier resolves
+    them, the (name, thread) probes, and, only when *listed* is given, each
+    place's newest story for its country."""
+    pool = await get_pool()
+    articles = await _articles(pool, items)
+    members = await _members(pool, items)
+    threads = await _threads(pool, items)
+    names = await _entity_names(items, now)
+    places = await _places(pool, items, now) if listed is not None else {}
+    mentions = await _mentions(pool, sorted(set(names.values())), sorted(threads))
+
+    facts: dict[str, Facts] = {}
+    for item in items:
+        if item.kind == "article":
+            facts[item.id] = _article_facts(articles.get(item.key), members.get(item.key))
+        elif item.kind == "thread" and item.key in threads:
+            top = tuple(threads[item.key]["top_entities"] or ())
+            facts[item.id] = Facts(thread=item.key, entities=top)
+        elif item.kind == "place":
+            place = places.get(item.key)
+            countries = _countries(place["country_code"]) if place else frozenset()
+            facts[item.id] = Facts(cell=item.key, countries=countries)
+        elif item.kind == "link":
+            facts[item.id] = Facts(countries=frozenset(item.key))
+        elif item.kind == "entity":
+            facts[item.id] = Facts(name=names.get(item.key))
+    return connect(items, facts, mentions, listed)

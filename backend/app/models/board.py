@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -37,3 +37,22 @@ class ResolvedItem(BaseModel):
 
 class BoardResolution(BaseModel):
     items: list[ResolvedItem]  # in the request's order
+
+
+class BoardEdge(BaseModel):
+    """An edge between two pins, from the earlier pin in board order."""
+
+    a: str
+    b: str
+    kind: Literal["same_thread", "shared_entity", "same_place", "co_covered"]
+    # "same thread", "shared: A, B, C" (up to 3 names), "same place", or
+    # "covered together: France and Nigeria".
+    label: str
+
+
+class BoardLinks(BaseModel):
+    """The edges between pins, by pins in board order, then kind."""
+
+    edges: list[BoardEdge]
+    # False when the 7-day links list wasn't cached, so co_covered edges were skipped.
+    co_coverage_checked: bool

@@ -6,6 +6,7 @@ The service is tested in tests/test_board.py and its SQL in tests/test_board_db.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -118,3 +119,154 @@ class TestResolve:
         resp = await _post(monkeypatch, "/api/board/resolve", {"items": [ARTICLE, "thread:7"]})
 
         assert "cache-control" not in resp.headers
+
+
+# --- /api/board/links -------------------------------------------------------------
+
+
+def _link(a: str, b: str):
+    from app.models.links import Link
+    from app.services.country_centroids import centroid
+
+    def end(iso):
+        point = centroid(iso)
+        return {"iso": iso, "name": point.name, "lat": point.lat, "lng": point.lng}
+
+    return Link.model_validate(
+        {
+            "a": end(a),
+            "b": end(b),
+            "n": 9,
+            "lift": 3.1,
+            "topic": "politics",
+            "tone": -0.2,
+            "from": a,
+            "outlets": 5,
+            "top_exclusive_share": 0.1,
+        }
+    )
+
+
+def _edge(a, b, kind, label):
+    return {"a": a, "b": b, "kind": kind, "label": label}
+
+
+def _key(*ids: str) -> str:
+    import hashlib
+
+    return "db:board:links:v1:" + hashlib.sha256("\n".join(sorted(ids)).encode()).hexdigest()
+
+
+# Computed over the items in id order: "article:..." < "place:..." < "thread:...".
+SORTED_EDGES = [
+    _edge(ARTICLE, "thread:7", "same_thread", "same thread"),
+    _edge(ARTICLE, "thread:7", "shared_entity", "shared: Ann Lee"),
+    _edge("place:6:3", "thread:7", "co_covered", "covered together: France and Nigeria"),
+    _edge(ARTICLE, "place:6:3", "same_place", "same place"),
+]
+
+
+@pytest.fixture
+def links(monkeypatch):
+    import app.routers.board as board_router
+
+    monkeypatch.setattr(board_router, "_now", lambda: NOW)
+    with (
+        patch("app.routers.board.board_edges", AsyncMock(return_value=SORTED_EDGES)) as edges,
+        patch(
+            "app.routers.board.cached_links_7d",
+            AsyncMock(return_value=[_link("FR", "NG"), _link("DE", "US")]),
+        ) as listed,
+        patch("app.routers.board.get_cached", AsyncMock(return_value=None)) as get_cached,
+        patch("app.routers.board.set_cached", new_callable=AsyncMock) as set_cached,
+    ):
+        yield SimpleNamespace(
+            edges=edges, listed=listed, get_cached=get_cached, set_cached=set_cached
+        )
+
+
+BOARD = ["thread:7", "place:6:3", ARTICLE]  # board order
+
+
+class TestLinks:
+    @pytest.mark.asyncio
+    async def test_edges_come_back_in_board_order(self, monkeypatch, links):
+        resp = await _post(monkeypatch, "/api/board/links", {"items": BOARD})
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "edges": [
+                # Each edge runs from the earlier pin; edges sort by pins, then kind.
+                _edge(
+                    "thread:7", "place:6:3", "co_covered", "covered together: France and Nigeria"
+                ),
+                _edge("thread:7", ARTICLE, "same_thread", "same thread"),
+                _edge("thread:7", ARTICLE, "shared_entity", "shared: Ann Lee"),
+                _edge("place:6:3", ARTICLE, "same_place", "same place"),
+            ],
+            "co_coverage_checked": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_computed_over_the_items_in_id_order_with_the_listed_pairs(
+        self, monkeypatch, links
+    ):
+        await _post(monkeypatch, "/api/board/links", {"items": BOARD})
+
+        [items, listed, now] = links.edges.await_args.args
+        assert [i.id for i in items] == sorted(BOARD)
+        assert listed == {frozenset({"FR", "NG"}), frozenset({"DE", "US"})}
+        assert now == NOW
+
+    @pytest.mark.asyncio
+    async def test_cached_for_ten_minutes_by_the_sorted_item_set(self, monkeypatch, links):
+        await _post(monkeypatch, "/api/board/links", {"items": BOARD})
+        await _post(monkeypatch, "/api/board/links", {"items": list(reversed(BOARD))})
+
+        keys = [c.args[0] for c in links.get_cached.await_args_list]
+        assert keys == [_key(*BOARD)] * 2
+        key, value, ttl = links.set_cached.await_args.args
+        assert (key, value, ttl) == (_key(*BOARD), {"edges": SORTED_EDGES}, 600)
+
+    @pytest.mark.asyncio
+    async def test_a_cached_answer_reads_nothing_and_keeps_board_order(self, monkeypatch, links):
+        links.get_cached.return_value = {"edges": SORTED_EDGES}
+
+        resp = await _post(monkeypatch, "/api/board/links", {"items": list(reversed(BOARD))})
+
+        links.edges.assert_not_awaited()
+        links.listed.assert_not_awaited()
+        assert resp.json()["edges"][0] == _edge(ARTICLE, "place:6:3", "same_place", "same place")
+        assert resp.json()["co_coverage_checked"] is True
+
+    @pytest.mark.asyncio
+    async def test_without_the_cached_7_day_links_co_coverage_is_skipped_and_nothing_cached(
+        self, monkeypatch, links
+    ):
+        links.listed.return_value = None
+        links.edges.return_value = SORTED_EDGES[:2]
+
+        resp = await _post(monkeypatch, "/api/board/links", {"items": BOARD})
+
+        assert links.edges.await_args.args[1] is None
+        assert resp.json()["co_coverage_checked"] is False
+        assert len(resp.json()["edges"]) == 2
+        links.set_cached.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", MALFORMED)
+    async def test_a_malformed_request_is_a_422_and_reads_nothing(self, monkeypatch, links, body):
+        resp = await _post(monkeypatch, "/api/board/links", body)
+
+        assert resp.status_code == 422
+        links.get_cached.assert_not_awaited()
+        links.edges.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_database_error_is_a_500_and_nothing_is_cached(self, monkeypatch, links):
+        links.edges.side_effect = RuntimeError("connection reset")
+
+        resp = await _post(monkeypatch, "/api/board/links", {"items": BOARD})
+
+        assert resp.status_code == 500
+        links.set_cached.assert_not_awaited()

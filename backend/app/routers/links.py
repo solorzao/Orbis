@@ -123,13 +123,17 @@ async def get_links(
     return await cached_links(window, tag, rank, limit)
 
 
+def _links_key(window: Window, tag: str | None, rank: str, limit: int) -> str:
+    return f"db:links:v5:{window.key}:{tag or ''}:{rank}:{limit}"
+
+
 async def cached_links(window: Window, tag: str | None, rank: str, limit: int) -> list[Link]:
     """/api/links' answer for the window: cached, else computed and cached.
 
     The request and the cache warmers both come here, so a warmed entry has
     the key and the bytes a request would have stored.
     """
-    cache_k = f"db:links:v5:{window.key}:{tag or ''}:{rank}:{limit}"
+    cache_k = _links_key(window, tag, rank, limit)
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
         return [Link.model_validate(link) for link in cached]
@@ -150,6 +154,15 @@ async def warm_links_24h() -> None:
 async def warm_links_7d() -> None:
     """Cache the default 7-day /api/links answer: 4.7 s cold on production."""
     await cached_links(_window("168h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT)
+
+
+async def cached_links_7d() -> list[Link] | None:
+    """The default 7-day /api/links answer when it is cached (warm_links_7d fills it
+    after each cycle), else None. Never computed here: the board's co-coverage edges
+    read it, and skip themselves rather than run the 7-day query."""
+    key = _links_key(_window("168h", None, None), None, DEFAULT_RANK, DEFAULT_LIMIT)
+    cached = await get_cached(key)
+    return None if cached is None else [Link.model_validate(link) for link in cached]
 
 
 Country = Annotated[str, Query(max_length=8, description="ISO 3166-1 alpha-2 code")]
