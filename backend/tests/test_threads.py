@@ -6,6 +6,7 @@ The SQL itself runs in tests/test_threads_db.py against a real PostgreSQL.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -207,7 +208,13 @@ async def test_loads_the_input_and_the_backlog_once_each():
 
     [backlog_args] = conn.args_of(threads.BACKLOG_SQL)
     assert backlog_args == (T0 - timedelta(hours=6), threads.MIN_TITLE_WORDS, 500, [a, b])
-    assert conn.args_of(threads.LOAD_SQL) == [([a, b, c],)]
+    assert conn.args_of(threads.LOAD_SQL) == [([a, b, c], threads.MAX_BATCH)]
+
+
+def test_a_cycle_loads_at_most_a_batch_oldest_first():
+    """So setup scales with the batch, and a backlog drains over a few cycles."""
+    sql = " ".join(threads.LOAD_SQL.split())
+    assert sql.endswith("ORDER BY a.published_at, a.id LIMIT $2")
 
 
 def test_the_backlog_skips_this_cycles_ids_and_takes_the_oldest_first():
@@ -259,19 +266,35 @@ async def test_a_new_story_seeds_a_thread_with_its_vector_and_display_title():
 
 
 @pytest.mark.asyncio
-async def test_the_score_query_runs_under_a_raised_ef_search():
+async def test_the_score_query_runs_on_the_hnsw_index_with_a_raised_ef_search():
     article = _row()
     conn = _conn([article])
 
     await _assign(conn, [article["id"]])
 
     i = next(i for i, c in enumerate(conn.calls) if c[1] == threads.SCORE_SQL)
-    assert conn.calls[i - 2 : i + 2] == [
+    assert conn.calls[i - 4 : i + 2] == [
         ("begin", None, ()),
         ("execute", "SET LOCAL hnsw.ef_search = 100", ()),
+        # A seq scan computes every pair: with a few thousand active threads, minutes.
+        ("execute", "SET LOCAL enable_seqscan = off", ()),
+        # Planned each time under these settings, never from a cached generic plan.
+        ("execute", "SET LOCAL plan_cache_mode = force_custom_plan", ()),
         ("fetch", threads.SCORE_SQL, ([0], ["[1,0]"], threads.CANDIDATES)),
         ("commit", None, ()),
     ]
+
+
+def test_the_score_query_parses_each_query_vector_once():
+    """Not once per (article, centroid) pair inside the LATERAL: 2M parses a cycle."""
+    sql = " ".join(threads.SCORE_SQL.split())
+    assert sql.startswith(
+        "WITH q AS MATERIALIZED ( SELECT a.ord, a.t::halfvec(512) AS v"
+        " FROM unnest($1::int[], $2::text[]) AS a(ord, t) )"
+    )
+    lateral = sql[sql.index("CROSS JOIN LATERAL") :]
+    assert "::halfvec" not in lateral
+    assert "ORDER BY centroid <#> q.v LIMIT $3" in lateral
 
 
 @pytest.mark.asyncio
@@ -464,21 +487,44 @@ async def test_a_new_thread_for_an_article_already_a_member_is_rolled_back():
 
 @pytest.mark.asyncio
 async def test_the_time_budget_leaves_the_rest_to_the_backlog(monkeypatch):
+    """Once the minimum is placed, oldest first."""
     clock = [0.0]
     monkeypatch.setattr(threads, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(threads, "MIN_PLACED", 2)
 
     def member(*args):
         clock[0] += threads.TIME_BUDGET_S + 1
         return args[0]
 
-    rows = [_row(), _row(), _row()]
+    rows = [_row(), _row(), _row(), _row()]
     conn = _conn(rows, **{threads.MEMBER_SQL: member})
 
     stats = await _assign(conn, [r["id"] for r in rows])
 
-    assert [m[0] for m in _member_threads(conn)] == [rows[0]["id"]]
-    assert (stats.assigned, stats.deferred) == (1, 2)
+    assert [m[0] for m in _member_threads(conn)] == [rows[0]["id"], rows[1]["id"]]
+    assert (stats.assigned, stats.deferred) == (2, 2)
     assert conn.args_of(threads.AGGREGATE_SQL)  # the cycle still finishes
+
+
+@pytest.mark.asyncio
+async def test_slow_setup_never_starves_placement(monkeypatch):
+    """The 2026-10-19 stall: scoring took 4 minutes, the budget (counted from the
+    start) had run out at the first article, and every article was deferred, every
+    cycle. The budget counts placement only."""
+    clock = [0.0]
+    monkeypatch.setattr(threads, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def slow_score(*_args):
+        clock[0] += 300  # setup far over the budget
+        return []
+
+    rows = [_row(), _row(), _row()]
+    conn = _conn(rows, **{threads.SCORE_SQL: slow_score})
+
+    stats = await _assign(conn, [r["id"] for r in rows])
+
+    assert (stats.assigned, stats.deferred) == (3, 0)
+    assert stats.score_seconds == 300
 
 
 @pytest.mark.asyncio
@@ -566,11 +612,13 @@ async def test_logs_one_summary_line(caplog):
         await _assign(conn, [article["id"]])
 
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Threads:")]
-    [summary] = [line for line in lines if " assigned " in line]
+    [summary] = lines
     assert summary.startswith("Threads: 1 assigned (0 joined, 1 started, 0 copies) in ")
-    assert summary.endswith(" s; 3 active.")
-    [finish] = [line for line in lines if line.startswith("Threads: aggregates")]
-    assert finish.startswith("Threads: aggregates, velocity and deactivation in ")
+    # Each phase's time, so a slow one shows in the log.
+    assert re.search(
+        r" s \(load [\d.]+, score [\d.]+, place [\d.]+, finish [\d.]+ s\); 3 active\.$",
+        summary,
+    ), summary
 
 
 @pytest.mark.asyncio
