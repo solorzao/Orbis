@@ -253,7 +253,11 @@ async def test_the_aggregate_step_finds_unaggregated_threads_by_the_partial_inde
     await conn.execute("ANALYZE threads")
     await conn.execute("SET LOCAL enable_seqscan = off")
 
-    plan = await _plan(conn, threads.AGGREGATE_SQL, [1, 2], NOW)
+    # Only the targets: the rest of the statement joins thread_members, whose
+    # statistics (whatever other tests left in pg_class) would steer this plan.
+    targets = "SELECT id FROM threads WHERE id = ANY($1::bigint[]) OR aggregated_at IS NULL"
+    assert targets in " ".join(threads.AGGREGATE_SQL.split())
+    plan = await _plan(conn, targets, [1, 2])
 
     assert "idx_threads_unaggregated" in plan
 

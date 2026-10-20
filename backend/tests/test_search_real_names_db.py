@@ -2,13 +2,8 @@
 
 Opt-in: set ORBIS_TEST_DATABASE_URL to a throwaway database with the
 migrations applied (017 included). The test runs in a transaction that is
-rolled back. Skipped without it.
-
-This file runs last on purpose (pytest takes files in name order). Its fixture
-writes 100K thread members and 200K graph nodes, and ANALYZE writes row and
-page counts to pg_class in place, so the rollback keeps them; the aborted rows
-also stay in the heap until vacuum. Run earlier, it would steer other tests'
-plans: the threads aggregate plan test flips with thread_members' size.
+rolled back, then vacuums the tables its fixture filled (see ``conn``). Skipped
+without it.
 """
 
 from __future__ import annotations
@@ -30,8 +25,21 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# The tables the fixture fills: 200K graph nodes and 100K thread members.
+_FILLED = ("kg_nodes", "kg_entity_names", "thread_members")
+
+
 @pytest_asyncio.fixture
 async def conn():
+    """A connection in a transaction that is rolled back; then the fixture's tables
+    are vacuumed, outside any transaction.
+
+    ANALYZE writes a table's row and page counts to pg_class in place, so a
+    rollback keeps them, and the aborted rows stay in the heap until vacuum:
+    later tests' plans would be made for 100K members. VACUUM (ANALYZE) removes
+    the dead rows and counts the live ones again. PARALLEL 0: a parallel vacuum
+    can fail on a container's 64 MB /dev/shm.
+    """
     import asyncpg
 
     connection = await asyncpg.connect(DATABASE_URL)
@@ -41,7 +49,10 @@ async def conn():
         yield connection
     finally:
         await tx.rollback()
-        await connection.close()
+        try:
+            await connection.execute(f"VACUUM (PARALLEL 0, ANALYZE) {', '.join(_FILLED)}")
+        finally:
+            await connection.close()
 
 
 def _walk(node):
