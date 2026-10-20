@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -67,6 +68,12 @@ class _Pool:
     async def fetchval(self, sql, *args, timeout=None):
         async with self._lock:
             return await self._conn.fetchval(sql, *args, timeout=timeout)
+
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        """For the place lookups: their transaction is a savepoint in the test's."""
+        async with self._lock:
+            yield self._conn
 
 
 @pytest_asyncio.fixture
@@ -500,20 +507,45 @@ async def test_at_production_scale_pins_are_read_by_primary_key(big):
 PAGE_BOUND = 300
 
 
+_BOTH = ("custom", "generic")
+_FORCED = re.compile(r"SET LOCAL plan_cache_mode = force_(custom|generic)_plan")
+
+
 class _Recorder:
-    """The pool as the services use it, on the test's connection, recording each statement."""
+    """The pool as the services use it, on the test's connection (and its own
+    connection: acquire() yields it), recording each statement with the plans it
+    can run with: the kind a service forced in its transaction, else either."""
 
     def __init__(self, connection):
         self._conn = connection
-        self.statements: list[tuple[str, tuple]] = []
+        self._modes = _BOTH
+        self.statements: list[tuple[str, tuple, tuple[str, ...]]] = []
 
     async def fetch(self, sql, *args, timeout=None):
-        self.statements.append((sql, args))
+        self.statements.append((sql, args, self._modes))
         return await self._conn.fetch(sql, *args)
 
     async def fetchval(self, sql, *args, timeout=None):
-        self.statements.append((sql, args))
+        self.statements.append((sql, args, self._modes))
         return await self._conn.fetchval(sql, *args)
+
+    async def execute(self, sql, *args):
+        forced = _FORCED.fullmatch(sql)
+        if forced:
+            self._modes = (forced.group(1),)
+        return await self._conn.execute(sql, *args)
+
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        yield self
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        async with self._conn.transaction():  # a savepoint in the test's transaction
+            try:
+                yield
+            finally:
+                self._modes = _BOTH
 
 
 async def _recorded(conn, read, *args):
@@ -560,7 +592,11 @@ async def _pages(conn, sql: str, args: tuple, mode: str) -> int:
 
 
 async def _total_pages(conn, statements, mode: str) -> int:
-    return sum([await _pages(conn, sql, args, mode) for sql, args in statements])
+    """Pages the recorded statements touch with *mode* plans: those that can run with
+    them (a statement whose service forced the other kind never does)."""
+    return sum(
+        [await _pages(conn, sql, args, mode) for sql, args, modes in statements if mode in modes]
+    )
 
 
 @pytest.mark.asyncio
@@ -578,6 +614,9 @@ async def test_at_production_scale_a_place_pin_reads_few_pages_whatever_the_plan
         item = board.parse_item(f"place:{lat}:{lng}")
         [snapshot], statements = await _recorded(big, board.resolve_items, [item], now)
         found[name] = snapshot and snapshot["title"]
+        # The lookups force custom plans: the generic one read a busy cell's week
+        # (3,791 pages when they didn't).
+        assert all(modes == ("custom",) for _, _, modes in statements), name
         for mode in ("custom", "generic"):
             pages = await _total_pages(big, statements, mode)
             assert pages < PAGE_BOUND, (name, mode, pages)
@@ -602,7 +641,7 @@ async def test_at_production_scale_an_entity_and_a_big_thread_without_it_read_fe
     assert edges == []
     for mode in ("custom", "generic"):
         pages = await _total_pages(big, statements, mode)
-        assert pages < PAGE_BOUND, (mode, pages, [sql.split()[:3] for sql, _ in statements])
+        assert pages < PAGE_BOUND, (mode, pages, [sql.split()[:3] for sql, _, _ in statements])
 
 
 @pytest.mark.asyncio

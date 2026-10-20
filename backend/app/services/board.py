@@ -152,6 +152,13 @@ PLACE_SQL = f"""
 # The windows a place is looked up in, in turn: the last few hours first, so a
 # busy cell reads only those; a cell quiet that long has few stories this week.
 PLACE_WINDOWS = (timedelta(hours=6), timedelta(days=7))
+# Planned with each lookup's values, always. A generic plan (asyncpg reuses its
+# prepared statements, and PostgreSQL may switch one to a generic plan after
+# five runs) assumes the window holds a third of the table, so it reads the
+# cell through the location index alone: a busy cell's whole week, 3,791 pages
+# at production's scale (tests/test_board_db.py). With the window's start, the
+# planner intersects the location and time indexes and reads its last hours.
+PLACE_SETTINGS = ("SET LOCAL plan_cache_mode = force_custom_plan",)
 
 # Members naming an entity this week, read for its top place: at most this
 # many per name (a sample of whichever members the index scan meets first, as
@@ -229,19 +236,26 @@ async def _threads(pool, items: list[BoardItem]) -> dict[int, Any]:
     return {row["id"]: row for row in await pool.fetch(THREADS_SQL, ids)}
 
 
-async def _place(pool, cell: tuple[int, int], now: datetime) -> Any | None:
+async def _place(conn, cell: tuple[int, int], now: datetime) -> Any | None:
     """The cell's newest story in the first window that has one, or None."""
     lat, lng = cell
     _, box = _cell_box(lat, lng, lat + 1, lng + 1)
     for window in PLACE_WINDOWS:
-        rows = await pool.fetch(PLACE_SQL, *box, now - window)
+        rows = await conn.fetch(PLACE_SQL, *box, now - window)
         if rows:
             return rows[0]
     return None
 
 
 async def _places(pool, items: list[BoardItem], now: datetime) -> dict[tuple[int, int], Any]:
-    return {item.key: await _place(pool, item.key, now) for item in items if item.kind == "place"}
+    """Each place pin's newest story (or None), looked up under PLACE_SETTINGS."""
+    cells = [item.key for item in items if item.kind == "place"]
+    if not cells:
+        return {}
+    async with pool.acquire() as conn, conn.transaction():
+        for setting in PLACE_SETTINGS:
+            await conn.execute(setting)
+        return {cell: await _place(conn, cell, now) for cell in cells}
 
 
 async def _entity_names(items: list[BoardItem], now: datetime) -> dict[tuple[str, str], str]:
@@ -652,7 +666,8 @@ def _details(item: BoardItem, place: str, time: datetime | None) -> list[str]:
         ]
         return [part for part in parts if part]
     if item.kind == "entity" and place:
-        return [f"most coverage this week in {place}"]
+        # The top cell of a sample of its members: "much of", not "most".
+        return [f"much of its coverage this week in {place}"]
     return []
 
 

@@ -6,6 +6,7 @@ are tested in tests/test_board_router.py.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -22,7 +23,9 @@ OTHER_ID = "0b9e2d4c-1a3f-4e5d-8c7b-6a5f4e3d2c1b"
 
 class FakePool:
     """The pool as the board reads it: each SQL constant answers with its rows,
-    or with what a function of the call's arguments returns. Records each call."""
+    or with what a function of the call's arguments returns. Records each call,
+    and a transaction's start and end as "BEGIN" and "COMMIT". It is its own
+    connection: acquire() yields it."""
 
     def __init__(self, answers: dict | None = None):
         self.answers = answers or {}
@@ -32,6 +35,19 @@ class FakePool:
         self.calls.append((sql, args))
         answer = self.answers.get(sql, [])
         return answer(*args) if callable(answer) else answer
+
+    async def execute(self, sql, *args):
+        self.calls.append((sql, args))
+
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        yield self
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        self.calls.append(("BEGIN", ()))
+        yield
+        self.calls.append(("COMMIT", ()))
 
     def calls_to(self, sql) -> list[tuple]:
         return [args for s, args in self.calls if s == sql]
@@ -332,6 +348,29 @@ class TestResolvePlaces:
         [snapshot] = await board.resolve_items(_items("place:6:3"), NOW)
 
         assert snapshot is None
+
+    @pytest.mark.asyncio
+    async def test_places_are_looked_up_with_custom_plans_in_one_transaction(self, pool):
+        """A generic plan, which asyncpg's reused statements can switch to, plans the
+        window without its start and reads a busy cell's whole week (3,791 pages in
+        tests/test_board_db.py); a custom plan reads its last 6 hours."""
+        pool.answers[board.PLACE_SQL] = [_place_row()]
+
+        await board.resolve_items(_items("place:6:3", "link:FR-US", "place:9:7"), NOW)
+
+        assert [sql for sql, _ in pool.calls] == [
+            "BEGIN",
+            "SET LOCAL plan_cache_mode = force_custom_plan",
+            board.PLACE_SQL,
+            board.PLACE_SQL,
+            "COMMIT",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_place_pins_no_transaction(self, pool):
+        await board.resolve_items(_items("link:FR-US"), NOW)
+
+        assert pool.calls == []
 
     @pytest.mark.asyncio
     async def test_a_story_without_a_region_names_the_place_by_its_country(self, pool):
