@@ -104,14 +104,14 @@ test.describe("A thread's detail, arcs and replay", () => {
     const facts = detail.getByRole("list", { name: "Facts" });
     await expect(facts).toContainText("Outlets11");
     await expect(facts).toContainText("Countries4");
-    // Key entities, inert until the tracker (PR 17b): labels, not buttons.
+    // Key entities: each tracks its name (the entity tracker).
     const entities = detail.getByRole("list", { name: "Key entities" });
     await expect(entities.getByRole("listitem")).toHaveText([
       "Suez Canal Authority",
       "Houthis",
       "Maersk",
     ]);
-    await expect(entities.getByRole("button")).toHaveCount(0);
+    await expect(entities.getByRole("button", { name: "Track Houthis" })).toBeVisible();
     await expect(play(page)).toHaveAccessibleName(`Replay how ${RED_SEA} spread`);
 
     // The selected one again closes it, and its arcs go.
