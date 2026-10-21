@@ -28,9 +28,9 @@
 
 ---
 
-## Decisions (2026-10-21, provisional while the owner is away)
+## Decisions (owner-approved, 2026-10-21)
 
-The controller decided these while the owner is away; the owner may revise any of them. The tasks below follow them.
+The controller proposed these and the owner approved all 13 on 2026-10-21. The tasks below follow them.
 
 | # | Decision | Why |
 |---|---|---|
@@ -3418,6 +3418,10 @@ The mutual exclusion is the page's job and is tested in e2e.
     - (a) keep the half sample (no change);
     - (b) a fixed-rate scheduler (start every 15 min, skip while one runs), which changes little while embeddings take 13–16 min;
     - (c) catch the GKG up with a per-cycle cap *and* make embedding writes cheaper (batched writes, or a narrow embeddings table), which is a project of its own.
+  - **Cost given to the owner (2026-10-21):**
+    - Full ingestion adds about **$3 a month** in usage.
+    - Realistically it also needs a **P10 disk**, about **+$10 a month**. Azure storage can only grow, so that's permanent.
+  - **Recommendation:** stay at half until a disk upgrade happens for the 7-day reads anyway (the open links-7d disk decision), then revisit full ingestion on the bigger disk.
   - **The events path** keeps its own catch-up regardless: its files are about 80 KB, and its writes are a few hundred HOT updates.
 - **Hourly rollups:** daily rollups stay (decision 1). Revisit only if the owner later wants relations to follow the timeline instead of the 7-day lens.
 
