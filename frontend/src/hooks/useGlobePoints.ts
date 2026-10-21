@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { GlobePoint, Topic } from "@/types/news";
-import { fetchGlobeNews } from "@/lib/api";
+import { fetchGlobeNews, retryOnce503 } from "@/lib/api";
 import { apiPointsToGlobePoints, dotSize, getTopicColor } from "@/lib/clustering";
 import { windowQuery, type TimeWindow } from "@/lib/timeWindow";
 
@@ -63,14 +63,19 @@ export function useGlobePoints(
     const controller = new AbortController();
     const { timespan, startTime, endTime } = windowQuery(timeWindow);
     const timer = setTimeout(() => {
-      fetchGlobeNews({
-        timespan,
-        limit: GLOBE_LIMIT,
-        startTime,
-        endTime,
-        topic,
-        signal: controller.signal,
-      })
+      // A 503 (a 7-day read stopped at a cycle's boundary) is asked once more.
+      retryOnce503(
+        () =>
+          fetchGlobeNews({
+            timespan,
+            limit: GLOBE_LIMIT,
+            startTime,
+            endTime,
+            topic,
+            signal: controller.signal,
+          }),
+        controller.signal,
+      )
         .then((apiPoints) => {
           if (controller.signal.aborted) return;
           setResult({

@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useGlobePoints, FETCH_DEBOUNCE_MS } from "./useGlobePoints";
-import { fetchGlobeNews, type ApiGlobePoint } from "@/lib/api";
+import { ApiError, fetchGlobeNews, type ApiGlobePoint } from "@/lib/api";
 import type { TimeWindow } from "@/lib/timeWindow";
 import { TOPIC_COLORS } from "@/lib/clustering";
 import type { Topic } from "@/types/news";
 
-vi.mock("@/lib/api", () => ({ fetchGlobeNews: vi.fn() }));
+// The fetch mocked; ApiError and the 503 retry as they are.
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchGlobeNews: vi.fn(),
+}));
 const mockFetch = vi.mocked(fetchGlobeNews);
 
 /** What the hook's `n`th fetch asked for. */
@@ -167,6 +171,37 @@ describe("useGlobePoints", () => {
     });
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(sent(0).startTime).toBe(TUESDAY.startTime);
+  });
+
+  it("asks once more after a 503, showing no error meanwhile", async () => {
+    // A 7-day read stopped at a cycle's boundary: the API says retry in 15 s.
+    mockFetch
+      .mockRejectedValueOnce(new ApiError(503, "Service Unavailable", 15_000))
+      .mockResolvedValueOnce([apiPoint("Paris")]);
+    const { result } = renderHook(() => useGlobePoints(LIVE_6H));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS);
+    });
+    expect(result.current.error).toBe(false); // not "Offline" while it waits
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(sent(1).signal).toBe(sent(0).signal);
+    expect(result.current.points.map((p) => p.locationName)).toEqual(["Paris"]);
+    expect(result.current).toMatchObject({ error: false, loading: false });
+  });
+
+  it("reports the error after a second 503", async () => {
+    mockFetch.mockRejectedValue(new ApiError(503, "Service Unavailable"));
+    const { result } = renderHook(() => useGlobePoints(LIVE_6H));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS + 2_000);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.current).toMatchObject({ error: true, loading: false, points: [] });
   });
 
   it("reports an error with no points", async () => {

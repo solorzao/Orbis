@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   ApiError,
+  RETRY_503_MS,
+  retryOnce503,
   fetchGlobeNews,
   fetchClusterArticles,
   fetchClusterSummary,
@@ -70,6 +72,99 @@ describe("fetchGlobeNews", () => {
     const [calledUrl, init] = mockFetch.mock.calls[0];
     expect(new URL(calledUrl).origin).toBe(window.location.origin);
     expect(JSON.stringify(init ?? {})).not.toMatch(/x-api-key/i);
+  });
+});
+
+/** A 503 as the API sends one for a week read stopped at a cycle's boundary. */
+function unavailable(retryAfter?: string) {
+  return Promise.resolve({
+    ok: false,
+    status: 503,
+    statusText: "Service Unavailable",
+    headers: new Headers(retryAfter ? { "Retry-After": retryAfter } : {}),
+    json: () => Promise.resolve({ detail: "The computation for wk:* was cancelled" }),
+  });
+}
+
+describe("a 503", () => {
+  it("carries its Retry-After on the ApiError", async () => {
+    mockFetch.mockReturnValue(unavailable("15"));
+    const err = await fetchGlobeNews().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(503);
+    expect(err.retryAfterMs).toBe(15_000);
+  });
+
+  it("without a Retry-After (or a date for one) carries none", async () => {
+    for (const header of [undefined, "Wed, 21 Oct 2026 07:28:00 GMT"]) {
+      mockFetch.mockReturnValue(unavailable(header));
+      const err = await fetchGlobeNews().catch((e) => e);
+      expect(err.retryAfterMs).toBeUndefined();
+    }
+  });
+});
+
+describe("retryOnce503", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const busy = (retryAfterMs?: number) => new ApiError(503, "Service Unavailable", retryAfterMs);
+
+  it("asks once more after the 503's Retry-After, and returns that answer", async () => {
+    const call = vi.fn().mockRejectedValueOnce(busy(15_000)).mockResolvedValueOnce("dots");
+    const answer = retryOnce503(call, new AbortController().signal);
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(call).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(answer).resolves.toBe("dots");
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits about 2 s when the 503 names no Retry-After", async () => {
+    const call = vi.fn().mockRejectedValueOnce(busy()).mockResolvedValueOnce("dots");
+    const answer = retryOnce503(call, new AbortController().signal);
+
+    await vi.advanceTimersByTimeAsync(RETRY_503_MS);
+    await expect(answer).resolves.toBe("dots");
+  });
+
+  it("gives up after a second 503", async () => {
+    const call = vi.fn().mockRejectedValue(busy(1_000));
+    const answer = retryOnce503(call, new AbortController().signal).catch((e) => e);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const err = (await answer) as ApiError;
+    expect(err.status).toBe(503);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes any other error on at once", async () => {
+    const call = vi.fn().mockRejectedValue(new ApiError(500, "Server Error"));
+    const err = (await retryOnce503(call, new AbortController().signal).catch(
+      (e) => e,
+    )) as ApiError;
+
+    expect(err.status).toBe(500);
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting, and never asks again, once aborted", async () => {
+    const call = vi.fn().mockRejectedValueOnce(busy(15_000)).mockResolvedValueOnce("dots");
+    const controller = new AbortController();
+    const answer = retryOnce503(call, controller.signal).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(1_000); // waiting on the Retry-After
+
+    controller.abort();
+    const err = (await answer) as Error;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(err.name).toBe("AbortError");
+    expect(call).toHaveBeenCalledTimes(1);
   });
 });
 
