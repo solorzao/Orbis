@@ -3,6 +3,10 @@
 Reads only event_pairs_daily: the rollups ingestion keeps (app/services/events.py).
 Relations are a 7-day lens: always the last 7 UTC days, whatever the timeline
 shows. Events are machine-coded from news reports; nothing here calls them facts.
+
+The contract (frontend/e2e/relations.contract.json): clients treat any non-2xx as
+an error and never parse 4xx bodies; 422s are FastAPI's validation list or
+_pair's string.
 """
 
 from __future__ import annotations
