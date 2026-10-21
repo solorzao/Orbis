@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   CAIRO,
   MOCK_LINKS_LIFT,
+  MOCK_RELATIONS,
   MOCK_THREADS,
   PARIS,
   hoverPlace,
@@ -324,6 +325,29 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
       await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
       await expectApart(page, size.width, "Links status, sheet open", regions);
     }
+  });
+}
+
+// While Relations is on, its class switch takes the rank switch's place and its
+// legend floats above it: regions of their own that must not move the capsule or
+// touch the timeline, the bottom row or the side panel.
+for (const size of SIZES.filter((s) => [1440, 1280, 1180].includes(s.width))) {
+  test(`the Relations switch and legend keep ${GAP}px apart at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await settle(page, size);
+    const before = (await page.getByTestId("layer-switcher").boundingBox())!;
+    await page.getByRole("button", { name: "Relations", exact: true }).press("Enter");
+    await expect(page.getByTestId("globe")).toHaveAttribute(
+      "data-relation-arcs",
+      String(MOCK_RELATIONS.relations.length),
+    );
+    await expect(page.getByTestId("relations-legend")).toBeVisible();
+    const regions = [...regionsAt(size.width), "relation-kind", "relations-legend"];
+    const b = await expectApart(page, size.width, "Relations on", regions);
+    // The layers keep their box, so the capsule keeps its place.
+    expect(b["layer-switcher"]).toMatchObject({ x: before.x, y: before.y, w: before.width });
+    expectCentred(b["timeline"], size.width, "Relations on");
   });
 }
 
