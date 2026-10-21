@@ -2494,8 +2494,11 @@ button.cite:hover {
 }
 
 /*
- * Investigation board (mockup #open-board and .board-n, line 287): the top
- * bar's Board button counts the pins, and the panels' pin buttons.
+ * Investigation board (mockup #open-board, .board-n, .board, .field, .pin,
+ * .elabel and .memo, lines 287 and 426-438). The top bar's Board button
+ * counts the pins. From 1180px the board is a split view on the left: the
+ * other panels hide and the globe slides right (Globe's `shifted`). Below,
+ * its list takes the sheet's place, as the sheet's search does.
  */
 .board-btn {
   gap: 8px;
@@ -2570,6 +2573,426 @@ button.cite:hover {
 }
 .iconbtn.pin-btn[aria-pressed="true"] {
   color: var(--accent-strong);
+}
+
+/* The split view: under the top bar, above the bottom row, as the side panel. */
+.board {
+  position: fixed;
+  top: 96px;
+  left: 24px;
+  bottom: 124px;
+  width: 58vw;
+  z-index: var(--z-sheet);
+  background: var(--board-background);
+  border-radius: var(--board-radius);
+  backdrop-filter: blur(var(--board-blur)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--board-blur)) saturate(1.3);
+}
+/* With Links on, its rank switch and status float above the layers: the board ends above them. */
+.board-open:has(.link-rank) .board {
+  bottom: 224px;
+}
+.board .ghead .sub {
+  min-width: 0;
+}
+.board .ghead .end .aurora-btn {
+  height: 32px;
+}
+.board button:not(:disabled) {
+  cursor: pointer;
+}
+.board-analyze[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+.board-open .left-stack,
+.board-open .side,
+.board-open .side-open,
+.board-open .recon,
+.board-open .topbar-center,
+.board-open .arc-pill,
+.board-open .hud {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.board-share {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  margin: 0 12px 10px;
+  padding: 0 6px 0 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+}
+.board-share .lbl {
+  flex: none;
+}
+.board-share input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font: var(--type-data-sm);
+  color: var(--text-secondary);
+}
+.board-share:has(input:focus-visible) {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: 2px;
+}
+.board-share input:focus-visible {
+  outline: none; /* the box shows the ring */
+}
+.board-legend {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0 20px 10px;
+  list-style: none;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.board-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* An edge's look in small: the legend's and the list view's keys. */
+.key {
+  flex: none;
+  width: 18px;
+  height: 0;
+  border-top: 1px solid var(--text-muted);
+}
+.key-same_thread {
+  height: 2px;
+  border: 0;
+  border-radius: 1px;
+  background: linear-gradient(90deg, var(--aurora-start), var(--aurora-end));
+}
+.key-same_place {
+  border-top: 2px solid var(--text-secondary);
+}
+.key-co_covered {
+  border-top-style: dashed;
+}
+.key-close_in_time {
+  border-top: 2px dotted var(--text-muted);
+}
+
+/* The canvas: a dotted field the cards sit on, the edges drawn under them. */
+.field {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0 12px 12px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background:
+    radial-gradient(var(--border-subtle) 1px, transparent 1.4px) 0 0 / 22px 22px,
+    var(--bg-inset);
+}
+.board-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.board-edges .edge {
+  fill: none;
+  stroke-linecap: round;
+}
+.edge-same_thread {
+  stroke: var(--board-same-thread);
+  stroke-width: 1.6;
+}
+.edge-shared_entity {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+}
+.edge-same_place {
+  stroke: var(--text-secondary);
+  stroke-width: 1.4;
+}
+.edge-co_covered {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}
+.edge-close_in_time {
+  stroke: var(--text-muted);
+  stroke-width: 1.6;
+  stroke-dasharray: 0.5 4;
+}
+.board-pins {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pin {
+  position: absolute;
+  z-index: 1;
+  width: 214px;
+}
+.pin-card {
+  min-height: 76px;
+  padding: 12px 34px 12px 14px;
+  border-radius: var(--board-pin-radius);
+  background: linear-gradient(var(--surface-hover), var(--surface-hover)), var(--surface-sheet);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--elev-float);
+  cursor: grab;
+  touch-action: none; /* a drag moves the card, never scrolls */
+  user-select: none;
+}
+.pin-card[data-dragging] {
+  cursor: grabbing;
+  box-shadow: var(--elev-lifted);
+}
+.pin-card:focus-visible {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: 2px;
+}
+.pin .k {
+  font: var(--type-label);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pin .h {
+  display: -webkit-box;
+  margin: 4px 0 0;
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+:is(.pin, .board-row) a.h:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.pin-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-color: transparent;
+}
+.elabel {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  max-width: 300px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-sheet);
+  font: var(--type-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none; /* the cards under a label stay draggable */
+}
+.board-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  font: var(--type-body-sm);
+  color: var(--text-muted);
+}
+
+/* The analysis memo: over the canvas's corner in the split view, in line in the list. */
+.memo {
+  position: absolute;
+  z-index: 3;
+  right: 12px;
+  bottom: 12px;
+  width: 300px;
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  padding: 12px 14px 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sheet);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--elev-lifted);
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+  scrollbar-width: thin;
+}
+.memo-head {
+  display: flex;
+  align-items: center;
+}
+.memo-x {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border-color: transparent;
+}
+.memo h3 {
+  margin: 10px 0 2px;
+  font: var(--type-label);
+  color: var(--text-primary);
+}
+.memo p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.memo .memo-msg {
+  margin-top: 8px;
+}
+.memo-skel {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Below 1180px: the board's list in the sheet, in the tabs' place. */
+.side-board ~ .side-body {
+  display: none;
+}
+.side:not([data-open="true"]) .side-board {
+  display: none;
+}
+.board-sheet {
+  display: grid;
+  gap: 12px;
+  padding: 0 4px 8px;
+}
+.board-sheet button:not(:disabled) {
+  cursor: pointer;
+}
+.board-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.board-sheet-head h2 {
+  margin: 0;
+  font: var(--type-heading);
+  color: var(--text-primary);
+}
+.board-sheet-head .sub {
+  margin: 2px 0 0;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.board-sheet-head .iconbtn {
+  flex: none;
+  margin-left: auto;
+}
+.board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.board-actions .aurora-btn {
+  height: 32px;
+}
+.board-sheet .board-share {
+  margin: 0;
+}
+.board-sheet .memo {
+  position: static;
+  width: auto;
+  max-height: none;
+  box-shadow: none;
+}
+.board-sheet .board-empty {
+  position: static;
+}
+.board-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.board-row {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 10px 40px 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.board-row:focus-visible {
+  outline: var(--bw-focus) solid var(--border-focus);
+  outline-offset: -2px;
+}
+.board-row .h {
+  margin: 0;
+  font: var(--type-body-sm);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.board-row-edges {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.board-row-edges li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Before a share link's pins join a board with its own: the merge prompt, over everything. */
+.board-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-toast);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--surface-scrim);
+}
+.board-prompt {
+  width: min(420px, 100%);
+  gap: 10px;
+  padding: 20px 22px;
+  background: linear-gradient(var(--surface-sheet), var(--surface-sheet)), var(--bg-page);
+  box-shadow: var(--elev-lifted);
+}
+.board-prompt h2 {
+  margin: 0;
+  font: var(--type-heading);
+  color: var(--text-primary);
+}
+.board-prompt p {
+  margin: 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+.board-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.board-prompt-actions button {
+  cursor: pointer;
 }
 
 @media (prefers-reduced-motion: reduce) {

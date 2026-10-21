@@ -84,8 +84,18 @@ import ThreadsRail, { type ThreadRef } from "@/components/ThreadsRail";
 import ThreadStories from "@/components/ThreadStories";
 import TrackSearch from "@/components/TrackSearch";
 import EntityDossier from "@/components/EntityDossier";
+import Board from "@/components/Board";
+import BoardMergePrompt from "@/components/BoardMergePrompt";
 import { PinContext, type PinControls } from "@/components/PinButton";
 import { useBoard } from "@/hooks/useBoard";
+import {
+  useBoardLinks,
+  useBoardMemo,
+  useBoardMirror,
+  useBoardRefresh,
+  useSharedBoard,
+} from "@/hooks/useBoardData";
+import { boardEdges } from "@/lib/boardEdges";
 import type { GlobeControls, GlobeFocus } from "@/components/Globe";
 
 /** The tracked entity's dossier among the Inspect tab's places and links. */
@@ -627,8 +637,8 @@ export default function Home() {
     onAnnounce: setSearchNote,
   });
 
-  // The investigation board (localStorage): pins from the panels, counted on
-  // the top bar's Board button (the board's own view comes next).
+  // The investigation board (localStorage): pins from the panels, the board's
+  // view of them with their edges and memo, and the globe's mirror of it.
   const board = useBoard();
   const [boardNote, setBoardNote] = useState("");
   const boardButtonRef = useRef<HTMLButtonElement>(null);
@@ -653,7 +663,7 @@ export default function Home() {
     () => (boardShown ? closeBoard() : openBoard()),
     [boardShown, closeBoard, openBoard],
   );
-  const { has: pinned, full: boardFull, toggle: togglePin } = board;
+  const { has: pinned, full: boardFull, toggle: togglePin, unpin } = board;
   const pinControls = useMemo<PinControls>(
     () => ({
       has: pinned,
@@ -670,6 +680,38 @@ export default function Home() {
       },
     }),
     [pinned, boardFull, togglePin],
+  );
+  const boardItems = useMemo(() => board.pins.map((p) => p.item), [board.pins]);
+  const boardLinks = useBoardLinks(boardItems, boardShown);
+  const edges = useMemo(
+    () => boardEdges(boardLinks.edges, board.pins),
+    [boardLinks.edges, board.pins],
+  );
+  const boardMirror = useBoardMirror(board.pins, edges, boardShown);
+  const boardMemo = useBoardMemo(board.pins);
+  useBoardRefresh(boardShown, board);
+  const sharedBoard = useSharedBoard(board, { onOpen: openBoard, announce: setBoardNote });
+  const handleUnpin = useCallback(
+    (item: string) => {
+      unpin(item);
+      setBoardNote("Removed from the board.");
+    },
+    [unpin],
+  );
+  const boardView = (variant: "split" | "sheet") => (
+    <Board
+      variant={variant}
+      pins={board.pins}
+      edges={edges}
+      coCoverageChecked={boardLinks.coCoverageChecked}
+      memo={boardMemo.memo}
+      analyzing={boardMemo.analyzing}
+      onAnalyze={boardMemo.analyze}
+      onDismissMemo={boardMemo.dismiss}
+      onMove={board.move}
+      onRemove={handleUnpin}
+      onClose={closeBoard}
+    />
   );
 
   // "/" focuses the Track search (the mockup's shortcut): the top bar's pill
@@ -993,8 +1035,12 @@ export default function Home() {
     </>
   );
 
+  // From 1180px the open board takes the left of the screen: the other panels
+  // hide and the globe slides right (soft-orbit.css .board-open).
+  const split = boardOpen && wide;
+
   const content = (
-    <main className="relative h-screen w-screen overflow-hidden">
+    <main className={`relative h-screen w-screen overflow-hidden${split ? " board-open" : ""}`}>
       {/* Starfield, under everything */}
       <Sky />
 
@@ -1023,6 +1069,8 @@ export default function Home() {
         threadLit={spreadReplay.lit}
         onGrab={handleGrab}
         focus={globeFocus}
+        board={boardMirror}
+        shifted={split}
       />
 
       {/* Orbital rings around the globe */}
@@ -1088,6 +1136,7 @@ export default function Home() {
         inspectRef={inspectRef}
         copilotRef={copilotRef}
         threadsRef={threadsTabRef}
+        board={!wide && boardOpen ? boardView("sheet") : undefined}
         search={
           !wide && sheetSearch ? (
             <div ref={sheetSearchRef}>
@@ -1141,6 +1190,9 @@ export default function Home() {
           )
         }
       />
+
+      {/* The investigation board's split view, from 1180px (below, its list is in the sheet) */}
+      {split && boardView("split")}
 
       {/* Bottom row: layers and the timeline, centred on the page. After the side
           panel: below 1180px the CSS lifts it above the sheet by sibling selectors. */}
@@ -1201,6 +1253,18 @@ export default function Home() {
         <span>{trackNote}</span>
         <span>{boardNote}</span>
       </p>
+
+      {/* A share link's pins, for a board with pins of its own: asked, never merged by itself */}
+      {sharedBoard.offer && (
+        <BoardMergePrompt
+          {...sharedBoard.offer}
+          onAdd={sharedBoard.accept}
+          onKeep={() => {
+            sharedBoard.decline();
+            boardButtonRef.current?.focus();
+          }}
+        />
+      )}
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}
       {shownCard && cardPoint && (

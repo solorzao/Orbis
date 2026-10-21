@@ -9,6 +9,7 @@ import {
   seedLastVisit,
   withBreaking,
   withCairo,
+  seedBoard,
 } from "./fixtures";
 
 const SIZES = [
@@ -416,6 +417,41 @@ for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
     const b = await expectApart(page, size.width, "thread open, Links on", regions);
     expectCentred(b["timeline"], size.width, "thread open, Links on");
   });
+}
+
+// The investigation board's split view from 1180px: on the left under the top
+// bar, above the bottom row (whose capsule keeps its place), the other panels
+// and the topics hidden, the globe slid right of it. With Links on, it ends
+// above the rank switch as the left column does.
+for (const size of SIZES.filter((s) => s.width >= SHEET_BELOW)) {
+  for (const links of [false, true]) {
+    const state = links ? "board view with Links on" : "board view";
+    test(`the ${state} keeps ${GAP}px apart at ${size.width}x${size.height}`, async ({ page }) => {
+      await settle(page, size, seedBoard);
+      if (links) await linksOn(page);
+      await page.getByTestId("board-open").press("Enter");
+      await expect(page.getByTestId("board")).toHaveAttribute("data-edges", "4");
+      const regions = [
+        ...topBarAt(size.width).filter((id) => id !== "topic-filter"),
+        "board",
+        "timeline",
+        "layer-switcher",
+        ...(links ? ["link-rank"] : []),
+      ];
+      const b = await expectApart(page, size.width, state, regions);
+      const board = b["board"];
+      expect(board.x, "board at the brand's left edge").toBeCloseTo(24, 0);
+      const barBottom = Math.max(...topBarAt(size.width).map((id) => b[id]?.y + b[id]?.h || 0));
+      expect(board.y - barBottom, "board below the top bar").toBeGreaterThanOrEqual(16);
+      expect(board.w, "board 58% of the width").toBeCloseTo(size.width * 0.58, 0);
+      expectCentred(b["timeline"], size.width, state);
+      expect(b["timeline"].w, "capsule at its full width").toBeCloseTo(640, 0);
+      // The topics and the side panel hide; the globe sits right of the board.
+      const hidden = await boxes(page, ["topic-filter", "side-panel"]);
+      expect(hidden, "hidden while the board shows").toEqual([]);
+      await expect(page.getByTestId("globe")).toHaveAttribute("data-shifted", "true");
+    });
+  }
 }
 
 test("on a very short screen the open sheet keeps at least its 56px tab bar", async ({ page }) => {

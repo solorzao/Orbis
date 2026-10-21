@@ -945,6 +945,150 @@ export const BOARD_PINS = {
   link: "link:FR-GB",
 } as const;
 
+/** What /api/board/resolve says of each (and what the seeded board saved). */
+export const BOARD_SNAPSHOTS: Record<string, Record<string, unknown>> = {
+  [BOARD_PINS.story]: {
+    title: "France announces new climate policy",
+    place: "Paris, France",
+    lat: 48.8566,
+    lng: 2.3522,
+    time: ago(60),
+    url: "https://example.com/france-climate",
+  },
+  [BOARD_PINS.thread]: {
+    title: "Red Sea shipping attacks",
+    place: "Yemen",
+    lat: 15.5,
+    lng: 48.5,
+    time: ago(20),
+    url: null,
+  },
+  [BOARD_PINS.place]: {
+    title: "London, United Kingdom",
+    place: "London, United Kingdom",
+    lat: 51.5,
+    lng: -0.5,
+    time: ago(30),
+    url: null,
+  },
+  [BOARD_PINS.person]: {
+    title: "Emmanuel Macron",
+    place: "Paris, France",
+    lat: 48.85,
+    lng: 2.35,
+    time: null,
+    url: null,
+  },
+  [BOARD_PINS.link]: {
+    title: "France and United Kingdom",
+    place: null,
+    lat: null,
+    lng: null,
+    time: null,
+    url: null,
+  },
+};
+
+/** /api/board/links' edges between the pins, by pair (the mock orients them by board order). */
+const BOARD_EDGES = [
+  { a: BOARD_PINS.story, b: BOARD_PINS.thread, kind: "same_thread", label: "same thread" },
+  {
+    a: BOARD_PINS.story,
+    b: BOARD_PINS.person,
+    kind: "shared_entity",
+    label: "shared: Emmanuel Macron",
+  },
+  {
+    a: BOARD_PINS.story,
+    b: BOARD_PINS.link,
+    kind: "co_covered",
+    label: "covered together: France and United Kingdom",
+  },
+  {
+    a: BOARD_PINS.place,
+    b: BOARD_PINS.link,
+    kind: "co_covered",
+    label: "covered together: France and United Kingdom",
+  },
+];
+const EDGE_ORDER = ["same_thread", "shared_entity", "same_place", "co_covered"];
+
+/** /api/board/links as the backend answers it: edges among the pins asked, from the earlier one. */
+export function mockBoardLinks(items: string[]) {
+  const index = new Map(items.map((item, i) => [item, i]));
+  const edges = BOARD_EDGES.filter((e) => index.has(e.a) && index.has(e.b))
+    .map((e) => (index.get(e.a)! < index.get(e.b)! ? e : { ...e, a: e.b, b: e.a }))
+    .sort(
+      (x, y) =>
+        index.get(x.a)! - index.get(y.a)! ||
+        index.get(x.b)! - index.get(y.b)! ||
+        EDGE_ORDER.indexOf(x.kind) - EDGE_ORDER.indexOf(y.kind),
+    );
+  return { edges, co_coverage_checked: true };
+}
+
+/** /api/board/analyze's memo on the five pins, citing four of them. */
+export const MOCK_MEMO = {
+  sections: [
+    {
+      heading: "Possible connections",
+      text: "The climate story [1] and the coverage of Emmanuel Macron [4] share his name; the story also appears in the same thread as the Red Sea coverage [2].",
+    },
+    { heading: "Contradictions", text: "None of the pins state conflicting facts [3]." },
+    {
+      heading: "Open questions",
+      text: "Whether France and the United Kingdom stay covered together [5].",
+    },
+  ],
+  citations: [1, 2, 3, 4, 5].map((n) => ({ n, item: Object.values(BOARD_PINS)[n - 1] })),
+  message: null,
+};
+
+export const isBoard = (path: string) => (url: URL) => url.pathname === `/api/board/${path}`;
+
+/** Mock the board's endpoints: resolve (unknown ids are null), links and analyze. */
+export async function mockBoardRoutes(page: Page) {
+  await page.route(isBoard("resolve"), (route) => {
+    const { items } = route.request().postDataJSON() as { items: string[] };
+    return route.fulfill({
+      json: { items: items.map((item) => ({ item, snapshot: BOARD_SNAPSHOTS[item] ?? null })) },
+    });
+  });
+  await page.route(isBoard("links"), (route) => {
+    const { items } = route.request().postDataJSON() as { items: string[] };
+    return route.fulfill({ json: mockBoardLinks(items) });
+  });
+  await page.route(isBoard("analyze"), (route) => route.fulfill({ json: MOCK_MEMO }));
+}
+
+/**
+ * A board in this browser before each page load, unless the page has one
+ * already (so a reload keeps what the test changed). Pins in the order given,
+ * each where it would be pinned, with the snapshots above.
+ */
+export async function seedBoard(page: Page, items: readonly string[] = Object.values(BOARD_PINS)) {
+  const spots = [
+    [0.5, 0],
+    [0.5, 1],
+    [1, 0.5],
+    [0, 0.5],
+    [0.933, 0.25],
+  ];
+  const pins = items.map((item, i) => ({
+    item,
+    snapshot: BOARD_SNAPSHOTS[item],
+    x: spots[i % spots.length][0],
+    y: spots[i % spots.length][1],
+    pinnedAt: Date.now() - (items.length - i) * 60_000,
+  }));
+  await page.addInitScript(
+    ([key, value]) => {
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, value);
+    },
+    [BOARD_KEY, JSON.stringify({ pins })] as const,
+  );
+}
+
 // ── Route interceptors ──────────────────────────────────────────────
 
 /**
@@ -994,6 +1138,9 @@ export async function mockAllApiRoutes(page: Page) {
 
   // The entity tracker: the Track search and the dossiers
   await mockEntityRoutes(page);
+
+  // The investigation board: resolve, links and analyze
+  await mockBoardRoutes(page);
 
   // Breaking stories: none, as often (withBreaking adds some)
   await page.route(isBreaking, (route) => route.fulfill({ json: [] }));

@@ -24,6 +24,7 @@ import type { ScreenPoint } from "@/lib/hoverCard";
 import { ARC_ALTITUDE_SCALE, arcDashTime, arcFlows, linkArcs, type GlobeArc } from "@/lib/links";
 import { revealedArcs, spreadArcs, type ThreadPlace } from "@/lib/threads";
 import { dimColor, focusArcs, focusLayer, focusRadius, type EntityPlace } from "@/lib/entities";
+import { boardArcs, type BoardMirror } from "@/lib/boardEdges";
 import { webGpuReady } from "@/lib/webgpu";
 import type { GlobeLayer } from "@/components/LayerSwitcher";
 
@@ -53,6 +54,8 @@ interface Ring {
   lng: number;
   /** A focus place: one pulse, in the connection colour, its reach by its stories. */
   focus?: boolean;
+  /** A pinned place while the board shows: repeating, in the connection colour. */
+  board?: boolean;
   maxR?: number;
 }
 
@@ -130,6 +133,13 @@ interface GlobeProps {
   onGrab?: () => void;
   /** A tracked entity's focus mode, or null. */
   focus?: GlobeFocus | null;
+  /**
+   * The investigation board's mirror while it shows: its pinned places stand
+   * out (the other dots dim) and ring, and arcs join pins with an edge.
+   */
+  board?: BoardMirror | null;
+  /** The board's split view is open: the globe slides right of it (mockup .board-open #globe). */
+  shifted?: boolean;
 }
 
 interface LandFeature {
@@ -168,6 +178,13 @@ function readGlobeTokens() {
       ],
       flowMs: durationMs(token("--dur-arc-flow", "6000ms"), 6000),
     },
+    // The board's arcs (tokens.md "Investigation board"): same thread in its colour, the rest faint.
+    board: {
+      thread: canvasColor(token("--board-same-thread", ""), "#8b9cff"),
+      start: canvasColor(token("--board-same-thread", ""), "#8b9cff", 0.25),
+      other: canvasColor(token("--board-same-thread", ""), "#8b9cff", 0.45),
+      flowMs: durationMs(token("--dur-arc-flow", "6000ms"), 6000),
+    },
   };
 }
 
@@ -193,6 +210,8 @@ export default function Globe({
   threadLit = null,
   onGrab,
   focus = null,
+  board = null,
+  shifted = false,
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -226,6 +245,7 @@ export default function Globe({
   const linkArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   const threadArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   const focusArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
+  const boardArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   // What each step of the thread's last replay drew ("lit:arcs"), for the e2e tests.
   const replayLogRef = useRef<{ thread: number; steps: string[] } | null>(null);
 
@@ -246,7 +266,21 @@ export default function Globe({
     () => (focus ? focusLayer(points, focus.places) : null),
     [focus, points],
   );
-  const dots = focusDots?.dots ?? points;
+  // The board's mirror: its pinned places stand out the same way (a stand-in
+  // where the window has no dot), each at its own size. Never with a focus.
+  const boardDots = useMemo(
+    () =>
+      board && !focus
+        ? focusLayer(
+            points,
+            board.places.map((p) => ({ ...p, countryCode: "", n: 1, tone: 0 })),
+          )
+        : null,
+    [board, focus, points],
+  );
+  // The highlighted places' dots: a tracked entity's, else the board's.
+  const highlight = focusDots ?? boardDots;
+  const dots = highlight?.dots ?? points;
   // The dots drawn now, for the zoom's re-set (the radii follow the altitude).
   const drawnDotsRef = useRef<GlobePoint[]>(NO_DOTS);
   // The focus places' single pulses: the same objects while the focus holds,
@@ -261,6 +295,11 @@ export default function Globe({
       maxR: 1.5 + 3 * Math.sqrt(p.n / maxN),
     }));
   }, [focus]);
+  // The board's pinned places ring while it shows (mockup applyGlobe), in place of breaking ones.
+  const boardRings = useMemo<Ring[]>(
+    () => (board ? board.places.map((p) => ({ lat: p.lat, lng: p.lng, board: true })) : []),
+    [board],
+  );
   // Whether dots are drawn (the Dots layer, or over a held heatmap during a replay).
   const dotsShownRef = useRef(layer === "dots");
   // The dots the heatmap on screen was computed from, so the same ones never recompute.
@@ -311,7 +350,7 @@ export default function Globe({
       .ringLng("lng")
       // A focus place's pulse takes the connection colour instead (focus mode).
       .ringColor((d: object) =>
-        ringFade((d as Ring).focus ? tokens.focus.highlight : tokens.warning),
+        ringFade((d as Ring).focus || (d as Ring).board ? tokens.focus.highlight : tokens.warning),
       )
       // Intensity (mockup initGlobe): a heatmap weighted by each place's story count
       .heatmapPointLat("lat")
@@ -484,10 +523,10 @@ export default function Globe({
       },
     });
 
-    // Handle resize
+    // Handle resize: the container's width (the window's, less the board's split view)
     const handleResize = () => {
       if (globeRef.current) {
-        globeRef.current.width(window.innerWidth);
+        globeRef.current.width(container.clientWidth || window.innerWidth);
         globeRef.current.height(window.innerHeight + GLOBE_OVERSCAN_PX);
       }
     };
@@ -541,14 +580,17 @@ export default function Globe({
     const globe = globeRef.current;
     if (!globe || !isLoaded) return;
     const pulse = ringRepeatMs({ reduced, lowPower }) > 0;
-    const breakingRings: Ring[] = pulse ? alerts.map(({ lat, lng }) => ({ lat, lng })) : [];
+    const breakingRings: Ring[] =
+      pulse && !board ? alerts.map(({ lat, lng }) => ({ lat, lng })) : [];
     const pulses = pulse ? focusRings : [];
-    globe.ringsData([...breakingRings, ...pulses]);
+    const pinned = pulse ? boardRings : [];
+    globe.ringsData([...breakingRings, ...pulses, ...pinned]);
     if (containerRef.current) {
       containerRef.current.dataset.rings = String(breakingRings.length); // e2e
       containerRef.current.dataset.focusPulses = String(pulses.length);
+      containerRef.current.dataset.boardRings = String(pinned.length);
     }
-  }, [alerts, focusRings, reduced, lowPower, isLoaded]);
+  }, [alerts, focusRings, boardRings, board, reduced, lowPower, isLoaded]);
 
   // The arcs: the Links layer's (the inspected one highlighted) and the
   // selected thread's spread (aurora, as far as a replay has lit it), flowing
@@ -563,8 +605,9 @@ export default function Globe({
     const flow = arcFlows({ reduced, lowPower, touch });
     const same = (a: unknown[], b: unknown[] | undefined) =>
       b !== undefined && a.length === b.length && a.every((x, i) => x === b[i]);
-    // While an entity is tracked the links' arcs dim, with no highlight: its arcs lead.
-    const focused = focus !== null;
+    // While an entity is tracked (or the board shows) the links' arcs dim, with
+    // no highlight: its arcs lead.
+    const focused = focus !== null || board !== null;
     const linkKey = [links, inspectedLink, flow, focused];
     if (!same(linkKey, linkArcsRef.current?.key)) {
       linkArcsRef.current = {
@@ -597,15 +640,24 @@ export default function Globe({
           : NO_ARCS,
       };
     }
+    const boardKey = [board, flow];
+    if (!same(boardKey, boardArcsRef.current?.key)) {
+      boardArcsRef.current = {
+        key: boardKey,
+        arcs: board ? boardArcs(board.arcs, { colors: tokens.board, flow }) : NO_ARCS,
+      };
+    }
     const linked = linkArcsRef.current!.arcs;
     const spread = revealedArcs(threadArcsRef.current!.arcs, threadLit);
     const entity = focusArcsRef.current!.arcs;
-    const arcs = [...linked, ...spread, ...entity];
+    const mirrored = boardArcsRef.current!.arcs;
+    const arcs = [...linked, ...spread, ...entity, ...mirrored];
     globe.arcsData(arcs);
     if (container) {
       // read by the e2e tests: WebGL arcs can't be found in the DOM
       container.dataset.arcs = String(linked.length);
       container.dataset.focusArcs = String(entity.length);
+      container.dataset.boardArcs = String(mirrored.length);
       // The arc drawn highlighted, if any (not the inspected link, which may not be drawn).
       container.dataset.arcHighlight =
         linked.find((a) => a.color === tokens.arcs.highlight)?.key ?? "";
@@ -630,7 +682,7 @@ export default function Globe({
       // how many times arcs were drawn: pausing them must not redraw any
       container.dataset.arcsDrawn = String(Number(container.dataset.arcsDrawn ?? 0) + 1);
     }
-  }, [links, inspectedLink, thread, threadLit, focus, reduced, lowPower, touch, isLoaded]);
+  }, [links, inspectedLink, thread, threadLit, focus, board, reduced, lowPower, touch, isLoaded]);
 
   // A drag pauses the arcs' dashes in place: only the accessor changes, so
   // three-globe keeps each mesh, its dash pattern and where its dashes are.
@@ -641,10 +693,13 @@ export default function Globe({
     globe.arcDashAnimateTime(arcDashTime(dragging) as (arc: object) => number);
     if (container) {
       const drawn =
-        links.length > 0 || (thread?.spread.length ?? 0) > 1 || (focus?.places.length ?? 0) > 1;
+        links.length > 0 ||
+        (thread?.spread.length ?? 0) > 1 ||
+        (focus?.places.length ?? 0) > 1 ||
+        (board?.arcs.length ?? 0) > 0;
       container.dataset.arcFlow = String(arcFlows({ reduced, lowPower, touch, dragging }) && drawn);
     }
-  }, [dragging, links, thread, focus, reduced, lowPower, touch, isLoaded]);
+  }, [dragging, links, thread, focus, board, reduced, lowPower, touch, isLoaded]);
 
   // Focus mode: the dots outside the tracked entity's places dim, and its
   // places (stand-ins where the window has no dot) are sized by its stories
@@ -666,6 +721,14 @@ export default function Globe({
           const base = n === null ? countBase(p) : focusRadius(n, focusDots.maxN);
           return dotRadius(base, altitudeRef.current);
         });
+    } else if (boardDots) {
+      // The board's places keep their colour and size; the rest dim.
+      globe
+        .pointColor((d: object) => {
+          const p = d as GlobePoint;
+          return boardDots.n(p) === null ? dimColor(p.color) : p.color;
+        })
+        .pointRadius((d: object) => dotRadius(countBase(d as GlobePoint), altitudeRef.current));
     } else {
       globe
         .pointColor("color")
@@ -675,8 +738,9 @@ export default function Globe({
       if (focus) container.dataset.focusEntity = focus.key;
       else delete container.dataset.focusEntity;
       container.dataset.focusPlaces = String(focus?.places.length ?? 0);
+      container.dataset.boardPlaces = String(boardDots ? (board?.places.length ?? 0) : 0);
     }
-  }, [focusDots, focus, isLoaded]);
+  }, [focusDots, boardDots, focus, board, isLoaded]);
 
   // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {
@@ -720,8 +784,8 @@ export default function Globe({
     webGpuReady().then((gpu) => {
       if (cancelled || !globeRef.current) return;
       const overlay = showDots(layer, { replaying, cpuPath: !gpu });
-      // In focus mode the tracked entity's places stand over the heatmap.
-      const focused = focusDots ? dots.filter((d) => focusDots.n(d) !== null) : NO_DOTS;
+      // In focus mode (or with the board shown) its places stand over the heatmap.
+      const focused = highlight ? dots.filter((d) => highlight.n(d) !== null) : NO_DOTS;
       drawDots(overlay ? dots : focused, true);
       tuneHeatmap(overlay);
       const shown = heatForRef.current !== null;
@@ -736,15 +800,36 @@ export default function Globe({
       cancelled = true;
       clearTimeout(settle);
     };
-  }, [points, dots, focusDots, layer, holdHeatmap, replaying, isLoaded]);
+  }, [points, dots, highlight, layer, holdHeatmap, replaying, isLoaded]);
+
+  // The board's split view slides the globe right of it (mockup .board-open
+  // #globe, left: 30vw, over --dur-slow): the canvas takes the container's new
+  // width once it has moved, so the globe centres in the room left.
+  useEffect(() => {
+    const globe = globeRef.current;
+    const container = containerRef.current;
+    if (!globe || !container || !isLoaded) return;
+    const fit = () => {
+      globeRef.current?.width(container.clientWidth);
+    };
+    fit();
+    const settled = setTimeout(fit, reduced ? 0 : 520);
+    return () => clearTimeout(settled);
+  }, [shifted, reduced, isLoaded]);
 
   return (
     <div
       ref={containerRef}
       data-testid="globe"
       data-dot-colors={[...new Set(points.map((p) => p.color))].sort().join(" ")}
+      data-shifted={shifted || undefined}
       className="fixed inset-x-0 bottom-0"
-      style={{ top: -GLOBE_OVERSCAN_PX, zIndex: "var(--z-globe)" }}
+      style={{
+        top: -GLOBE_OVERSCAN_PX,
+        left: shifted ? "30vw" : 0,
+        zIndex: "var(--z-globe)",
+        transition: "left var(--dur-slow) var(--ease-out)",
+      }}
     />
   );
 }
