@@ -15,9 +15,16 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.models.relations import Relation, RelationDetail, Relations
-from app.routers.http_cache import edge_cached
+from app.routers.http_cache import edge_cached, retry_shortly
 from app.routers.links import Country, _pair
-from app.services.cache import WEEK_TTL, cached_model, get_cached, set_cached, single_flight
+from app.services.cache import (
+    WEEK_TTL,
+    FlightCancelled,
+    cached_model,
+    get_cached,
+    set_cached,
+    single_flight,
+)
 from app.services.relations import (
     get_relation_detail,
     get_relation_pairs,
@@ -80,7 +87,10 @@ async def get_relations(
         await set_cached(key, result.model_dump(mode="json", by_alias=True), ttl)
         return result
 
-    return await single_flight(key, load)
+    try:
+        return await single_flight(key, load)
+    except FlightCancelled as stopped:  # at shutdown: a 503 to retry
+        raise retry_shortly(stopped) from None
 
 
 @router.get("/relations/detail", response_model=RelationDetail, dependencies=[Depends(edge_cached)])
@@ -110,4 +120,7 @@ async def get_relation(a: Country, b: Country) -> RelationDetail:
         await set_cached(key, result.model_dump(mode="json", by_alias=True), WEEK_TTL)
         return result
 
-    return await single_flight(key, load)
+    try:
+        return await single_flight(key, load)
+    except FlightCancelled as stopped:  # at shutdown: a 503 to retry
+        raise retry_shortly(stopped) from None

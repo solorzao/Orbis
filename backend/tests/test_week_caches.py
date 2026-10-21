@@ -337,6 +337,35 @@ class TestStopping:
         assert not cache._in_flight
 
     @pytest.mark.asyncio
+    async def test_at_shutdown_every_week_read_is_stopped_a_relations_read_too(self, redis):
+        """Redis and the pool close next: a relations read left running could set_cached
+        after close_redis (reopening it) or reach get_pool after close_pool."""
+        from app.services import cache, ingestion
+
+        relations_started, relations_cancelled = asyncio.Event(), asyncio.Event()
+
+        async def relations_read():
+            relations_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                relations_cancelled.set()
+                raise
+
+        relations_request = asyncio.create_task(
+            cache.single_flight("wk:relations:v1:20261015-20261021:all:40", relations_read)
+        )
+        await asyncio.wait_for(relations_started.wait(), 1)
+
+        await ingestion.stop_background_tasks(shutdown=True)
+
+        assert relations_cancelled.is_set()
+        with pytest.raises(cache.FlightCancelled):
+            await relations_request
+        await asyncio.sleep(0)
+        assert not cache._in_flight
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(("path", "mock"), [("/api/news", "globes"), ("/api/links", "links")])
     async def test_a_request_whose_week_read_is_cancelled_gets_a_503_to_retry(
         self, monkeypatch, redis, week, caplog, path, mock

@@ -96,8 +96,9 @@ async def shutdown() -> None:
     """Stop scheduler and release connections on shutdown."""
     logger.info("Shutting down Orbis API …")
     await stop_scheduler()
-    # A cache warm still running would reopen Redis or the pool once closed.
-    await stop_background_tasks()
+    # A cache warm or a week read still running would reopen Redis or the pool once
+    # closed: every one stops here.
+    await stop_background_tasks(shutdown=True)
     await close_redis()
     await close_pool()
 

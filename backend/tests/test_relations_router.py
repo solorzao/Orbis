@@ -27,14 +27,16 @@ NOT_FOUND = {"detail": "No reported events between them in the last 7 days."}
 QUAD_KEYS = {"verbal_cooperation", "material_cooperation", "verbal_conflict", "material_conflict"}
 
 
-def _pair(a="IR", b="US", n=20, q=(2, 1, 12, 5), from_a=5, mentions=300, outlets=4) -> dict:
+def _pair(
+    a="IR", b="US", n=20, q=(2, 1, 12, 5), from_a=5, mentions=300, outlets=4, goldstein=-2.0
+) -> dict:
     """A LIST_SQL row: a pair over the lens."""
     return {
         "a": a,
         "b": b,
         "n": n,
         "mentions": mentions,
-        "goldstein": -2.0,
+        "goldstein": goldstein,
         "tone": -3.0,
         "q1": q[0],
         "q2": q[1],
@@ -74,6 +76,7 @@ class FakePool:
         self.titles: list[dict] = []
         self.calls: list[tuple[str, tuple]] = []
         self.gate: asyncio.Event | None = None  # when set, the list waits for it
+        self.detail_gate: asyncio.Event | None = None  # when set, the detail waits for it
 
     async def fetch(self, sql: str, *args):
         self.calls.append((sql, args))
@@ -82,6 +85,8 @@ class FakePool:
                 await self.gate.wait()
             return self.pairs
         if sql == relations.DETAIL_SQL:
+            if self.detail_gate is not None:
+                await self.detail_gate.wait()
             return self.detail
         if sql == relations.TITLES_SQL:
             return self.titles
@@ -375,6 +380,50 @@ async def test_no_key_is_under_db_so_a_cycles_invalidation_leaves_them(monkeypat
     assert sorted(redis.values) == [DETAIL_KEY, LIST_KEY]
     await invalidate("db:*")
     assert sorted(redis.values) == [DETAIL_KEY, LIST_KEY]
+
+
+@pytest.mark.asyncio
+async def test_a_class_tie_with_a_goldstein_of_zero_is_cooperation(monkeypatch, redis, pool):
+    """The tie-break is the Goldstein sign, and zero isn't negative: cooperation."""
+    pool.pairs = [_pair(n=20, q=(5, 5, 5, 5), goldstein=0.0)]
+    async with _client(monkeypatch) as client:
+        resp = await client.get("/api/relations")
+
+    [rel] = resp.json()["relations"]
+    assert (rel["kind"], rel["goldstein"]) == ("cooperation", 0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "params", "gate"),
+    [
+        ("/api/relations", {}, "gate"),
+        ("/api/relations/detail", {"a": "IR", "b": "US"}, "detail_gate"),
+    ],
+)
+async def test_a_read_cancelled_under_a_request_is_a_503_to_retry(
+    monkeypatch, redis, pool, caplog, path, params, gate
+):
+    """As links' and the globe's week reads: if a cancel scope ever reaches
+    wk:relations: (shutdown does), a waiting request gets a 503 with Retry-After,
+    not a bare 500 with a traceback."""
+    from app.services import cache
+
+    setattr(pool, gate, asyncio.Event())
+    with caplog.at_level(logging.INFO):
+        async with _client(monkeypatch) as client:
+            request = asyncio.create_task(client.get(path, params=params))
+            while not pool.calls:
+                await asyncio.sleep(0.01)
+            await asyncio.gather(*cache.cancel_flights("wk:relations"), return_exceptions=True)
+            resp = await request
+
+    assert resp.status_code == 503
+    assert resp.headers["retry-after"] == "15"
+    assert "cache-control" not in resp.headers  # never kept at the edge
+    assert resp.json()["detail"] == "The computation for wk:* was cancelled; retry shortly."
+    assert not [r for r in caplog.records if r.exc_info]
+    assert redis.values == {}
 
 
 def test_both_routes_are_rate_limited_as_data():
