@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { arcApex, arcPillText, linkEnds } from "@/lib/links";
+import { arcApex, type ArcPillLabel } from "@/lib/links";
 import type { ScreenPoint } from "@/lib/hoverCard";
-import type { CountryLink } from "@/types/news";
 
 interface ArcPillProps {
-  /** The hovered link, else the inspected one, or null: no pill, no frame loop. */
-  link: CountryLink | null;
+  /**
+   * The arc to name (lib/links linkPill, lib/relations relationPill): the
+   * hovered one, else the focused or inspected one, or null: no pill, no frame loop.
+   */
+  label: ArcPillLabel | null;
   /** Where a point above the globe is on screen, or null on its far side. */
   project: (lat: number, lng: number, altitude?: number) => ScreenPoint | null;
   /** A touch screen ((hover: none)): CSS hides the pill, so it runs no frame loop either. */
@@ -15,21 +17,21 @@ interface ArcPillProps {
 }
 
 /**
- * The floating pill that names a link at the top of its arc (mockup
- * .arc-pill): "41 stories link United States and Iran, mostly politics".
+ * The floating pill that names an arc at its top (mockup .arc-pill): a link's
+ * "41 stories link United States and Iran, mostly politics", or a relation's
+ * "312 reported events between United States and Iran, mostly verbal conflict".
  * The globe moves without telling React, so a requestAnimationFrame loop
  * places it (only while it shows), and hides it while the arc's top is on
  * the far side. It lets the pointer through to the arc beneath, and is
- * hidden from screen readers: the link inspector says the same to everyone.
+ * hidden from screen readers: the inspectors say the same to everyone.
  */
-export default function ArcPill({ link, project, touch = false }: ArcPillProps) {
+export default function ArcPill({ label, project, touch = false }: ArcPillProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const shown = touch ? null : link;
-  const [start, end] = shown ? linkEnds(shown) : [null, null];
-  const startLat = start?.lat;
-  const startLng = start?.lng;
-  const endLat = end?.lat;
-  const endLng = end?.lng;
+  const shown = touch ? null : label;
+  const startLat = shown?.start.lat;
+  const startLng = shown?.start.lng;
+  const endLat = shown?.end.lat;
+  const endLng = shown?.end.lng;
 
   useEffect(() => {
     if (startLat === undefined || startLng === undefined) return;
@@ -55,10 +57,9 @@ export default function ArcPill({ link, project, touch = false }: ArcPillProps) 
   }, [startLat, startLng, endLat, endLng, project]);
 
   if (!shown) return null;
-  const { n, text } = arcPillText(shown);
   return (
     <div ref={ref} className="arc-pill" data-testid="arc-pill" aria-hidden="true">
-      <span className="num">{n}</span> {text}
+      <span className="num">{shown.n}</span> {shown.text}
     </div>
   );
 }

@@ -22,6 +22,7 @@ import {
 } from "@/lib/globeView";
 import type { ScreenPoint } from "@/lib/hoverCard";
 import { ARC_ALTITUDE_SCALE, arcDashTime, arcFlows, linkArcs, type GlobeArc } from "@/lib/links";
+import { relationArcs, type Relation } from "@/lib/relations";
 import { revealedArcs, spreadArcs, type ThreadPlace } from "@/lib/threads";
 import { dimColor, focusArcs, focusLayer, focusRadius, type EntityPlace } from "@/lib/entities";
 import { boardArcs, type BoardMirror } from "@/lib/boardEdges";
@@ -32,6 +33,7 @@ import type { GlobeLayer } from "@/components/LayerSwitcher";
 const DOT_ALTITUDE = 0.01;
 const NO_DOTS: GlobePoint[] = [];
 const NO_LINKS: CountryLink[] = [];
+const NO_RELATIONS: Relation[] = [];
 const NO_ALERTS: readonly { lat: number; lng: number }[] = [];
 const NO_ARCS: GlobeArc[] = [];
 /** The breaking rings' reach, in degrees (mockup initGlobe). */
@@ -125,6 +127,18 @@ interface GlobeProps {
   /** The link whose arc is under the pointer, or null when it leaves the arcs. */
   onArcHover?: (link: CountryLink | null) => void;
   onArcClick?: (link: CountryLink) => void;
+  /** The Relations layer's relations, drawn as arcs (none while it is off or unavailable). */
+  relations?: Relation[];
+  /**
+   * The relation to highlight (its relationKey): the focused list row's, else
+   * the opened one's. Hidden while a thread's arcs are drawn, or while muted.
+   */
+  inspectedRelation?: string | null;
+  /** The relation whose arc is under the pointer, or null when it leaves the arcs. */
+  onRelationHover?: (relation: Relation | null) => void;
+  onRelationClick?: (relation: Relation) => void;
+  /** How many relation labels ArcLabels renders (for the e2e tests: WebGL arcs aren't in the DOM). */
+  relationLabels?: number;
   /** The selected thread: its spread drawn as aurora arcs, first place to each later one. */
   thread?: { id: number; spread: readonly ThreadPlace[] } | null;
   /** While its spread replays, the places lit so far: only their arcs show (null: all). */
@@ -163,6 +177,14 @@ function readGlobeTokens() {
     },
     // The links' arcs while an entity is tracked: everything else dims.
     mutedArc: canvasColor(token("--arc-muted", ""), "rgba(180, 190, 255, 0.10)"),
+    // The relations' arcs (tokens.md "Connection arcs"), by class.
+    relations: {
+      cooperation: canvasColor(token("--arc-relation-cooperation", ""), "#8fb8ff"),
+      conflict: canvasColor(token("--arc-relation-conflict", ""), "#f2949c"),
+      highlight: canvasColor(token("--arc-highlight", ""), "#7fe6ff"),
+      muted: canvasColor(token("--arc-muted", ""), "rgba(180, 190, 255, 0.10)"),
+      flowMs: durationMs(token("--dur-arc-flow", "6000ms"), 6000),
+    },
     // A tracked entity's arcs and pulses (tokens.md "Connection arc").
     focus: {
       highlight: canvasColor(token("--connection-highlight", ""), "#7fe6ff"),
@@ -206,6 +228,11 @@ export default function Globe({
   inspectedLink = null,
   onArcHover,
   onArcClick,
+  relations = NO_RELATIONS,
+  inspectedRelation = null,
+  onRelationHover,
+  onRelationClick,
+  relationLabels = 0,
   thread = null,
   threadLit = null,
   onGrab,
@@ -234,6 +261,12 @@ export default function Globe({
   const onArcClickRef = useRef(onArcClick);
   onArcClickRef.current = onArcClick;
 
+  const onRelationHoverRef = useRef(onRelationHover);
+  onRelationHoverRef.current = onRelationHover;
+
+  const onRelationClickRef = useRef(onRelationClick);
+  onRelationClickRef.current = onRelationClick;
+
   const onGrabRef = useRef(onGrab);
   onGrabRef.current = onGrab;
 
@@ -243,6 +276,7 @@ export default function Globe({
   // inputs hold, so a replay step or a new link list leaves the other's arc
   // objects (and three-globe's meshes and dash phase) as they were.
   const linkArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
+  const relationArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   const threadArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   const focusArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   const boardArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
@@ -385,14 +419,18 @@ export default function Globe({
       .arcDashAnimateTime("dashAnimateTime")
       .arcAltitudeAutoScale(ARC_ALTITUDE_SCALE)
       .arcsTransitionDuration(0)
-      // No arcLabel: the arc pill (ArcPill) names the hovered link.
+      // No arcLabel: the arc pill (ArcPill) names the hovered link or relation.
       .onArcHover((arc: object | null) => {
-        onArcHoverRef.current?.((arc as GlobeArc | null)?.link ?? null);
+        const hovered = arc as GlobeArc | null;
+        onArcHoverRef.current?.(hovered?.link ?? null);
+        onRelationHoverRef.current?.(hovered?.relation ?? null);
       })
       .onArcClick((arc: object) => {
         pointClicked = true;
-        const link = (arc as GlobeArc).link; // a thread's arcs open nothing
+        // A thread's (or an entity's, or the board's) arcs open nothing.
+        const { link, relation } = arc as GlobeArc;
         if (link) onArcClickRef.current?.(link);
+        if (relation) onRelationClickRef.current?.(relation);
       })
       .onZoom((pov: { lat: number; lng: number; altitude: number }) => {
         // The drift moves the camera every frame without zooming; only a real
@@ -621,6 +659,21 @@ export default function Globe({
           : linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow }),
       };
     }
+    // The relations' arcs follow the links' rules: muted under the same focus,
+    // and the inspected one's highlight hidden while a thread's arcs are drawn.
+    const relationHighlight = thread ? null : inspectedRelation;
+    const relationKey = [relations, relationHighlight, flow, focused];
+    if (!same(relationKey, relationArcsRef.current?.key)) {
+      relationArcsRef.current = {
+        key: relationKey,
+        arcs: relationArcs(relations, {
+          inspected: relationHighlight,
+          colors: tokens.relations,
+          flow,
+          muted: focused,
+        }),
+      };
+    }
     const focusKey = [focus, flow];
     if (!same(focusKey, focusArcsRef.current?.key)) {
       focusArcsRef.current = {
@@ -648,10 +701,11 @@ export default function Globe({
       };
     }
     const linked = linkArcsRef.current!.arcs;
+    const related = relationArcsRef.current!.arcs;
     const spread = revealedArcs(threadArcsRef.current!.arcs, threadLit);
     const entity = focusArcsRef.current!.arcs;
     const mirrored = boardArcsRef.current!.arcs;
-    const arcs = [...linked, ...spread, ...entity, ...mirrored];
+    const arcs = [...linked, ...related, ...spread, ...entity, ...mirrored];
     globe.arcsData(arcs);
     if (container) {
       // read by the e2e tests: WebGL arcs can't be found in the DOM
@@ -661,6 +715,10 @@ export default function Globe({
       // The arc drawn highlighted, if any (not the inspected link, which may not be drawn).
       container.dataset.arcHighlight =
         linked.find((a) => a.color === tokens.arcs.highlight)?.key ?? "";
+      container.dataset.relationArcs = String(related.length);
+      container.dataset.relationHighlight =
+        related.find((a) => a.color === tokens.relations.highlight)?.key ?? "";
+      container.dataset.relationMuted = String(focused && related.length > 0);
       container.dataset.threadArcs = String(spread.length);
       // Each replay step as drawn, "1:0,2:1,…": a step at or before the last starts a new replay.
       if (thread && threadLit !== null) {
@@ -682,7 +740,20 @@ export default function Globe({
       // how many times arcs were drawn: pausing them must not redraw any
       container.dataset.arcsDrawn = String(Number(container.dataset.arcsDrawn ?? 0) + 1);
     }
-  }, [links, inspectedLink, thread, threadLit, focus, board, reduced, lowPower, touch, isLoaded]);
+  }, [
+    links,
+    inspectedLink,
+    relations,
+    inspectedRelation,
+    thread,
+    threadLit,
+    focus,
+    board,
+    reduced,
+    lowPower,
+    touch,
+    isLoaded,
+  ]);
 
   // A drag pauses the arcs' dashes in place: only the accessor changes, so
   // three-globe keeps each mesh, its dash pattern and where its dashes are.
@@ -694,12 +765,13 @@ export default function Globe({
     if (container) {
       const drawn =
         links.length > 0 ||
+        relations.length > 0 ||
         (thread?.spread.length ?? 0) > 1 ||
         (focus?.places.length ?? 0) > 1 ||
         (board?.arcs.length ?? 0) > 0;
       container.dataset.arcFlow = String(arcFlows({ reduced, lowPower, touch, dragging }) && drawn);
     }
-  }, [dragging, links, thread, focus, board, reduced, lowPower, touch, isLoaded]);
+  }, [dragging, links, relations, thread, focus, board, reduced, lowPower, touch, isLoaded]);
 
   // Focus mode: the dots outside the tracked entity's places dim, and its
   // places (stand-ins where the window has no dot) are sized by its stories
@@ -823,6 +895,7 @@ export default function Globe({
       data-testid="globe"
       data-dot-colors={[...new Set(points.map((p) => p.color))].sort().join(" ")}
       data-shifted={shifted || undefined}
+      data-relation-labels={relationLabels}
       className="fixed inset-x-0 bottom-0"
       style={{
         top: -GLOBE_OVERSCAN_PX,

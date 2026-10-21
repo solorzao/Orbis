@@ -90,7 +90,8 @@ kbd {
 }
 .low-power .glass,
 .low-power .pillbar,
-.low-power .arc-pill {
+.low-power .arc-pill,
+.low-power .arc-tag {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   background: #1a182c;
@@ -765,6 +766,10 @@ kbd {
 .left-stack.links-on {
   bottom: 224px;
 }
+/* With Relations on, its switch, legend and status (when shown) float there: higher still. */
+.left-stack.relations-on {
+  bottom: 360px;
+}
 
 /*
  * "Since your last visit" (mockup .since): first in the left column from
@@ -1335,6 +1340,91 @@ kbd {
 }
 
 /*
+ * Relation inspector (the link inspector's .insp structure): the readouts two
+ * by two, so Goldstein's sub-label reads; each class a row with its count, its
+ * share and a bar in its side's arc colour (words first: colour never carries
+ * the class alone); the directions; the UTC days as paired bars, cooperation
+ * then conflict (a table under them says the same to screen readers).
+ */
+.readouts.rel-readouts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ro-sub {
+  display: block;
+  margin-top: 2px;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.rel-classes,
+.rel-directions {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.rel-class {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.5em 3em 64px;
+  gap: 10px;
+  align-items: center;
+  padding: 3px 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+.rel-class-n,
+.rel-class-pct {
+  font: var(--type-data-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.rel-class-pct {
+  color: var(--text-muted);
+}
+.rel-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+.rel-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--c);
+}
+.rel-directions li {
+  padding: 3px 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+.rel-days {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+.rel-day {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+.rel-day-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 48px;
+}
+.rel-day-bars .b {
+  width: 6px;
+  min-height: 1px;
+  border-radius: 2px 2px 0 0;
+}
+.rel-day-lbl {
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+}
+
+/*
  * Entity dossier (mockup inspectHTML, entity branch; .prow and #constellation,
  * lines 368-373): three readouts, the daily stories, the names in the same
  * coverage around the entity, the top places with their tone.
@@ -1794,6 +1884,14 @@ button.cite:hover {
 .layers .tg:hover {
   color: var(--text-primary);
 }
+/* Relations under a range or a replay: focusable, its note read, not pressable. */
+.layers .tg[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.layers .tg[aria-disabled="true"]:hover {
+  color: var(--text-muted);
+}
 /*
  * From 1180px the layers share the bottom row with the 640px capsule, centred
  * on the page; just above 1180 the row's side tracks are about 222px, so the
@@ -1804,20 +1902,36 @@ button.cite:hover {
   .layers .tg {
     padding: 0 10px;
   }
-  .layers .tg {
-    gap: 5px;
-  }
   .layers .sep {
     margin: 0;
   }
 }
 /*
- * Below 1440px a side track can't hold the base layers and both overlays in
- * one line (318px against 272px at 1280, 222px at 1180): the overlays take a
- * line of their own above the base layers. 78px tall, the dock still fits the
- * row the 84px capsule sets.
+ * Where the overlays' line is short of room (below 1440px), a toggle drops its
+ * dot (three overlays then fit a 222px track at 1180). Pressed, it takes the
+ * selected fill and its label an underline in the accent: a cue of shape, not
+ * colour alone, at about 10:1 against the glass (WCAG 1.4.11). aria-pressed
+ * carries the state to screen readers.
  */
-@media (1180px <= width < 1440px) {
+@media (width < 1440px) {
+  .layers .tg::before {
+    display: none;
+  }
+  .layers .tg[aria-pressed="true"] {
+    background: var(--surface-selected);
+    text-decoration: underline;
+    text-decoration-color: var(--accent-primary);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+  }
+}
+/*
+ * Below 1600px a side track can't hold the base layers and the three overlays
+ * in one line (415px against 352px at 1440, 272px at 1280, 222px at 1180):
+ * the overlays take a line of their own above the base layers. 74px tall, the
+ * dock still fits the row the 84px capsule sets.
+ */
+@media (1180px <= width < 1600px) {
   .layers {
     flex-direction: column-reverse;
     align-items: flex-start;
@@ -1825,6 +1939,32 @@ button.cite:hover {
   }
   .layers .sep {
     display: none;
+  }
+}
+/*
+ * Below 1180px the dock sits centred over the capsule, the rank or class switch
+ * right of it and the Links status left: in one line it would push them off a
+ * tablet's edges, so it stacks too where the screen is tall enough. On a short
+ * screen (a phone on its side) it keeps one line, its toggles dotless.
+ */
+@media (761px <= width < 1180px) and (min-height: 561px) {
+  .layers {
+    flex-direction: column-reverse;
+    align-items: center;
+    border-radius: var(--radius-lg);
+  }
+  .layers .sep {
+    display: none;
+  }
+}
+/* In one line, its buttons tighten so the class switch beside it keeps 12px from the edge at 844. */
+@media (761px <= width < 1180px) and (max-height: 560px) {
+  .layers .seg button,
+  .layers .tg {
+    padding: 0 8px;
+  }
+  .layers .sep {
+    margin: 0 2px;
   }
 }
 /*
@@ -1875,6 +2015,66 @@ button.cite:hover {
 .links-chip-status {
   color: var(--text-secondary);
 }
+/*
+ * Relations' class switch takes the rank switch's place (it carries
+ * .link-rank: Links and Relations are never on together). Its legend, and its
+ * status when it draws nothing, float in a column 12px above the switch's
+ * 40px pill. The legend's colours are the arcs' own tokens, each named in
+ * words beside its swatch.
+ */
+.relations-float {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px + 40px + 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  width: max-content;
+  max-width: 360px;
+  pointer-events: none; /* only its words: the globe stays draggable around them */
+}
+.relations-status {
+  margin: 0;
+  height: 32px;
+  padding: 0 14px;
+  font: var(--type-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.relations-legend {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+.relations-legend .rl-lens {
+  color: var(--text-primary);
+}
+.rl-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+}
+.rl-note {
+  color: var(--text-muted);
+}
+.relations-legend .sw {
+  flex: none;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+.sw-coop {
+  background: var(--arc-relation-cooperation);
+}
+.sw-conf {
+  background: var(--arc-relation-conflict);
+}
 
 /*
  * The pill that names a link at its arc's top (mockup .arc-pill); ArcPill
@@ -1906,6 +2106,36 @@ button.cite:hover {
   color: var(--accent-strong);
 }
 .arc-pill:not([data-placed]) {
+  visibility: hidden;
+}
+/*
+ * The strongest relation arcs' persistent labels (ArcLabels places them):
+ * smaller and quieter than the pill, which renders after them and so sits
+ * above. Edged in their class's arc colour; the class is in their words too.
+ */
+.arc-tag {
+  position: fixed;
+  z-index: var(--z-reticle);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(var(--surface-glass), var(--surface-glass)), var(--bg-page);
+  border: 1px solid var(--border-subtle);
+  font: var(--type-data-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.arc-tag.cooperation {
+  border-color: color-mix(in srgb, var(--arc-relation-cooperation) 45%, transparent);
+}
+.arc-tag.conflict {
+  border-color: color-mix(in srgb, var(--arc-relation-conflict) 45%, transparent);
+}
+.arc-tag:not([data-placed]) {
   visibility: hidden;
 }
 /* A touch screen can't hover an arc (as the hover card, useTouchOnly): no pill. */
@@ -2400,6 +2630,10 @@ button.cite:hover {
   .bottombar .links-chip {
     display: inline-flex;
   }
+  /* No room for the relation arcs' labels on a phone: the list in Inspect names them. */
+  .arc-tags {
+    display: none;
+  }
   .timeline {
     height: 64px;
   }
@@ -2497,6 +2731,31 @@ button.cite:hover {
     right: calc(100% + 12px);
     bottom: 50%;
     transform: translateY(50%);
+  }
+  /* Relations' legend is too tall to sit beside them: it centres above the layers. */
+  .relations-float {
+    left: 50%;
+    bottom: calc(100% + 12px);
+    transform: translateX(-50%);
+    align-items: center;
+  }
+}
+/*
+ * On a short screen (a phone on its side) the legend keeps its lens and the
+ * caveat, in two lines under the top bar; the swatches and the topics note go
+ * (the arcs' labels and the list name the class in words).
+ */
+@media (761px <= width < 1180px) and (max-height: 560px) {
+  .relations-float {
+    max-width: 440px;
+  }
+  .relations-legend .rl-key,
+  .relations-legend .rl-topics {
+    display: none;
+  }
+  /* With the sheet open there is no room above the layers: the list in Inspect names the lens. */
+  .side[data-open="true"] ~ .bottombar .relations-float {
+    display: none;
   }
 }
 @media (max-width: 639px) {
@@ -2606,6 +2865,10 @@ button.cite:hover {
 .board-open:has(.link-rank) .board {
   bottom: 224px;
 }
+/* With Relations on, its legend floats above its switch: the board ends above both. */
+.board-open:has(.relation-kind) .board {
+  bottom: 360px;
+}
 .board .ghead .sub {
   min-width: 0;
 }
@@ -2625,6 +2888,7 @@ button.cite:hover {
 .board-open .recon,
 .board-open .topbar-center,
 .board-open .arc-pill,
+.board-open .arc-tags,
 .board-open .hud {
   opacity: 0;
   visibility: hidden;

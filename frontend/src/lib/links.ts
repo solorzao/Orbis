@@ -5,6 +5,7 @@
 import type { ApiLink, ApiLinkDetail } from "@/lib/api";
 import { pointAt } from "@/lib/cells";
 import { apiArticlesToNewsArticles, mapApiTopic, mapTopicMix } from "@/lib/clustering";
+import type { Relation } from "@/lib/relations";
 import type { CountryLink, GlobePoint, LinkCountry, LinkDetail, Topic } from "@/types/news";
 
 /** How links are ranked: surprisingly often together (lift), or by stories (count). */
@@ -71,10 +72,12 @@ export interface ArcColors {
   flowMs: number;
 }
 
-/** One arc as globe.gl draws it: a link's, or a thread's spread (lib/threads). */
+/** One arc as globe.gl draws it: a link's, a relation's, or a thread's spread (lib/threads). */
 export interface GlobeArc {
   /** The link it draws (Links layer); none for a thread's arc. */
   link?: CountryLink;
+  /** The relation it draws (Relations layer, lib/relations): its click opens the inspector. */
+  relation?: Relation;
   /** The thread whose spread it draws. */
   thread?: number;
   key: string;
@@ -192,6 +195,20 @@ export function arcPillText(link: CountryLink): { n: number; text: string } {
   const verb = link.n === 1 ? "story links" : "stories link";
   const topic = link.topic === "All" ? "" : `, mostly ${link.topic.toLowerCase()}`;
   return { n: link.n, text: `${verb} ${from.name} and ${to.name}${topic}` };
+}
+
+/** What the arc pill names: an arc's ends (from its origin), its number and its words. */
+export interface ArcPillLabel {
+  start: LinkCountry;
+  end: LinkCountry;
+  n: number;
+  text: string;
+}
+
+/** A link's arc pill: "41 stories link United States and Iran, mostly politics". */
+export function linkPill(link: CountryLink): ArcPillLabel {
+  const [start, end] = linkEnds(link);
+  return { start, end, ...arcPillText(link) };
 }
 
 /** A link's names from its origin: "US ↔ IR" for its pill, "United States and Iran" in full. */

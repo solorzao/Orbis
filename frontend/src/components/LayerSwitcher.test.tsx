@@ -30,11 +30,12 @@ describe("LayerSwitcher", () => {
       within(group)
         .getAllByRole("button")
         .map((b) => b.textContent),
-    ).toEqual(["Dots", "Intensity", "Links", "Threads"]);
+    ).toEqual(["Dots", "Intensity", "Links", "Threads", "Relations"]);
     expect(LAYERS.map((l) => l.id)).toEqual(["dots", "intensity"]);
     expect(group.querySelector(".sep")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Links" })).toHaveClass("tg");
     expect(screen.getByRole("button", { name: "Threads" })).toHaveClass("tg");
+    expect(screen.getByRole("button", { name: "Relations" })).toHaveClass("tg");
   });
 
   it("toggles the Threads overlay; Links and Threads may both be on", () => {
@@ -213,5 +214,134 @@ describe("LayerSwitcher", () => {
       />,
     );
     expect(screen.queryByTestId("links-status")).toBeNull();
+  });
+});
+
+describe("LayerSwitcher's Relations overlay (the 7-day lens)", () => {
+  const LENS = { firstDay: "2026-10-15", lastDay: "2026-10-21", since: "2026-10-15" };
+  const toggle = () => screen.getByRole("button", { name: "Relations" });
+
+  it("toggles Relations after Threads, saying what it shows", () => {
+    const onRelationsChange = vi.fn();
+    const { rerender } = renderSwitcher({ onRelationsChange });
+    expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect(toggle()).toHaveAttribute(
+      "title",
+      "Reported events between countries over the last 7 days (GDELT)",
+    );
+    fireEvent.click(toggle());
+    expect(onRelationsChange).toHaveBeenCalledWith(true);
+
+    rerender(
+      <LayerSwitcher
+        layer="dots"
+        onChange={() => {}}
+        links={false}
+        onLinksChange={() => {}}
+        rank="lift"
+        onRankChange={() => {}}
+        threads={false}
+        onThreadsChange={() => {}}
+        relations
+        onRelationsChange={onRelationsChange}
+      />,
+    );
+    expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle());
+    expect(onRelationsChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("shows the class switch and the legend only while Relations is on and available", () => {
+    const { rerender } = renderSwitcher({ relationLens: LENS });
+    expect(screen.queryByRole("group", { name: "Show relations" })).toBeNull();
+    expect(screen.queryByTestId("relations-legend")).toBeNull();
+
+    rerender(
+      <LayerSwitcher
+        layer="dots"
+        onChange={() => {}}
+        links={false}
+        onLinksChange={() => {}}
+        rank="lift"
+        onRankChange={() => {}}
+        threads={false}
+        onThreadsChange={() => {}}
+        relations
+        relationLens={LENS}
+      />,
+    );
+    const kind = screen.getByRole("group", { name: "Show relations" });
+    expect(kind).toHaveAttribute("data-testid", "relation-kind");
+    expect(
+      within(kind)
+        .getAllByRole("button")
+        .map((b) => [b.textContent, b.getAttribute("aria-pressed")]),
+    ).toEqual([
+      ["All", "true"],
+      ["Cooperation", "false"],
+      ["Conflict", "false"],
+    ]);
+    // Outside the layers' pill, so the bottom row keeps its size.
+    expect(screen.getByTestId("layer-switcher")).not.toContainElement(kind);
+    const legend = screen.getByTestId("relations-legend");
+    expect(legend).toHaveTextContent("Relations · last 7 days · 15–21 Oct (UTC days)");
+    expect(legend).toHaveTextContent(
+      "Reported events from news, machine-coded by GDELT. Not verified.",
+    );
+    expect(legend).toHaveTextContent("Topic filters don't apply to relations.");
+    // The class in words beside each swatch: colour never carries it alone.
+    expect(within(legend).getByText("Cooperation")).toBeInTheDocument();
+    expect(within(legend).getByText("Conflict")).toBeInTheDocument();
+  });
+
+  it("says since when, during the first week's ramp", () => {
+    renderSwitcher({ relations: true, relationLens: { ...LENS, since: "2026-10-19" } });
+    expect(screen.getByTestId("relations-legend")).toHaveTextContent(
+      "Relations · since 19 Oct (UTC)",
+    );
+  });
+
+  it("names the last 7 days while the lens loads", () => {
+    renderSwitcher({ relations: true, relationLens: null });
+    expect(screen.getByTestId("relations-legend")).toHaveTextContent(/^Relations · last 7 days/);
+  });
+
+  it("switches the class shown", () => {
+    const onRelationKindChange = vi.fn();
+    renderSwitcher({ relations: true, relationLens: LENS, onRelationKindChange });
+    const kind = screen.getByRole("group", { name: "Show relations" });
+    fireEvent.click(within(kind).getByRole("button", { name: "Conflict" }));
+    expect(onRelationKindChange).toHaveBeenCalledWith("conflict");
+  });
+
+  it("says why it draws nothing, beside the legend", () => {
+    renderSwitcher({
+      relations: true,
+      relationLens: LENS,
+      relationsStatus: "No reported events between countries in the last 7 days",
+    });
+    const status = screen.getByTestId("relations-status");
+    expect(status).toHaveTextContent("No reported events between countries in the last 7 days");
+    expect(screen.getByTestId("layer-switcher")).not.toContainElement(status);
+  });
+
+  it("is unavailable under a range or a replay: described, pressed state kept, inert", () => {
+    const onRelationsChange = vi.fn();
+    const note = "Relations cover the last 7 days: not available for a range or replay";
+    renderSwitcher({
+      relations: true,
+      onRelationsChange,
+      relationLens: LENS,
+      relationsStatus: "Relations couldn't load",
+      relationsUnavailable: note,
+    });
+    expect(toggle()).toHaveAttribute("aria-disabled", "true");
+    expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    expect(toggle()).toHaveAccessibleDescription(note);
+    fireEvent.click(toggle());
+    expect(onRelationsChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("relation-kind")).toBeNull();
+    expect(screen.queryByTestId("relations-legend")).toBeNull();
+    expect(screen.queryByTestId("relations-status")).toBeNull();
   });
 });

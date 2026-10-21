@@ -1,8 +1,69 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import RecentPlaces from "./RecentPlaces";
-import type { LinkEntry, PanelEntry } from "@/types/news";
+import type { LinkEntry, PanelEntry, RelationEntry } from "@/types/news";
 import { MAX_PANELS } from "@/lib/panelQuery";
+import { toRelation } from "@/lib/relations";
+import type { ApiRelation } from "@/lib/api";
+import contract from "../../e2e/relations.contract.json";
+
+function relationEntry(relationId: string, createdAt: number): RelationEntry {
+  return {
+    relationId,
+    relation: toRelation(contract.list.relations[0] as ApiRelation), // IR–US, from US: 312
+    filter: "all",
+    lens: null,
+    detail: null,
+    detailLoading: true,
+    createdAt,
+  };
+}
+
+describe("RecentPlaces with relations", () => {
+  it("holds relations beside places and links, named as reported events", () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <RecentPlaces
+        places={[]}
+        links={[]}
+        relations={[relationEntry("r1", 1)]}
+        activeId="r1"
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+    const pick = screen.getByRole("button", { pressed: true });
+    expect(pick).toHaveTextContent("US ↔ IR · events312");
+    expect(pick).toHaveAccessibleName(
+      "US ↔ IR · events: United States and Iran, 312 reported events",
+    );
+    fireEvent.click(pick);
+    expect(onSelect).toHaveBeenCalledWith("r1");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close United States and Iran reported events" }),
+    );
+    expect(onClose).toHaveBeenCalledWith("r1");
+  });
+
+  it("keeps MAX_PANELS across places, links and relations, the newest", () => {
+    const places = [{ ...entry("a", "Paris, France", 5), createdAt: 0 }];
+    const links = [linkEntry("l1", 1), linkEntry("l2", 2)];
+    const relations = [relationEntry("r3", 3), relationEntry("r4", 4), relationEntry("r5", 5)];
+    render(
+      <RecentPlaces
+        places={places}
+        links={links}
+        relations={relations}
+        activeId={null}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const picks = screen.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
+    expect(picks.map((b) => b.getAttribute("data-place"))).toEqual(["l1", "l2", "r3", "r4", "r5"]);
+  });
+});
 
 function entry(panelId: string, locationName: string | undefined, count = 4): PanelEntry {
   return {

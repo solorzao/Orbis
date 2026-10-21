@@ -8,6 +8,7 @@ import { expect, type Page } from "@playwright/test";
 import { GLOBE_OVERSCAN_PX, HOME_VIEW } from "../src/lib/globeView";
 import { arcApex } from "../src/lib/links";
 import type { ApiThread, ApiThreadDetail } from "../src/lib/threads";
+import contract from "./relations.contract.json";
 
 // ── Mock data ───────────────────────────────────────────────────────
 
@@ -414,6 +415,57 @@ export async function mockLinkRoutes(page: Page) {
     route.fulfill({ json: mockLinkDetail(route.request().url()) }),
   );
   await page.route("**/api/links/explain", (route) => route.fulfill({ json: MOCK_LINK_EXPLAIN }));
+}
+
+// ── Relations (reported events over the 7-day lens) ─────────────────
+// The answers come from the committed contract (relations.contract.json), which
+// PR 19c's test_relations_contract.py checks against the API's models: change
+// the contract there, never the shapes here.
+
+/** /api/relations, every class: IR–US (conflict), FR–US and FR–NG (cooperation). */
+export const MOCK_RELATIONS = contract.list;
+/** /api/relations?kind=conflict: IR–US only, its numbers conflict's alone. */
+export const MOCK_RELATIONS_CONFLICT = contract.list_conflict;
+
+/** /api/relations?kind=cooperation: FR–US, IR–US and FR–NG, their numbers cooperation's alone. */
+export const MOCK_RELATIONS_COOPERATION = contract.list_cooperation;
+
+/** /api/relations as the backend answers it, by ?kind= (every class by default). */
+export function mockRelations(url: string) {
+  const kind = new URL(url).searchParams.get("kind");
+  if (kind === "conflict") return MOCK_RELATIONS_CONFLICT;
+  if (kind === "cooperation") return MOCK_RELATIONS_COOPERATION;
+  return MOCK_RELATIONS;
+}
+
+/**
+ * /api/relations/detail for Iran and the United States: the contract's, with
+ * its first sample's URL made unsafe. The real API never sends one (it
+ * sanitises them); the override tests the UI's own isWebUrl guard.
+ */
+export const MOCK_RELATION_DETAIL = {
+  ...contract.detail,
+  samples: contract.detail.samples.map((s, i) =>
+    i === 0 ? { ...s, url: "javascript:alert(1)" } : s,
+  ),
+};
+
+/** Whether a request is for the arcs (/api/relations), not a relation's detail. */
+export const isRelationsList = (url: URL) => url.pathname === "/api/relations";
+export const isRelationDetail = (url: URL) => url.pathname === "/api/relations/detail";
+
+/** Mock the Relations layer's endpoints: the arcs, and a pair's detail (404 for any other pair). */
+export async function mockRelationRoutes(page: Page) {
+  await page.route(isRelationsList, (route) =>
+    route.fulfill({ json: mockRelations(route.request().url()) }),
+  );
+  await page.route(isRelationDetail, (route) => {
+    const q = new URL(route.request().url()).searchParams;
+    const pair = [q.get("a"), q.get("b")].sort().join("-");
+    return pair === "IR-US"
+      ? route.fulfill({ json: MOCK_RELATION_DETAIL })
+      : route.fulfill({ status: 404, json: contract.not_found });
+  });
 }
 
 // ── Story threads ───────────────────────────────────────────────────
@@ -1132,6 +1184,9 @@ export async function mockAllApiRoutes(page: Page) {
 
   // The Links layer
   await mockLinkRoutes(page);
+
+  // The Relations layer (the committed API contract)
+  await mockRelationRoutes(page);
 
   // The Threads layer
   await mockThreadRoutes(page);

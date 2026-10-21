@@ -1,15 +1,18 @@
 "use client";
 
 import type { CSSProperties, ReactNode } from "react";
-import type { LinkEntry, PanelEntry } from "@/types/news";
+import type { LinkEntry, PanelEntry, RelationEntry } from "@/types/news";
 import { MAX_PANELS } from "@/lib/panelQuery";
 import { linkPairLabel } from "@/lib/links";
+import { relationPairLabel, reportedEvents } from "@/lib/relations";
 
 interface RecentPlacesProps {
   /** Open places. */
   places: PanelEntry[];
   /** Open links between countries. */
   links?: LinkEntry[];
+  /** Open relations between countries (their reported events). */
+  relations?: RelationEntry[];
   /** The tracked person or organisation (its dossier's id), shown first. */
   entity?: { id: string; name: string } | null;
   /** The place, link or dossier inspected below. */
@@ -79,6 +82,22 @@ function linkPill(entry: LinkEntry): Pill {
   };
 }
 
+/** A relation's pill: "US ↔ IR · events", from the acting country, with its event count. */
+function relationPill(entry: RelationEntry): Pill {
+  const { short, long } = relationPairLabel(entry.relation);
+  const n = entry.detail?.relation.n ?? entry.relation.n;
+  const shown = `${short} · events`;
+  return {
+    id: entry.relationId,
+    createdAt: entry.createdAt,
+    title: `${long}: reported events, last 7 days`,
+    label: `${shown}: ${long}, ${reportedEvents(n)}`, // the visible words first (label in name)
+    closeLabel: `Close ${long} reported events`,
+    count: n,
+    content: <span className="place-name">{shown}</span>,
+  };
+}
+
 /** The tracked entity's pill: its dossier, and × to stop tracking. */
 function entityPill(entity: { id: string; name: string }): Pill {
   return {
@@ -98,22 +117,24 @@ function entityPill(entity: { id: string; name: string }): Pill {
 }
 
 /**
- * The places and links opened from the globe, as a row of pills at the top of
- * the Inspect tab, oldest first: pick one to inspect it, × to close it. A
- * link reads "US ↔ IR", from where most of its stories come. A tracked
- * person or organisation comes first, its × stopping the tracking.
+ * The places, links and relations opened from the globe, as a row of pills
+ * at the top of the Inspect tab, oldest first: pick one to inspect it, × to
+ * close it. A link reads "US ↔ IR", from where most of its stories come; a
+ * relation "US ↔ IR · events", from its acting country. A tracked person or
+ * organisation comes first, its × stopping the tracking.
  */
 export default function RecentPlaces({
   places,
   links = [],
+  relations = [],
   entity = null,
   activeId,
   onSelect,
   onClose,
 }: RecentPlacesProps) {
-  if (places.length + links.length === 0 && !entity) return null;
+  if (places.length + links.length + relations.length === 0 && !entity) return null;
   // A stable sort: what opened at the same moment keeps its order.
-  const opened = [...places.map(placePill), ...links.map(linkPill)]
+  const opened = [...places.map(placePill), ...links.map(linkPill), ...relations.map(relationPill)]
     .sort((a, b) => a.createdAt - b.createdAt)
     .slice(-MAX_PANELS);
   const pills = entity ? [entityPill(entity), ...opened] : opened;
