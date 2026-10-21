@@ -4,7 +4,7 @@
 
 **Goal:** Rebuild the Orbis frontend in the Soft Orbit design language and add the "connections" features (hover previews, arcs, story threads, co-pilot, board), on top of data and API foundations that make those features accurate and cheap.
 
-**Architecture:** Work lands as small PRs to `main`, each green in CI before hand-off. Phase 1 fixes data and API foundations in the FastAPI backend (no visual change). Phase 2 moves the Next.js frontend onto the Soft Orbit tokens and shell. Phases 3 to 5 add features, each backend endpoint paired with its Soft Orbit surface.
+**Architecture:** Work lands as small PRs to `main`, each green in CI before hand-off. Phase 1 fixes data and API foundations in the FastAPI backend (no visual change). Phase 2 moves the Next.js frontend onto the Soft Orbit tokens and shell. Phases 3 to 5 add features, each backend endpoint paired with its Soft Orbit surface. Phase 6 reworks how every AI surface speaks, and rebuilds the co-pilot as a tool-using agent.
 
 **Tech Stack:** FastAPI + asyncpg + PostgreSQL (PostGIS, pgvector, pg_trgm) on Azure; GDELT GKG ingestion every 15 minutes; Claude Haiku 5.5 (`claude-haiku-5-5`); OpenAI `text-embedding-3-small`; Upstash Redis; Next.js 16 + React 19 + Tailwind v4 + globe.gl on Vercel.
 
@@ -54,8 +54,11 @@
 | 18 | 4 | Investigation board (split view, pins mirrored on the globe) | 12, 13 |
 | 19 | 5 Events | GDELT Events ingestion: daily country-pair rollups | 4b |
 | 20 | 5 | Relation arcs layer (cooperation and conflict) | 13, 19 |
+| 21 | 6 AI voice | One voice for every Claude surface: a shared house style and system prompt | none |
+| 22 | 6 | Voice evals and output guards (leak checks, a graded eval set) | 21 |
+| 23 | 6 | Co-pilot rework: a tool-using agent over the existing retrieval | 21, 22 |
 
-Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md` (done through #85), and Phase 4's is `docs/plans/2026-10-18-soft-orbit-phase-4.md` (PR 15 split into 15a–15c, 17 into 17a/17b, 18 into 18a/18b). Phase 5 is scoped here and gets its bite-sized plan when Phase 4 is done, so it builds on what actually shipped.
+Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md` (done through #85), and Phase 4's is `docs/plans/2026-10-18-soft-orbit-phase-4.md` (PR 15 split into 15a–15c, 17 into 17a/17b, 18 into 18a/18b). Phases 5 and 6 are scoped here and each gets its bite-sized plan when the phase before it is done, so it builds on what actually shipped.
 
 ---
 
@@ -822,6 +825,40 @@ Depends on 7a being deployed and 7b merged.
 
 - **PR 19:** ingest `export.CSV.zip` from the same `lastupdate.txt` each cycle. Keep only daily `event_pairs_daily(a_iso, b_iso, quad_class, day, n_events, mentions, avg_goldstein, avg_tone, sample_urls)` rollups (CAMEO actor codes mapped to ISO), with 7-day retention like everything else.
 - **PR 20:** relation arcs in `arc-relation-cooperation` / `arc-relation-conflict`, always labelled, from `/api/relations`.
+
+## Phase 6: AI voice and agent rework (scoped)
+
+Owner-requested on 2026-10-21. Every Claude surface still talks like a system describing its inputs, not like a guide to the news.
+- **Examples from the board memo on production:** it addresses "a reader" ("A reader could check the dated articles…"), names its inputs by handle ("Pin 2 is Steve Witkoff"), quotes raw metadata ("dated 2026-10-21 11:15 UTC"), and narrates gaps in its own data ("pin 2 gives only 'this week' with no date").
+- **The co-pilot** showed the same habit earlier (owner report, 2026-10-18): exposing its context and how it works.
+
+**Surfaces in scope:**
+- the co-pilot (planner and synthesis);
+- cluster and selection summaries;
+- link explanations;
+- thread synopses;
+- the board memo.
+
+**PR 21 (one voice):**
+- **A shared house style** in `backend/app/services/voice.py`, imported into every surface's system prompt. Write about the stories, places and people, never about the data:
+  - no pins, ids, fields, tools, retrieval, context or prompts;
+  - no "the reader", "the user" or "the data";
+  - human dates ("this morning", "21 October") instead of timestamps;
+  - say what is known plainly and leave out what isn't;
+  - no narrated gaps;
+  - short;
+  - citations as inline references the UI renders (chips), never "pin N" in prose.
+- **The board memo** keeps its three sections but writes them for someone reading the news.
+
+**PR 22 (evals and guards):**
+- **Output guards:** catch leaks (handles like "pin 3", "the reader", ISO timestamps, field and tool names, meta-commentary about inputs) and reject or regenerate, as the "linked to" check does today.
+- **A graded eval set** built from real production inputs for each surface, with an LLM judge scoring voice, faithfulness to the sources and citation accuracy. It runs on demand with a cost cap, and the scores gate prompt changes. The claude-api skill's `build-eval` flow covers this.
+
+**PR 23 (co-pilot rework):**
+- **Replace the JSON plan-then-execute pipeline** with a tool-using agent over the existing retrieval: semantic and keyword search, threads, entities, the board, links, and globe actions.
+- **Streaming,** with a per-turn budget.
+- **Visible work as UI, not prose:** small "looked at" chips (places, threads, people) instead of narration.
+- **Choose the model per surface on the eval set** (Haiku against Sonnet), within the daily cap.
 
 ## Risks to watch
 
