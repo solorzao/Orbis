@@ -4,10 +4,62 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: read # the change filter lists the PR's files through the API
+
+# A newer push to the same PR cancels the run it supersedes
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
+  # Each job runs only when something it reads changed, so a docs-only PR runs
+  # nothing and a backend-only PR skips E2E (which runs no backend). The frontend
+  # unit tests read backend/app and docs/redesign files for parity checks, and
+  # the backend tests read the frontend/e2e contract fixtures. Editing this
+  # workflow runs everything, and so does a filter error or a PR past the
+  # 3000 files the API lists, so a gap in the listing never skips a check.
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      all: ${{ steps.filter.outcome != 'success' || github.event.pull_request.changed_files >= 3000 }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+      backend: ${{ steps.filter.outputs.backend }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        continue-on-error: true
+        with:
+          filters: |
+            workflow: &workflow
+              - '.github/workflows/ci.yml'
+            frontend:
+              - *workflow
+              - 'frontend/**'
+              - 'backend/app/**'
+              - 'docs/redesign/**'
+            e2e:
+              - *workflow
+              - 'frontend/**'
+            backend:
+              - *workflow
+              - 'backend/**'
+              - 'database/**'
+              - 'scripts/**'
+              - 'frontend/e2e/**'
+            infra:
+              - *workflow
+              - 'infra/**'
+
   frontend:
     name: Frontend Checks
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.all == 'true' || needs.changes.outputs.frontend == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -27,7 +79,8 @@ jobs:
   e2e:
     name: E2E Tests (Playwright)
     runs-on: ubuntu-latest
-    needs: frontend
+    needs: [changes, frontend]
+    if: needs.changes.outputs.all == 'true' || needs.changes.outputs.e2e == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -51,6 +104,8 @@ jobs:
   backend:
     name: Backend Checks
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.all == 'true' || needs.changes.outputs.backend == 'true'
     defaults:
       run:
         working-directory: backend
@@ -100,6 +155,8 @@ jobs:
   terraform:
     name: Terraform Checks
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.all == 'true' || needs.changes.outputs.infra == 'true'
     defaults:
       run:
         working-directory: infra
