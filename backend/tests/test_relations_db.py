@@ -212,6 +212,12 @@ _DETAIL_PAGES = 60  # 14 heap pages at most (7 days x 2 directions), plus the in
 _TITLES_PAGES = 60  # 10 lookups by source_url
 
 
+def _report(capsys, line: str) -> None:
+    """A measure into CI's log for the PR (pytest captures prints otherwise)."""
+    with capsys.disabled():
+        print(f"\n[relations] {line}")
+
+
 async def _relation_pages(conn, *names: str) -> int:
     return sum(
         [
@@ -246,10 +252,7 @@ async def test_at_production_scale_the_list_reads_the_table_once(big, mode, caps
         await big.execute(f"SET LOCAL {setting}")
     raw = await big.fetchval("EXPLAIN (ANALYZE, FORMAT JSON) " + relations.LIST_SQL, *_list_args())
     ms = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Execution Time"]
-    with capsys.disabled():
-        print(
-            f"\n[relations] list over the lens ({mode}): {pages} pages, bound {bound}; {ms:.0f} ms"
-        )
+    _report(capsys, f"list over the lens ({mode}): {pages} pages, bound {bound}; {ms:.0f} ms")
 
 
 _PER_PAIR_LIST_SQL = """
@@ -274,7 +277,7 @@ ORDER BY p.mentions DESC, p.n DESC, p.a, p.b
 
 
 @pytest.mark.asyncio
-async def test_the_list_page_bound_fails_for_a_per_pair_read(big):
+async def test_the_list_page_bound_fails_for_a_per_pair_read(big, capsys):
     """The mutation twin: outlets counted per pair against the table, the shape this
     plan rejected, read it once per pair and break the bound. (Only the busiest
     pairs, so the twin stays quick: a few dozen reads of the table.)"""
@@ -291,11 +294,12 @@ async def test_the_list_page_bound_fails_for_a_per_pair_read(big):
         LAST,
     )
     pages = await db_plans.pages(big, _PER_PAIR_LIST_SQL, _list_args(busiest), "custom")
+    _report(capsys, f"per-pair list (twin): {pages} pages, bound {bound}")
     assert pages > bound, (pages, bound)
 
 
 @pytest.mark.asyncio
-async def test_at_production_scale_since_reads_the_day_index(big):
+async def test_at_production_scale_since_reads_the_day_index(big, capsys):
     await fill_week(big, TODAY)
     custom = await db_plans.custom_plan(big, relations.SINCE_SQL, FIRST, LAST)
     generic = await db_plans.generic_plan(
@@ -306,11 +310,12 @@ async def test_at_production_scale_since_reads_the_day_index(big):
         assert "idx_event_pairs_day" in plan["indexes"], plan
     for mode in ("custom", "generic"):
         pages = await db_plans.pages(big, relations.SINCE_SQL, (FIRST, LAST), mode)
+        _report(capsys, f"since ({mode}): {pages} pages, bound {_SINCE_PAGES}")
         assert pages <= _SINCE_PAGES, (mode, pages)
 
 
 @pytest.mark.asyncio
-async def test_the_since_checks_fail_without_the_day_index(big):
+async def test_the_since_checks_fail_without_the_day_index(big, capsys):
     """The mutation twin of the checks above (19b's twin covers the purge): without
     the day index, since reads the whole table or the whole primary key (it holds
     day too; 19b's CI showed the planner prefers it), past the page bound."""
@@ -321,6 +326,7 @@ async def test_the_since_checks_fail_without_the_day_index(big):
             plan = await db_plans.custom_plan(big, relations.SINCE_SQL, FIRST, LAST)
             assert "idx_event_pairs_day" not in plan["indexes"], plan
             pages = await db_plans.pages(big, relations.SINCE_SQL, (FIRST, LAST), "custom")
+            _report(capsys, f"since, no day index (twin): {pages} pages, bound {_SINCE_PAGES}")
             assert pages > _SINCE_PAGES, (pages, plan)
             raise _Undo
 
@@ -331,7 +337,7 @@ def _busy_pair() -> tuple[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_at_production_scale_the_detail_reads_the_primary_key(big):
+async def test_at_production_scale_the_detail_reads_the_primary_key(big, capsys):
     await fill_week(big, TODAY)
     a, b = _busy_pair()
     args = (a, b, FIRST, LAST)
@@ -348,11 +354,12 @@ async def test_at_production_scale_the_detail_reads_the_primary_key(big):
         assert "event_pairs_daily_pkey" in plan["indexes"], plan
     for mode in ("custom", "generic"):
         pages = await db_plans.pages(big, relations.DETAIL_SQL, args, mode)
+        _report(capsys, f"detail ({mode}): {pages} pages, bound {_DETAIL_PAGES}")
         assert pages <= _DETAIL_PAGES, (mode, pages)
 
 
 @pytest.mark.asyncio
-async def test_the_detail_check_fails_without_the_primary_key(big):
+async def test_the_detail_check_fails_without_the_primary_key(big, capsys):
     """The mutation twin: without the primary key the detail can't read by pair, so
     it reads the lens's days whole (a seq scan, or the day index's 7 of 8 days),
     past the page bound."""
@@ -366,12 +373,13 @@ async def test_the_detail_check_fails_without_the_primary_key(big):
             plan = await db_plans.custom_plan(big, relations.DETAIL_SQL, a, b, FIRST, LAST)
             assert "event_pairs_daily_pkey" not in plan["indexes"], plan
             pages = await db_plans.pages(big, relations.DETAIL_SQL, (a, b, FIRST, LAST), "custom")
+            _report(capsys, f"detail, no primary key (twin): {pages} pages, bound {_DETAIL_PAGES}")
             assert pages > _DETAIL_PAGES, (pages, plan)
             raise _Undo
 
 
 @pytest.mark.asyncio
-async def test_at_production_scale_titles_are_read_by_source_url(big):
+async def test_at_production_scale_titles_are_read_by_source_url(big, capsys):
     await big.execute(
         """
         INSERT INTO articles (title, source_url, source_name, published_at, latitude,
@@ -395,6 +403,7 @@ async def test_at_production_scale_titles_are_read_by_source_url(big):
         assert "articles_source_url_key" in plan["indexes"], plan
     for mode in ("custom", "generic"):
         pages = await db_plans.pages(big, relations.TITLES_SQL, (urls,), mode)
+        _report(capsys, f"titles, 10 URLs ({mode}): {pages} pages, bound {_TITLES_PAGES}")
         assert pages <= _TITLES_PAGES, (mode, pages)
 
 
