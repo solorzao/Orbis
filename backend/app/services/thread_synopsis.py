@@ -8,7 +8,11 @@ alone. A thread is summarised again once it has grown by half. Each call
 draws on SYNOPSIS_SHARE of the daily Claude budget, so synopses pause before
 any visitor-facing feature does, and each attempt is capped at
 CALL_TIMEOUT_S. A reply that isn't the expected JSON, or that fails
-validation, is dropped and the thread waits for the next cycle.
+validation, is dropped, and the thread backs off (as one without a usable
+headline does): it isn't eligible again for RETRY_HOURS, doubling with each
+failure in a row up to MAX_RETRY_HOURS, so a thread whose replies keep failing
+can't take a slot, and a call, every cycle. Claude being unavailable (the
+budget, the API) isn't the thread's failure: it is asked again next cycle.
 
 Cost, estimated: about 600 input tokens a call (the system prompt and 15
 headlines) and up to about 300 output (the JSON plus low-effort thinking),
@@ -47,6 +51,10 @@ MIN_STORIES = 5
 MIN_COUNTRIES = 2  # ... or MIN_SOURCES outlets
 MIN_SOURCES = 5
 REGROWTH = 1.5  # summarised again at 1.5 times the stories the last synopsis covered
+# After a failed attempt, a thread waits this long, doubling with each failure in a
+# row, up to MAX_RETRY_HOURS (migration 020).
+RETRY_HOURS = 2
+MAX_RETRY_HOURS = 24
 
 # Eligible threads were last seen in the active window (a thread with 2+
 # stories goes inactive after ACTIVE_HOURS without one).
@@ -99,7 +107,8 @@ SCHEMA: dict[str, Any] = {
 # Listed threads (the list's own predicate, as literals, so idx_threads_listed
 # serves it) seen in the active window, that are still active (a
 # thread_centroids row, by primary key): never every active thread, most of
-# them single-story ones no list shows.
+# them single-story ones no list shows. Not one backing off from a failure ($2 is
+# now).
 ELIGIBLE_SQL = f"""
     SELECT t.id, t.n_stories
     FROM threads t
@@ -108,15 +117,31 @@ ELIGIBLE_SQL = f"""
       AND t.n_stories >= {MIN_STORIES}
       AND (cardinality(t.countries) >= {MIN_COUNTRIES} OR t.n_sources >= {MIN_SOURCES})
       AND (t.summarized_n = 0 OR t.n_stories >= {REGROWTH} * t.summarized_n)
+      AND (t.synopsis_retry_at IS NULL OR t.synopsis_retry_at <= $2)
     ORDER BY t.velocity DESC, t.id
     LIMIT {SYNOPSES_PER_CYCLE}
 """
 
-# Columns no index covers, so the update can stay HOT.
+# Columns no index covers, so the update can stay HOT. A synopsis (or the null
+# answer) ends any backoff.
 WRITE_SQL = """
     UPDATE threads
-    SET title = $2, synopsis = $3, summarized_at = now(), summarized_n = n_stories
+    SET title = $2, synopsis = $3, summarized_at = now(), summarized_n = n_stories,
+        synopsis_failures = 0, synopsis_retry_at = NULL
     WHERE id = $1
+"""
+
+# A failed attempt, at $2 (the cycle's now): RETRY_HOURS times 2 for each earlier
+# failure in a row, at most MAX_RETRY_HOURS. The exponent is capped first, so a
+# long run of failures can't overflow the interval. HOT too.
+FAILED_SQL = f"""
+    UPDATE threads
+    SET synopsis_failures = synopsis_failures + 1,
+        synopsis_retry_at = $2::timestamptz + least(
+            make_interval(hours => {RETRY_HOURS}) * power(2, least(synopsis_failures, 8)),
+            make_interval(hours => {MAX_RETRY_HOURS}))
+    WHERE id = $1
+    RETURNING synopsis_failures, synopsis_retry_at
 """
 
 # A <headlines> tag inside a headline would end the block early or open a fake
@@ -191,21 +216,39 @@ def parse_synopsis(reply: str) -> tuple[str, str] | tuple[None, None] | None:
     return title, synopsis
 
 
+async def _failed(pool: Any, thread_id: int, now: datetime, why: str, level: int) -> None:
+    """Back *thread_id* off after a failed attempt (FAILED_SQL), and log it."""
+    row = await pool.fetchrow(FAILED_SQL, thread_id, now)
+    if row is None:  # purged meanwhile
+        return
+    logger.log(
+        level,
+        "Thread %s: %s; failure %d in a row, eligible again at %s.",
+        thread_id,
+        why,
+        row["synopsis_failures"],
+        row["synopsis_retry_at"].isoformat(timespec="minutes"),
+    )
+
+
 async def summarise_threads(now: datetime | None = None) -> int:
     """Write synopses for this cycle's eligible threads; return how many were written.
 
-    Then, if any were, invalidate the threads cache and rewarm its first list, so
-    the list shows them without waiting for the next cycle. *now* is for tests.
+    Then, if any were, invalidate the caches that show a thread's title (the
+    threads lists and details, and search's thread results) and rewarm the first
+    list, so they show the new titles without waiting for the next cycle. Cluster
+    articles' thread chips are read live, never cached. *now* is for tests.
     """
     now = now or datetime.now(timezone.utc)
     pool = await get_pool()
-    threads = await pool.fetch(ELIGIBLE_SQL, now - ACTIVE_WINDOW)
+    threads = await pool.fetch(ELIGIBLE_SQL, now - ACTIVE_WINDOW, now)
     written = 0
     for thread in threads:
         thread_id = thread["id"]
         rows = await pool.fetch(ARTICLES_SQL, thread_id, STORIES_PER_PROMPT, 0)
         prompt = build_prompt(rows)
         if prompt is None:
+            await _failed(pool, thread_id, now, "no usable headline", logging.INFO)
             continue
         try:
             reply = await _call_claude(
@@ -220,7 +263,7 @@ async def summarise_threads(now: datetime | None = None) -> int:
             continue
         parsed = parse_synopsis(reply)
         if parsed is None:
-            logger.warning("Thread %s: unusable synopsis reply; trying next cycle.", thread_id)
+            await _failed(pool, thread_id, now, "unusable synopsis reply", logging.WARNING)
             continue
         await pool.execute(WRITE_SQL, thread_id, *parsed)
         written += 1
@@ -229,6 +272,7 @@ async def summarise_threads(now: datetime | None = None) -> int:
         from app.routers.threads import warm_threads
 
         await invalidate("db:threads*")
+        await invalidate("db:search*")
         await warm_threads()
     logger.info("Thread synopses: %d of %d eligible written.", written, len(threads))
     return written

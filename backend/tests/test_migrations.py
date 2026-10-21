@@ -172,3 +172,15 @@ def test_thread_merges_migration_only_adds_merged_into():
         "SET lock_timeout = '5s'",
         "ALTER TABLE threads ADD COLUMN IF NOT EXISTS merged_into BIGINT",
     ]
+
+
+def test_synopsis_retries_migration_only_adds_two_columns_without_a_rewrite():
+    """One instant change, under one lock: a constant default and a nullable column
+    are catalog-only. Neither is indexed, so writing them keeps an update HOT."""
+    sql = " ".join(_sql_without_comments("020_synopsis_retries.sql").split())
+    statements = [st.strip() for st in sql.split(";") if st.strip()]
+    assert statements == [
+        "SET lock_timeout = '5s'",
+        "ALTER TABLE threads ADD COLUMN IF NOT EXISTS synopsis_failures INT NOT NULL DEFAULT 0,"
+        " ADD COLUMN IF NOT EXISTS synopsis_retry_at TIMESTAMPTZ",
+    ]
