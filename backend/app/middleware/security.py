@@ -15,6 +15,7 @@ from urllib.parse import unquote
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 
 from app.config import settings
 
@@ -184,9 +185,11 @@ _ENTITY_TYPES = frozenset({"person", "org"})
 
 
 def loggable_path(path: str) -> str:
-    """A request path fit for a log line. No query string (``/api/search?q=``), and
-    an entity dossier's path cut after its type (``/api/entities/person/…``),
-    matched as routing reads it, percent-decoded. Any other path is as sent."""
+    """A request target fit for uvicorn's access log (AccessLogPathFilter), which has
+    only the target as sent, still percent-encoded (a ``%0A`` stays three
+    characters): no query string (``/api/search?q=``), and an entity dossier's
+    path cut after its type (``/api/entities/person/…``), matched as routing reads
+    it, percent-decoded. Lines that have the request log its route_template."""
     raw = path.split("?", 1)[0]
     match = _ENTITY_PATH.fullmatch(unquote(raw))
     if match is None:
@@ -195,9 +198,27 @@ def loggable_path(path: str) -> str:
     return f"/api/entities/{kind}" + ("/…" if match.group(2) is not None else "")
 
 
-def path_head(path: str) -> str:
-    """A request path's first two segments (``/api/entities``), for lines that need no more."""
-    return "/".join(path.split("?", 1)[0].split("/")[:3]) or "/"
+def route_template(request: Request) -> str:
+    """The route a request matches, as declared (``/api/entities/{entity_type}/{name:path}``),
+    or ``unmatched``: never the path as sent, so never what a visitor typed nor a
+    newline they forged (``%0A``). Read from the scope once routing has run; before
+    it (the API-key gate, the rate limiter), matched as routing matches: the first
+    full match, else the first whose path matches but not its method."""
+    route = request.scope.get("route")
+    if route is None:
+        router = getattr(request.scope.get("app"), "router", None)
+        partial = None
+        for candidate in getattr(router, "routes", ()):
+            match, _ = candidate.matches(request.scope)
+            if match == Match.FULL:
+                route = candidate
+                break
+            if match == Match.PARTIAL and partial is None:
+                partial = candidate
+        else:
+            route = partial
+    template = getattr(route, "path", None)
+    return template if isinstance(template, str) else "unmatched"
 
 
 class AccessLogPathFilter(logging.Filter):
@@ -247,15 +268,15 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS:
             return await call_next(request)
 
-        # Logged by its group and first two segments only: the rest of a path can be
-        # what a visitor typed (an entity's name).
+        # Logged by its route and group only: a path can hold what a visitor typed
+        # (an entity's name) or a newline they forged.
         group = _get_rate_group(path)
 
         # --- API key check ---
         if not _check_api_key(request):
             logger.warning(
                 "Rejected request to %s (%s group): bad API key from %s",
-                path_head(path),
+                route_template(request),
                 group,
                 _client_ip(request),
             )
@@ -268,7 +289,8 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             bucket_key = f"{group}:{ip}"
             bucket = _rate_buckets[group][bucket_key]
             if not bucket.allow(time.time(), window, limit):
-                logger.warning("Rate-limited %s on %s (%s group)", ip, path_head(path), group)
+                route = route_template(request)
+                logger.warning("Rate-limited %s on %s (%s group)", ip, route, group)
                 return JSONResponse(
                     {"detail": "Too many requests. Please try again later."},
                     status_code=429,

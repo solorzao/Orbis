@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import settings
-from app.middleware.security import AccessLogPathFilter, SecurityMiddleware, loggable_path
+from app.middleware.security import AccessLogPathFilter, SecurityMiddleware, route_template
 from app.routers.agent import router as agent_router
 from app.routers.board import router as board_router
 from app.routers.entities import router as entities_router
@@ -105,15 +105,16 @@ async def shutdown() -> None:
 # ---------------------------------------------------------------------------
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log method, path, and response time for every request. The path never holds
-    what a visitor typed: no query string, no entity name (loggable_path)."""
+    """Log method, route, status and response time for every request. The route as
+    declared (``/api/entities/{entity_type}/{name:path}``), or ``unmatched``, never
+    the path as sent: no query string, entity name or forged newline (route_template)."""
     start = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info(
         "%s %s -> %d (%.1f ms)",
         request.method,
-        loggable_path(request.url.path),
+        route_template(request),
         response.status_code,
         elapsed_ms,
     )

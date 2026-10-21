@@ -58,21 +58,6 @@ class TestLoggablePath:
 
         assert loggable_path(path) == shown
 
-    @pytest.mark.parametrize(
-        ("path", "head"),
-        [
-            (f"/api/entities/person/{ENCODED}", "/api/entities"),
-            ("/api/search?q=Zzsecret", "/api/search"),
-            ("/api/board/resolve", "/api/board"),
-            ("/health", "/health"),
-            ("/", "/"),
-        ],
-    )
-    def test_the_head_is_the_first_two_segments(self, path, head):
-        from app.middleware.security import path_head
-
-        assert path_head(path) == head
-
 
 # --- Uvicorn's access log ------------------------------------------------------------
 
@@ -141,15 +126,22 @@ class TestAccessLog:
 # --- The app's own request line --------------------------------------------------------
 
 
+ENTITY_ROUTE = "/api/entities/{entity_type}/{name:path}"
+FORGED = "/api/news%0A2026-10-21 12:00:00 INFO     orbis  GET /forged -> 200"
+
+
 class TestRequestLine:
+    """The app's own line names the route a request matched, as declared, or
+    "unmatched": never a path as sent, so never visitor text or a forged newline."""
+
     @pytest.mark.asyncio
-    async def test_an_entity_dossiers_name_is_cut_from_the_request_line(self, monkeypatch, caplog):
+    async def test_an_entity_dossier_is_logged_as_its_route(self, monkeypatch, caplog):
         with caplog.at_level(logging.INFO, logger="orbis"):
             resp = await _get(monkeypatch, f"/api/entities/person/{'x' * 300}{ENCODED}")
 
         assert resp.status_code == 422
         [line] = [r.getMessage() for r in caplog.records if r.name == "orbis"]
-        assert line.startswith("GET /api/entities/person/… -> 422 (")
+        assert line.startswith(f"GET {ENTITY_ROUTE} -> 422 (")
         _no_secret(caplog.text)
 
     @pytest.mark.asyncio
@@ -160,25 +152,116 @@ class TestRequestLine:
         [line] = [r.getMessage() for r in caplog.records if r.name == "orbis"]
         assert line.startswith("GET /api/search -> 422 (")
 
+    @pytest.mark.asyncio
+    async def test_a_path_no_route_matches_is_unmatched_on_one_line(self, monkeypatch, caplog):
+        with caplog.at_level(logging.INFO, logger="orbis"):
+            resp = await _get(monkeypatch, FORGED)
+
+        assert resp.status_code == 404
+        [line] = [r.getMessage() for r in caplog.records if r.name == "orbis"]
+        assert line.startswith("GET unmatched -> 404 (")
+        assert "\n" not in line and "forged" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_newline_in_an_entity_name_matches_no_route_and_stays_out(
+        self, monkeypatch, caplog
+    ):
+        """{name:path} matches no newline: the request is a 404, logged as unmatched."""
+        with caplog.at_level(logging.INFO, logger="orbis"):
+            resp = await _get(monkeypatch, "/api/entities/person/Zz%0Aforged line")
+
+        assert resp.status_code == 404
+        [line] = [r.getMessage() for r in caplog.records if r.name == "orbis"]
+        assert line.startswith("GET unmatched -> 404 (")
+        assert "\n" not in line and "forged" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_decoded_newline_in_the_path_never_starts_a_log_line(self, monkeypatch, caplog):
+        """As uvicorn hands the app a target with %0A: decoded into the scope's path."""
+        from app.main import app
+        from app.middleware import security
+
+        monkeypatch.setattr(security.settings, "api_key", "")
+        security._rate_buckets.clear()
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/api/news\n2026-10-21 12:00:00 INFO     orbis  GET /forged -> 200",
+            "raw_path": b"/api/news%0A2026-10-21%2012:00:00%20INFO%20orbis%20GET%20/forged",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"host", b"test")],
+            "client": ("10.0.0.5", 51234),
+            "server": ("test", 80),
+        }
+        sent = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        with caplog.at_level(logging.INFO, logger="orbis"):
+            await app(scope, receive, send)
+
+        assert sent[0]["status"] == 404
+        [line] = [r.getMessage() for r in caplog.records if r.name == "orbis"]
+        assert line.startswith("GET unmatched -> 404 (")
+        assert "\n" not in line and "forged" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_method_the_route_lacks_still_names_the_route(self, monkeypatch, caplog):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import app
+        from app.middleware import security
+
+        monkeypatch.setattr(security.settings, "api_key", "")
+        security._rate_buckets.clear()
+        with caplog.at_level(logging.INFO, logger="orbis"):
+            transport = ASGITransport(app=app, raise_app_exceptions=False)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post("/api/search?q=Zzsecret")
+
+        assert resp.status_code == 405
+        [line] = [r.getMessage() for r in caplog.records if r.name == "orbis"]
+        assert line.startswith("POST /api/search -> 405 (")
+
 
 # --- The API-key gate and the rate limiter ---------------------------------------------
 
 
 class TestGateAndLimiter:
+    """They answer before routing runs: the route is matched as routing matches it."""
+
     @pytest.mark.asyncio
-    async def test_a_rejected_key_logs_the_group_and_two_segments(self, monkeypatch, caplog):
+    async def test_a_rejected_key_logs_the_route_and_group(self, monkeypatch, caplog):
         with caplog.at_level(logging.WARNING, logger="app.middleware.security"):
             resp = await _get(monkeypatch, f"/api/entities/person/{ENCODED}", api_key="right")
 
         assert resp.status_code == 403
         [line] = [r.getMessage() for r in caplog.records]
-        assert line.startswith("Rejected request to /api/entities (data group): bad API key from ")
+        assert line.startswith(
+            f"Rejected request to {ENTITY_ROUTE} (data group): bad API key from "
+        )
         _no_secret(caplog.text)
 
     @pytest.mark.asyncio
-    async def test_a_rate_limited_request_logs_the_group_and_two_segments(
-        self, monkeypatch, caplog
-    ):
+    async def test_a_rejected_key_on_no_route_is_unmatched(self, monkeypatch, caplog):
+        with caplog.at_level(logging.WARNING, logger="app.middleware.security"):
+            resp = await _get(monkeypatch, FORGED, api_key="right")
+
+        assert resp.status_code == 403
+        [line] = [r.getMessage() for r in caplog.records]
+        assert line.startswith("Rejected request to unmatched (data group): bad API key from ")
+        assert "forged" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_rate_limited_request_logs_the_route_and_group(self, monkeypatch, caplog):
         from app.middleware import security
 
         monkeypatch.setitem(security._RATE_LIMITS, "data", (60, 1))
@@ -197,7 +280,8 @@ class TestGateAndLimiter:
 
         assert limited.status_code == 429
         [line] = [r.getMessage() for r in caplog.records]
-        assert line.startswith("Rate-limited ") and line.endswith(" on /api/entities (data group)")
+        assert line.startswith("Rate-limited ")
+        assert line.endswith(f" on {ENTITY_ROUTE} (data group)")
         _no_secret(caplog.text)
 
 
