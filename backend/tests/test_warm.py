@@ -26,15 +26,16 @@ def redis_up():
 def test_the_first_visit_is_warmed_globe_first_then_the_links_layer_then_breaking():
     """The globe is on the first visit's critical path; links only once the layer is on;
     breaking stories (one list for every topic) for the ticker and the delta; then the
-    threads rail's default list (24 hours, all topics, 20); last the 7-day globe for
-    every topic pill, the slowest (a week of stories, read once)."""
+    threads rail's default list (24 hours, all topics, 20). Last the two week reads,
+    which most cycles skip: run before breaking, links-7d's 26.5 s left breaking to
+    time out on production (2026-10-21)."""
     assert warm.WARMERS == (
         warm_globe,
         warm_volume,
         warm_links_24h,
-        warm_links_7d,
         warm_breaking,
         warm_threads,
+        warm_links_7d,
         warm_globe_week,
     )
     assert warm.WARM_TIMEOUT == 30

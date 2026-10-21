@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from app.models.threads import ThreadDetail, ThreadSummary
 from app.routers.http_cache import edge_cached
 from app.routers.news import _globe_topic_tag
-from app.services.cache import cycle_ttl, get_cached, set_cached
+from app.services.cache import cached_model, cycle_ttl, get_cached, set_cached
 from app.services.thread_reads import LIST_HOURS, list_threads, thread_detail
 
 router = APIRouter(prefix="/api", tags=["threads"])
@@ -92,7 +92,11 @@ async def cached_threads(hours: int, tag: str | None, limit: int) -> list[Thread
     cache_k = f"db:threads:list:v1:{hours}h:{tag or ''}:{limit}"
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached answer too
-        return [ThreadSummary.model_validate(t) for t in cached]
+        threads = cached_model(
+            cache_k, cached, lambda c: [ThreadSummary.model_validate(t) for t in c]
+        )
+        if threads is not None:
+            return threads
 
     task = _list_in_flight.get(cache_k)
     if task is None:
@@ -137,8 +141,9 @@ async def get_thread(
     tone, and its stories newest first, 20 a page. 404 for an unknown id."""
     cache_k = f"db:threads:detail:v1:{thread_id}:{offset}"
     cached = await get_cached(cache_k)
-    if cached is not None:
-        return ThreadDetail.model_validate(cached)
+    found = None if cached is None else cached_model(cache_k, cached, ThreadDetail.model_validate)
+    if found is not None:
+        return found
 
     detail = await thread_detail(thread_id, offset, _now())
     if detail is None:

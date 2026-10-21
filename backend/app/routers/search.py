@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.middleware.security import strip_invisible
 from app.models.search import SearchResults
 from app.routers.http_cache import edge_cached
-from app.services.cache import get_cached, set_cached
+from app.services.cache import cached_model, get_cached, set_cached
 from app.services.search import search
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -40,8 +40,9 @@ async def get_search(
 
     cache_k = f"db:search:v1:{q.lower()}"
     cached = await get_cached(cache_k)
-    if cached is not None:
-        return SearchResults(**cached)
+    found = None if cached is None else cached_model(cache_k, cached, SearchResults.model_validate)
+    if found is not None:
+        return found
 
     results = SearchResults(**await search(q, _now()))
     await set_cached(cache_k, results.model_dump(), _SEARCH_TTL)

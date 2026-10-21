@@ -1,14 +1,19 @@
-"""Reading and writing several cache keys at once (app.services.cache), Redis faked."""
+"""The cache helpers (app.services.cache), Redis faked: several keys at once, entries
+that no longer fit their model, single-flight computations, week-long entries' age."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import BaseModel
 
+from app.config import settings
 from app.services import cache
+from tests.fake_redis import FakeRedis as ClockRedis
 
 
 class FakePipeline:
@@ -136,3 +141,191 @@ def test_the_fake_pipeline_matches_redis_py():
     pipe = aioredis.Redis().pipeline(transaction=False)
     assert pipe.set("k", "v", ex=1) is pipe
     assert len(pipe.command_stack) == 1
+
+
+@pytest.fixture
+def clock_redis():
+    """Redis with a clock (tests/fake_redis.py), for the week-long entries."""
+    fake = ClockRedis()
+    with patch("app.services.cache.get_redis", AsyncMock(return_value=fake)):
+        yield fake
+
+
+class Story(BaseModel):
+    title: str
+    capped: bool  # a field the model gained after entries were cached without it
+
+
+class TestCachedModel:
+    def test_an_entry_that_fits_is_parsed(self):
+        story = cache.cached_model("db:x", {"title": "t", "capped": True}, Story.model_validate)
+        assert story == Story(title="t", capped=True)
+
+    def test_an_entry_that_no_longer_fits_its_model_is_a_miss_logged_once(self, caplog):
+        """A model gaining a required field must not 500 the entries cached before it."""
+        with caplog.at_level(logging.WARNING, logger="app.services.cache"):
+            parsed = cache.cached_model(
+                "db:search:v1:abbas",
+                [{"title": "a"}, {"title": "b"}],
+                lambda rows: [Story.model_validate(r) for r in rows],
+            )
+
+        assert parsed is None
+        [record] = caplog.records
+        # The key's first parts only: the rest is what a visitor typed (loggable_key).
+        assert record.getMessage().startswith("Cached db:search:v1:… no longer fits its model")
+        assert "abbas" not in record.getMessage()
+        assert record.exc_info is None  # one line, no traceback
+
+    def test_the_log_names_the_first_errors_place_and_type_never_its_value(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="app.services.cache"):
+            cache.cached_model(
+                "db:x", {"title": "a visitor's secret", "capped": "maybe"}, Story.model_validate
+            )
+
+        [record] = caplog.records
+        message = record.getMessage()
+        assert "first at capped (bool_parsing)" in message
+        assert "secret" not in message and "maybe" not in message
+
+    def test_other_errors_are_not_a_miss(self):
+        with pytest.raises(KeyError):
+            cache.cached_model("db:x", {}, lambda entry: entry["missing"])
+
+
+def _blocked():
+    """A computation that waits until cancelled, with events for its start and its end."""
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def compute():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    return compute, started, cancelled
+
+
+class TestSingleFlight:
+    @pytest.mark.asyncio
+    async def test_cancel_with_caller_cancels_the_computation_with_its_caller(self):
+        """A week warmer's: its timeout, or a stopped warm, ends the week read too."""
+        compute, started, cancelled = _blocked()
+        caller = asyncio.create_task(cache.single_flight("wk:x", compute, cancel_with_caller=True))
+        await started.wait()
+
+        caller.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        await asyncio.wait_for(cancelled.wait(), 1)
+
+    @pytest.mark.asyncio
+    async def test_cancel_flights_cancels_its_prefixs_and_their_callers_get_an_error(self):
+        """A request joined to a week read a cycle stops gets an error, not a cancellation
+        of its own; other keys' computations go on."""
+        week, week_started, week_cancelled = _blocked()
+        release = asyncio.Event()
+
+        async def day():
+            await release.wait()
+            return "day"
+
+        joined = asyncio.create_task(cache.single_flight("wk:x", week))
+        other = asyncio.create_task(cache.single_flight("db:x", day))
+        await week_started.wait()
+
+        stopped = cache.cancel_flights("wk:")
+
+        assert len(stopped) == 1
+        await asyncio.gather(*stopped, return_exceptions=True)
+        assert week_cancelled.is_set()
+        with pytest.raises(RuntimeError, match="cancelled"):
+            await joined
+        release.set()
+        assert await other == "day"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_callers_share_one_computation(self):
+        calls = 0
+        release = asyncio.Event()
+
+        async def compute():
+            nonlocal calls
+            calls += 1
+            await release.wait()
+            return calls
+
+        waiting = [asyncio.create_task(cache.single_flight("k", compute)) for _ in range(3)]
+        await asyncio.sleep(0)
+        release.set()
+
+        assert await asyncio.gather(*waiting) == [1, 1, 1]
+        assert calls == 1
+        assert await cache.single_flight("k", compute) == 2  # landed: the next runs anew
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_caller_leaves_it_running_for_the_others(self):
+        release = asyncio.Event()
+
+        async def compute():
+            await release.wait()
+            return "done"
+
+        first = asyncio.create_task(cache.single_flight("k", compute))
+        second = asyncio.create_task(cache.single_flight("k", compute))
+        await asyncio.sleep(0)
+        first.cancel()  # a browser aborts its request
+        release.set()
+
+        assert await second == "done"
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+
+class TestWeekFresh:
+    @pytest.mark.asyncio
+    async def test_a_week_entry_is_fresh_until_it_is_55_minutes_old(self, clock_redis):
+        """Its age is its TTL's: written with WEEK_TTL, it is WEEK_TTL - TTL seconds old."""
+        await cache.set_cached("wk:x", [1], cache.WEEK_TTL)
+        assert await cache.week_fresh("wk:x")
+
+        clock_redis.elapse(54 * 60)
+        assert await cache.week_fresh("wk:x")
+        clock_redis.elapse(2 * 60)
+        assert not await cache.week_fresh("wk:x")  # 56 minutes old: the warm refreshes it
+        assert await cache.get_cached("wk:x") == [1]  # still served meanwhile
+
+    @pytest.mark.asyncio
+    async def test_missing_or_short_lived_entries_are_never_fresh(self, clock_redis):
+        assert not await cache.week_fresh("wk:none")
+        await cache.set_cached("wk:empty", [], 60)  # an empty answer, cached briefly
+        assert not await cache.week_fresh("wk:empty")
+
+    @pytest.mark.asyncio
+    async def test_without_redis_nothing_is_fresh(self):
+        with patch("app.services.cache.get_redis", AsyncMock(return_value=None)):
+            assert not await cache.week_fresh("wk:x")
+
+    @pytest.mark.asyncio
+    async def test_a_failed_ttl_read_is_not_fresh_and_logs_the_loggable_key(self, caplog):
+        broken = AsyncMock()
+        broken.ttl.side_effect = ConnectionError("down")
+        with (
+            patch("app.services.cache.get_redis", AsyncMock(return_value=broken)),
+            caplog.at_level(logging.WARNING, logger="app.services.cache"),
+        ):
+            assert not await cache.week_fresh("wk:links:v5:live:168::lift:40")
+
+        [record] = caplog.records
+        assert record.getMessage() == "Redis TTL failed for key=wk:links:v5:…"
+
+    def test_an_hourly_refresh_lands_before_the_entry_expires(self):
+        """Refreshed at the first warm once 55 minutes old, an entry has 25 minutes left:
+        a cycle's interval (15) and the allowance for a cycle and its warm to run."""
+        assert cache.WEEK_REFRESH_AGE == 55 * 60
+        assert cache.WEEK_TTL == 80 * 60
+        slack = cache.WEEK_TTL - cache.WEEK_REFRESH_AGE
+        assert slack >= cache.cycle_ttl(0) > settings.ingestion_interval_seconds

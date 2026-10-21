@@ -8,6 +8,8 @@ way the frontend's first visit does (the same code path and cache key; the
 7-day globe's seven topics come from one pass, under their requests' keys),
 one at a time to spare the database, each within WARM_TIMEOUT seconds or its
 own WARMER_TIMEOUTS. A warmer that fails or times out is logged and skipped.
+The 7-day window's answers are kept under ``wk:*`` instead, which no cycle
+invalidates, and their warmers refresh them about hourly.
 """
 
 from __future__ import annotations
@@ -27,28 +29,33 @@ logger = logging.getLogger("orbis.warm")
 Warmer = Callable[[], Awaitable[object]]
 
 # Run in order: the first visit's globe and timeline (24 hours, all topics),
-# then the links layer's default windows, then breaking stories (one list for
+# then the links layer's 24-hour window, then breaking stories (one list for
 # every topic: the ticker's, and the delta's count), then the threads rail's
-# default list (24 hours, all topics, 20), then the 7-day globe for every topic
-# pill (one pass over the week; the slowest). Another endpoint's warmer joins here.
+# default list (24 hours, all topics, 20). Another endpoint's warmer joins
+# there. Last, the two week reads: the 7-day links list and the 7-day globe for
+# every topic pill. They refresh their wk:* entries (which no cycle
+# invalidates) only once those are 55 minutes old (cache.week_fresh), so one
+# cycle an hour runs them and the others skip them; run last, they never hold
+# up the cycle's own warmers (links-7d's 26.5 s ran breaking past its 30 s on
+# production, 2026-10-21).
 WARMERS: tuple[Warmer, ...] = (
     warm_globe,
     warm_volume,
     warm_links_24h,
-    warm_links_7d,
     warm_breaking,
     warm_threads,
+    warm_links_7d,
     warm_globe_week,
 )
 
 # Seconds each warmer may take.
 WARM_TIMEOUT = 30
 
-# Warmers allowed longer, both reading the week's stories on a slow disk. 7-day
-# globe queries took 20-73 s each, cold, on production; its one pass reads them
-# once. The 7-day links warm took 12-27 s, then passed 30 s on 2026-10-21 and
-# was skipped, leaving the links layer's week and the board's co-coverage
-# edges cold for a cycle.
+# Warmers allowed longer, both reading the week's stories on a slow disk, about
+# once an hour: the 7-day globe's one pass took 25-33 s on production, and the
+# 7-day links warm 12-27 s, once past 30 s (2026-10-21). One cut off is
+# cancelled, read and all; its entry, stored for 80 minutes and refreshed at
+# 55, serves on for up to 25 more, and the next cycle's warm retries it.
 WARMER_TIMEOUTS: dict[Warmer, float] = {warm_globe_week: 90, warm_links_7d: 90}
 
 

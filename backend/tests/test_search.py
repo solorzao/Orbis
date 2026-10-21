@@ -301,6 +301,23 @@ class TestSearchRoute:
         assert value == RESULTS
 
     @pytest.mark.asyncio
+    async def test_cached_results_that_no_longer_fit_the_model_are_recomputed(
+        self, monkeypatch, service
+    ):
+        """Names cached before #91 added capped: a miss, recomputed, never a 500."""
+        run, set_cached = service
+        before_capped = {**RESULTS, "people": [{"type": "person", "name": "Abbas", "n": 40}]}
+        with patch(
+            "app.routers.search.get_cached", new_callable=AsyncMock, return_value=before_capped
+        ):
+            async with _client(monkeypatch) as client:
+                resp = await client.get("/api/search", params={"q": "abbas"})
+        assert resp.status_code == 200
+        assert resp.json() == RESULTS
+        run.assert_awaited_once()
+        set_cached.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_serves_the_cached_results(self, monkeypatch, service):
         run, _ = service
         with patch("app.routers.search.get_cached", new_callable=AsyncMock, return_value=RESULTS):

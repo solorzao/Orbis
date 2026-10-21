@@ -2,8 +2,10 @@
 #
 # The B1ms server's limits are its disk (P4: ~25 MB/s, 120 IOPS) and its
 # burstable CPU credits. Story threads (Phase 4) add work to every ingestion
-# cycle, so these warn before either runs out. Brief spikes are expected (the
-# cache warm after each cycle reads at the disk's cap for ~10 s), so each
+# cycle, so these warn before either runs out. Spikes are expected: the cache
+# warm after each cycle reads at the disk's cap for some seconds, and about
+# once an hour for a minute or so more, when it refreshes the 7-day globe
+# (~25 s) and links (12-30 s), each a read of the week's stories. So each
 # alert looks at a 15-minute average.
 #
 # The address is not committed: pass it when applying,

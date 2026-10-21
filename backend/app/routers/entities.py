@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.middleware.security import strip_invisible
 from app.models.entities import EntityDossier, EntityType
 from app.routers.http_cache import edge_cached
-from app.services.cache import cycle_ttl, get_cached, set_cached
+from app.services.cache import cached_model, cycle_ttl, get_cached, set_cached
 from app.services.entities import get_entity_dossier, resolve_entity
 
 router = APIRouter(prefix="/api", tags=["entities"])
@@ -58,8 +58,9 @@ async def get_entity(
 
     cache_k = f"db:entity:v1:{entity_type}:{name.lower()}:{timespan}"
     cached = await get_cached(cache_k)
-    if cached is not None:
-        return EntityDossier(**cached)
+    found = None if cached is None else cached_model(cache_k, cached, EntityDossier.model_validate)
+    if found is not None:
+        return found
 
     task = _dossier_in_flight.get(cache_k)
     if task is None:
