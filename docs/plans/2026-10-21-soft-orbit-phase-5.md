@@ -97,7 +97,7 @@ The other columns are not read: `ActionGeo_*` (51–58, FIPS country and coordin
 1. **Narrow tables only; the `articles` heap is off limits.**
    - No `ALTER`, index or foreign key on `articles`.
    - The new tables carry only what their reads need. Events are not joined to articles, except to look up titles of at most 10 sample URLs by `articles_source_url_key`.
-   - Migrations set `lock_timeout` before their first `CREATE`. Indexes on busy tables are built `CONCURRENTLY`; 020 creates brand-new, empty tables, so it doesn't need to.
+   - Migrations set `lock_timeout` before their first `CREATE`. Indexes on busy tables are built `CONCURRENTLY`; 021 creates brand-new, empty tables, so it doesn't need to.
    - Static migration tests in `tests/test_migrations.py`.
 2. **Every hot query is index-bounded, and a test proves it the way production will run it.**
    - DB plan tests fill **production-like row counts** (the week fixture, sized from the repro) and assert the planner's **natural** choice, under custom and generic plans.
@@ -160,7 +160,7 @@ The other columns are not read: `ActionGeo_*` (51–58, FIPS country and coordin
 
 | PR | What | Depends on |
 |---|---|---|
-| 19a | Migration 020: `event_pairs_daily` and `event_files`; static and DB schema tests; README | none |
+| 19a | Migration 021: `event_pairs_daily` and `event_files`; static and DB schema tests; README | none |
 | 19b | Events ingestion: CAMEO→ISO table, capped fetch and catch-up, parse and aggregate, one batched upsert, purge, kill switch, **CI repro** | 19a deployed |
 | 19b+ | **Measure on prod** (the controller, no code) | 19b deployed, then 24 h |
 | 19c | `/api/relations`, `/api/relations/detail`: rollup reads, `db:`/`wk:` caching, production-scale plan tests | 19b merged; #108 merged |
@@ -197,7 +197,7 @@ Product questions go to the controller; see the PR description.
 
 ---
 
-## PR 19a: Migration 020, rollup tables
+## PR 19a: Migration 021, rollup tables
 
 Branch: `claude/p5-events-schema`.
 
@@ -206,13 +206,13 @@ Branch: `claude/p5-events-schema`.
 **Files:**
 - Modify: `backend/tests/test_migrations.py`
 
-**Step 1: Write the failing test.** Add `"020_event_pairs_daily.sql"` to `TABLE_MIGRATIONS`, and append:
+**Step 1: Write the failing test.** Add `"021_event_pairs_daily.sql"` to `TABLE_MIGRATIONS`, and append:
 
 ```python
 def test_events_migration_creates_only_its_two_tables():
     """New tables only (nothing references articles or anything else), room on each
     page for HOT updates, and no data statements."""
-    sql = " ".join(_sql_without_comments("020_event_pairs_daily.sql").split())
+    sql = " ".join(_sql_without_comments("021_event_pairs_daily.sql").split())
     assert sql.startswith("SET lock_timeout = '5s';")
     creates = re.findall(r"CREATE (TABLE|INDEX) IF NOT EXISTS (\w+)", sql)
     assert creates == [
@@ -228,14 +228,14 @@ def test_events_migration_creates_only_its_two_tables():
 **Step 2: Run it to verify it fails.**
 
 Run: `cd backend && python -m pytest tests/test_migrations.py -q`
-Expected: 2 FAILED, with `FileNotFoundError: … 020_event_pairs_daily.sql`: the parametrised `TABLE_MIGRATIONS` case and the new test.
+Expected: 2 FAILED, with `FileNotFoundError: … 021_event_pairs_daily.sql`: the parametrised `TABLE_MIGRATIONS` case and the new test.
 
-### Task 19a.2: `database/migrations/020_event_pairs_daily.sql`
+### Task 19a.2: `database/migrations/021_event_pairs_daily.sql`
 
 **Step 3: Write the migration.**
 
 ```sql
--- 020_event_pairs_daily.sql
+-- 021_event_pairs_daily.sql
 -- GDELT Events (Phase 5, PR 19): daily country-pair rollups of the
 -- machine-coded events in GDELT 2.0's 15-minute export files, and the log
 -- of the files added. Ingestion (app/services/events.py) adds each file's
@@ -309,7 +309,7 @@ Expected: all PASSED.
 **Step 5: Write the tests.**
 
 ```python
-"""event_pairs_daily and event_files on a real PostgreSQL (migration 020).
+"""event_pairs_daily and event_files on a real PostgreSQL (migration 021).
 
 Opt-in: set ORBIS_TEST_DATABASE_URL to a throwaway database with the
 migrations applied. Every test runs in a transaction that is rolled back.
@@ -337,7 +337,7 @@ async def conn():
     connection = await asyncpg.connect(DATABASE_URL)
     if not await connection.fetchval("SELECT to_regclass('event_pairs_daily') IS NOT NULL"):
         await connection.close()
-        pytest.skip("event_pairs_daily is missing: apply migration 020")
+        pytest.skip("event_pairs_daily is missing: apply migration 021")
     tx = connection.transaction()
     await tx.start()
     try:
@@ -438,15 +438,15 @@ Expected: `3 skipped`. They run on CI.
 **Step 8: Commit.**
 
 ```bash
-git add database/migrations/020_event_pairs_daily.sql backend/tests/test_migrations.py backend/tests/test_events_schema_db.py database/README.md
-git commit -m "feat(db): migration 020 adds GDELT event rollups (event_pairs_daily, event_files)"
+git add database/migrations/021_event_pairs_daily.sql backend/tests/test_migrations.py backend/tests/test_events_schema_db.py database/README.md
+git commit -m "feat(db): migration 021 adds GDELT event rollups (event_pairs_daily, event_files)"
 ```
 
 **Step 9:** Push, then open the PR `feat(db): GDELT event rollup tables (PR 19a)`.
 - CI's Backend Checks must show `test_events_schema_db.py` as 3 passed, not skipped.
 - The description repeats the note about rerunning the Deploy workflow if the lock timeout trips.
 
-**After merge:** the controller confirms that the Deploy log shows `Applied: 020_event_pairs_daily.sql`. Only then does 19b merge.
+**After merge:** the controller confirms that the Deploy log shows `Applied: 021_event_pairs_daily.sql`. Only then does 19b merge.
 
 **Rollback:** nothing reads or writes the tables until 19b, so reverting the PR is harmless; the empty tables can stay. If Phase 5 is abandoned, a later migration drops them.
 
@@ -1959,7 +1959,7 @@ on:
       - backend/app/services/relations.py
       - backend/app/services/cameo_countries.py
       - backend/scripts/events_repro.py
-      - database/migrations/020_event_pairs_daily.sql
+      - database/migrations/021_event_pairs_daily.sql
       - .github/workflows/events-repro.yml
   workflow_dispatch:
     inputs:
