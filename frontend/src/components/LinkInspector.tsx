@@ -13,6 +13,8 @@ interface LinkInspectorProps {
   onClose: () => void;
   onMinimize: () => void;
   onExplain: () => void;
+  /** Track a shared name (the entity tracker); inert pills without it. */
+  onTrack?: (entity: { name: string; type: "person" | "org" }) => void;
 }
 
 const sentStyle = (score: number) =>
@@ -45,6 +47,7 @@ export default function LinkInspector({
   onClose,
   onMinimize,
   onExplain,
+  onTrack,
 }: LinkInspectorProps) {
   const { link, detail, query, explanation, explaining } = entry;
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -174,13 +177,31 @@ export default function LinkInspector({
             <span>Shared in coverage</span>
           </p>
           <div className="chips">
-            {/* Inert for now: tracking a name comes with the entity tracker (PR 17). */}
-            {shared.map((s) => (
-              <span key={`${s.type}:${s.name}`} className="pill" title={`In ${s.n} of the stories`}>
-                {s.name}
-                <span className="num">{s.n}</span>
-              </span>
-            ))}
+            {/* A shared name tracks it (the entity tracker); themes stay labels. */}
+            {shared.map((s) =>
+              onTrack ? (
+                <button
+                  key={`${s.type}:${s.name}`}
+                  type="button"
+                  className="pill"
+                  title={`In ${s.n} of the stories`}
+                  aria-label={`Track ${s.name}`}
+                  onClick={() => onTrack({ name: s.name, type: s.type })}
+                >
+                  {s.name}
+                  <span className="num">{s.n}</span>
+                </button>
+              ) : (
+                <span
+                  key={`${s.type}:${s.name}`}
+                  className="pill"
+                  title={`In ${s.n} of the stories`}
+                >
+                  {s.name}
+                  <span className="num">{s.n}</span>
+                </span>
+              ),
+            )}
             {themes.map((t) => (
               <span key={t} className="pill pill-theme" title="A theme of the stories">
                 {t}

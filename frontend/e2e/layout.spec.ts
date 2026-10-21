@@ -40,9 +40,14 @@ function openSheetHeight({ width, height }: { width: number; height: number }) {
 // Chrome regions that must never touch. Later PRs add their regions here.
 const TOP_BAR = ["brand", "topic-filter", "status-pill"];
 
+/** The top bar's regions at a width: the Track search pill from 1180px, its button below. */
+function topBarAt(width: number) {
+  return [...TOP_BAR, width >= SHEET_BELOW ? "track-search" : "search-open"];
+}
+
 /** The regions shown at a width: the side panel (or its reopen pill), the bottom row. */
 function regionsAt(width: number, side: "side-panel" | "side-open" = "side-panel") {
-  return [...TOP_BAR, side, "timeline", ...(width > NARROW_MAX ? ["layer-switcher"] : [])];
+  return [...topBarAt(width), side, "timeline", ...(width > NARROW_MAX ? ["layer-switcher"] : [])];
 }
 
 type Box = { id: string; x: number; y: number; w: number; h: number };
@@ -152,6 +157,10 @@ for (const size of SIZES) {
 
     // The topics may scroll, but a crowded side must not squeeze them to nothing.
     expect(b["topic-filter"]?.w ?? 0, "topic-filter width").toBeGreaterThanOrEqual(200);
+    // The Track search: a pill (its placeholder legible) from 1180px, a button below.
+    if (!sheet) {
+      expect(b["track-search"].w, "search pill width").toBeGreaterThanOrEqual(220);
+    }
 
     if (sheet) {
       // Open, the sheet is at its tallest and the bottom row moves up above it.
@@ -162,7 +171,7 @@ for (const size of SIZES) {
     }
 
     // The floating panel clears the top bar by at least 16px...
-    const barBottom = Math.max(...TOP_BAR.map((id) => b[id].y + b[id].h));
+    const barBottom = Math.max(...topBarAt(size.width).map((id) => b[id].y + b[id].h));
     const panel = b["side-panel"];
     expect(panel.y - barBottom, "side panel below the top bar").toBeGreaterThanOrEqual(16);
     // The bottom row spans the width, its capsule centred on the page under the globe

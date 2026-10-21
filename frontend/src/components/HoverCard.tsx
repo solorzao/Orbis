@@ -146,6 +146,8 @@ interface HoverCardProps {
   /** While Links is on: how many countries the place's country is linked to. */
   linkedCountries?: number | null;
   onOpen?: () => void;
+  /** Track a name the place's stories mention (the entity tracker); inert pills without it. */
+  onTrack?: (entity: { name: string; type: "person" | "org" }) => void;
   onPointerEnter?: () => void;
   onPointerLeave?: () => void;
   ref?: Ref<HTMLElement>;
@@ -170,6 +172,7 @@ export default function HoverCard({
   docked = false,
   linkedCountries = null,
   onOpen,
+  onTrack,
   onPointerEnter,
   onPointerLeave,
   ref,
@@ -243,13 +246,26 @@ export default function HoverCard({
           </span>
         </div>
         {preview && preview.entities.length > 0 && (
-          // Inert for now: tracking a name comes with the entity tracker.
+          // Buttons that track the name once something can (the entity tracker).
           <div className="chips">
-            {preview.entities.slice(0, 3).map((e) => (
-              <span key={`${e.type}:${e.name}`} className="pill" title={`${e.n} stories`}>
-                {e.name}
-              </span>
-            ))}
+            {preview.entities.slice(0, 3).map((e) =>
+              onTrack ? (
+                <button
+                  key={`${e.type}:${e.name}`}
+                  type="button"
+                  className="pill"
+                  title={`${e.n} stories`}
+                  aria-label={`Track ${e.name}`}
+                  onClick={() => onTrack({ name: e.name, type: e.type })}
+                >
+                  {e.name}
+                </button>
+              ) : (
+                <span key={`${e.type}:${e.name}`} className="pill" title={`${e.n} stories`}>
+                  {e.name}
+                </span>
+              ),
+            )}
           </div>
         )}
         {loading && <span className="skel short" />}

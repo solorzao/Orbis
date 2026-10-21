@@ -1,6 +1,6 @@
 "use client";
 
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import Link from "next/link";
 import { Topic } from "@/types/news";
 import TopicFilter from "@/components/TopicFilter";
@@ -16,11 +16,20 @@ interface TopBarProps {
   isReplay?: boolean;
   /** The topic pills' nav (TopicFilter). */
   topicsRef?: Ref<HTMLElement>;
+  /** The Track search pill, shown from 1180px (CSS). */
+  search?: ReactNode;
+  /** Below 1180px a search button opens the same search in the sheet. */
+  onSearchOpen?: () => void;
+  /** The sheet's search is open. */
+  searchOpen?: boolean;
+  searchButtonRef?: Ref<HTMLButtonElement>;
 }
 
 /**
- * One grid with three tracks (brand | topics | status), so the regions can
- * shrink or scroll but never overlap. Layout rules are in soft-orbit.css.
+ * One grid with three tracks (brand | topics | search and status), so the
+ * regions can shrink or scroll but never overlap. From 1180px the Track
+ * search is a pill before the status; below, a button there opens it in the
+ * sheet. Layout rules are in soft-orbit.css.
  */
 export default function TopBar({
   activeTopic,
@@ -30,6 +39,10 @@ export default function TopBar({
   isOffline,
   isReplay = false,
   topicsRef,
+  search,
+  onSearchOpen,
+  searchOpen = false,
+  searchButtonRef,
 }: TopBarProps) {
   return (
     <header className="topbar">
@@ -67,6 +80,31 @@ export default function TopBar({
       </div>
 
       <div className="topbar-right">
+        {search && <div className="track-bar">{search}</div>}
+        {onSearchOpen && (
+          <button
+            ref={searchButtonRef}
+            type="button"
+            className="pillbar pill lg search-btn"
+            data-testid="search-open"
+            aria-label="Track search"
+            aria-expanded={searchOpen}
+            onClick={onSearchOpen}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 14 14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              aria-hidden="true"
+            >
+              <circle cx="6" cy="6" r="4.3" />
+              <path d="M9.3 9.3 13 13" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
         <StatusPill
           isLive={isLive}
           isLoading={isLoading}

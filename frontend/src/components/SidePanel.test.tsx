@@ -227,4 +227,36 @@ describe("SidePanel", () => {
     fireEvent.click(screen.getByTestId("side-collapse"));
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  it("shows the sheet's Track search above the tabs' content when given one", () => {
+    const { rerender } = render(
+      <SidePanel
+        tab="copilot"
+        onTabChange={() => {}}
+        open
+        onOpenChange={() => {}}
+        copilot={<p>Co-pilot content</p>}
+        inspect={<p>Inspect content</p>}
+        search={<input aria-label="Sheet search" />}
+      />,
+    );
+    const search = screen.getByTestId("side-search");
+    expect(search).toContainElement(screen.getByRole("textbox", { name: "Sheet search" }));
+    // Before the panels, after the tab bar.
+    const panels = screen.getAllByRole("tabpanel", { hidden: true });
+    expect(search.compareDocumentPosition(panels[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    rerender(
+      <SidePanel
+        tab="copilot"
+        onTabChange={() => {}}
+        open
+        onOpenChange={() => {}}
+        copilot={<p>Co-pilot content</p>}
+        inspect={<p>Inspect content</p>}
+      />,
+    );
+    expect(screen.queryByTestId("side-search")).toBeNull();
+  });
 });

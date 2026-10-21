@@ -22,6 +22,8 @@ interface SidePanelProps {
   inspect: ReactNode;
   /** The Threads tab's content (the sheet, below 1180px, where there is no rail), or none. */
   threads?: ReactNode;
+  /** The sheet's Track search (below 1180px, opened from the top bar), over the tabs' content. */
+  search?: ReactNode;
   /** Places and links open in the Inspect tab, shown as a badge on the collapsed pill. */
   inspectCount?: number;
   /** The Inspect tab panel, where focus lands when a place's controls go (useKeepFocus). */
@@ -56,6 +58,7 @@ export default function SidePanel({
   copilot,
   inspect,
   threads,
+  search,
   inspectCount = 0,
   inspectRef,
   copilotRef,
@@ -165,6 +168,12 @@ export default function SidePanel({
             </button>
           </div>
         </div>
+
+        {search && (
+          <div className="side-search" data-testid="side-search">
+            {search}
+          </div>
+        )}
 
         {TABS.map((t) => (
           <div

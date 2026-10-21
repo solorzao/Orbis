@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import type { GlobeInstance } from "globe.gl";
 import type { CountryLink, GlobePoint } from "@/types/news";
 import {
@@ -23,6 +23,7 @@ import {
 import type { ScreenPoint } from "@/lib/hoverCard";
 import { ARC_ALTITUDE_SCALE, arcDashTime, arcFlows, linkArcs, type GlobeArc } from "@/lib/links";
 import { revealedArcs, spreadArcs, type ThreadPlace } from "@/lib/threads";
+import { dimColor, focusArcs, focusLayer, focusRadius, type EntityPlace } from "@/lib/entities";
 import { webGpuReady } from "@/lib/webgpu";
 import type { GlobeLayer } from "@/components/LayerSwitcher";
 
@@ -32,6 +33,44 @@ const NO_DOTS: GlobePoint[] = [];
 const NO_LINKS: CountryLink[] = [];
 const NO_ALERTS: readonly { lat: number; lng: number }[] = [];
 const NO_ARCS: GlobeArc[] = [];
+/** The breaking rings' reach, in degrees (mockup initGlobe). */
+const RING_MAX_DEG = 4.5;
+
+/**
+ * A tracked person's or organisation's focus mode: the other dots dim, its
+ * places (`key`: the entity) stand out sized by their stories and pulse
+ * once, and arcs run from `centre` (its mention-weighted middle) to each.
+ */
+export interface GlobeFocus {
+  key: string;
+  places: readonly EntityPlace[];
+  centre: { lat: number; lng: number } | null;
+}
+
+/** A ring on the globe: a breaking place's (repeating), or a focus place's single pulse. */
+interface Ring {
+  lat: number;
+  lng: number;
+  /** A focus place: one pulse, in the connection colour, its reach by its stories. */
+  focus?: boolean;
+  maxR?: number;
+}
+
+/** A dot's radius (globe degrees) at the camera's altitude: constant on screen. */
+function dotRadius(base: number, altitude: number): number {
+  // Scale down more aggressively at close zoom so dots don't dominate
+  const scale = altitude < 1 ? altitude : Math.sqrt(altitude);
+  return Math.max(0.04, base * scale);
+}
+
+/** A place's own dot size, by its stories (a log scale). */
+const countBase = (p: GlobePoint) => 0.15 + Math.log2(Math.max(1, p.count)) * 0.06;
+
+/**
+ * Each ring's repeat period: a breaking place's every `repeat` ms, a focus
+ * place's never again (three-globe emits one ring, then none for a period of 0).
+ */
+const ringPeriod = (repeat: number) => (d: object) => ((d as Ring).focus ? 0 : repeat);
 
 // Natural Earth 1:110m countries without Antarctica, self-hosted and cached as
 // immutable: a changed file gets a new version (see public/geo/README.md).
@@ -89,6 +128,8 @@ interface GlobeProps {
   threadLit?: number | null;
   /** The visitor pressed or scrolled the globe (to leave the camera where they put it). */
   onGrab?: () => void;
+  /** A tracked entity's focus mode, or null. */
+  focus?: GlobeFocus | null;
 }
 
 interface LandFeature {
@@ -109,6 +150,14 @@ function readGlobeTokens() {
       coverage: canvasColor(token("--arc-coverage", ""), "rgba(180, 190, 255, 0.30)"),
       highlight: canvasColor(token("--arc-highlight", ""), "#7fe6ff"),
       flowMs: durationMs(token("--dur-arc-flow", "6000ms"), 6000),
+    },
+    // The links' arcs while an entity is tracked: everything else dims.
+    mutedArc: canvasColor(token("--arc-muted", ""), "rgba(180, 190, 255, 0.10)"),
+    // A tracked entity's arcs and pulses (tokens.md "Connection arc").
+    focus: {
+      highlight: canvasColor(token("--connection-highlight", ""), "#7fe6ff"),
+      start: canvasColor(token("--connection-highlight", ""), "#7fe6ff", 0.25),
+      flowMs: durationMs(token("--connection-flow", "6000ms"), 6000),
     },
     // The active thread's arcs (tokens.md "Aurora gradient"): faint cyan to lavender.
     spread: {
@@ -143,6 +192,7 @@ export default function Globe({
   thread = null,
   threadLit = null,
   onGrab,
+  focus = null,
 }: GlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -175,6 +225,7 @@ export default function Globe({
   // objects (and three-globe's meshes and dash phase) as they were.
   const linkArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   const threadArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
+  const focusArcsRef = useRef<{ key: unknown[]; arcs: GlobeArc[] } | null>(null);
   // What each step of the thread's last replay drew ("lit:arcs"), for the e2e tests.
   const replayLogRef = useRef<{ thread: number; steps: string[] } | null>(null);
 
@@ -188,8 +239,28 @@ export default function Globe({
   motionRef.current = { reduced, lowPower };
 
   const altitudeRef = useRef(HOME_VIEW.altitude);
-  const pointsRef = useRef(points);
-  pointsRef.current = points;
+  // Focus mode's dots: the window's, plus a stand-in for each of the entity's
+  // places it lacks, each with its stories in the entity's coverage. Built
+  // once per focus and window, so the dots' meshes aren't rebuilt per render.
+  const focusDots = useMemo(
+    () => (focus ? focusLayer(points, focus.places) : null),
+    [focus, points],
+  );
+  const dots = focusDots?.dots ?? points;
+  // The dots drawn now, for the zoom's re-set (the radii follow the altitude).
+  const drawnDotsRef = useRef<GlobePoint[]>(NO_DOTS);
+  // The focus places' single pulses: the same objects while the focus holds,
+  // so a refresh of the breaking rings never pulses them again.
+  const focusRings = useMemo<Ring[]>(() => {
+    if (!focus) return [];
+    const maxN = Math.max(1, ...focus.places.map((p) => p.n));
+    return focus.places.map((p) => ({
+      lat: p.lat,
+      lng: p.lng,
+      focus: true,
+      maxR: 1.5 + 3 * Math.sqrt(p.n / maxN),
+    }));
+  }, [focus]);
   // Whether dots are drawn (the Dots layer, or over a held heatmap during a replay).
   const dotsShownRef = useRef(layer === "dots");
   // The dots the heatmap on screen was computed from, so the same ones never recompute.
@@ -226,16 +297,10 @@ export default function Globe({
       .pointsData([])
       .pointLat("lat")
       .pointLng("lng")
-      .pointRadius((d: object) => {
-        const p = d as GlobePoint;
-        const alt = altitudeRef.current;
-        // Constant apparent size: dots shrink in globe-units as you zoom in
-        // so they don't overlap when the surface expands visually
-        const base = 0.15 + Math.log2(Math.max(1, p.count)) * 0.06;
-        // Scale down more aggressively at close zoom so dots don't dominate
-        const scale = alt < 1 ? alt : Math.sqrt(alt);
-        return Math.max(0.04, base * scale);
-      })
+      // Constant apparent size: dots shrink in globe-units as you zoom in so
+      // they don't overlap when the surface expands visually. (Focus mode
+      // sets its own accessors: see the focus effect.)
+      .pointRadius((d: object) => dotRadius(countBase(d as GlobePoint), altitudeRef.current))
       .pointColor("color")
       .pointAltitude(DOT_ALTITUDE)
       .pointResolution(12)
@@ -244,7 +309,10 @@ export default function Globe({
       .ringsData([])
       .ringLat("lat")
       .ringLng("lng")
-      .ringColor(() => ringFade(tokens.warning))
+      // A focus place's pulse takes the connection colour instead (focus mode).
+      .ringColor((d: object) =>
+        ringFade((d as Ring).focus ? tokens.focus.highlight : tokens.warning),
+      )
       // Intensity (mockup initGlobe): a heatmap weighted by each place's story count
       .heatmapPointLat("lat")
       .heatmapPointLng("lng")
@@ -254,9 +322,9 @@ export default function Globe({
       .heatmapColorSaturation(HEATMAP.colorSaturation)
       .heatmapBaseAltitude(HEATMAP.baseAltitude)
       .heatmapTopAltitude(HEATMAP.topAltitude)
-      .ringMaxRadius(4.5)
+      .ringMaxRadius((d: object) => (d as Ring).maxR ?? RING_MAX_DEG)
       .ringPropagationSpeed(1.4)
-      .ringRepeatPeriod(ringRepeatMs(motionRef.current))
+      .ringRepeatPeriod(ringPeriod(ringRepeatMs(motionRef.current)))
       // No pointLabel: the hover card (HoverCard, GlobeHud) replaces the tooltip.
       .onPointHover((point: object | null) => {
         onPointHoverRef.current?.((point as GlobePoint | null) ?? null);
@@ -297,7 +365,7 @@ export default function Globe({
         if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
         zoomTimerRef.current = setTimeout(() => {
           if (globeRef.current && dotsShownRef.current) {
-            globeRef.current.pointsData([...pointsRef.current]);
+            globeRef.current.pointsData([...drawnDotsRef.current]);
           }
         }, 150);
       });
@@ -458,7 +526,7 @@ export default function Globe({
   useEffect(() => {
     if (globeRef.current && isLoaded) {
       const repeat = ringRepeatMs({ reduced, lowPower });
-      globeRef.current.ringRepeatPeriod(repeat);
+      globeRef.current.ringRepeatPeriod(ringPeriod(repeat));
       if (containerRef.current) containerRef.current.dataset.ringRepeat = String(repeat); // e2e
     }
   }, [reduced, lowPower, isLoaded]);
@@ -466,14 +534,21 @@ export default function Globe({
   // The breaking places' rings, only while they may pulse: with a repeat
   // period of 0 three-globe still draws one ring per place (and again on each
   // refresh), so held still there are none. The ticker still lists the stories.
+  // A tracked entity's places pulse once (their ring objects are kept while
+  // the focus holds, so a refresh doesn't pulse them again), and never when
+  // motion is reduced or in low-power mode.
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe || !isLoaded) return;
     const pulse = ringRepeatMs({ reduced, lowPower }) > 0;
-    const rings = pulse ? alerts.map(({ lat, lng }) => ({ lat, lng })) : [];
-    globe.ringsData(rings);
-    if (containerRef.current) containerRef.current.dataset.rings = String(rings.length); // e2e
-  }, [alerts, reduced, lowPower, isLoaded]);
+    const breakingRings: Ring[] = pulse ? alerts.map(({ lat, lng }) => ({ lat, lng })) : [];
+    const pulses = pulse ? focusRings : [];
+    globe.ringsData([...breakingRings, ...pulses]);
+    if (containerRef.current) {
+      containerRef.current.dataset.rings = String(breakingRings.length); // e2e
+      containerRef.current.dataset.focusPulses = String(pulses.length);
+    }
+  }, [alerts, focusRings, reduced, lowPower, isLoaded]);
 
   // The arcs: the Links layer's (the inspected one highlighted) and the
   // selected thread's spread (aurora, as far as a replay has lit it), flowing
@@ -488,11 +563,29 @@ export default function Globe({
     const flow = arcFlows({ reduced, lowPower, touch });
     const same = (a: unknown[], b: unknown[] | undefined) =>
       b !== undefined && a.length === b.length && a.every((x, i) => x === b[i]);
-    const linkKey = [links, inspectedLink, flow];
+    // While an entity is tracked the links' arcs dim, with no highlight: its arcs lead.
+    const focused = focus !== null;
+    const linkKey = [links, inspectedLink, flow, focused];
     if (!same(linkKey, linkArcsRef.current?.key)) {
       linkArcsRef.current = {
         key: linkKey,
-        arcs: linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow }),
+        arcs: focused
+          ? linkArcs(links, {
+              inspected: null,
+              colors: { ...tokens.arcs, coverage: tokens.mutedArc },
+              flow: false,
+            })
+          : linkArcs(links, { inspected: inspectedLink, colors: tokens.arcs, flow }),
+      };
+    }
+    const focusKey = [focus, flow];
+    if (!same(focusKey, focusArcsRef.current?.key)) {
+      focusArcsRef.current = {
+        key: focusKey,
+        arcs:
+          focus?.centre != null
+            ? focusArcs(focus.key, focus.centre, focus.places, { colors: tokens.focus, flow })
+            : NO_ARCS,
       };
     }
     const threadKey = [thread?.id, thread?.spread, flow];
@@ -506,11 +599,13 @@ export default function Globe({
     }
     const linked = linkArcsRef.current!.arcs;
     const spread = revealedArcs(threadArcsRef.current!.arcs, threadLit);
-    const arcs = [...linked, ...spread];
+    const entity = focusArcsRef.current!.arcs;
+    const arcs = [...linked, ...spread, ...entity];
     globe.arcsData(arcs);
     if (container) {
       // read by the e2e tests: WebGL arcs can't be found in the DOM
       container.dataset.arcs = String(linked.length);
+      container.dataset.focusArcs = String(entity.length);
       // The arc drawn highlighted, if any (not the inspected link, which may not be drawn).
       container.dataset.arcHighlight =
         linked.find((a) => a.color === tokens.arcs.highlight)?.key ?? "";
@@ -535,7 +630,7 @@ export default function Globe({
       // how many times arcs were drawn: pausing them must not redraw any
       container.dataset.arcsDrawn = String(Number(container.dataset.arcsDrawn ?? 0) + 1);
     }
-  }, [links, inspectedLink, thread, threadLit, reduced, lowPower, touch, isLoaded]);
+  }, [links, inspectedLink, thread, threadLit, focus, reduced, lowPower, touch, isLoaded]);
 
   // A drag pauses the arcs' dashes in place: only the accessor changes, so
   // three-globe keeps each mesh, its dash pattern and where its dashes are.
@@ -545,27 +640,61 @@ export default function Globe({
     if (!globe || !isLoaded) return;
     globe.arcDashAnimateTime(arcDashTime(dragging) as (arc: object) => number);
     if (container) {
-      const drawn = links.length > 0 || (thread?.spread.length ?? 0) > 1;
+      const drawn =
+        links.length > 0 || (thread?.spread.length ?? 0) > 1 || (focus?.places.length ?? 0) > 1;
       container.dataset.arcFlow = String(arcFlows({ reduced, lowPower, touch, dragging }) && drawn);
     }
-  }, [dragging, links, thread, reduced, lowPower, touch, isLoaded]);
+  }, [dragging, links, thread, focus, reduced, lowPower, touch, isLoaded]);
+
+  // Focus mode: the dots outside the tracked entity's places dim, and its
+  // places (stand-ins where the window has no dot) are sized by its stories
+  // there. New accessors make three-globe restyle the dots it has, keeping
+  // their meshes. The globe says which entity it focuses on (for the e2e tests).
+  useEffect(() => {
+    const globe = globeRef.current;
+    const container = containerRef.current;
+    if (!globe || !isLoaded) return;
+    if (focusDots) {
+      globe
+        .pointColor((d: object) => {
+          const p = d as GlobePoint;
+          return focusDots.n(p) === null ? dimColor(p.color) : p.color;
+        })
+        .pointRadius((d: object) => {
+          const p = d as GlobePoint;
+          const n = focusDots.n(p);
+          const base = n === null ? countBase(p) : focusRadius(n, focusDots.maxN);
+          return dotRadius(base, altitudeRef.current);
+        });
+    } else {
+      globe
+        .pointColor("color")
+        .pointRadius((d: object) => dotRadius(countBase(d as GlobePoint), altitudeRef.current));
+    }
+    if (container) {
+      if (focus) container.dataset.focusEntity = focus.key;
+      else delete container.dataset.focusEntity;
+      container.dataset.focusPlaces = String(focus?.places.length ?? 0);
+    }
+  }, [focusDots, focus, isLoaded]);
 
   // The active layer's data: dots and their rings, or the Intensity heatmap
   useEffect(() => {
     const globe = globeRef.current;
     const container = containerRef.current;
     if (!globe || !isLoaded) return;
-    const drawDots = (dots: GlobePoint[], overHeatmap = false) => {
-      dotsShownRef.current = dots.length > 0;
+    const drawDots = (shown: GlobePoint[], overHeatmap = false) => {
+      dotsShownRef.current = shown.length > 0;
+      drawnDotsRef.current = shown;
       // Over the heatmap, the dots sit above its highest bump so the heat can't wash them out.
       globe.pointAltitude(overHeatmap ? HEATMAP.topAltitude + 0.005 : DOT_ALTITUDE);
-      globe.pointsData(dots);
-      if (container) container.dataset.dots = String(dots.length); // read by the e2e tests
+      globe.pointsData(shown);
+      if (container) container.dataset.dots = String(shown.length); // read by the e2e tests
     };
     if (layer === "dots") {
       heatForRef.current = null;
       globe.heatmapsData([]);
-      drawDots(points);
+      drawDots(dots);
       return;
     }
     let cancelled = false;
@@ -591,7 +720,9 @@ export default function Globe({
     webGpuReady().then((gpu) => {
       if (cancelled || !globeRef.current) return;
       const overlay = showDots(layer, { replaying, cpuPath: !gpu });
-      drawDots(overlay ? points : NO_DOTS, true);
+      // In focus mode the tracked entity's places stand over the heatmap.
+      const focused = focusDots ? dots.filter((d) => focusDots.n(d) !== null) : NO_DOTS;
+      drawDots(overlay ? dots : focused, true);
       tuneHeatmap(overlay);
       const shown = heatForRef.current !== null;
       if (shown && (heatForRef.current === points || !recomputeHeatmap({ gpu, hold: holdHeatmap })))
@@ -605,7 +736,7 @@ export default function Globe({
       cancelled = true;
       clearTimeout(settle);
     };
-  }, [points, layer, holdHeatmap, replaying, isLoaded]);
+  }, [points, dots, focusDots, layer, holdHeatmap, replaying, isLoaded]);
 
   return (
     <div

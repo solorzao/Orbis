@@ -10,7 +10,9 @@ interface RecentPlacesProps {
   places: PanelEntry[];
   /** Open links between countries. */
   links?: LinkEntry[];
-  /** The place or link inspected below. */
+  /** The tracked person or organisation (its dossier's id), shown first. */
+  entity?: { id: string; name: string } | null;
+  /** The place, link or dossier inspected below. */
   activeId: string | null;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
@@ -33,10 +35,11 @@ interface Pill {
   title: string;
   /** For screen readers, when the pill's text is shorthand. */
   label?: string;
-  /** Who the × closes. */
-  closeName: string;
+  /** What the × says it does. */
+  closeLabel: string;
   content: ReactNode;
-  count: number;
+  /** Its stories, or none (the tracked entity). */
+  count: number | null;
 }
 
 const stories = (n: number) => `${n} ${n === 1 ? "story" : "stories"}`;
@@ -47,7 +50,7 @@ function placePill(entry: PanelEntry): Pill {
     id: entry.panelId,
     createdAt: entry.createdAt,
     title: name,
-    closeName: short,
+    closeLabel: `Close ${short}`,
     count: entry.point.count,
     content: (
       <>
@@ -70,29 +73,50 @@ function linkPill(entry: LinkEntry): Pill {
     createdAt: entry.createdAt,
     title: long,
     label: `${short}: ${long}, ${stories(n)}`, // the visible codes first (label in name)
-    closeName: long,
+    closeLabel: `Close ${long}`,
     count: n,
     content: <span className="place-name">{short}</span>,
+  };
+}
+
+/** The tracked entity's pill: its dossier, and × to stop tracking. */
+function entityPill(entity: { id: string; name: string }): Pill {
+  return {
+    id: entity.id,
+    createdAt: -Infinity,
+    title: `Tracking ${entity.name}`,
+    label: `Tracking ${entity.name}`,
+    closeLabel: `Stop tracking ${entity.name}`,
+    count: null,
+    content: (
+      <>
+        <span className="ent-mark" aria-hidden="true" />
+        <span className="place-name">{entity.name}</span>
+      </>
+    ),
   };
 }
 
 /**
  * The places and links opened from the globe, as a row of pills at the top of
  * the Inspect tab, oldest first: pick one to inspect it, × to close it. A
- * link reads "US ↔ IR", from where most of its stories come.
+ * link reads "US ↔ IR", from where most of its stories come. A tracked
+ * person or organisation comes first, its × stopping the tracking.
  */
 export default function RecentPlaces({
   places,
   links = [],
+  entity = null,
   activeId,
   onSelect,
   onClose,
 }: RecentPlacesProps) {
-  if (places.length + links.length === 0) return null;
+  if (places.length + links.length === 0 && !entity) return null;
   // A stable sort: what opened at the same moment keeps its order.
-  const pills = [...places.map(placePill), ...links.map(linkPill)]
+  const opened = [...places.map(placePill), ...links.map(linkPill)]
     .sort((a, b) => a.createdAt - b.createdAt)
     .slice(-MAX_PANELS);
+  const pills = entity ? [entityPill(entity), ...opened] : opened;
 
   return (
     <div
@@ -115,12 +139,12 @@ export default function RecentPlaces({
               onClick={() => onSelect(pill.id)}
             >
               {pill.content}
-              <span className="num">{pill.count}</span>
+              {pill.count !== null && <span className="num">{pill.count}</span>}
             </button>
             <button
               type="button"
               className="place-close"
-              aria-label={`Close ${pill.closeName}`}
+              aria-label={pill.closeLabel}
               onClick={() => onClose(pill.id)}
             >
               <svg

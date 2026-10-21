@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import type {
   ArticleThread,
@@ -17,7 +17,8 @@ import { apiArticlesToNewsArticles } from "@/lib/clustering";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/panelQuery";
 import { cardLabel } from "@/lib/hoverCard";
-import { cellKey, pointAt } from "@/lib/cells";
+import { cellKey, dotInCell, pointAt } from "@/lib/cells";
+import { focusCentre, trackAnnouncement, type EntityPlace, type EntityRef } from "@/lib/entities";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { breakingDot, type BreakingStory } from "@/lib/breaking";
 import {
@@ -52,11 +53,12 @@ import { useBreaking } from "@/hooks/useBreaking";
 import { useLastVisit } from "@/hooks/useLastVisit";
 import { useDelta } from "@/hooks/useDelta";
 import { useMotionPrefs } from "@/hooks/useMotionPrefs";
-import { useSidePanel, useWideScreen } from "@/hooks/useSidePanel";
+import { useSidePanel, useWideScreen, type SideTab } from "@/hooks/useSidePanel";
 import { useThread, useThreads } from "@/hooks/useThreads";
 import { useSpreadReplay } from "@/hooks/useSpreadReplay";
 import { useFlyToThread, type ThreadView } from "@/hooks/useFlyToThread";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
+import { useEntity } from "@/hooks/useEntity";
 import { useHoverCard, useTouchOnly } from "@/hooks/useHoverCard";
 import { rememberBrief, useHoverPreview } from "@/hooks/useHoverPreview";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
@@ -80,7 +82,17 @@ import BreakingTicker from "@/components/BreakingTicker";
 import SinceStrip from "@/components/SinceStrip";
 import ThreadsRail, { type ThreadRef } from "@/components/ThreadsRail";
 import ThreadStories from "@/components/ThreadStories";
-import type { GlobeControls } from "@/components/Globe";
+import TrackSearch from "@/components/TrackSearch";
+import EntityDossier from "@/components/EntityDossier";
+import type { GlobeControls, GlobeFocus } from "@/components/Globe";
+
+/** The tracked entity's dossier among the Inspect tab's places and links. */
+const ENTITY_ID = "entity";
+
+/** Whether a key press is typing (in a field), where "/" and Escape aren't the page's. */
+const isTyping = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 
 /** A thread's stories in Inspect ("All {n} stories"). */
 interface ThreadStoriesEntry {
@@ -166,6 +178,28 @@ export default function Home() {
     () => (selectedId !== null && spread ? { id: selectedId, spread } : null),
     [selectedId, spread],
   );
+
+  // The entity tracker: the person or organisation tracked (one at a time),
+  // its dossier, and the globe's focus mode on its places once that lands.
+  const [tracked, setTracked] = useState<EntityRef | null>(null);
+  const entity = useEntity(tracked);
+  const { dossier } = entity;
+  const globeFocus = useMemo<GlobeFocus | null>(
+    () =>
+      dossier && dossier.places.length > 0
+        ? { key: dossier.name, places: dossier.places, centre: focusCentre(dossier.places) }
+        : null,
+    [dossier],
+  );
+  // What the page's announcer says of it, and of the Track search's results.
+  const trackNote = trackAnnouncement({ tracked, ...entity });
+  const [searchNote, setSearchNote] = useState("");
+  // Below 1180px the top bar's search button opens the Track search in the sheet.
+  const [sheetSearch, setSheetSearch] = useState(false);
+  const barSearchRef = useRef<HTMLInputElement>(null);
+  const sheetInputRef = useRef<HTMLInputElement>(null);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const sheetSearchRef = useRef<HTMLDivElement>(null);
   // Minimize and close remove the focused control: keep focus in the Inspect tab.
   const inspectRef = useRef<HTMLDivElement>(null);
   const copilotRef = useRef<HTMLDivElement>(null);
@@ -174,6 +208,9 @@ export default function Home() {
   // "All {n} stories" in the sheet's Threads tab hides it: focus goes on to Inspect.
   const threadsTabRef = useRef<HTMLDivElement>(null);
   const keepThreadsFocus = useKeepFocus(inspectRef, threadsTabRef);
+  // A choice in the sheet's search closes it: the focus goes on to what opened.
+  const keepSearchInspectFocus = useKeepFocus(inspectRef, sheetSearchRef);
+  const keepSearchThreadsFocus = useKeepFocus(threadsTabRef, sheetSearchRef);
 
   const globeControlsRef = useRef<GlobeControls | null>(null);
   const playRef = useRef<HTMLButtonElement>(null);
@@ -460,22 +497,34 @@ export default function Home() {
     [wide, setSideTab, setSideOpen, resetSpreadReplay],
   );
 
+  // Tracking ends: the dossier goes from Inspect, and the globe's focus mode.
+  const endTracking = useCallback(() => {
+    setTracked(null);
+    setActiveId((prev) => (prev === ENTITY_ID ? null : prev));
+  }, []);
+
   // A row selects its thread (Threads on, for the sheet's tab); the selected one
   // again closes it. A thread's arcs and an inspected link's highlight don't
-  // show together: the link's comes back when the thread closes.
+  // show together: the link's comes back when the thread closes. The globe
+  // shows one focus at a time: a thread selected stops tracking an entity, as
+  // tracking one closes the selected thread.
   const handleThreadSelect = useCallback(
     (thread: ThreadRef | null) => {
       resetSpreadReplay();
       setSelectedThread(thread);
-      if (thread) setThreadsOn(true);
+      if (thread) {
+        setThreadsOn(true);
+        endTracking();
+      }
     },
-    [resetSpreadReplay],
+    [resetSpreadReplay, endTracking],
   );
 
-  // A story's "Part of" chip: Threads on, its thread selected and its spread
-  // drawn; below 1180px the sheet shows it in the Threads tab.
+  // A story's "Part of" chip (or a thread found by the Track search): Threads
+  // on, its thread selected and its spread drawn; below 1180px the sheet shows
+  // it in the Threads tab.
   const handleThreadChip = useCallback(
-    (thread: ArticleThread) => {
+    (thread: Pick<ArticleThread, "id" | "title">) => {
       handleThreadSelect({ id: thread.id, title: thread.title });
       if (!wide) {
         setSideTab("threads");
@@ -484,6 +533,110 @@ export default function Home() {
     },
     [handleThreadSelect, wide, setSideTab, setSideOpen],
   );
+
+  // Track a person or organisation (from the search, a pill or the dossier's
+  // constellation): its dossier in Inspect and the globe's focus mode. The
+  // selected thread's arcs go, and the hover card that offered the name.
+  const { dismiss: dismissHoverCard } = hover;
+  const handleTrack = useCallback(
+    (next: EntityRef) => {
+      resetSpreadReplay();
+      setSelectedThread(null);
+      // The same name again keeps its dossier: no new request.
+      setTracked((prev) => (prev?.name === next.name && prev.type === next.type ? prev : next));
+      setActiveId(ENTITY_ID);
+      showInspect();
+      dismissHoverCard();
+    },
+    [resetSpreadReplay, showInspect, dismissHoverCard],
+  );
+  // A thread's key entities don't say person or org: useEntity tries both.
+  const handleTrackName = useCallback((name: string) => handleTrack({ name }), [handleTrack]);
+
+  // A place from the Track search or the dossier: fly there (at once with
+  // reduced motion) and open it, as a click on its dot does.
+  const handlePlaceOpen = useCallback(
+    (point: GlobePoint) => {
+      globeControlsRef.current?.flyTo(point.lat, point.lng, 1.5, reduced ? 0 : undefined);
+      handlePointClick(point);
+    },
+    [reduced, handlePointClick],
+  );
+  const handleEntityPlace = useCallback(
+    (place: EntityPlace) =>
+      handlePlaceOpen(
+        dotInCell(points, { lat: place.lat, lng: place.lng, place: place.place, count: place.n }),
+      ),
+    [points, handlePlaceOpen],
+  );
+
+  // The search button (below 1180px) opens the Track search in the sheet, or closes it.
+  const handleSearchOpen = useCallback(() => {
+    setSheetSearch((open) => !open);
+    setSideOpen(true);
+  }, [setSideOpen]);
+  const closeSheetSearch = useCallback(() => {
+    setSheetSearch(false);
+    searchButtonRef.current?.focus();
+  }, []);
+  // The search has the sheet while it is open: a tab picked closes it.
+  const handleSideTab = useCallback(
+    (tab: SideTab) => {
+      setSheetSearch(false);
+      setSideTab(tab);
+    },
+    [setSideTab],
+  );
+  // A choice in the sheet's search closes it; the focus follows to what opened
+  // (the place or dossier in Inspect, or the thread in the Threads tab).
+  const sheetChoice = useCallback(
+    (into: "inspect" | "threads") => {
+      if (into === "inspect") keepSearchInspectFocus(null);
+      else keepSearchThreadsFocus(null);
+      setSheetSearch(false);
+    },
+    [keepSearchInspectFocus, keepSearchThreadsFocus],
+  );
+  const searchHandlers = (variant: "bar" | "sheet") => ({
+    points,
+    onPlace: (point: GlobePoint) => {
+      if (variant === "sheet") sheetChoice("inspect");
+      handlePlaceOpen(point);
+    },
+    onEntity: (next: EntityRef) => {
+      if (variant === "sheet") sheetChoice("inspect");
+      handleTrack(next);
+    },
+    onThread: (thread: { id: number; title: string }) => {
+      if (variant === "sheet") sheetChoice("threads");
+      handleThreadChip(thread);
+    },
+    onAnnounce: setSearchNote,
+  });
+
+  // "/" focuses the Track search (the mockup's shortcut): the top bar's pill
+  // from 1180px, the sheet's below. Escape on the page (nothing focused, no
+  // hover card to hide first) stops tracking.
+  const hoverShown = hover.card !== null;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isTyping(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        if (wide) barSearchRef.current?.focus();
+        else if (sheetInputRef.current) sheetInputRef.current.focus();
+        else {
+          setSheetSearch(true); // it opens focused
+          setSideOpen(true);
+        }
+        return;
+      }
+      const onPage = !document.activeElement || document.activeElement === document.body;
+      if (e.key === "Escape" && tracked && onPage && !hoverShown) endTracking();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [wide, tracked, hoverShown, endTracking, setSideOpen]);
 
   // "All {n} stories": the thread's stories in Inspect, the detail's first page
   // at once, then 20 more a page.
@@ -553,9 +706,10 @@ export default function Home() {
   // for the same pair, topic and window).
   const handleLinkOpen = useCallback(
     (link: CountryLink) => {
-      // Its highlight, not a thread's arcs.
+      // Its highlight, not a thread's arcs or a tracked entity's focus.
       resetSpreadReplay();
       setSelectedThread(null);
+      setTracked(null);
       const query = panelQuery(activeTopic, timeWindow, Date.now());
       const key = linkKey(link.a.iso, link.b.iso);
       const existing = linkQueue.find(
@@ -619,7 +773,8 @@ export default function Home() {
 
   const handleZoomChange = useCallback(() => {}, []);
 
-  // Closing or minimizing works the same for a place and a link (by id).
+  // Closing or minimizing works the same for a place, a link and the tracked
+  // entity's dossier (by id): closing that stops tracking.
   const handleClosePanel = useCallback(
     (id: string) => {
       // Focus goes to the open pill, or to the tab when it was this one.
@@ -627,10 +782,13 @@ export default function Home() {
       setPanelQueue((prev) => prev.filter((p) => p.panelId !== id));
       setLinkQueue((prev) => prev.filter((l) => l.linkId !== id));
       if (id === threadStoriesId) setThreadStories(null);
+      if (id === ENTITY_ID) setTracked(null);
       setActiveId((prev) => (prev === id ? null : prev));
     },
     [activeId, keepInspectFocus, threadStoriesId],
   );
+  // Stop tracking (the dossier's button or Escape, or its pill's ×).
+  const handleStopTracking = useCallback(() => handleClosePanel(ENTITY_ID), [handleClosePanel]);
 
   const handleMinimizePanel = useCallback(
     (id: string) => {
@@ -701,17 +859,33 @@ export default function Home() {
       <RecentPlaces
         places={panelQueue}
         links={linkQueue}
+        entity={tracked ? { id: ENTITY_ID, name: dossier?.name ?? tracked.name } : null}
         activeId={activeId}
         onSelect={handleSelectRecent}
         onClose={handleClosePanel}
       />
-      {activeLink ? (
+      {tracked && activeId === ENTITY_ID ? (
+        <EntityDossier
+          // A pivot is a new dossier: it starts on its heading (the node pressed went).
+          key={`${tracked.type ?? ""}:${tracked.name}`}
+          entity={tracked}
+          dossier={dossier}
+          loading={entity.loading}
+          notFound={entity.notFound}
+          error={entity.error}
+          onPivot={handleTrack}
+          onPlace={handleEntityPlace}
+          onStop={handleStopTracking}
+          onMinimize={() => handleMinimizePanel(ENTITY_ID)}
+        />
+      ) : activeLink ? (
         <LinkInspector
           key={activeLink.linkId}
           entry={activeLink}
           onClose={() => handleClosePanel(activeLink.linkId)}
           onMinimize={() => handleMinimizePanel(activeLink.linkId)}
           onExplain={() => handleExplain(activeLink)}
+          onTrack={handleTrack}
         />
       ) : expandedPanel ? (
         <NewsPanel
@@ -788,6 +962,7 @@ export default function Home() {
         thread={globeThread}
         threadLit={spreadReplay.lit}
         onGrab={handleGrab}
+        focus={globeFocus}
       />
 
       {/* Orbital rings around the globe */}
@@ -815,6 +990,10 @@ export default function Home() {
         isOffline={apiError}
         isReplay={replaying}
         topicsRef={topicsRef}
+        search={<TrackSearch variant="bar" inputRef={barSearchRef} {...searchHandlers("bar")} />}
+        onSearchOpen={handleSearchOpen}
+        searchOpen={!wide && sheetSearch}
+        searchButtonRef={searchButtonRef}
       />
       {/* The left column from 1180px: since your last visit, then the threads rail */}
       <div className={linksOn ? "left-stack links-on" : "left-stack"}>
@@ -830,6 +1009,7 @@ export default function Home() {
             lit={spreadReplay.lit}
             onSelect={handleThreadSelect}
             onShowStories={handleShowThreadStories}
+            onTrack={handleTrackName}
           />
         )}
       </div>
@@ -837,13 +1017,26 @@ export default function Home() {
       {/* Co-pilot and stories, right (a bottom sheet below 1180px) */}
       <SidePanel
         tab={sideTab}
-        onTabChange={side.setTab}
+        onTabChange={handleSideTab}
         open={side.open}
         onOpenChange={side.setOpen}
-        inspectCount={panelQueue.length + linkQueue.length}
+        inspectCount={panelQueue.length + linkQueue.length + (tracked ? 1 : 0)}
         inspectRef={inspectRef}
         copilotRef={copilotRef}
         threadsRef={threadsTabRef}
+        search={
+          !wide && sheetSearch ? (
+            <div ref={sheetSearchRef}>
+              <TrackSearch
+                variant="sheet"
+                autoFocus
+                inputRef={sheetInputRef}
+                onDismiss={closeSheetSearch}
+                {...searchHandlers("sheet")}
+              />
+            </div>
+          ) : undefined
+        }
         copilot={
           <CoPilot
             messages={agentMessages}
@@ -879,6 +1072,7 @@ export default function Home() {
               lit={spreadReplay.lit}
               onSelect={handleThreadSelect}
               onShowStories={handleShowThreadStories}
+              onTrack={handleTrackName}
             />
           )
         }
@@ -939,6 +1133,8 @@ export default function Home() {
         <span>{cardPoint ? cardLabel(cardPoint) : ""}</span>
         <span>{linksNote ?? ""}</span>
         <span>{replayAnnouncement(globeThread?.spread ?? [], spreadReplay.phase)}</span>
+        <span>{searchNote}</span>
+        <span>{trackNote}</span>
       </p>
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}
@@ -959,6 +1155,7 @@ export default function Home() {
             dismissCard();
             handlePointClick(cardPoint);
           }}
+          onTrack={handleTrack}
           onPointerEnter={hover.onCardEnter}
           onPointerLeave={hover.onCardLeave}
         />

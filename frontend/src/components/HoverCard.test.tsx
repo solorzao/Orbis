@@ -126,6 +126,19 @@ describe("HoverCard", () => {
     expect(brief.textContent).toContain("France set new carbon targets");
   });
 
+  it("makes each name a Track button once something can track it", () => {
+    const onTrack = vi.fn();
+    const { card } = renderCard({ onTrack });
+    const pills = within(card).getAllByRole("button", { name: /^Track / });
+    expect(pills.map((p) => p.textContent)).toEqual([
+      "Emmanuel Macron",
+      "European Union",
+      "Anne Hidalgo",
+    ]);
+    fireEvent.click(within(card).getByRole("button", { name: "Track European Union" }));
+    expect(onTrack).toHaveBeenCalledWith({ name: "European Union", type: "org" });
+  });
+
   it("shows a skeleton while the preview loads", () => {
     const { card } = renderCard({ preview: null, previewLoading: true });
     expect(within(card).queryByTestId("hover-spark")).toBeNull();
