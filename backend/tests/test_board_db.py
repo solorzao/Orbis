@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 
 from app.services import board, knowledge_graph
+from tests import db_plans
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -552,40 +553,6 @@ async def _production_week(conn, now: datetime) -> dict:
     }
 
 
-def _walk(node):
-    yield node
-    for child in node.get("Plans", []):
-        yield from _walk(child)
-
-
-def _summary(raw) -> dict:
-    top = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Plan"]
-    nodes = list(_walk(top))
-    return {
-        "seq_scans": {n["Relation Name"] for n in nodes if n["Node Type"] == "Seq Scan"},
-        "indexes": {n["Index Name"] for n in nodes if "Index Name" in n},
-    }
-
-
-async def _custom_plan(conn, sql: str, *args) -> dict:
-    """The plan PostgreSQL runs with these values, as executed (its first runs)."""
-    return _summary(await conn.fetchval("EXPLAIN (ANALYZE, FORMAT JSON) " + sql, *args))
-
-
-async def _generic_plan(conn, sql: str, types: list[str], values: list[str]) -> dict:
-    """The plan made without the values, which a reused prepared statement may switch to."""
-    await conn.execute("SET LOCAL plan_cache_mode = force_generic_plan")
-    await conn.execute(f"PREPARE zzboard_plan ({', '.join(types)}) AS {sql}")
-    try:
-        raw = await conn.fetchval(
-            f"EXPLAIN (FORMAT JSON) EXECUTE zzboard_plan ({', '.join(values)})"
-        )
-    finally:
-        await conn.execute("DEALLOCATE zzboard_plan")
-        await conn.execute("SET LOCAL plan_cache_mode = auto")
-    return _summary(raw)
-
-
 def _ts(value: datetime) -> str:
     return f"'{value.isoformat()}'::timestamptz"
 
@@ -595,11 +562,11 @@ async def test_at_production_scale_pins_are_read_by_primary_key(big):
     now = _now()
     ids = await _production_week(big, now)
 
-    articles = await _custom_plan(big, board.ARTICLES_SQL, ids["articles"])
-    members = await _custom_plan(big, board.MEMBERS_SQL, ids["members"])
-    threads = await _custom_plan(big, board.THREADS_SQL, ids["threads"])
-    threads_generic = await _generic_plan(
-        big, board.THREADS_SQL, ["bigint[]"], [_literal(ids["threads"])]
+    articles = await db_plans.custom_plan(big, board.ARTICLES_SQL, ids["articles"])
+    members = await db_plans.custom_plan(big, board.MEMBERS_SQL, ids["members"])
+    threads = await db_plans.custom_plan(big, board.THREADS_SQL, ids["threads"])
+    threads_generic = await db_plans.generic_plan(
+        big, board.THREADS_SQL, ["bigint[]"], [db_plans.literal(ids["threads"])]
     )
 
     assert articles == {"seq_scans": set(), "indexes": {"articles_pkey"}}
@@ -677,42 +644,15 @@ async def _recorded(conn, read, *args):
     return result, recorder.statements
 
 
-def _literal(value) -> str:
-    """*value* as an SQL literal of unknown type, which EXECUTE coerces to the parameter's."""
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)):
-        return repr(value)
-    if isinstance(value, (list, tuple)):
-        items = ",".join(
-            '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"' for v in value
-        )
-        return _literal("{" + items + "}")
-    text = value.isoformat() if isinstance(value, datetime) else str(value)
-    return "'" + text.replace("'", "''") + "'"
-
-
-async def _pages(conn, sql: str, args: tuple, mode: str) -> int:
-    """Shared buffers (hit + read) the statement touches when run with a *mode* plan."""
-    await conn.execute(f"SET LOCAL plan_cache_mode = force_{mode}_plan")
-    await conn.execute(f"PREPARE zzboard_q AS {sql}")
-    try:
-        raw = await conn.fetchval(
-            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE zzboard_q"
-            f" ({', '.join(_literal(a) for a in args)})"
-        )
-    finally:
-        await conn.execute("DEALLOCATE zzboard_q")
-        await conn.execute("SET LOCAL plan_cache_mode = auto")
-    plan = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Plan"]
-    return plan.get("Shared Hit Blocks", 0) + plan.get("Shared Read Blocks", 0)
-
-
 async def _total_pages(conn, statements, mode: str) -> int:
     """Pages the recorded statements touch with *mode* plans: those that can run with
     them (a statement whose service forced the other kind never does)."""
     return sum(
-        [await _pages(conn, sql, args, mode) for sql, args, modes in statements if mode in modes]
+        [
+            await db_plans.pages(conn, sql, args, mode)
+            for sql, args, modes in statements
+            if mode in modes
+        ]
     )
 
 
@@ -768,8 +708,10 @@ async def test_at_production_scale_names_are_read_through_the_member_indexes(big
     names = ["Zzplan Heavy 0", "Zzplan Mid 3", "Zzplan Rare 77", "Zzplan Nobody"]
     week = now - board.ENTITY_WINDOW
 
-    sample = await _custom_plan(big, board.ENTITY_SAMPLE_SQL, names, week, board.ENTITY_SAMPLE)
-    sample_generic = await _generic_plan(
+    sample = await db_plans.custom_plan(
+        big, board.ENTITY_SAMPLE_SQL, names, week, board.ENTITY_SAMPLE
+    )
+    sample_generic = await db_plans.generic_plan(
         big,
         board.ENTITY_SAMPLE_SQL,
         ["text[]", "timestamptz", "int"],
@@ -779,7 +721,7 @@ async def test_at_production_scale_names_are_read_through_the_member_indexes(big
             str(board.ENTITY_SAMPLE),
         ],
     )
-    mentions = await _custom_plan(big, board.MENTIONS_SQL, names, ids["threads"][:10])
+    mentions = await db_plans.custom_plan(big, board.MENTIONS_SQL, names, ids["threads"][:10])
 
     for plan in (sample, sample_generic):
         assert "thread_members" not in plan["seq_scans"], plan

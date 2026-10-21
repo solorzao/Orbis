@@ -122,6 +122,12 @@ class Settings:
     ingestion_interval_seconds: int = field(
         default_factory=lambda: _env_int("INGESTION_INTERVAL_SECONDS", 900)
     )  # 15 minutes
+    # GDELT Events rollups (app/services/events.py); false switches the step off.
+    events_ingestion_enabled: bool = field(
+        default_factory=lambda: (
+            _env("EVENTS_INGESTION_ENABLED", "true").lower() in ("true", "1", "yes")
+        )
+    )
 
     # --- Data retention ---
     retention_days: int = 7

@@ -12,6 +12,14 @@ import pytest
 from app.config import settings
 
 
+@pytest.fixture(autouse=True)
+def _no_events():
+    """The GDELT Events step, stubbed so no cycle test reaches the network
+    (it has its own tests: test_events*.py)."""
+    with patch("app.services.ingestion.ingest_events", new_callable=AsyncMock) as ingest:
+        yield ingest
+
+
 def _make_gkg_article(url="https://example.com/story", title="Test Headline"):
     """Build a dict as fetch_raw_gkg would return; *title* is GDELT's page title."""
     return {
@@ -637,6 +645,7 @@ class TestRunIngestionCycle:
                 "app.services.ingestion._purge_old_articles",
                 side_effect=_record("purge"),
             ),
+            patch("app.services.ingestion.ingest_events", side_effect=_record("events")),
             patch(
                 "app.services.ingestion.generate_embeddings",
                 side_effect=_record("embed", embedded),
@@ -645,8 +654,9 @@ class TestRunIngestionCycle:
         ):
             assert await run_ingestion_cycle() == 5
 
-        # The ids embedded this cycle go to thread assignment, inside the lock.
-        assert calls == ["ingest", "purge", "embed", ("threads", pool, embedded)]
+        # The events step runs before the embeddings' IOPS peak. The ids embedded
+        # this cycle go to thread assignment, inside the lock.
+        assert calls == ["ingest", "purge", "events", "embed", ("threads", pool, embedded)]
 
     @pytest.mark.asyncio
     async def test_a_failed_thread_assignment_is_a_warning_not_a_failed_cycle(self, assign, caplog):
@@ -694,12 +704,17 @@ class TestPurgeOldArticles:
                 "app.services.ingestion.purge_threads",
                 AsyncMock(side_effect=lambda *args: calls.append(("threads", args))),
             ),
+            patch(
+                "app.services.ingestion.purge_events",
+                AsyncMock(side_effect=lambda *args: calls.append(("events", args))),
+            ),
             patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
         ):
             await _purge_old_articles()
 
         assert calls == [
             ("threads", (pool, settings.retention_days)),
+            ("events", (pool, settings.retention_days)),
             ("articles", (settings.retention_days,)),
         ]
 
@@ -714,6 +729,7 @@ class TestPurgeOldArticles:
                 "app.services.ingestion.purge_threads",
                 AsyncMock(side_effect=RuntimeError("boom")),
             ),
+            patch("app.services.ingestion.purge_events", new_callable=AsyncMock),
             patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
             caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
         ):
@@ -721,6 +737,44 @@ class TestPurgeOldArticles:
 
         assert calls == [("articles", (settings.retention_days,))]
         assert "Thread purge failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_failed_events_purge_still_purges_the_articles(self, caplog):
+        from app.services.ingestion import _purge_old_articles
+
+        calls: list = []
+        with (
+            patch("app.services.ingestion.get_pool", AsyncMock(return_value=self._pool(calls))),
+            patch("app.services.ingestion.purge_threads", new_callable=AsyncMock),
+            patch(
+                "app.services.ingestion.purge_events",
+                AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
+            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
+        ):
+            await _purge_old_articles()
+
+        assert calls == [("articles", (settings.retention_days,))]
+        assert "Events purge failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_the_kill_switch_leaves_the_events_purge_running(self, monkeypatch):
+        """Switched off, the events step adds nothing, and the rows still age out."""
+        from app.services.ingestion import _purge_old_articles
+
+        monkeypatch.setattr(settings, "events_ingestion_enabled", False)
+        pool = self._pool([])
+        purge = AsyncMock()
+        with (
+            patch("app.services.ingestion.get_pool", AsyncMock(return_value=pool)),
+            patch("app.services.ingestion.purge_threads", new_callable=AsyncMock),
+            patch("app.services.ingestion.purge_events", purge),
+            patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
+        ):
+            await _purge_old_articles()
+
+        purge.assert_awaited_once_with(pool, settings.retention_days)
 
 
 async def _drain_background_tasks():
