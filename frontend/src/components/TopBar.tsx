@@ -66,7 +66,7 @@ export default function TopBar({
           className="h-7 w-7 sm:h-10 sm:w-10"
           style={{ filter: "drop-shadow(0 0 12px rgba(0, 212, 255, 0.5))" }}
         />
-        <div>
+        <div className="brand-word">
           <h1
             className="text-sm font-bold tracking-[0.2em] text-[var(--brand-wordmark-color)] uppercase sm:text-lg"
             style={{
@@ -150,7 +150,12 @@ export default function TopBar({
             <span className="sr-only">{boardCount === 1 ? "pin" : "pins"}</span>
           </button>
         )}
-        <Link href="/about" title="About Orbis" className="pillbar pill lg">
+        <Link
+          href="/about"
+          title="About Orbis"
+          className="pillbar pill lg"
+          data-testid="about-link"
+        >
           About
         </Link>
       </div>

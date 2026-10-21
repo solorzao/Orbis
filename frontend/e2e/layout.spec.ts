@@ -19,8 +19,11 @@ const SIZES = [
   { width: 1180, height: 800 }, // the narrowest floating panel
   { width: 1024, height: 768 },
   { width: 824, height: 1024 }, // one-row bar, at its tightest
+  { width: 768, height: 1024 }, // two-row bar, a tablet
   { width: 700, height: 800 }, // two-row bar, motto still shown
   { width: 390, height: 844 },
+  { width: 360, height: 740 }, // the brand mark alone
+  { width: 320, height: 568 }, // the narrowest phone
   { width: 844, height: 390 }, // a phone on its side
 ];
 
@@ -158,6 +161,11 @@ for (const size of SIZES) {
 
     // The topics may scroll, but a crowded side must not squeeze them to nothing.
     expect(b["topic-filter"]?.w ?? 0, "topic-filter width").toBeGreaterThanOrEqual(200);
+    // The last of the top bar, About, keeps the bar's margin (12px on phones, 24px wider).
+    const [about] = await boxes(page, ["about-link"]);
+    expect(about.x + about.w, "About inside the bar's margin").toBeLessThanOrEqual(
+      size.width - (size.width < 640 ? 12 : 24),
+    );
     // The Track search: a pill (its placeholder legible) from 1180px, a button below.
     if (!sheet) {
       expect(b["track-search"].w, "search pill width").toBeGreaterThanOrEqual(220);

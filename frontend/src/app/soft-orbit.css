@@ -477,6 +477,20 @@ kbd {
     display: none;
   }
 }
+/*
+ * Narrow phones: the brand mark alone, so the first row (search, status,
+ * Board and About beside it) keeps 12px apart. The name stays for screen readers.
+ */
+@media (max-width: 379px) {
+  .brand-word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
 
 /*
  * Track search (mockup label.pillbar.search, line 583): from 1180px a pill
