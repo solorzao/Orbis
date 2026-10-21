@@ -3,7 +3,9 @@
 Periodically downloads the latest GDELT GKG data file (published every
 15 minutes), extracts articles with city-level locations, takes their
 titles from GDELT (scraping the page only when GDELT has none), and
-upserts them with their GKG fields into the database.
+upserts them with their GKG fields into the database. Each cycle also adds
+GDELT's Event exports to daily country-pair rollups (app/services/events.py),
+before the embeddings.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from app.config import settings
 from app.services.cache import cancel_flights, invalidate
 from app.services.database import get_pool, upsert_articles
 from app.services.embeddings import generate_embeddings
+from app.services.events import ingest_events, purge_events
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
 from app.services.ml_models import analyze_sentiment_ml, classify_topics_ml
@@ -176,13 +179,18 @@ async def _purge_old_articles() -> None:
     """Delete articles older than the retention window, thread rows first.
 
     Nothing references articles, so this is the only path that removes thread
-    members (by their own published_at) and threads last seen before it.
+    members (by their own published_at) and threads last seen before it. The
+    event rollups age out here too, whether or not the events step is on.
     """
     pool = await get_pool()
     try:
         await purge_threads(pool, settings.retention_days)
     except Exception:
         logger.warning("Thread purge failed; continuing.", exc_info=True)
+    try:
+        await purge_events(pool, settings.retention_days)
+    except Exception:
+        logger.warning("Events purge failed; continuing.", exc_info=True)
     status = await pool.execute(
         "DELETE FROM articles WHERE published_at < NOW() - make_interval(days => $1)",
         settings.retention_days,
@@ -287,8 +295,10 @@ async def run_ingestion_cycle() -> int:
 
     Downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
-    Then purges articles outside the retention window, embeds the new rows
-    and assigns them to story threads (a failure there is only a warning).
+    Then purges articles outside the retention window, adds GDELT's Event
+    exports to the daily country-pair rollups (time-bounded, never raises),
+    embeds the new rows and assigns them to story threads (a failure there is
+    only a warning).
     The API caches (db:*) are invalidated once, at the end, even if a
     step failed: until then visitors get the last cycle's answers rather than
     a cold query while the embeddings keep the database busy, and breaking
@@ -315,6 +325,7 @@ async def run_ingestion_cycle() -> int:
             logger.info("Ingestion cycle starting …")
             count = await _ingest_from_raw_gkg()
             await _purge_old_articles()
+            await ingest_events()  # never raises; seconds, before the embeddings' IOPS peak
             embedded = await generate_embeddings()
             await _assign_threads(embedded)
             logger.info("Ingestion cycle complete: %d articles.", count)

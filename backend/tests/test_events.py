@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import hashlib
 import io
+import logging
 import zipfile
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -18,6 +23,7 @@ from app.services.events import (
     slot_of,
     slot_url,
 )
+from app.services.gdelt import Download, LastUpdateEntry
 
 TODAY = date(2026, 10, 21)
 
@@ -245,3 +251,236 @@ def test_a_rollup_records_each_event():
     r = Rollup()
     r.add(3, 1.5, 2.0, None)
     assert (r.n_events, r.mentions, r.goldstein_sum, r.tone_sum) == (1, 3, 1.5, 2.0)
+
+
+def _export_zip(*rows: str) -> bytes:
+    return _zip({"20261021123000.export.CSV": ("\n".join(rows) + "\n").encode()})
+
+
+class _Pool:
+    def __init__(self, done=()):
+        self.done = [{"slot": s} for s in done]
+
+    async def fetch(self, sql, *args):
+        return self.done
+
+
+def _index(body: bytes, size: int | None = None) -> dict:
+    return {
+        "export": LastUpdateEntry(
+            len(body) if size is None else size,
+            hashlib.md5(body).hexdigest(),
+            "http://data.gdeltproject.org/gdeltv2/20261021123000.export.CSV.zip",
+        )
+    }
+
+
+def _patches(index, downloads, pool, store):
+    return (
+        patch("app.services.events.fetch_lastupdate", AsyncMock(return_value=index)),
+        patch("app.services.events.download_capped", AsyncMock(side_effect=downloads)),
+        patch("app.services.events.get_pool", AsyncMock(return_value=pool)),
+        patch("app.services.events.store_rollups", store),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_process(monkeypatch):
+    """Each test starts as a process that hasn't run a cycle yet."""
+    monkeypatch.setattr(events, "_last_newest", None)
+
+
+class TestIngestEvents:
+    @pytest.mark.asyncio
+    async def test_first_run_adds_only_the_newest_file(self):
+        body = _export_zip(_event())
+        store = AsyncMock(return_value=1)
+        p = _patches(_index(body), [Download("ok", body)], _Pool(), store)
+        with p[0], p[1], p[2], p[3]:
+            await events.ingest_events(now=T + timedelta(minutes=5))
+        _, rollups, files = store.await_args.args
+        assert list(rollups) == [("US", "IR", TODAY, 3)]
+        assert files == [events.FileResult(T, "ok", 1, 1)]
+
+    @pytest.mark.asyncio
+    async def test_a_newest_file_failing_its_md5_is_not_added(self, caplog):
+        body = _export_zip(_event())
+        store = AsyncMock()
+        p = _patches(_index(body), [Download("ok", body + b"x")], _Pool(), store)
+        with p[0], p[1], p[2], p[3], caplog.at_level(logging.WARNING, logger="orbis.events"):
+            await events.ingest_events(now=T)
+        store.assert_not_awaited()
+        assert "MD5" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_newest_file_over_the_cap_is_never_downloaded(self):
+        body = _export_zip(_event())
+        download = AsyncMock()
+        index = _index(body, size=events.MAX_ZIP_BYTES + 1)
+        with (
+            patch("app.services.events.fetch_lastupdate", AsyncMock(return_value=index)),
+            patch("app.services.events.download_capped", download),
+            patch("app.services.events.get_pool", AsyncMock(return_value=_Pool())),
+            patch("app.services.events.store_rollups", AsyncMock()),
+        ):
+            await events.ingest_events(now=T)
+        download.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_missing_older_slot_is_recorded_missing(self, monkeypatch):
+        monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 2)  # the newest and one before
+        body = _export_zip(_event())
+        store = AsyncMock(return_value=1)
+        downloads = [Download("ok", body), Download("missing")]
+        p = _patches(_index(body), downloads, _Pool(done=[T - 2 * Q]), store)
+        with p[0], p[1], p[2], p[3]:
+            await events.ingest_events(now=T)
+        _, _, files = store.await_args.args
+        assert files == [
+            events.FileResult(T, "ok", 1, 1),
+            events.FileResult(T - Q, "missing", 0, 0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_switched_off_it_does_nothing(self, monkeypatch):
+        monkeypatch.setattr(events.settings, "events_ingestion_enabled", False)
+        fetch = AsyncMock()
+        with patch("app.services.events.fetch_lastupdate", fetch):
+            await events.ingest_events(now=T)
+        fetch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failure_is_a_warning(self, caplog):
+        with (
+            patch(
+                "app.services.events.fetch_lastupdate",
+                AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            caplog.at_level(logging.WARNING, logger="orbis.events"),
+        ):
+            await events.ingest_events(now=T)  # does not raise
+        assert "Events ingestion failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_logs_one_summary_line(self, caplog):
+        body = _export_zip(_event(), _event(a="USA", b="USA"), "bad")
+        p = _patches(_index(body), [Download("ok", body)], _Pool(), AsyncMock(return_value=1))
+        with p[0], p[1], p[2], p[3], caplog.at_level(logging.INFO, logger="orbis.events"):
+            await events.ingest_events(now=T)
+        [line] = [
+            r.getMessage() for r in caplog.records if r.getMessage().startswith("Events: 1 file")
+        ]
+        assert "3 rows, 1 kept (0 not root" in line and "1 same country, 1 malformed" in line
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_file_is_recorded_so_it_is_never_retried(self):
+        body = b"not a zip at all"
+        store = AsyncMock(return_value=0)
+        p = _patches(_index(body), [Download("ok", body)], _Pool(), store)
+        with p[0], p[1], p[2], p[3]:
+            await events.ingest_events(now=T)
+        _, rollups, files = store.await_args.args
+        assert rollups == {} and files == [events.FileResult(T, "unreadable", 0, 0)]
+
+    @pytest.mark.asyncio
+    async def test_a_file_that_fails_halfway_adds_nothing_and_is_recorded(self):
+        body = _export_zip(_event())
+
+        def half_then_fail(raw, today, part):
+            part[("US", "IR", today, 3)] = Rollup(n_events=7)
+            raise RuntimeError("a bug, or a hostile file")
+
+        store = AsyncMock(return_value=0)
+        p = _patches(_index(body), [Download("ok", body)], _Pool(), store)
+        with p[0], p[1], p[2], p[3], patch("app.services.events.parse_events", half_then_fail):
+            await events.ingest_events(now=T)
+        _, rollups, files = store.await_args.args
+        assert rollups == {}  # its half never merged
+        assert files == [events.FileResult(T, "unreadable", 0, 0)]
+
+    @pytest.mark.asyncio
+    async def test_catch_up_files_get_one_retry_and_a_short_timeout(self, monkeypatch):
+        monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 2)
+        body = _export_zip(_event())
+        download = AsyncMock(side_effect=[Download("ok", body), Download("failed")])
+        store = AsyncMock(return_value=1)
+        with (
+            patch("app.services.events.fetch_lastupdate", AsyncMock(return_value=_index(body))),
+            patch("app.services.events.download_capped", download),
+            patch(
+                "app.services.events.get_pool",
+                AsyncMock(return_value=_Pool(done=[T - 2 * Q])),
+            ),
+            patch("app.services.events.store_rollups", store),
+        ):
+            await events.ingest_events(now=T)
+        newest_call, catch_up_call = download.await_args_list
+        assert newest_call.kwargs == {}
+        assert catch_up_call.kwargs == {
+            "attempts": events.CATCHUP_ATTEMPTS,
+            "timeout": events.CATCHUP_TIMEOUT_S,
+        }
+        _, _, files = store.await_args.args
+        assert files == [events.FileResult(T, "ok", 1, 1)]  # the failed one: next cycle
+
+    @pytest.mark.asyncio
+    async def test_a_hanging_step_times_out_and_claims_nothing(self, monkeypatch, caplog):
+        monkeypatch.setattr(events, "EVENTS_STEP_TIMEOUT_S", 0.05)
+
+        async def hang():
+            await asyncio.Event().wait()
+
+        store = AsyncMock()
+        with (
+            patch("app.services.events.fetch_lastupdate", hang),
+            patch("app.services.events.store_rollups", store),
+            caplog.at_level(logging.WARNING, logger="orbis.events"),
+        ):
+            await events.ingest_events(now=T)  # returns, doesn't hang
+        store.assert_not_awaited()
+        assert "timed out" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_slots_that_left_the_window_unadded_are_logged_as_lost(self, monkeypatch, caplog):
+        monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 1)
+        monkeypatch.setattr(events, "_last_newest", T - 2 * Q)
+        window = timedelta(hours=events.CATCHUP_HOURS)
+        body = _export_zip(_event())
+        p = _patches(
+            _index(body),
+            [Download("ok", body)],
+            _Pool(done=[T - window - Q]),
+            AsyncMock(return_value=1),
+        )
+        with p[0], p[1], p[2], p[3], caplog.at_level(logging.WARNING, logger="orbis.events"):
+            await events.ingest_events(now=T)
+        assert "1 slot lost" in caplog.text
+        assert f"{T - window:%Y%m%d%H%M%S}" in caplog.text
+        assert events._last_newest == T
+
+
+@contextlib.asynccontextmanager
+async def _no_transaction():
+    yield
+
+
+class TestPurgeEvents:
+    @pytest.mark.asyncio
+    async def test_forces_custom_plans_before_deleting(self):
+        sent: list[str] = []
+
+        class Conn:
+            async def execute(self, sql, *args):
+                sent.append(sql)
+
+            def transaction(self):
+                return _no_transaction()
+
+        class Pool:
+            @contextlib.asynccontextmanager
+            async def acquire(self):
+                yield Conn()
+
+        await events.purge_events(Pool(), 7, T)
+        assert sent[0] == "SET LOCAL plan_cache_mode = force_custom_plan"
+        assert sent[1:] == [events.PURGE_PAIRS_SQL, events.PURGE_FILES_SQL]
