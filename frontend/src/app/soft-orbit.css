@@ -1340,6 +1340,91 @@ kbd {
 }
 
 /*
+ * Relation inspector (the link inspector's .insp structure): the readouts two
+ * by two, so Goldstein's sub-label reads; each class a row with its count, its
+ * share and a bar in its side's arc colour (words first: colour never carries
+ * the class alone); the directions; the UTC days as paired bars, cooperation
+ * then conflict (a table under them says the same to screen readers).
+ */
+.readouts.rel-readouts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ro-sub {
+  display: block;
+  margin-top: 2px;
+  font: var(--type-label);
+  color: var(--text-muted);
+}
+.rel-classes,
+.rel-directions {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.rel-class {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.5em 3em 64px;
+  gap: 10px;
+  align-items: center;
+  padding: 3px 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+.rel-class-n,
+.rel-class-pct {
+  font: var(--type-data-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.rel-class-pct {
+  color: var(--text-muted);
+}
+.rel-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+.rel-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--c);
+}
+.rel-directions li {
+  padding: 3px 0;
+  font: var(--type-body-sm);
+  color: var(--text-secondary);
+}
+.rel-days {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+.rel-day {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+.rel-day-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 48px;
+}
+.rel-day-bars .b {
+  width: 6px;
+  min-height: 1px;
+  border-radius: 2px 2px 0 0;
+}
+.rel-day-lbl {
+  font: var(--type-data-sm);
+  color: var(--text-muted);
+}
+
+/*
  * Entity dossier (mockup inspectHTML, entity branch; .prow and #constellation,
  * lines 368-373): three readouts, the daily stories, the names in the same
  * coverage around the entity, the top places with their tone.
@@ -1799,6 +1884,14 @@ button.cite:hover {
 .layers .tg:hover {
   color: var(--text-primary);
 }
+/* Relations under a range or a replay: focusable, its note read, not pressable. */
+.layers .tg[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.layers .tg[aria-disabled="true"]:hover {
+  color: var(--text-muted);
+}
 /*
  * From 1180px the layers share the bottom row with the 640px capsule, centred
  * on the page; just above 1180 the row's side tracks are about 222px, so the
@@ -1809,23 +1902,49 @@ button.cite:hover {
   .layers .tg {
     padding: 0 10px;
   }
-  .layers .tg {
-    gap: 5px;
-  }
   .layers .sep {
     margin: 0;
   }
 }
 /*
- * Below 1440px a side track can't hold the base layers and both overlays in
- * one line (318px against 272px at 1280, 222px at 1180): the overlays take a
- * line of their own above the base layers. 78px tall, the dock still fits the
- * row the 84px capsule sets.
+ * Where the overlays' line is short of room (below 1440px), a toggle drops its
+ * dot and shows its state as the base layers do, by a fill (aria-pressed
+ * still carries it): three overlays fit a 222px track at 1180.
  */
-@media (1180px <= width < 1440px) {
+@media (width < 1440px) {
+  .layers .tg::before {
+    display: none;
+  }
+  .layers .tg[aria-pressed="true"] {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+/*
+ * Below 1600px a side track can't hold the base layers and the three overlays
+ * in one line (415px against 352px at 1440, 272px at 1280, 222px at 1180):
+ * the overlays take a line of their own above the base layers. 74px tall, the
+ * dock still fits the row the 84px capsule sets.
+ */
+@media (1180px <= width < 1600px) {
   .layers {
     flex-direction: column-reverse;
     align-items: flex-start;
+    border-radius: var(--radius-lg);
+  }
+  .layers .sep {
+    display: none;
+  }
+}
+/*
+ * Below 1180px the dock sits centred over the capsule, the rank or class switch
+ * right of it and the Links status left: in one line it would push them off a
+ * tablet's edges, so it stacks too where the screen is tall enough. On a short
+ * screen (a phone on its side) it keeps one line, its toggles dotless.
+ */
+@media (761px <= width < 1180px) and (min-height: 561px) {
+  .layers {
+    flex-direction: column-reverse;
+    align-items: center;
     border-radius: var(--radius-lg);
   }
   .layers .sep {
@@ -1919,7 +2038,7 @@ button.cite:hover {
 .relations-legend .rl-lens {
   color: var(--text-primary);
 }
-.rl-line {
+.rl-key {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2603,6 +2722,20 @@ button.cite:hover {
     bottom: calc(100% + 12px);
     transform: translateX(-50%);
     align-items: center;
+  }
+}
+/*
+ * On a short screen (a phone on its side) the legend keeps its lens and the
+ * caveat, in two lines under the top bar; the swatches and the topics note go
+ * (the arcs' labels and the list name the class in words).
+ */
+@media (761px <= width < 1180px) and (max-height: 560px) {
+  .relations-float {
+    max-width: 440px;
+  }
+  .relations-legend .rl-key,
+  .relations-legend .rl-topics {
+    display: none;
   }
 }
 @media (max-width: 639px) {

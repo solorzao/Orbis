@@ -228,16 +228,16 @@ export default function LayerSwitcher({
             <span className="rl-lens">
               {relationLens ? relationLensLabel(relationLens) : "Relations · last 7 days"}
             </span>
-            <span className="rl-line">
+            <span className="rl-key">
               <span className="sw sw-coop" aria-hidden="true" />
               <span>Cooperation</span>
               <span className="sw sw-conf" aria-hidden="true" />
               <span>Conflict</span>
-              <span className="rl-note">
-                Reported events from news, machine-coded by GDELT. Not verified.
-              </span>
             </span>
-            <span className="rl-line rl-note">Topic filters don&apos;t apply to relations.</span>
+            <span className="rl-note">
+              Reported events from news, machine-coded by GDELT. Not verified.
+            </span>
+            <span className="rl-note rl-topics">Topic filters don&apos;t apply to relations.</span>
           </p>
         </div>
       )}

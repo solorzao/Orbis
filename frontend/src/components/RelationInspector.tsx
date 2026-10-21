@@ -134,7 +134,7 @@ export default function RelationInspector({ entry, onClose, onMinimize }: Relati
         <p className="insp-status">No reported events between them in the last 7 days.</p>
       ) : (
         <>
-          <div className="readouts" data-testid="relation-readouts">
+          <div className="readouts rel-readouts" data-testid="relation-readouts">
             <div className="ro" role="group" aria-label="Events">
               <span aria-hidden="true">Events</span>
               <b>{rel.n}</b>
