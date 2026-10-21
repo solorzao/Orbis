@@ -3,6 +3,10 @@ name: Deploy
 on:
   push:
     branches: [main]
+    # Nothing to deploy when a push changes only docs
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   # Manual run deploys every component regardless of what changed
   workflow_dispatch:
 
