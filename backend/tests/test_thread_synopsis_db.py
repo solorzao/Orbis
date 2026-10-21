@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -26,6 +27,7 @@ pytestmark = pytest.mark.skipif(
 
 NOW = datetime(2101, 1, 10, tzinfo=timezone.utc)
 HOUR = timedelta(hours=1)
+MINUTE = timedelta(minutes=1)
 SYNOPSIS = (
     "Strikes against the pension reform spread from Paris to Lyon and Marseille "
     "on Tuesday. Unions said rail and port workers would stay out through Friday."
@@ -83,9 +85,41 @@ async def _thread(
     return thread_id
 
 
-async def _eligible(conn) -> list[int]:
-    rows = await conn.fetch(thread_synopsis.ELIGIBLE_SQL, NOW - thread_synopsis.ACTIVE_WINDOW)
+async def _eligible(conn, now=NOW) -> list[int]:
+    rows = await conn.fetch(thread_synopsis.ELIGIBLE_SQL, now - thread_synopsis.ACTIVE_WINDOW, now)
     return [r["id"] for r in rows]
+
+
+async def _headlines(conn, thread_id: int, n: int) -> None:
+    for i in range(n):
+        article = await conn.fetchval(
+            "INSERT INTO articles (title, source_url, source_name, published_at, latitude,"
+            " longitude, location) VALUES ($1, $2, 'zz-a.test', $3, 0, 0,"
+            " ST_SetSRID(ST_MakePoint(0, 0), 4326)::geography) RETURNING id",
+            f"Zz cough syrup deaths rise in town {i} - AP",
+            f"https://zzsynopsis.test/{uuid.uuid4()}",
+            NOW - i * HOUR,
+        )
+        await conn.execute(
+            "INSERT INTO thread_members (article_id, thread_id, story_key, published_at,"
+            " latitude, longitude, similarity) VALUES ($1, $2, $3, $4, 0, 0, 1)",
+            article,
+            thread_id,
+            9400 + i,
+            NOW - i * HOUR,
+        )
+
+
+@contextmanager
+def _stubbed(conn, call):
+    """get_pool, Claude and the cache stubbed, for summarise_threads on *conn*."""
+    with (
+        patch("app.services.thread_synopsis.get_pool", AsyncMock(return_value=conn)),
+        patch("app.services.thread_synopsis._call_claude", call),
+        patch("app.services.thread_synopsis.invalidate", new_callable=AsyncMock),
+        patch("app.routers.threads.warm_threads", new_callable=AsyncMock),
+    ):
+        yield
 
 
 @pytest.mark.asyncio
@@ -151,7 +185,7 @@ async def test_eligibility_reads_listed_threads_by_the_partial_index(conn):
     plan = "\n".join(
         r[0]
         for r in await conn.fetch(
-            "EXPLAIN " + thread_synopsis.ELIGIBLE_SQL, NOW - thread_synopsis.ACTIVE_WINDOW
+            "EXPLAIN " + thread_synopsis.ELIGIBLE_SQL, NOW - thread_synopsis.ACTIVE_WINDOW, NOW
         )
     )
 
@@ -208,3 +242,75 @@ async def test_a_synopsis_is_written_with_the_story_count_it_covers(conn):
     )
     assert row["summarized_at"] is not None
     assert thread_id not in await _eligible(conn)  # until it reaches 11 stories
+
+
+# --- backing off -------------------------------------------------------------------------
+
+LINKED = json.dumps(
+    {
+        "title": "Cough syrup deaths rise",
+        "synopsis": "Child deaths in several towns have been linked to a contaminated cough syrup.",
+    }
+)
+
+
+async def _backoff(conn, thread_id):
+    return tuple(
+        await conn.fetchrow(
+            "SELECT synopsis_failures, synopsis_retry_at FROM threads WHERE id = $1", thread_id
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_reply_is_not_asked_again_until_its_backoff_ends(conn):
+    """Two hours after the first failure, then four after the second; a synopsis
+    clears them. Before, it was asked again every cycle, taking a slot of the six."""
+    thread_id = await _thread(conn, n_stories=7)
+    await _headlines(conn, thread_id, 3)
+    call = AsyncMock(return_value=LINKED)
+
+    with _stubbed(conn, call):
+        assert await thread_synopsis.summarise_threads(now=NOW) == 0
+        first = await _backoff(conn, thread_id)
+        assert await thread_synopsis.summarise_threads(now=NOW + 15 * MINUTE) == 0
+        asked_next_cycle = call.await_count
+        assert await thread_synopsis.summarise_threads(now=NOW + 2 * HOUR) == 0
+        second = await _backoff(conn, thread_id)
+        assert await thread_synopsis.summarise_threads(now=NOW + 5 * HOUR) == 0
+        asked_before_the_second_ends = call.await_count
+        call.return_value = json.dumps({"title": "Zz cough syrup deaths", "synopsis": SYNOPSIS})
+        assert await thread_synopsis.summarise_threads(now=NOW + 6 * HOUR) == 1
+
+    assert first == (1, NOW + 2 * HOUR)
+    assert asked_next_cycle == 1
+    assert second == (2, NOW + 6 * HOUR)
+    assert asked_before_the_second_ends == 2
+    assert call.await_count == 3
+    assert await _backoff(conn, thread_id) == (0, None)
+    row = await conn.fetchrow("SELECT title, synopsis FROM threads WHERE id = $1", thread_id)
+    assert tuple(row) == ("Zz cough syrup deaths", SYNOPSIS)
+
+
+@pytest.mark.asyncio
+async def test_a_thread_without_usable_headlines_backs_off_without_a_call(conn):
+    thread_id = await _thread(conn, n_stories=7)  # no members: no headline at all
+    call = AsyncMock(return_value=LINKED)
+
+    with _stubbed(conn, call):
+        assert await thread_synopsis.summarise_threads(now=NOW) == 0
+
+    call.assert_not_awaited()
+    assert await _backoff(conn, thread_id) == (1, NOW + 2 * HOUR)
+    assert thread_id not in await _eligible(conn, NOW + HOUR)
+    assert thread_id in await _eligible(conn, NOW + 2 * HOUR)
+
+
+@pytest.mark.asyncio
+async def test_the_backoff_doubles_up_to_a_day_without_overflowing(conn):
+    thread_id = await _thread(conn, n_stories=7)
+    await conn.execute("UPDATE threads SET synopsis_failures = 1000 WHERE id = $1", thread_id)
+
+    row = await conn.fetchrow(thread_synopsis.FAILED_SQL, thread_id, NOW)
+
+    assert tuple(row) == (1001, NOW + 24 * HOUR)
