@@ -13,6 +13,8 @@ import {
   fetchBreaking,
   fetchDelta,
   fetchLinkDetail,
+  fetchRelationDetail,
+  fetchRelations,
   explainLink,
   isExplainFallback,
   LINK_EXPLAIN_FAILED,
@@ -21,6 +23,7 @@ import {
 } from "./api";
 import { readFileSync } from "fs";
 import path from "path";
+import contract from "../../e2e/relations.contract.json";
 
 const mockFetch = vi.fn();
 
@@ -432,6 +435,50 @@ describe("fetchLinkDetail", () => {
       end_time: RANGE_QUERY.endTime,
       topic: "Climate",
     });
+  });
+});
+
+describe("fetchRelations (the fixed 7-day lens)", () => {
+  it("asks for every class, 40 at most, with no window at all", async () => {
+    mockFetch.mockReturnValue(jsonResponse(contract.list));
+    const answer = await fetchRelations({ kind: "all" });
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/api/relations");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ kind: "all", limit: "40" });
+    expect(answer.relations).toHaveLength(3);
+  });
+
+  it("asks for one class, and passes the signal on", async () => {
+    mockFetch.mockReturnValue(jsonResponse(contract.list_conflict));
+    const controller = new AbortController();
+    await fetchRelations({ kind: "conflict", limit: 20, signal: controller.signal });
+    const [called, init] = mockFetch.mock.calls[0];
+    expect(Object.fromEntries(new URL(called).searchParams)).toEqual({
+      kind: "conflict",
+      limit: "20",
+    });
+    expect(init.signal).toBe(controller.signal);
+  });
+});
+
+describe("fetchRelationDetail", () => {
+  it("asks for the pair as given (the API answers it in code order)", async () => {
+    mockFetch.mockReturnValue(jsonResponse(contract.detail));
+    const answer = await fetchRelationDetail({ a: "US", b: "IR" });
+    const url = new URL(mockFetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/api/relations/detail");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ a: "US", b: "IR" });
+    expect(answer?.a.iso).toBe("IR");
+  });
+
+  it("resolves null when the pair has no events left in the lens (a 404)", async () => {
+    mockFetch.mockReturnValue(jsonResponse(contract.not_found, 404));
+    await expect(fetchRelationDetail({ a: "IR", b: "US" })).resolves.toBeNull();
+  });
+
+  it("throws on any other failure", async () => {
+    mockFetch.mockReturnValue(jsonResponse({ detail: "Internal Server Error" }, 500));
+    await expect(fetchRelationDetail({ a: "IR", b: "US" })).rejects.toThrow("API 500");
   });
 });
 

@@ -5,6 +5,7 @@
 import type { ApiLink, ApiLinkDetail } from "@/lib/api";
 import { pointAt } from "@/lib/cells";
 import { apiArticlesToNewsArticles, mapApiTopic, mapTopicMix } from "@/lib/clustering";
+import type { Relation } from "@/lib/relations";
 import type { CountryLink, GlobePoint, LinkCountry, LinkDetail, Topic } from "@/types/news";
 
 /** How links are ranked: surprisingly often together (lift), or by stories (count). */
@@ -71,10 +72,12 @@ export interface ArcColors {
   flowMs: number;
 }
 
-/** One arc as globe.gl draws it: a link's, or a thread's spread (lib/threads). */
+/** One arc as globe.gl draws it: a link's, a relation's, or a thread's spread (lib/threads). */
 export interface GlobeArc {
   /** The link it draws (Links layer); none for a thread's arc. */
   link?: CountryLink;
+  /** The relation it draws (Relations layer, lib/relations): its click opens the inspector. */
+  relation?: Relation;
   /** The thread whose spread it draws. */
   thread?: number;
   key: string;

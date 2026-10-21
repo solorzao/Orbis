@@ -2,6 +2,7 @@ import type { PanelQuery, Topic } from "@/types/news";
 import { windowQuery, type TimeWindow } from "@/lib/timeWindow";
 import { queryWindow } from "@/lib/panelQuery";
 import { LINKS_LIMIT, type LinkRank } from "@/lib/links";
+import { RELATIONS_LIMIT, type RelationKind } from "@/lib/relations";
 
 // Same-origin /api/* routes are proxied to the backend by
 // src/app/api/[...path]/route.ts, which adds the API key server-side.
@@ -365,6 +366,105 @@ export function fetchLinkDetail({ a, b, query }: LinkQuery): Promise<ApiLinkDeta
   const params: Record<string, string> = { a, b, ...windowParams(queryWindow(query)) };
   if (query.topic) params.topic = query.topic;
   return apiFetch<ApiLinkDetail>("/api/links/detail", params);
+}
+
+/** Reported events by CAMEO QuadClass: every key is always sent (zeros included). */
+export interface ApiQuadCounts {
+  verbal_cooperation: number;
+  material_cooperation: number;
+  verbal_conflict: number;
+  material_conflict: number;
+}
+
+/**
+ * Two countries' reported events over the 7-day lens (/api/relations): GDELT's
+ * machine-coded events between them, either way. `a` < `b` by code.
+ */
+export interface ApiRelation {
+  a: ApiLinkCountry;
+  b: ApiLinkCountry;
+  n: number;
+  /** Distinct outlets among those recorded (a lower bound). */
+  outlets: number;
+  /** Mentions in each event's first 15 minutes, summed. */
+  mentions: number;
+  quad: ApiQuadCounts;
+  /** The majority class (under a class filter, the filter). */
+  kind: "cooperation" | "conflict";
+  /** Mean Goldstein score, -10 to +10, scored by event type. */
+  goldstein: number;
+  /** Mean tone of the first reports. */
+  tone: number;
+  /** The country whose actors act in most of the events. */
+  from: string;
+}
+
+/** The lens's UTC days, since when it holds rollups (null: none), and the pairs. */
+export interface ApiRelations {
+  first_day: string;
+  last_day: string;
+  since: string | null;
+  relations: ApiRelation[];
+}
+
+/** One relation for the inspector (/api/relations/detail): every class, the pair in code order. */
+export interface ApiRelationDetail extends ApiRelation {
+  first_day: string;
+  last_day: string;
+  since: string | null;
+  /** a → b first, then b → a; only those with events. */
+  directions: { from: string; to: string; n: number; quad: ApiQuadCounts }[];
+  /** All 7 days, first_day to last_day, zero-filled. */
+  daily: { day: string; cooperation: number; conflict: number }[];
+  /** Up to 10 reports the events came from, newest day first. */
+  samples: {
+    url: string;
+    outlet: string;
+    /** Our own article's title for that URL, else null. */
+    title: string | null;
+    day: string;
+    quad_class: 1 | 2 | 3 | 4;
+    from: string;
+  }[];
+}
+
+/**
+ * The relations for the Relations layer's arcs: always the last 7 UTC days
+ * (the lens is fixed, so no window is sent), every class or one.
+ */
+export function fetchRelations({
+  kind,
+  limit = RELATIONS_LIMIT,
+  signal,
+}: {
+  kind: RelationKind;
+  /** Most relations returned (1 to 60). */
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<ApiRelations> {
+  return apiFetch<ApiRelations>("/api/relations", { kind, limit: String(limit) }, signal);
+}
+
+/**
+ * A relation's detail for the inspector, every class. Null when the pair has
+ * no events left in the lens (a 404): around UTC midnight a listed pair's only
+ * day can leave it. Other failures throw.
+ */
+export async function fetchRelationDetail({
+  a,
+  b,
+  signal,
+}: {
+  a: string;
+  b: string;
+  signal?: AbortSignal;
+}): Promise<ApiRelationDetail | null> {
+  try {
+    return await apiFetch<ApiRelationDetail>("/api/relations/detail", { a, b }, signal);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 /**
