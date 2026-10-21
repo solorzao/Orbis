@@ -592,12 +592,122 @@ Branch: `claude/p4-board-ui`.
 
 ---
 
-## After Phase 4
+## Phase 4 shipped (done 2026-10-21, through #108)
 
-- **Phase 5** (GDELT Events: `event_pairs_daily` rollups and relation arcs) gets its plan from what shipped here.
-- **Follow-ups noted in Phase 3 and 4:**
-  - breaking stories could reuse threads (a thread whose velocity spikes) instead of per-cell clustering;
-  - ingestion's batch dedup keeps only the first copy of a headline per batch, so wire bursts undercount outlets;
-  - GDELT geocoding errors (e.g. "Vienne, Wien, Austria" for the French Vienne);
-  - an alias map for entity names ("Biden" vs "Joe Biden");
-  - the links-7d disk decision.
+All eight plan PRs merged. A final whole-phase review found no Critical issues and four Important ones; all four were fixed before close (#106–#108).
+
+### Story threads
+- **Ingestion:** articles are assigned to threads at ingestion, on narrow tables (`threads`, `thread_centroids`, `thread_members`; no FK or index on `articles`).
+- **Merge pass:** threads covering the same story are merged; losers stay as `merged_into` aliases, so old ids still resolve.
+- **Synopses:** Haiku synopses, which pause at half the daily budget and back off after failures.
+- **API:** `/api/threads` and `/api/threads/{id}`.
+- **UI:** the Threads rail and sheet tab, aurora spread arcs and replay, and "Part of" chips.
+- About 14.6K active threads at plateau.
+
+### Entity tracker
+- **Search:** `/api/search` over the narrow `kg_entity_names` (017/018). Cold searches take 0.3–3.6 s, down from 10–45 s.
+- **Dossiers:** read from the GIN index on `thread_members`, capped at 2,000 mentions.
+- **UI:** Track search (places are matched client-side), the dossier with its constellation, globe focus mode, and live entity pills.
+
+### Investigation board
+- **State:** kept in localStorage.
+- **API:** `/api/board/resolve`, `/links` and `/analyze` (a cited memo). Pins are cached per item (`db:board:item:v1:*`), and the board has its own rate group.
+- **UI:** typed edges, the globe as a mirror, Markdown export, defensive share links, and adoption of merged threads.
+
+### Hardening along the way
+- **#87:** DB alerts.
+- **#93:** hotfix for the thread-scoring CPU stall (79 s → 0.6 s in the repro).
+- **#96:** Claude timeouts on every visitor path.
+- **`has_injection_pattern`** also checks an NFKC, HTML-unescaped copy.
+- **#102:** shown-title rules for junk headlines.
+- **#103:** the 7-day globe answers every topic from one pass, and a topic change filters the dots on screen at once (owner bug).
+- **#105, #108:** the 7-day globe and links refresh hourly under `wk:*`, outside cycle invalidation. Week reads fall from 192 to 48 a day, and both week warmers run last.
+- **#107:** no visitor text in logs. The access log is off, and request lines name the matched route.
+- **#106:** synopsis attempt backoff (migration 020).
+
+## Deviations from this plan (as shipped)
+
+### 15b: threads and assignment
+- **Titles are judged as shown (#102):**
+  - `MIN_NAMED_TITLE_WORDS` = 3 (a 3-word headline counts if it names someone);
+  - `DIGEST_PATTERN` and `SECTION_PATTERN`;
+  - SQL/Python parity through `shown_title_sql`, with a fuzz test.
+- **Backlog:** oldest first, with `MAX_BATCH` = 1200 and `MIN_PLACED` = 100.
+- **Scoring:** runs under `SCORE_SETTINGS` (`enable_seqscan` off, `force_custom_plan`) over a MATERIALIZED query CTE (#93).
+- **Copies:** a copy bumps only `threads.last_seen`. Centroid rows are written only when the centroid changes.
+- **`thread_centroids.n_stories` and `last_seen`:** step 5's "also update `thread_centroids.n_stories`" didn't ship. These columns are informational and write-only; deactivation reads `threads`.
+- **Repair pick-up:** `aggregated_at IS NULL` (migration 015), not `last_seen > aggregated_at`.
+- **Merges (not planned; #98, #100):**
+  - migration 019 `merged_into`, with no index or FK, resolved by up to 10 primary-key hops;
+  - `MERGE_SIM` 0.82, or 0.77 with 2 shared non-generic names;
+  - `MERGE_ROUNDS` 3, `MAX_MERGES`, `MAX_MOVED_MEMBERS` 5,000, and a 30 s budget;
+  - a catch-up pass, and "Thread merge:" audit lines.
+
+### 15c: synopses
+- `SYNOPSIS_SHARE` = 0.5.
+- A null "not identifiable" answer is stored as NULLs.
+- `NO_STORY_*` suppression on reads.
+- The failure backoff (#106).
+
+### 16, 17a and 18b
+- **16:** rows say "{n} countries", not regions.
+- **17a:** migration 014 (kg_edges autovacuum). Its stated reason no longer holds since #91/#95, but it still helps `retrieval.co_mentions`.
+- **18b:**
+  - "close in time" covers articles only, within 2 h;
+  - a refresh on each open drops rejected pins;
+  - `askDropping` retries after a 422;
+  - the memo docks beside the canvas;
+  - a share-merge prompt;
+  - the Board icon below 1180px. The top bar shows two rows up to 820px, hides the clock at 820–860px and the brand word at 379px or less.
+
+### Not in the roadmap
+- #103 (the 7-day globe warm), #105 and #108 (hourly week warms): an exception to "never read the `articles` heap per cycle", now bounded to hourly.
+
+## After Phase 4 (prioritised)
+
+### P1
+1. **Phase 5,** GDELT Events: plan `docs/plans/2026-10-21-soft-orbit-phase-5.md` (#111), with owner-approved decisions.
+2. **The GKG cadence (owner decision).** Cycles start about every 30 minutes and read only the newest file, so about half of GDELT's GKG files are never ingested.
+   - Full ingestion costs about +$3/month in usage. It realistically needs a P10 disk (+~$10/month; storage can't shrink), because embedding writes would saturate P4 about 19 h a day.
+   - Recommendation: stay at half until a disk upgrade for the 7-day reads.
+3. **The 7-day reads decision.** Hourly warms (#108) bound them today. Long-term options: narrow rollups (shared with Phase 5's daily rollups), or a P10 disk.
+4. **Week-warm hardening (in flight):**
+   - a cancelled week flight returns 503 with a client retry;
+   - empty topic variants are kept for `WEEK_TTL`;
+   - the All key is written last;
+   - a bounded stop wait.
+5. **Fix the flaky real-names search plan test** (in flight).
+
+### P2
+6. **Calibration audit after a week of live data:**
+   - "Thread merge:" audit lines at 0.82 / 0.77;
+   - `JOIN_SIM` under-joins;
+   - same-template local news clustering (e.g. 5186);
+   - digests and section labels in other languages.
+7. **Board edge labels** are hidden under cards at 1180–1280.
+8. **Storage and vacuum watch:** check `pg_total_relation_size` for `threads`, `thread_members` and `thread_centroids` weekly for 2 weeks, and HNSW vacuum CPU credits.
+9. **Test hardening:**
+   - a natural-plan test at production scale for the dossier SQL;
+   - HNSW count and timing asserts at ≥99%;
+   - the 50 ms single-flight test;
+   - CI ruff on `tests/` and `scripts/`.
+10. **E2E sharding** (`--shard=i/3`): about 30 min to about 12.
+11. **Rail fallback copy:** the raw lead headline, and "pending" shown forever.
+12. **Thread selection by chip or search while a range is shown** contradicts "live only".
+13. **Merged-thread refetch flicker:** seed the winner's detail instead.
+14. **A static test** that the listed thresholds in `database.py` match `LISTED_SQL`.
+15. **`MERGE_STEPS` and `plan_merges`** are test-only and could drift from `_merge`.
+16. **Deferred:** a partial `idx_kg_nodes_name_trgm WHERE type <> 'ARTICLE'`.
+17. **Bump `v1`** on `db:board:links` and `db:board:item` whenever `BoardEdge`, `BoardSnapshot` or the record shape changes.
+
+### P3
+18. **Carry-over:**
+    - breaking stories via threads;
+    - batch dedup undercounting outlets;
+    - GDELT geocoding errors ("Vienne, Wien, Austria");
+    - an entity alias map ("Biden" vs "Joe Biden"), plus the person/org same-name collision.
+19. **Stale dependabot PRs #14–#31:** close them and let dependabot reopen current ones (owner's call).
+20. **Docs:** the README API table, the 014 rationale, and the `llm_budget` comments.
+21. **The 2026-10-19 assignment stall window** self-heals on 10-26. Consider a reconcile for assignment outages longer than 6 h.
+22. **Vercel function logs** still record `/api/search?q=…` URLs. Making search a POST would be the only fix (owner awareness).
+23. **Phase 6** (AI voice and agent rework) is scoped in the parent plan (#109).
