@@ -14,7 +14,8 @@ from datetime import date
 
 from app.services.country_centroids import COUNTRY_CENTROIDS
 
-ROWS_PER_DAY = 5000
+# 19b's repro (2026-10-21, 96 files): 2,616 rows after a day, rounded up.
+ROWS_PER_DAY = 3000
 ISO = sorted(COUNTRY_CENTROIDS)[:150]
 
 FILL_SQL = """

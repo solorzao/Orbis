@@ -35,7 +35,9 @@ WITHDRAWN = frozenset({"ANT"})  # Netherlands Antilles (dissolved 2010)
 # ISO alpha-3 codes GDELT emits that CAMEO's list lacks: 19b.7's repro reports
 # the unmapped codes a day of exports holds; add the countries among them here
 # and to the table.
-EXTRA: frozenset[str] = frozenset()
+EXTRA: frozenset[str] = frozenset(
+    {"SSD"}  # South Sudan (2011): 88 events in the repro's day of exports, 2026-10-21
+)
 
 CAMEO_TO_ISO2: dict[str, str] = {
     "ABW": "AW",
@@ -231,6 +233,7 @@ CAMEO_TO_ISO2: dict[str, str] = {
     "SOM": "SO",
     "SPM": "PM",
     "SRB": "RS",
+    "SSD": "SS",
     "STP": "ST",
     "SUR": "SR",
     "SVK": "SK",

@@ -37,6 +37,13 @@ def test_regional_withdrawn_and_unknown_codes_are_unmapped():
         assert cameo_to_iso2(code) == "", code
 
 
+def test_codes_gdelt_emits_beyond_cameos_list_are_mapped():
+    """19b's repro found South Sudan (88 events in a day) unmapped: an ISO code
+    newer than CAMEO's list."""
+    assert "SSD" in EXTRA
+    assert cameo_to_iso2("SSD") == "SS"
+
+
 def test_case_and_spaces_are_ignored():
     assert cameo_to_iso2(" usa ") == "US"
 
