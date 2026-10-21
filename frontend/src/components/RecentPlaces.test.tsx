@@ -11,6 +11,7 @@ function relationEntry(relationId: string, createdAt: number): RelationEntry {
   return {
     relationId,
     relation: toRelation(contract.list.relations[0] as ApiRelation), // IR–US, from US: 312
+    filter: "all",
     lens: null,
     detail: null,
     detailLoading: true,

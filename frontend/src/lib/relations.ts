@@ -77,7 +77,8 @@ export interface RelationSample {
   outlet: string;
   title: string | null;
   day: string;
-  quadClass: 1 | 2 | 3 | 4;
+  /** CAMEO QuadClass, 1 to 4 by the contract (sampleQuad checks it). */
+  quadClass: number;
   from: string;
 }
 
@@ -161,9 +162,15 @@ export function quadSide(key: QuadKey): "cooperation" | "conflict" {
   return key.endsWith("cooperation") ? "cooperation" : "conflict";
 }
 
-/** A sample's QuadClass (1 to 4) as its class. */
-export function sampleQuad(quadClass: 1 | 2 | 3 | 4): QuadKey {
-  return QUAD_KEYS[quadClass - 1];
+/**
+ * A sample's QuadClass (1 to 4) as its class, or null for anything else: the
+ * value comes from GDELT through the API, so the inspector skips a class it
+ * can't name rather than fail.
+ */
+export function sampleQuad(quadClass: number): QuadKey | null {
+  return Number.isInteger(quadClass) && quadClass >= 1 && quadClass <= 4
+    ? QUAD_KEYS[quadClass - 1]
+    : null;
 }
 
 /** How a set of events splits, in words: its main class, else its side, else mixed. */

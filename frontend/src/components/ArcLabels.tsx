@@ -20,6 +20,11 @@ interface ArcLabelsProps {
   yieldTo: string | null;
   /** Where a point above the globe is on screen, or null on its far side. */
   project: (lat: number, lng: number, altitude?: number) => ScreenPoint | null;
+  /**
+   * How many labels it has rendered in the DOM (placed or not), each time that
+   * changes: the globe shows it as data-relation-labels for the e2e tests.
+   */
+  onCount?: (rendered: number) => void;
 }
 
 /**
@@ -30,12 +35,17 @@ interface ArcLabelsProps {
  * the pointer through, and are hidden from screen readers: the keyboard list
  * and the inspector say the same to everyone. CSS hides them on phones.
  */
-export default function ArcLabels({ relations, muted, yieldTo, project }: ArcLabelsProps) {
+export default function ArcLabels({ relations, muted, yieldTo, project, onCount }: ArcLabelsProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const shown = useMemo(
     () => labelledRelations(relations, { muted, yieldTo }),
     [relations, muted, yieldTo],
   );
+
+  // The labels in the DOM now, counted there rather than recomputed elsewhere.
+  useEffect(() => {
+    onCount?.(boxRef.current?.querySelectorAll(".arc-tag").length ?? 0);
+  }, [shown, onCount]);
   // Each label's arc top, in the order they render.
   const apexes = useMemo(
     () =>

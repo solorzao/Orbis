@@ -78,7 +78,13 @@ export default function RelationList({
                   aria-label={`${long}: ${reportedEvents(rel.n)}, ${words}`}
                   onClick={() => onOpen(rel)}
                   onFocus={() => onFocusRelation(rel)}
-                  onBlur={() => onFocusRelation(null)}
+                  onBlur={(e) => {
+                    // Tabbing to the next row: its focus hands the label on. A null
+                    // between them would redraw every arc twice.
+                    const next = e.relatedTarget;
+                    if (next instanceof HTMLElement && next.hasAttribute("data-relation")) return;
+                    onFocusRelation(null);
+                  }}
                 >
                   <span className="h">{long}</span>
                   <span className="m">

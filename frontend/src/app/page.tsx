@@ -45,7 +45,6 @@ import {
   type LinkRank,
 } from "@/lib/links";
 import {
-  labelledRelations,
   relationKey,
   relationPill,
   relationsStatus,
@@ -200,6 +199,8 @@ export default function Home() {
   // The relation arc under the pointer, and the list row with the focus: each named by the pill.
   const [hoveredRelation, setHoveredRelation] = useState<Relation | null>(null);
   const [focusedRelation, setFocusedRelation] = useState<Relation | null>(null);
+  // How many arc labels ArcLabels has in the DOM (the globe's data-relation-labels).
+  const [relationLabels, setRelationLabels] = useState(0);
   // What is breaking now, for the topic: only for a live window (a range or a
   // replay looks back), polled every 5 minutes. The ticker and the rings show it.
   const breaking = useBreaking(activeTopic, timeWindow.kind === "live" && !replaying);
@@ -971,6 +972,8 @@ export default function Home() {
       const entry: RelationEntry = {
         relationId,
         relation,
+        // Its numbers are this class's alone until the detail (every class) lands.
+        filter: relationKind,
         lens: relationsResult.lens,
         detail: null,
         detailLoading: true,
@@ -989,6 +992,7 @@ export default function Home() {
       panelQueue,
       linkQueue,
       relationQueue,
+      relationKind,
       relationsResult.lens,
       fetchRelationData,
       showInspect,
@@ -1100,10 +1104,6 @@ export default function Home() {
   const arcPill = pillRelation ? relationPill(pillRelation) : pillLink ? linkPill(pillLink) : null;
   // The 5 strongest arcs' labels: the one with the pill yields to it (none on touch screens).
   const labelYield = !touch && pillRelation ? keyOf(pillRelation) : null;
-  const relationLabels = labelledRelations(relationsDrawn, {
-    muted: relationsMuted,
-    yieldTo: labelYield,
-  }).length;
 
   // Co-pilot: "Show stories here" takes the click path for the dot at an action's place.
   const showStoriesFor = useCallback(
@@ -1296,6 +1296,7 @@ export default function Home() {
         muted={relationsMuted}
         yieldTo={labelYield}
         project={projectPoint}
+        onCount={setRelationLabels}
       />
       <ArcPill label={arcPill} project={projectPoint} touch={touch} />
 

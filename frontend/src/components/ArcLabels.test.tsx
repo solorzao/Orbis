@@ -71,6 +71,35 @@ describe("ArcLabels (decision 6: the 5 strongest arcs labelled)", () => {
     expect(screen.getByTestId("arc-labels")).toHaveAttribute("aria-hidden", "true");
   });
 
+  it("reports how many labels it renders in the DOM (data-relation-labels)", () => {
+    const onCount = vi.fn();
+    const project = () => ({ x: 1, y: 2 });
+    const { rerender } = render(
+      <ArcLabels
+        relations={SEVEN}
+        muted={false}
+        yieldTo={null}
+        project={project}
+        onCount={onCount}
+      />,
+    );
+    expect(onCount).toHaveBeenLastCalledWith(5);
+    rerender(
+      <ArcLabels
+        relations={SEVEN}
+        muted={false}
+        yieldTo="US-X6"
+        project={project}
+        onCount={onCount}
+      />,
+    );
+    expect(onCount).toHaveBeenLastCalledWith(4);
+    rerender(
+      <ArcLabels relations={SEVEN} muted yieldTo={null} project={project} onCount={onCount} />,
+    );
+    expect(onCount).toHaveBeenLastCalledWith(0);
+  });
+
   it("renders none while another focus mutes the arcs, and runs no frame loop", () => {
     const { container } = render(
       <ArcLabels relations={SEVEN} muted yieldTo={null} project={() => ({ x: 1, y: 2 })} />,

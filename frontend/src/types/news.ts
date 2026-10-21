@@ -1,5 +1,5 @@
 import type { LiveHours } from "@/lib/timeWindow";
-import type { Relation, RelationDetail, RelationLens } from "@/lib/relations";
+import type { Relation, RelationDetail, RelationKind, RelationLens } from "@/lib/relations";
 
 /** The story thread a cluster story is part of (/api/news/cluster), when it would be listed. */
 export interface ArticleThread {
@@ -168,6 +168,8 @@ export interface RelationEntry {
   relationId: string;
   /** The relation as its arc or list row had it: its ends, numbers and acting country. */
   relation: Relation;
+  /** The class switch it was opened under: other than "all", `relation`'s numbers are that class's alone. */
+  filter: RelationKind;
   /** The lens the list answered for, until the detail names its own; null if unknown. */
   lens: RelationLens | null;
   detail: RelationDetail | null;

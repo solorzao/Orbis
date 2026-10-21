@@ -427,11 +427,15 @@ export const MOCK_RELATIONS = contract.list;
 /** /api/relations?kind=conflict: IR–US only, its numbers conflict's alone. */
 export const MOCK_RELATIONS_CONFLICT = contract.list_conflict;
 
-/** /api/relations as the backend answers it, by ?kind= (the contract has every class and conflict). */
+/** /api/relations?kind=cooperation: FR–US, IR–US and FR–NG, their numbers cooperation's alone. */
+export const MOCK_RELATIONS_COOPERATION = contract.list_cooperation;
+
+/** /api/relations as the backend answers it, by ?kind= (every class by default). */
 export function mockRelations(url: string) {
-  return new URL(url).searchParams.get("kind") === "conflict"
-    ? MOCK_RELATIONS_CONFLICT
-    : MOCK_RELATIONS;
+  const kind = new URL(url).searchParams.get("kind");
+  if (kind === "conflict") return MOCK_RELATIONS_CONFLICT;
+  if (kind === "cooperation") return MOCK_RELATIONS_COOPERATION;
+  return MOCK_RELATIONS;
 }
 
 /**

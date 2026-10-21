@@ -15,6 +15,7 @@ function entry(over: Partial<RelationEntry> = {}): RelationEntry {
   return {
     relationId: "relation-IR-US-1",
     relation: LIST.relations[0],
+    filter: "all",
     lens: LENS,
     detail: DETAIL,
     detailLoading: false,
@@ -40,6 +41,8 @@ describe("RelationInspector", () => {
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("United States and Iran");
     expect(readout("Events")).toHaveTextContent("312");
     expect(readout("Outlets")).toHaveTextContent("23");
+    // A lower bound (each day and class keeps up to 8 outlets), said in words.
+    expect(readout("Outlets")).toHaveTextContent("at least");
     expect(readout("Goldstein")).toHaveTextContent("−3.1");
     expect(readout("Goldstein")).toHaveTextContent(
       "event-type score, −10 conflict to +10 cooperation",
@@ -64,7 +67,8 @@ describe("RelationInspector", () => {
 
   it("shows every class, whatever the layer's class switch says (decision 7)", () => {
     // Opened under Conflict: the arc's numbers are conflict's, the detail every class's.
-    renderInspector(entry({ relation: CONFLICT.relations[0] }));
+    renderInspector(entry({ relation: CONFLICT.relations[0], filter: "conflict" }));
+    expect(screen.queryByText(/only, as the class switch filters/)).toBeNull();
     const classes = screen.getByRole("list", { name: "Reported events by class" });
     expect(
       within(classes)
@@ -143,6 +147,31 @@ describe("RelationInspector", () => {
     expect(screen.getByTestId("relation-inspector")).toHaveTextContent(
       "Couldn't load this relation's detail.",
     );
+  });
+
+  it("labels a filtered arc's numbers as one class's until every class loads (or if it fails)", () => {
+    for (const over of [{ detailLoading: true }, { detailError: true }]) {
+      const { unmount } = renderInspector(
+        entry({ relation: CONFLICT.relations[0], filter: "conflict", detail: null, ...over }),
+      );
+      expect(readout("Events")).toHaveTextContent("260"); // conflict's alone
+      expect(screen.getByText("Conflict only, as the class switch filters it")).toBeVisible();
+      // No class rows from one class's numbers: they would read as the pair's split.
+      expect(screen.queryByRole("list", { name: "Reported events by class" })).toBeNull();
+      unmount();
+    }
+  });
+
+  it("skips the class of a sample whose QuadClass isn't 1 to 4, and still lists it", () => {
+    const samples = DETAIL.samples.map((s, i) =>
+      i === 0 ? { ...s, quadClass: 7 as unknown as 1 } : s,
+    );
+    renderInspector(entry({ detail: { ...DETAIL, samples } }));
+    const [first] = within(screen.getByRole("list", { name: "Sample reports" })).getAllByRole(
+      "listitem",
+    );
+    expect(first).toHaveTextContent("Gulf shipping warnings traded");
+    expect(first.querySelector(".art-tag")).toBeNull();
   });
 
   it("minimizes on Escape, closes on Close, and has no Pin (decision 9)", () => {

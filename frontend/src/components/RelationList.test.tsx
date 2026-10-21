@@ -53,6 +53,16 @@ describe("RelationList", () => {
     expect(onFocusRelation).toHaveBeenLastCalledWith(null);
   });
 
+  it("tabbing from row to row hands the label straight on, with no null between", () => {
+    const { onFocusRelation } = renderList();
+    const [first, second] = screen.getAllByRole("button");
+    fireEvent.focus(first);
+    fireEvent.blur(first, { relatedTarget: second });
+    fireEvent.focus(second, { relatedTarget: first });
+    // Each null would redraw every arc twice (highlight off, then on).
+    expect(vi.mocked(onFocusRelation).mock.calls).toEqual([[relations[0]], [relations[1]]]);
+  });
+
   it("without relations, says why, or that they are loading", () => {
     renderList({
       relations: [],

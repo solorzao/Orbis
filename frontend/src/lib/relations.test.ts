@@ -279,4 +279,23 @@ describe("a detail's days and samples", () => {
     expect(quadSide("material_conflict")).toBe("conflict");
     expect(quadSide("verbal_cooperation")).toBe("cooperation");
   });
+
+  it("names no class for a QuadClass outside 1 to 4 (untrusted input)", () => {
+    for (const bad of [0, 5, 2.5, -1, Number.NaN]) expect(sampleQuad(bad)).toBeNull();
+  });
+});
+
+describe("the contract's cooperation answer", () => {
+  it("covers cooperation's events alone, in every quad key", () => {
+    const { relations } = toRelations(contract.list_cooperation as ApiRelations);
+    expect(relations.map((r) => [relationKey(r.a.iso, r.b.iso), r.kind, r.n])).toEqual([
+      ["FR-US", "cooperation", 100],
+      ["IR-US", "cooperation", 52],
+      ["FR-NG", "cooperation", 33],
+    ]);
+    for (const r of relations) {
+      expect(r.quad.verbal_conflict + r.quad.material_conflict).toBe(0);
+      expect(r.n).toBe(QUAD_KEYS.reduce((sum, k) => sum + r.quad[k], 0));
+    }
+  });
 });

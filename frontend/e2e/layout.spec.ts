@@ -15,6 +15,8 @@ import {
 
 const SIZES = [
   { width: 1920, height: 1080 },
+  { width: 1600, height: 900 }, // the layers' widest single line
+  { width: 1599, height: 900 }, // the layers stacked, at their widest
   { width: 1440, height: 900 },
   { width: 1280, height: 800 },
   { width: 1180, height: 800 }, // the narrowest floating panel
@@ -329,9 +331,12 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
 }
 
 // While Relations is on, its class switch takes the rank switch's place and its
-// legend floats above it: regions of their own that must not move the capsule or
-// touch the timeline, the bottom row or the side panel.
-for (const size of SIZES.filter((s) => [1440, 1280, 1180].includes(s.width))) {
+// legend floats above it (centred above the layers below 1180px): regions of
+// their own that must not move the capsule or touch the timeline, the bottom
+// row, the top bar or the side panel. On a short screen with the sheet open the
+// legend gives way (there is no room above the layers); the list in Inspect
+// names the lens there.
+for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
   test(`the Relations switch and legend keep ${GAP}px apart at ${size.width}x${size.height}`, async ({
     page,
   }) => {
@@ -348,6 +353,23 @@ for (const size of SIZES.filter((s) => [1440, 1280, 1180].includes(s.width))) {
     // The layers keep their box, so the capsule keeps its place.
     expect(b["layer-switcher"]).toMatchObject({ x: before.x, y: before.y, w: before.width });
     expectCentred(b["timeline"], size.width, "Relations on");
+    // The switch and the legend keep the gap from the viewport's edges too.
+    for (const id of ["relation-kind", "relations-legend"]) {
+      expect(b[id].x, `${id}: left margin`).toBeGreaterThanOrEqual(GAP);
+      expect(size.width - (b[id].x + b[id].w), `${id}: right margin`).toBeGreaterThanOrEqual(GAP);
+    }
+    if (size.width < SHEET_BELOW) {
+      await page.getByTestId("side-collapse").press("Enter");
+      await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
+      const short = size.height <= 560;
+      const open = [
+        ...regionsAt(size.width),
+        "relation-kind",
+        ...(short ? [] : ["relations-legend"]),
+      ];
+      await expectApart(page, size.width, "Relations on, sheet open", open);
+      if (short) expect(await boxes(page, ["relations-legend"]), "legend gives way").toEqual([]);
+    }
   });
 }
 

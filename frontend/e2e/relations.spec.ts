@@ -1,12 +1,20 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
 import {
+  MOCK_LINKS_LIFT,
   MOCK_RELATIONS,
   MOCK_RELATIONS_CONFLICT,
+  MOCK_RELATIONS_COOPERATION,
+  NEW_YORK,
+  PARIS,
   gotoStillGlobe,
   isRelationsList,
+  mockAgentRoute,
   mockRelations,
   seedBoard,
 } from "./fixtures";
+
+/** useGlobePoints' FETCH_DEBOUNCE_MS, which useRelations shares. */
+const FETCH_DEBOUNCE_MS = 150;
 
 /** Record each /api/relations request, answering as the backend does. */
 async function recordRelations(page: Page) {
@@ -38,7 +46,13 @@ test.describe("Relations layer", () => {
     await gotoStillGlobe(page, async (p) => {
       asked = await recordRelations(p);
     });
+    const links = page.getByRole("button", { name: "Links", exact: true });
+    await links.press("Enter");
+    await expect(globe(page)).toHaveAttribute("data-arcs", String(MOCK_LINKS_LIFT.length));
     await relationsOn(page);
+    // One arc overlay at a time: Relations on turned Links off.
+    await expect(links).toHaveAttribute("aria-pressed", "false");
+    await expect(globe(page)).toHaveAttribute("data-arcs", "0");
     await expect(globe(page)).toHaveAttribute("data-relation-labels", ALL);
     // The fixed lens: the class and the cap, and no window at all.
     expect(asked.map((q) => Object.fromEntries(q))).toEqual([{ kind: "all", limit: "40" }]);
@@ -47,7 +61,31 @@ test.describe("Relations layer", () => {
     await expect(legend).toContainText("Not verified");
     await expect(legend).toContainText("Topic filters don't apply");
 
-    await page.getByRole("button", { name: "Links", exact: true }).press("Enter");
+    // And Links on turns Relations off.
+    await links.press("Enter");
+    await expect(relationsToggle(page)).toHaveAttribute("aria-pressed", "false");
+    await expect(globe(page)).toHaveAttribute("data-relation-arcs", "0");
+  });
+
+  test("the co-pilot's Show links turns Relations off too", async ({ page }) => {
+    await gotoStillGlobe(page, (p) =>
+      mockAgentRoute(p, {
+        answer: "Markets in Paris and New York reacted to the talks.",
+        globe_actions: [
+          { type: "flyTo", lat: PARIS.lat, lng: PARIS.lng, label: "Paris" },
+          { type: "flyTo", lat: NEW_YORK.lat, lng: NEW_YORK.lng, label: "New York" },
+        ],
+      }),
+    );
+    await relationsOn(page);
+    const input = page.getByTestId("agent-input");
+    await input.fill("How did markets react?");
+    await input.press("Enter");
+    await page
+      .getByRole("group", { name: "Suggested actions" })
+      .getByRole("button", { name: "Show links" })
+      .press("Enter");
+    await expect(globe(page)).toHaveAttribute("data-arcs", String(MOCK_LINKS_LIFT.length));
     await expect(relationsToggle(page)).toHaveAttribute("aria-pressed", "false");
     await expect(globe(page)).toHaveAttribute("data-relation-arcs", "0");
   });
@@ -67,6 +105,15 @@ test.describe("Relations layer", () => {
       "data-relation-arcs",
       String(MOCK_RELATIONS_CONFLICT.relations.length),
     );
+    await page
+      .getByTestId("relation-kind")
+      .getByRole("button", { name: "Cooperation" })
+      .press("Enter");
+    await expect.poll(() => asked.at(-1)?.get("kind")).toBe("cooperation");
+    await expect(globe(page)).toHaveAttribute(
+      "data-relation-arcs",
+      String(MOCK_RELATIONS_COOPERATION.relations.length),
+    );
 
     // A new live window: the globe refetches its dots, the lens nothing.
     const fetched = asked.length;
@@ -78,6 +125,9 @@ test.describe("Relations layer", () => {
     await page.getByTestId("timeline").getByRole("button", { name: "6h" }).press("Enter");
     await sixHours;
     await expect(page.getByTestId("timeline-label")).toHaveText("Last 6 h, live");
+    // Proving a request isn't made needs a wait: past the hooks' 150 ms fetch
+    // debounce (FETCH_DEBOUNCE_MS), which a relations refetch would sit behind too.
+    await page.waitForTimeout(3 * FETCH_DEBOUNCE_MS);
     expect(asked).toHaveLength(fetched);
   });
 

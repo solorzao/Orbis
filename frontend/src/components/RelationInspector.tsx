@@ -68,6 +68,10 @@ export default function RelationInspector({ entry, onClose, onMinimize }: Relati
   // Named from the arc's acting country; the numbers are the detail's once it lands.
   const [from, to] = relationEnds(entry.relation);
   const rel = detail?.relation ?? entry.relation;
+  // Opened under a class switch, the arc's numbers are that class's alone: until
+  // the detail (every class) lands, or if it fails, they say so, and the class
+  // rows wait for it rather than read one class's numbers as the pair's split.
+  const filtered = detail === null && entry.filter !== "all" ? entry.filter : null;
   const lens = detail?.lens ?? entry.lens;
   const kicker = lens ? relationLensLabel(lens, "Relation") : "Relation · last 7 days";
   const total = Math.max(
@@ -134,6 +138,12 @@ export default function RelationInspector({ entry, onClose, onMinimize }: Relati
         <p className="insp-status">No reported events between them in the last 7 days.</p>
       ) : (
         <>
+          {filtered && (
+            <p className="insp-note rel-filtered">
+              {filtered === "conflict" ? "Conflict" : "Cooperation"} only, as the class switch
+              filters it
+            </p>
+          )}
           <div className="readouts rel-readouts" data-testid="relation-readouts">
             <div className="ro" role="group" aria-label="Events">
               <span aria-hidden="true">Events</span>
@@ -141,7 +151,10 @@ export default function RelationInspector({ entry, onClose, onMinimize }: Relati
             </div>
             <div className="ro" role="group" aria-label="Outlets">
               <span aria-hidden="true">Outlets</span>
-              <b title="At least: up to 8 outlets are kept per day and class">{rel.outlets}</b>
+              <b title="Each day and class keeps up to 8 outlets, so this is a lower bound">
+                {rel.outlets}
+              </b>
+              <small className="ro-sub">at least</small>
             </div>
             <div className="ro" role="group" aria-label="Goldstein">
               <span aria-hidden="true">Goldstein</span>
@@ -159,26 +172,28 @@ export default function RelationInspector({ entry, onClose, onMinimize }: Relati
             </div>
           </div>
 
-          <div>
-            <p className="lbl insp-kicker">
-              <span>By class</span>
-            </p>
-            <ul className="rel-classes" aria-label="Reported events by class">
-              {QUAD_KEYS.map((key) => {
-                const pct = Math.round((rel.quad[key] / total) * 100);
-                return (
-                  <li key={key} className="rel-class" style={sideStyle(key)}>
-                    <span className="rel-class-name">{QUAD_LABELS[key]}</span>
-                    <span className="rel-class-n">{rel.quad[key]}</span>
-                    <span className="rel-class-pct">{pct}%</span>
-                    <span className="rel-bar" aria-hidden="true">
-                      <span style={{ width: `${pct}%` }} />
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+          {!filtered && (
+            <div>
+              <p className="lbl insp-kicker">
+                <span>By class</span>
+              </p>
+              <ul className="rel-classes" aria-label="Reported events by class">
+                {QUAD_KEYS.map((key) => {
+                  const pct = Math.round((rel.quad[key] / total) * 100);
+                  return (
+                    <li key={key} className="rel-class" style={sideStyle(key)}>
+                      <span className="rel-class-name">{QUAD_LABELS[key]}</span>
+                      <span className="rel-class-n">{rel.quad[key]}</span>
+                      <span className="rel-class-pct">{pct}%</span>
+                      <span className="rel-bar" aria-hidden="true">
+                        <span style={{ width: `${pct}%` }} />
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
           {detail && detail.directions.length > 0 && (
             <div>
@@ -278,9 +293,11 @@ export default function RelationInspector({ entry, onClose, onMinimize }: Relati
                       <div className="m">
                         <span>{s.outlet}</span>
                         <span>{dayWords(s.day)}</span>
-                        <span className="art-tag" style={sideStyle(quad)}>
-                          {QUAD_LABELS[quad]}
-                        </span>
+                        {quad && (
+                          <span className="art-tag" style={sideStyle(quad)}>
+                            {QUAD_LABELS[quad]}
+                          </span>
+                        )}
                         <span>
                           {nameOf(rel, s.from)} → {nameOf(rel, other)}
                         </span>
