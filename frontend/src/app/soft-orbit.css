@@ -765,6 +765,10 @@ kbd {
 .left-stack.links-on {
   bottom: 224px;
 }
+/* With Relations on, its switch, legend and status (when shown) float there: higher still. */
+.left-stack.relations-on {
+  bottom: 360px;
+}
 
 /*
  * "Since your last visit" (mockup .since): first in the left column from
@@ -1875,6 +1879,66 @@ button.cite:hover {
 .links-chip-status {
   color: var(--text-secondary);
 }
+/*
+ * Relations' class switch takes the rank switch's place (it carries
+ * .link-rank: Links and Relations are never on together). Its legend, and its
+ * status when it draws nothing, float in a column 12px above the switch's
+ * 40px pill. The legend's colours are the arcs' own tokens, each named in
+ * words beside its swatch.
+ */
+.relations-float {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px + 40px + 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  width: max-content;
+  max-width: 360px;
+  pointer-events: none; /* only its words: the globe stays draggable around them */
+}
+.relations-status {
+  margin: 0;
+  height: 32px;
+  padding: 0 14px;
+  font: var(--type-label);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.relations-legend {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  font: var(--type-label);
+  color: var(--text-secondary);
+}
+.relations-legend .rl-lens {
+  color: var(--text-primary);
+}
+.rl-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+}
+.rl-note {
+  color: var(--text-muted);
+}
+.relations-legend .sw {
+  flex: none;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+.sw-coop {
+  background: var(--arc-relation-cooperation);
+}
+.sw-conf {
+  background: var(--arc-relation-conflict);
+}
 
 /*
  * The pill that names a link at its arc's top (mockup .arc-pill); ArcPill
@@ -2498,6 +2562,13 @@ button.cite:hover {
     bottom: 50%;
     transform: translateY(50%);
   }
+  /* Relations' legend is too tall to sit beside them: it centres above the layers. */
+  .relations-float {
+    left: 50%;
+    bottom: calc(100% + 12px);
+    transform: translateX(-50%);
+    align-items: center;
+  }
 }
 @media (max-width: 639px) {
   .side,
@@ -2605,6 +2676,10 @@ button.cite:hover {
 /* With Links on, its rank switch and status float above the layers: the board ends above them. */
 .board-open:has(.link-rank) .board {
   bottom: 224px;
+}
+/* With Relations on, its legend floats above its switch: the board ends above both. */
+.board-open:has(.relation-kind) .board {
+  bottom: 360px;
 }
 .board .ghead .sub {
   min-width: 0;
