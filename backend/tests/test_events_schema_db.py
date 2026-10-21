@@ -7,7 +7,7 @@ migrations applied. Every test runs in a transaction that is rolled back.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 import pytest_asyncio
@@ -120,7 +120,8 @@ async def test_checks_reject_bad_rows(conn):
             async with conn.transaction():  # a savepoint
                 await conn.execute(_ROW, *args)
     for i, status in enumerate(("ok", "missing", "unreadable")):
-        await conn.execute(_FILE, status, f"{15 * (i + 1)} minutes")
+        # asyncpg encodes an interval from a timedelta, not a string.
+        await conn.execute(_FILE, status, timedelta(minutes=15 * (i + 1)))
     with pytest.raises(asyncpg.CheckViolationError):
         async with conn.transaction():
-            await conn.execute(_FILE, "other", "2 hours")
+            await conn.execute(_FILE, "other", timedelta(hours=2))
