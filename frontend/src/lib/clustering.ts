@@ -170,12 +170,17 @@ export function mapLead(lead: ApiGlobePoint["lead"]): GlobeLead | undefined {
   };
 }
 
+/** A place's dot size by its story count. */
+export function dotSize(count: number): number {
+  return Math.min(0.4 + count * 0.15, 1.5);
+}
+
 export function apiPointsToGlobePoints(apiPoints: ApiGlobePoint[]): GlobePoint[] {
   return apiPoints.map((p, i) => ({
     id: `api-${i}`,
     lat: p.lat,
     lng: p.lng,
-    size: Math.min(0.4 + p.article_count * 0.15, 1.5),
+    size: dotSize(p.article_count),
     color: getTopicColor(mapApiTopic(p.topic)),
     articles: [],
     isCluster: p.article_count > 1,
