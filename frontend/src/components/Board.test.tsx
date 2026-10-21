@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import Board from "./Board";
-import { decodeShare, type Pin, type PinSnapshot } from "@/lib/board";
+import { decodeShare, pinKindLabel, type Pin, type PinSnapshot } from "@/lib/board";
+
+// The real thing, watched: a card names its kind each time it renders.
+vi.mock("@/lib/board", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/board")>();
+  return { ...actual, pinKindLabel: vi.fn(actual.pinKindLabel) };
+});
 import type { BoardEdge } from "@/lib/boardEdges";
 import type { BoardMemo } from "@/lib/boardApi";
 
@@ -140,6 +146,17 @@ describe("Board, the split view", () => {
     expect(y).toBeLessThan(0.5);
   });
 
+  it("re-renders only the moving card while a drag goes on", () => {
+    setup();
+    const first = card(/^1\. Story/);
+    first.setPointerCapture = vi.fn();
+    fireEvent.pointerDown(first, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+    vi.mocked(pinKindLabel).mockClear(); // each card names its kind as it renders
+    fireEvent.pointerMove(first, { pointerId: 1, clientX: 140, clientY: 90 });
+    const rendered = new Set(vi.mocked(pinKindLabel).mock.calls.map(([item]) => item));
+    expect(rendered).toEqual(new Set([PINS[0].item]));
+  });
+
   it("removes a pin, and closes with its button or Escape", () => {
     const { props } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Remove pin 2: Red Sea shipping attacks" }));
@@ -209,6 +226,14 @@ describe("Board, the memo", () => {
     fireEvent.click(chip);
     expect(card(/^3\. Person/)).toHaveFocus();
     expect(screen.getByTestId("board-announcer")).toHaveTextContent("The analysis memo is ready.");
+  });
+
+  it("docks beside the canvas, never over it, so no card sits under it", () => {
+    setup({ memo: MEMO });
+    const memo = screen.getByRole("region", { name: "Analysis memo" });
+    const field = screen.getByTestId("board-field");
+    expect(field).not.toContainElement(memo);
+    expect(memo.parentElement).toBe(field.parentElement);
   });
 
   it("shows a message instead of the memo, and can be closed", () => {

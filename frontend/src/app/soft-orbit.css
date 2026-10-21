@@ -2700,11 +2700,19 @@ button.cite:hover {
 }
 
 /* The canvas: a dotted field the cards sit on, the edges drawn under them. */
+/* The canvas, and the memo docked beside it while it shows (never over a card). */
+.board-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  margin: 0 12px 12px;
+}
 .field {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  margin: 0 12px 12px;
   border-radius: var(--radius-lg);
   overflow: hidden;
   background:
@@ -2754,7 +2762,7 @@ button.cite:hover {
   width: 214px;
 }
 .pin-card {
-  min-height: 76px;
+  min-height: 84px; /* its kicker and two lines of title (Board.tsx CARD_H) */
   padding: 12px 34px 12px 14px;
   border-radius: var(--board-pin-radius);
   background: linear-gradient(var(--surface-hover), var(--surface-hover)), var(--surface-sheet);
@@ -2810,13 +2818,18 @@ button.cite:hover {
   padding: 3px 10px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-subtle);
-  background: var(--surface-sheet);
+  /* opaque, so an edge or card behind can't cross its words */
+  background: linear-gradient(var(--surface-sheet), var(--surface-sheet)), var(--bg-page);
   font: var(--type-label);
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none; /* the cards under a label stay draggable */
+}
+/* No spot along its edge was clear of the cards: under them (boardEdges.layoutEdges). */
+.elabel.under {
+  z-index: 0;
 }
 .board-empty {
   position: absolute;
@@ -2832,16 +2845,15 @@ button.cite:hover {
 
 /* The analysis memo: over the canvas's corner in the split view, in line in the list. */
 .memo {
-  position: absolute;
-  z-index: 3;
-  right: 12px;
-  bottom: 12px;
-  width: 300px;
-  max-height: calc(100% - 24px);
+  flex: none;
+  align-self: flex-start;
+  width: clamp(240px, 32%, 320px);
+  max-height: 100%;
   overflow-y: auto;
   padding: 12px 14px 14px 16px;
   border-radius: var(--radius-md);
-  background: var(--surface-sheet);
+  /* the sheet's glass over the page's own colour: opaque, as the Track results */
+  background: linear-gradient(var(--surface-sheet), var(--surface-sheet)), var(--bg-page);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--elev-lifted);
   font: var(--type-body-sm);
@@ -2923,7 +2935,6 @@ button.cite:hover {
   margin: 0;
 }
 .board-sheet .memo {
-  position: static;
   width: auto;
   max-height: none;
   box-shadow: none;

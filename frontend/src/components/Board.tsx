@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo as memoComponent,
   useEffect,
   useId,
   useLayoutEffect,
@@ -13,13 +14,17 @@ import {
 } from "react";
 import { isWebUrl } from "@/hooks/useAgent";
 import { keyMove, pinKindLabel, positionWords, shareUrl, type Pin } from "@/lib/board";
-import { EDGE_LEGEND, layoutEdges, pinEdges, type BoardEdge } from "@/lib/boardEdges";
+import { EDGE_LEGEND, layoutEdges, pinEdges, type BoardEdge, type CardBox } from "@/lib/boardEdges";
 import { memoParts, type BoardMemo } from "@/lib/boardApi";
 import { EXPORT_FILENAME, boardMarkdown } from "@/lib/boardExport";
 
-/** A card's box on the canvas (mockup .pin: 214px wide), and the canvas's inner margin. */
+/**
+ * A card's box on the canvas (mockup .pin: 214px wide; tall enough for its
+ * kicker and two lines of title, as .pin-card's min-height), and the
+ * canvas's inner margin.
+ */
 const CARD_W = 214;
-const CARD_H = 76;
+const CARD_H = 84;
 const PAD = 16;
 
 interface BoardProps {
@@ -166,6 +171,75 @@ function MemoPanel({
   );
 }
 
+/** What a card does, the same functions for the board's life (so a card re-renders only when it changes). */
+interface CardHandlers {
+  key: (e: KeyboardEvent<HTMLElement>, pin: Pin, index: number) => void;
+  down: (e: PointerEvent<HTMLElement>, pin: Pin) => void;
+  move: (e: PointerEvent<HTMLElement>) => void;
+  up: (e: PointerEvent<HTMLElement>) => void;
+  remove: (index: number) => void;
+  ref: (item: string, el: HTMLElement | null) => void;
+}
+
+/**
+ * A pin's card on the canvas (mockup .pin): its number, kind and place, and
+ * its title; a focusable group that the arrow keys and the pointer move.
+ * Memoised: while one card is dragged, the others keep their render.
+ */
+const PinCard = memoComponent(function PinCard({
+  pin,
+  index,
+  left,
+  top,
+  x,
+  y,
+  dragging,
+  hintId,
+  handlers,
+}: {
+  pin: Pin;
+  index: number;
+  left: number;
+  top: number;
+  /** Where it is on the board now (0-1), for data-x/data-y. */
+  x: number;
+  y: number;
+  dragging: boolean;
+  hintId: string;
+  handlers: CardHandlers;
+}) {
+  return (
+    <li
+      className="pin"
+      style={{ left, top }}
+      data-item={pin.item}
+      data-x={x.toFixed(2)}
+      data-y={y.toFixed(2)}
+    >
+      <div
+        ref={(el) => handlers.ref(pin.item, el)}
+        className="pin-card"
+        role="group"
+        tabIndex={0}
+        aria-label={pinName(pin, index)}
+        aria-describedby={hintId}
+        data-dragging={dragging || undefined}
+        onKeyDown={(e) => handlers.key(e, pin, index)}
+        onPointerDown={(e) => handlers.down(e, pin)}
+        onPointerMove={handlers.move}
+        onPointerUp={handlers.up}
+        onPointerCancel={handlers.up}
+      >
+        <div className="k">
+          <span>{pinKicker(pin, index)}</span>
+        </div>
+        <PinTitle pin={pin} />
+      </div>
+      <RemoveButton pin={pin} i={index} onRemove={() => handlers.remove(index)} />
+    </li>
+  );
+});
+
 /**
  * The investigation board (mockup section.board): from 1180px a split view
  * on the left with the globe mirroring it on the right, its pins as cards on
@@ -247,17 +321,21 @@ export default function Board({
   const spanX = Math.max(1, size.w - CARD_W - 2 * PAD);
   const spanY = Math.max(1, size.h - CARD_H - 2 * PAD);
   const placed = (p: Pin) => (drag?.item === p.item ? drag : p);
-  const centres = useMemo(() => {
-    const map = new Map<string, { x: number; y: number }>();
+  // Each card's box on the canvas (where a drag has it now), and its centre for the edges.
+  const { centres, boxes } = useMemo(() => {
+    const centres = new Map<string, { x: number; y: number }>();
+    const boxes: CardBox[] = [];
     for (const p of pins) {
       const { x, y } = drag?.item === p.item ? drag : p;
-      map.set(p.item, { x: PAD + x * spanX + CARD_W / 2, y: PAD + y * spanY + CARD_H / 2 });
+      const box = { x: PAD + x * spanX, y: PAD + y * spanY, w: CARD_W, h: CARD_H };
+      boxes.push(box);
+      centres.set(p.item, { x: box.x + CARD_W / 2, y: box.y + CARD_H / 2 });
     }
-    return map;
+    return { centres, boxes };
   }, [pins, drag, spanX, spanY]);
   const laid = useMemo(
-    () => (variant === "split" ? layoutEdges(centres, edges) : []),
-    [variant, centres, edges],
+    () => (variant === "split" ? layoutEdges(centres, edges, boxes) : []),
+    [variant, centres, boxes, edges],
   );
   const byPin = useMemo(() => pinEdges(pins, edges), [pins, edges]);
   const number = new Map(pins.map((p, i) => [p.item, i + 1]));
@@ -297,6 +375,28 @@ export default function Board({
     setDrag(null);
     if (end.x !== x || end.y !== y) onMove(end.item, end.x, end.y);
   };
+  // The cards' handlers, stable for the board's life, each calling this
+  // render's (which read its spans and pins): a card's props change only when
+  // the card itself does.
+  const latest = useRef({ onCardKey, onPointerDown, onPointerMove, onPointerUp, remove });
+  useLayoutEffect(() => {
+    latest.current = { onCardKey, onPointerDown, onPointerMove, onPointerUp, remove };
+  });
+  const handlers = useMemo<CardHandlers>(
+    () => ({
+      key: (e, pin, index) => latest.current.onCardKey(e, pin, index),
+      down: (e, pin) => latest.current.onPointerDown(e, pin),
+      move: (e) => latest.current.onPointerMove(e),
+      up: (e) => latest.current.onPointerUp(e),
+      remove: (index) => latest.current.remove(index),
+      // Each card's (or row's) element, for a citation chip or a removal to focus.
+      ref: (item, el) => {
+        if (el) pinRefs.current.set(item, el);
+        else pinRefs.current.delete(item);
+      },
+    }),
+    [],
+  );
 
   const exportBoard = () => {
     const text = boardMarkdown({ pins, edges, memo, now: Date.now() });
@@ -430,10 +530,7 @@ export default function Board({
               return (
                 <li
                   key={p.item}
-                  ref={(el) => {
-                    if (el) pinRefs.current.set(p.item, el);
-                    else pinRefs.current.delete(p.item);
-                  }}
+                  ref={(el) => handlers.ref(p.item, el)}
                   className="board-row"
                   tabIndex={-1}
                   aria-label={pinName(p, i)}
@@ -507,90 +604,74 @@ export default function Board({
           ))}
         </ul>
       )}
-      <div className="field" ref={fieldRef} data-testid="board-field">
-        <svg className="board-edges" aria-hidden="true">
-          <defs>
-            <linearGradient
-              id={`${uid}-aurora`}
-              gradientUnits="userSpaceOnUse"
-              x1="0"
-              y1="0"
-              x2={Math.max(1, size.w)}
-              y2="0"
-            >
-              <stop offset="0" stopColor="var(--aurora-start)" />
-              <stop offset="1" stopColor="var(--aurora-end)" />
-            </linearGradient>
-          </defs>
-          {laid.map((e) => (
-            <path
-              key={e.key}
-              d={e.d}
-              className={`edge edge-${e.kind}`}
-              style={e.kind === "same_thread" ? { stroke: `url(#${uid}-aurora)` } : undefined}
-            />
-          ))}
-        </svg>
-        {laid.map((e) => (
-          <span
-            key={e.key}
-            className={`elabel elabel-${e.kind}`}
-            style={{ left: e.x, top: e.y }}
-            aria-hidden="true"
-          >
-            {e.label}
-          </span>
-        ))}
-        <ol className="board-pins" aria-label="Pins">
-          {pins.map((p, i) => {
-            const at = placed(p);
-            return (
-              <li
-                key={p.item}
-                className="pin"
-                style={{ left: PAD + at.x * spanX, top: PAD + at.y * spanY }}
-                data-item={p.item}
-                data-x={at.x.toFixed(2)}
-                data-y={at.y.toFixed(2)}
+      {/* The memo docks beside the canvas, never over it: no card can sit under it. */}
+      <div className="board-body">
+        <div className="field" ref={fieldRef} data-testid="board-field">
+          <svg className="board-edges" aria-hidden="true">
+            <defs>
+              <linearGradient
+                id={`${uid}-aurora`}
+                gradientUnits="userSpaceOnUse"
+                x1="0"
+                y1="0"
+                x2={Math.max(1, size.w)}
+                y2="0"
               >
-                <div
-                  ref={(el) => {
-                    if (el) pinRefs.current.set(p.item, el);
-                    else pinRefs.current.delete(p.item);
-                  }}
-                  className="pin-card"
-                  role="group"
-                  tabIndex={0}
-                  aria-label={pinName(p, i)}
-                  aria-describedby={`${uid}-hint`}
-                  data-dragging={drag?.item === p.item || undefined}
-                  onKeyDown={(e) => onCardKey(e, p, i)}
-                  onPointerDown={(e) => onPointerDown(e, p)}
-                  onPointerMove={onPointerMove}
-                  onPointerUp={onPointerUp}
-                  onPointerCancel={onPointerUp}
-                >
-                  <div className="k">
-                    <span>{pinKicker(p, i)}</span>
-                  </div>
-                  <PinTitle pin={p} />
-                </div>
-                <RemoveButton pin={p} i={i} onRemove={() => remove(i)} />
-              </li>
-            );
-          })}
-        </ol>
-        <p id={`${uid}-hint`} hidden>
-          Arrow keys move it; with Shift, further.
-        </p>
-        {empty}
-        <ul className="sr-only" aria-label="Connections">
-          {edges.map((e) => (
-            <li key={`${e.a}|${e.b}|${e.kind}`}>
-              Pins {number.get(e.a)} and {number.get(e.b)}: {e.label}
-            </li>
+                <stop offset="0" stopColor="var(--aurora-start)" />
+                <stop offset="1" stopColor="var(--aurora-end)" />
+              </linearGradient>
+            </defs>
+            {laid.map((e) => (
+              <path
+                key={e.key}
+                d={e.d}
+                className={`edge edge-${e.kind}`}
+                style={e.kind === "same_thread" ? { stroke: `url(#${uid}-aurora)` } : undefined}
+              />
+            ))}
+          </svg>
+          {/* A label no spot along its edge keeps clear of the cards goes under them. */}
+          {laid.map((e) => (
+            <span
+              key={e.key}
+              className={`elabel elabel-${e.kind}${e.under ? " under" : ""}`}
+              style={{ left: e.x, top: e.y }}
+              aria-hidden="true"
+            >
+              {e.label}
+            </span>
           ))}
-        </ul>
+          <ol className="board-pins" aria-label="Pins">
+            {pins.map((p, i) => {
+              const at = placed(p);
+              return (
+                <PinCard
+                  key={p.item}
+                  pin={p}
+                  index={i}
+                  left={PAD + at.x * spanX}
+                  top={PAD + at.y * spanY}
+                  x={at.x}
+                  y={at.y}
+                  dragging={drag?.item === p.item}
+                  hintId={`${uid}-hint`}
+                  handlers={handlers}
+                />
+              );
+            })}
+          </ol>
+          <p id={`${uid}-hint`} hidden>
+            Arrow keys move it; with Shift, further.
+          </p>
+          {empty}
+          <ul className="sr-only" aria-label="Connections">
+            {edges.map((e) => (
+              <li key={`${e.a}|${e.b}|${e.kind}`}>
+                Pins {number.get(e.a)} and {number.get(e.b)}: {e.label}
+              </li>
+            ))}
+          </ul>
+        </div>
         {memoPanel}
       </div>
       {announcer}

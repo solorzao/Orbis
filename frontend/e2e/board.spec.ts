@@ -217,6 +217,28 @@ test.describe("The investigation board", () => {
     if (SCRATCH) await page.screenshot({ path: `${SCRATCH}/p18b-memo-1440.png` });
     await memo.getByRole("button", { name: "Pin 4: Emmanuel Macron" }).press("Enter");
     await expect(card(page, 4)).toBeFocused();
+    // Every card, the focused one among them, is in full view: on the canvas, none under the memo.
+    const seen = await page.evaluate(() => {
+      const box = (el: Element) => el.getBoundingClientRect();
+      const field = box(document.querySelector('[data-testid="board-field"]')!);
+      const memo = box(document.querySelector('[data-testid="board-memo"]')!);
+      return Array.from(document.querySelectorAll(".pin-card")).map((el) => {
+        const c = box(el);
+        const inField =
+          c.left >= field.left &&
+          c.right <= field.right &&
+          c.top >= field.top &&
+          c.bottom <= field.bottom;
+        const underMemo = !(
+          c.right <= memo.left ||
+          memo.right <= c.left ||
+          c.bottom <= memo.top ||
+          memo.bottom <= c.top
+        );
+        return inField && !underMemo;
+      });
+    });
+    expect(seen).toEqual([true, true, true, true, true]);
   });
 
   test("Export downloads the board as orbis-board.md", async ({ page }) => {
