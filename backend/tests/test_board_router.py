@@ -38,12 +38,36 @@ async def _post(monkeypatch, path, body):
         return await client.post(path, json=body)
 
 
-def test_resolve_and_links_are_data_reads_and_analysis_spends_ai_calls():
-    from app.middleware.security import _get_rate_group
+def test_resolve_and_links_have_their_own_tighter_group_and_analysis_spends_ai_calls():
+    """A board's reads fan out (up to 20 pins each), so they get 20 a minute per
+    visitor, a third of the data group's 60; a memo is an AI call."""
+    from app.middleware.security import _RATE_LIMITS, _get_rate_group
 
-    assert _get_rate_group("/api/board/resolve") == "data"
-    assert _get_rate_group("/api/board/links") == "data"
+    assert _get_rate_group("/api/board/resolve") == "board"
+    assert _get_rate_group("/api/board/links") == "board"
     assert _get_rate_group("/api/board/analyze") == "ai"
+    assert _RATE_LIMITS["board"] == (60, 20)
+    assert _get_rate_group("/api/boards") == "data"  # the prefix is the board's own
+
+
+@pytest.mark.asyncio
+async def test_the_21st_board_read_in_a_minute_is_a_429(monkeypatch):
+    with patch("app.routers.board.resolve_items", AsyncMock(return_value=[None])):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import app
+        from app.middleware import security
+
+        monkeypatch.setattr(security.settings, "api_key", "")
+        security._rate_buckets.clear()
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            codes = [
+                (await client.post("/api/board/resolve", json={"items": ["thread:7"]})).status_code
+                for _ in range(21)
+            ]
+
+    assert codes == [200] * 20 + [429]
 
 
 # Each of these is a 422 on every route, before anything is read.

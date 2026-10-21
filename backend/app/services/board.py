@@ -35,7 +35,7 @@ from urllib.parse import urlsplit
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.services import llm_budget
 from app.services.ai_summary import SummaryUnavailable, _call_claude
-from app.services.cache import cycle_ttl, get_cached, set_cached
+from app.services.cache import cycle_ttl, get_cached, get_many, set_cached, set_many
 from app.services.country_centroids import centroid
 from app.services.database import _cell_box, get_pool
 from app.services.entities import newest_per_story, resolve_entity, top_places
@@ -302,30 +302,94 @@ async def _entity_places(pool, names: list[str], now: datetime) -> dict[str, dic
 async def resolve_items(items: list[BoardItem], now: datetime) -> list[dict | None]:
     """Each item's snapshot from server data, in order: None for an unknown or
     expired one (an article or thread purged, a cell with no story this week, a
-    name the graph doesn't know)."""
+    name the graph doesn't know). Cached per item (item_records)."""
+    records = await item_records(items, now)
+    return [_snapshot_from(records[item.id]["snapshot"]) for item in items]
+
+
+# ---------------------------------------------------------------------------
+# Item records: each pin's resolution, cached
+# ---------------------------------------------------------------------------
+# A board opening resolves every pin, a share link resolves them, /links reads
+# what their edges need and /analyze their snapshots: up to 20 places at two
+# lookups each and 20 name resolutions. So each item's resolution (its snapshot
+# and its edge facts) is cached on its own, until the next cycle ends (db:*):
+# one read for all, then only the misses resolved, together, and written in one
+# round trip. An unknown item is cached too.
+ITEM_KEY = "db:board:item:v1:"
+_ITEM_TTL = 600
+
+
+def item_key(item_id: str) -> str:
+    return ITEM_KEY + item_id
+
+
+async def item_records(items: list[BoardItem], now: datetime) -> dict[str, dict]:
+    """Each item's record, ``{"snapshot": ..., "facts": ...}`` as JSON: cached, or
+    resolved (the misses together) and cached until the next cycle ends."""
+    cached = await get_many([item_key(item.id) for item in items])
+    records = {item.id: record for item, record in zip(items, cached) if record is not None}
+    misses = [item for item in items if item.id not in records]
+    if misses:
+        fresh = await _resolve_records(misses, now)
+        await set_many({item_key(i): record for i, record in fresh.items()}, cycle_ttl(_ITEM_TTL))
+        records.update(fresh)
+    return records
+
+
+async def _resolve_records(items: list[BoardItem], now: datetime) -> dict[str, dict]:
+    """The records of *items* from bounded reads: articles, members and threads by
+    primary key, places through their cells, names as the dossier resolves them."""
     pool = await get_pool()
     articles = await _articles(pool, items)
+    members = await _members(pool, items)
     threads = await _threads(pool, items)
     places = await _places(pool, items, now)
     names = await _entity_names(items, now)
     entity_places = await _entity_places(pool, sorted(set(names.values())), now)
 
-    def one(item: BoardItem) -> dict | None:
+    def one(item: BoardItem) -> tuple[dict | None, Facts]:
         if item.kind == "link":
-            return snapshot(link_title(*item.key))
+            return snapshot(link_title(*item.key)), Facts(countries=frozenset(item.key))
         if item.kind == "entity":
             stored = names.get(item.key)
-            return None if stored is None else _entity_snapshot(stored, entity_places.get(stored))
+            if stored is None:
+                return None, Facts()
+            return _entity_snapshot(stored, entity_places.get(stored)), Facts(name=stored)
         if item.kind == "article":
             row = articles.get(item.key)
-            return None if row is None else _article_snapshot(row)
+            facts = _article_facts(row, members.get(item.key))
+            return (None if row is None else _article_snapshot(row)), facts
         if item.kind == "thread":
-            row = threads.get(item.key)
-            return None if row is None else _thread_snapshot(row)
+            row = threads.get(item.key)  # the thread it resolves to
+            if row is None:
+                return None, Facts()
+            facts = Facts(thread=row["id"], entities=tuple(row["top_entities"] or ()))
+            return _thread_snapshot(row), facts
         row = places.get(item.key)
-        return None if row is None else _place_snapshot(item.key, row)
+        countries = _countries(row["country_code"]) if row else frozenset()
+        place = None if row is None else _place_snapshot(item.key, row)
+        return place, Facts(cell=item.key, countries=countries)
 
-    return [one(item) for item in items]
+    records = {}
+    for item in items:
+        shown, facts = one(item)
+        records[item.id] = {"snapshot": _snapshot_json(shown), "facts": _facts_json(facts)}
+    return records
+
+
+def _snapshot_json(shown: dict | None) -> dict | None:
+    if shown is None:
+        return None
+    time = shown.get("time")
+    return {**shown, "time": time.isoformat() if time is not None else None}
+
+
+def _snapshot_from(stored: dict | None) -> dict | None:
+    if stored is None:
+        return None
+    time = stored.get("time")
+    return {**stored, "time": datetime.fromisoformat(time) if time is not None else None}
 
 
 def _article_snapshot(row: Any) -> dict:
@@ -423,6 +487,27 @@ class Facts:
     cell: tuple[int, int] | None = None
     countries: frozenset[str] = frozenset()
     name: str | None = None
+
+
+def _facts_json(facts: Facts) -> dict:
+    return {
+        "thread": facts.thread,
+        "entities": list(facts.entities),
+        "cell": list(facts.cell) if facts.cell is not None else None,
+        "countries": sorted(facts.countries),
+        "name": facts.name,
+    }
+
+
+def _facts_from(stored: dict) -> Facts:
+    cell = stored.get("cell")
+    return Facts(
+        thread=stored.get("thread"),
+        entities=tuple(stored.get("entities") or ()),
+        cell=(cell[0], cell[1]) if cell else None,
+        countries=frozenset(stored.get("countries") or ()),
+        name=stored.get("name"),
+    )
 
 
 def _edge(a: BoardItem, b: BoardItem, kind: str, label: str) -> dict:
@@ -574,36 +659,20 @@ def _article_facts(article: Any | None, member: Any | None) -> Facts:
 async def board_edges(
     items: list[BoardItem], listed: set[frozenset[str]] | None, now: datetime
 ) -> list[dict]:
-    """The edges between *items* (see ``connect``), from bounded reads: articles,
-    members and threads by primary key, entity names as the dossier resolves
-    them, the (name, thread) probes, and, only when *listed* is given, each
-    place's newest story for its country."""
+    """The edges between *items* (see ``connect``). Each item's facts come from its
+    record (item_records: cached, usually by the board's resolve), then the
+    (name, thread) probes and, for two or more articles or threads, the names
+    too common to connect them."""
+    records = await item_records(items, now)
+    facts = {item.id: _facts_from(records[item.id]["facts"]) for item in items}
+    names = sorted({f.name for f in facts.values() if f.name is not None})
+    threads = sorted(
+        {facts[i.id].thread for i in items if i.kind == "thread" and facts[i.id].thread}
+    )
     pool = await get_pool()
-    articles = await _articles(pool, items)
-    members = await _members(pool, items)
-    threads = await _threads(pool, items)
-    names = await _entity_names(items, now)
-    places = await _places(pool, items, now) if listed is not None else {}
-    resolved_threads = sorted({row["id"] for row in threads.values()})
-    mentions = await _mentions(pool, sorted(set(names.values())), resolved_threads)
+    mentions = await _mentions(pool, names, threads)
     topical = sum(1 for item in items if item.kind in _TOPICAL)
     generic = await generic_names(pool) if topical >= 2 else frozenset()
-
-    facts: dict[str, Facts] = {}
-    for item in items:
-        if item.kind == "article":
-            facts[item.id] = _article_facts(articles.get(item.key), members.get(item.key))
-        elif item.kind == "thread" and item.key in threads:
-            row = threads[item.key]  # the thread it resolves to
-            facts[item.id] = Facts(thread=row["id"], entities=tuple(row["top_entities"] or ()))
-        elif item.kind == "place":
-            place = places.get(item.key)
-            countries = _countries(place["country_code"]) if place else frozenset()
-            facts[item.id] = Facts(cell=item.key, countries=countries)
-        elif item.kind == "link":
-            facts[item.id] = Facts(countries=frozenset(item.key))
-        elif item.kind == "entity":
-            facts[item.id] = Facts(name=names.get(item.key))
     return connect(items, facts, mentions, listed, generic)
 
 

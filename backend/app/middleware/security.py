@@ -75,15 +75,20 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     # A page asks once per visit; each since is its own cache entry, and a
     # miss can read a week of stories. Its own bucket, so it never spends AI calls.
     "delta": (60, 10),
+    # The board's resolve and links: each names up to 20 pins, and a miss looks
+    # each up (a place, twice). Opening a board asks for both, and links again
+    # as pins change. Its analysis is an AI call.
+    "board": (60, 20),
 }
 
-# Path prefix → group
+# Path prefix → group, first match wins: the board's analysis before its reads.
 _PATH_GROUPS: dict[str, str] = {
     "/api/news/summary": "ai",
     "/api/news/summarize-selection": "ai",
     "/api/agent/ask": "ai",
     "/api/links/explain": "ai",
     "/api/board/analyze": "ai",
+    "/api/board/": "board",
     "/api/news/delta": "delta",
 }
 
