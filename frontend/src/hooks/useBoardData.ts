@@ -16,23 +16,28 @@ import type { BoardControls } from "@/hooks/useBoard";
 
 const NO_EDGES: BoardEdge[] = [];
 
+const pinWords = (n: number) => `${n} ${n === 1 ? "pin" : "pins"}`;
+
 /**
  * The typed edges between the pins (/api/board/links), asked for while the
  * board shows and two or more pins are on it, after a short pause (as the
  * globe's requests), for the pins in board order. A change of pins aborts the
  * last request and ignores its answer; the last edges stay while the next
- * load (boardEdges keeps only those between pins still on the board).
+ * load (boardEdges keeps only those between pins still on the board). An id
+ * the server refuses is left out (fetchBoardLinks); any other failure (a 429,
+ * an outage) draws none and says so (`failed`).
  */
 export function useBoardLinks(
   items: readonly string[],
   enabled: boolean,
-): { edges: BoardEdge[]; coCoverageChecked: boolean; loading: boolean } {
+): { edges: BoardEdge[]; coCoverageChecked: boolean; loading: boolean; failed: boolean } {
   const key = items.join("\n");
   const on = enabled && items.length >= 2;
   const [result, setResult] = useState<{
     key: string;
     edges: BoardEdge[];
     coCoverageChecked: boolean;
+    failed: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -40,12 +45,15 @@ export function useBoardLinks(
     const controller = new AbortController();
     const timer = setTimeout(() => {
       fetchBoardLinks(key.split("\n"), controller.signal)
-        .then((r) => {
-          if (!controller.signal.aborted) setResult({ key, ...r });
+        .then(({ edges, coCoverageChecked }) => {
+          if (!controller.signal.aborted) {
+            setResult({ key, edges, coCoverageChecked, failed: false });
+          }
         })
         .catch(() => {
-          if (!controller.signal.aborted)
-            setResult({ key, edges: NO_EDGES, coCoverageChecked: true });
+          if (!controller.signal.aborted) {
+            setResult({ key, edges: NO_EDGES, coCoverageChecked: true, failed: true });
+          }
         });
     }, FETCH_DEBOUNCE_MS);
     return () => {
@@ -54,11 +62,13 @@ export function useBoardLinks(
     };
   }, [on, key]);
 
-  if (!on) return { edges: NO_EDGES, coCoverageChecked: true, loading: false };
+  if (!on) return { edges: NO_EDGES, coCoverageChecked: true, loading: false, failed: false };
+  const current = result?.key === key;
   return {
     edges: result?.edges ?? NO_EDGES,
     coCoverageChecked: result?.coCoverageChecked ?? true,
-    loading: result?.key !== key,
+    loading: !current,
+    failed: current && result.failed,
   };
 }
 
@@ -145,12 +155,20 @@ export function useBoardMirror(
 /**
  * Each time the board opens, its pins are refreshed from /api/board/resolve:
  * fresh snapshots (an expired pin keeps its own), merged threads adopted.
+ * A pin the server refuses is unpinned, and `announce` says so: kept, it
+ * would fail every request for edges and every analysis.
  */
-export function useBoardRefresh(open: boolean, board: BoardControls) {
+export function useBoardRefresh(
+  open: boolean,
+  board: BoardControls,
+  announce: (note: string) => void,
+) {
   const { ready, refresh } = board;
   const pinsRef = useRef(board.pins);
+  const announceRef = useRef(announce);
   useEffect(() => {
     pinsRef.current = board.pins;
+    announceRef.current = announce;
   });
   useEffect(() => {
     if (!open || !ready) return;
@@ -158,11 +176,15 @@ export function useBoardRefresh(open: boolean, board: BoardControls) {
     if (items.length === 0) return;
     const controller = new AbortController();
     resolveItems(items, controller.signal)
-      .then(({ items: results }) => {
-        if (!controller.signal.aborted) refresh(results);
+      .then(({ items: results, rejected }) => {
+        if (controller.signal.aborted) return;
+        refresh(results, rejected);
+        if (rejected.length > 0) {
+          announceRef.current(`Removed ${pinWords(rejected.length)} the server no longer accepts.`);
+        }
       })
       .catch(() => {
-        // offline or refused: the stored snapshots stand
+        // offline: the stored snapshots stand
       });
     return () => controller.abort();
   }, [open, ready, refresh]);
@@ -175,8 +197,6 @@ function dropShareParam() {
   url.searchParams.delete(SHARE_PARAM);
   window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
 }
-
-const pinWords = (n: number) => `${n} ${n === 1 ? "pin" : "pins"}`;
 
 /**
  * A share link (`?board=`) opened: its ids, read defensively, are resolved

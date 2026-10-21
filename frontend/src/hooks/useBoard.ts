@@ -39,8 +39,11 @@ export interface BoardControls {
   toggle: (item: string, snapshot: PinSnapshot) => "pinned" | "unpinned" | "full";
   unpin: (item: string) => void;
   move: (item: string, x: number, y: number) => void;
-  /** Fresh snapshots from /api/board/resolve (merged threads take their new id). */
-  refresh: (results: readonly ResolvedItem[]) => void;
+  /**
+   * Fresh snapshots from /api/board/resolve (merged threads take their new
+   * id); the ids it refuses are unpinned.
+   */
+  refresh: (results: readonly ResolvedItem[], rejected?: readonly string[]) => void;
   /** Add shared pins the board lacks, as far as there is room. */
   merge: (entries: readonly { item: string; snapshot: PinSnapshot }[]) => {
     added: number;
@@ -107,7 +110,8 @@ export function useBoard(): BoardControls {
     [set],
   );
   const refresh = useCallback(
-    (results: readonly ResolvedItem[]) => set(applyResolved(boardRef.current, results)),
+    (results: readonly ResolvedItem[], rejected?: readonly string[]) =>
+      set(applyResolved(boardRef.current, results, rejected)),
     [set],
   );
   const merge = useCallback(

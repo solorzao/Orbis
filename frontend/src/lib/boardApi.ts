@@ -55,44 +55,59 @@ async function refusedIndex(res: Response): Promise<number | null> {
 }
 
 /**
- * What each pin is now, in board order: a snapshot, or null when the server
- * no longer knows it. An id the server refuses (a link to a country without a
- * label point, say: the board can't check that) is dropped and the rest asked
- * again; `rejected` lists those.
+ * POST the ids. An id the server refuses (a 422 naming its index: a link to a
+ * country without a label point, say, which the board can't check) is dropped
+ * and the rest asked again, while at least `min` are left. The answer's JSON
+ * (null when too few were left to ask), and the ids dropped. Any other
+ * failure throws.
  */
-export async function resolveItems(
+async function askDropping(
+  path: string,
   items: readonly string[],
+  min: number,
   signal?: AbortSignal,
-): Promise<{ items: ResolvedItem[]; rejected: string[] }> {
+): Promise<{ data: unknown; rejected: string[] }> {
   let asked = [...items];
   const rejected: string[] = [];
-  while (asked.length > 0) {
-    const res = await post("/api/board/resolve", { items: asked }, signal);
-    if (res.ok) {
-      const data = (await res.json()) as { items?: unknown };
-      const list = Array.isArray(data?.items) ? data.items : [];
-      const resolved = list
-        .map((r) => r as { item?: unknown; snapshot?: unknown })
-        .filter((r): r is ResolvedItem => typeof r?.item === "string")
-        .map((r) => ({ item: r.item, snapshot: r.snapshot ?? null }));
-      return { items: resolved, rejected };
-    }
+  while (asked.length >= min) {
+    const res = await post(path, { items: asked }, signal);
+    if (res.ok) return { data: await res.json(), rejected };
     const index = res.status === 422 ? await refusedIndex(res) : null;
     if (index === null || index >= asked.length) throw new ApiError(res.status, res.statusText);
     rejected.push(asked[index]);
     asked = asked.filter((_, i) => i !== index);
   }
-  return { items: [], rejected };
+  return { data: null, rejected };
 }
 
-/** The typed edges between the pins (board order: each runs from the earlier pin). */
+/**
+ * What each pin is now, in board order: a snapshot, or null when the server
+ * no longer knows it. `rejected` lists the ids it refuses (see askDropping).
+ */
+export async function resolveItems(
+  items: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ items: ResolvedItem[]; rejected: string[] }> {
+  const { data, rejected } = await askDropping("/api/board/resolve", items, 1, signal);
+  const list = (data as { items?: unknown } | null)?.items;
+  const resolved = (Array.isArray(list) ? list : [])
+    .map((r) => r as { item?: unknown; snapshot?: unknown })
+    .filter((r): r is ResolvedItem => typeof r?.item === "string")
+    .map((r) => ({ item: r.item, snapshot: r.snapshot ?? null }));
+  return { items: resolved, rejected };
+}
+
+/**
+ * The typed edges between the pins (board order: each runs from the earlier
+ * pin), among those the server accepts; `rejected` lists the ids it refuses.
+ */
 export async function fetchBoardLinks(
   items: readonly string[],
   signal?: AbortSignal,
-): Promise<{ edges: BoardEdge[]; coCoverageChecked: boolean }> {
-  const res = await post("/api/board/links", { items }, signal);
-  if (!res.ok) throw new ApiError(res.status, res.statusText);
-  return toBoardLinks(await res.json());
+): Promise<{ edges: BoardEdge[]; coCoverageChecked: boolean; rejected: string[] }> {
+  const { data, rejected } = await askDropping("/api/board/links", items, 2, signal);
+  if (data === null) return { edges: [], coCoverageChecked: true, rejected };
+  return { ...toBoardLinks(data), rejected };
 }
 
 /** What /api/board/analyze is sent: each pin with its saved title, place and time. */

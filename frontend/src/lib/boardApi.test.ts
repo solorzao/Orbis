@@ -111,7 +111,29 @@ describe("fetchBoardLinks", () => {
     expect(out).toEqual({
       edges: [{ a: "thread:7", b: "place:48:2", kind: "same_place", label: "same place" }],
       coCoverageChecked: true,
+      rejected: [],
     });
+  });
+
+  it("drops an id the server refuses (a 422 names its index) and asks again", async () => {
+    mockFetch
+      .mockReturnValueOnce(json({ detail: "items[0] is not a board item id." }, 422))
+      .mockReturnValueOnce(json({ edges: [], co_coverage_checked: true }));
+    const out = await fetchBoardLinks(["link:FR-ZZ", "thread:7", "place:48:2"]);
+    expect(sent(1).body).toEqual({ items: ["thread:7", "place:48:2"] });
+    expect(out).toEqual({ edges: [], coCoverageChecked: true, rejected: ["link:FR-ZZ"] });
+  });
+
+  it("asks nothing once fewer than two pins are left", async () => {
+    mockFetch.mockReturnValueOnce(json({ detail: "items[1] is not a board item id." }, 422));
+    const out = await fetchBoardLinks(["thread:7", "link:FR-ZZ"]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(out).toEqual({ edges: [], coCoverageChecked: true, rejected: ["link:FR-ZZ"] });
+  });
+
+  it("throws on any other failure, a 429 among them", async () => {
+    mockFetch.mockReturnValue(json({ detail: "Rate limit exceeded" }, 429));
+    await expect(fetchBoardLinks(["thread:7", "place:48:2"])).rejects.toThrow("API 429");
   });
 });
 

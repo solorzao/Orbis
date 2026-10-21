@@ -397,14 +397,20 @@ export function sharedEntries(
  * The pins refreshed from /api/board/resolve. A pin the server no longer
  * knows keeps its stored snapshot. A thread that merged into another
  * (`resolved_as`) takes that thread's id, as the Threads layer adopts it, or
- * goes when that thread is pinned already.
+ * goes when that thread is pinned already. An id the server refuses
+ * (`rejected`) is unpinned.
  */
-export function applyResolved(state: BoardState, results: readonly ResolvedItem[]): BoardState {
+export function applyResolved(
+  state: BoardState,
+  results: readonly ResolvedItem[],
+  rejected: readonly string[] = [],
+): BoardState {
   const byItem = new Map(results.map((r) => [r.item, r.snapshot]));
   const pinned = new Set(state.pins.map((p) => p.item));
   const seen = new Set<string>();
   const pins: Pin[] = [];
   for (const p of state.pins) {
+    if (rejected.includes(p.item)) continue; // the server refuses it: every request would fail
     const raw = byItem.get(p.item);
     const snapshot = toSnapshot(raw) ?? p.snapshot;
     const swap = mergedInto(raw, p.item);

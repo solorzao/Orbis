@@ -30,6 +30,8 @@ interface BoardProps {
   edges: readonly BoardEdge[];
   /** False: the server couldn't check co-coverage this time (the legend says so). */
   coCoverageChecked: boolean;
+  /** The edges couldn't be had at all (a 429, an outage): said in the legend's place. */
+  edgesFailed?: boolean;
   memo: BoardMemo | null;
   analyzing: boolean;
   onAnalyze: () => void;
@@ -47,6 +49,8 @@ const pinKicker = (p: Pin, i: number) => `${i + 1}. ${pinKindLabel(p.item)}${whe
 const pinName = (p: Pin, i: number) => `${pinKicker(p, i)}: ${p.snapshot.title}`;
 
 const plural = (n: number) => `${n} ${n === 1 ? "pin" : "pins"}`;
+
+const UNAVAILABLE = "Connections unavailable right now";
 
 /** A pin's title: a link to its story when it has a web link. */
 function PinTitle({ pin }: { pin: Pin }) {
@@ -175,6 +179,7 @@ export default function Board({
   pins,
   edges,
   coCoverageChecked,
+  edgesFailed = false,
   memo,
   analyzing,
   onAnalyze,
@@ -454,8 +459,13 @@ export default function Board({
             })}
           </ol>
         )}
-        {!coCoverageChecked && pins.length > 1 && (
-          <p className="insp-note">Covered together: unavailable right now</p>
+        {edgesFailed ? (
+          <p className="insp-note" role="status">
+            {UNAVAILABLE}
+          </p>
+        ) : (
+          !coCoverageChecked &&
+          pins.length > 1 && <p className="insp-note">Covered together: unavailable right now</p>
         )}
         {announcer}
       </section>
@@ -481,16 +491,22 @@ export default function Board({
         </div>
       </div>
       {shareRow}
-      <ul className="board-legend" aria-label="Edge types">
-        {EDGE_LEGEND.map(({ kind, label }) => (
-          <li key={kind}>
-            <i className={`key key-${kind}`} aria-hidden="true" />
-            {kind === "co_covered" && !coCoverageChecked
-              ? "Covered together: unavailable right now"
-              : label}
-          </li>
-        ))}
-      </ul>
+      {edgesFailed ? (
+        <p className="board-legend" role="status">
+          {UNAVAILABLE}
+        </p>
+      ) : (
+        <ul className="board-legend" aria-label="Edge types">
+          {EDGE_LEGEND.map(({ kind, label }) => (
+            <li key={kind}>
+              <i className={`key key-${kind}`} aria-hidden="true" />
+              {kind === "co_covered" && !coCoverageChecked
+                ? "Covered together: unavailable right now"
+                : label}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="field" ref={fieldRef} data-testid="board-field">
         <svg className="board-edges" aria-hidden="true">
           <defs>

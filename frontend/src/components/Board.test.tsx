@@ -105,6 +105,12 @@ describe("Board, the split view", () => {
     expect(screen.getByText("Covered together: unavailable right now")).toBeInTheDocument();
   });
 
+  it("says when the connections couldn't be had at all, in the legend's place", () => {
+    setup({ edges: [], edgesFailed: true });
+    expect(screen.getByRole("status")).toHaveTextContent("Connections unavailable right now");
+    expect(screen.queryByRole("list", { name: "Edge types" })).toBeNull();
+  });
+
   it("moves a focused card with the arrow keys, saying where it is now", () => {
     const { props } = setup();
     const first = card(/^1\. Story/);
@@ -318,6 +324,11 @@ describe("Board, the list view (below 1180px)", () => {
     expect(within(rows[1]).getByRole("list", { name: "Connections of pin 2" })).toHaveTextContent(
       "same thread: 1. France announces new climate policy",
     );
+  });
+
+  it("says when the connections couldn't be had", () => {
+    setup({ variant: "sheet", edges: [], edgesFailed: true });
+    expect(screen.getByRole("status")).toHaveTextContent("Connections unavailable right now");
   });
 
   it("a citation chip focuses its row", () => {

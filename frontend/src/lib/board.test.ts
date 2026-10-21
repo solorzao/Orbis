@@ -369,6 +369,16 @@ describe("refreshing pins from /api/board/resolve", () => {
     expect(next.pins[0]).toMatchObject({ x: 0.3, snapshot: { title: "Red Sea" } });
   });
 
+  it("unpins the ids the server refuses", () => {
+    const b = board(pin("thread:7"), pin("link:FR-ZZ"), pin("place:48:2"));
+    const next = applyResolved(
+      b,
+      [{ item: "thread:7", snapshot: { title: "Seven" } }],
+      ["link:FR-ZZ"],
+    );
+    expect(next.pins.map((p) => p.item)).toEqual(["thread:7", "place:48:2"]);
+  });
+
   it("ignores a malformed resolved_as and answers for pins it doesn't hold", () => {
     const b = board(pin("thread:7"));
     const next = applyResolved(b, [

@@ -689,7 +689,7 @@ export default function Home() {
   );
   const boardMirror = useBoardMirror(board.pins, edges, boardShown);
   const boardMemo = useBoardMemo(board.pins);
-  useBoardRefresh(boardShown, board);
+  useBoardRefresh(boardShown, board, setBoardNote);
   const sharedBoard = useSharedBoard(board, { onOpen: openBoard, announce: setBoardNote });
   const handleUnpin = useCallback(
     (item: string) => {
@@ -704,6 +704,7 @@ export default function Home() {
       pins={board.pins}
       edges={edges}
       coCoverageChecked={boardLinks.coCoverageChecked}
+      edgesFailed={boardLinks.failed}
       memo={boardMemo.memo}
       analyzing={boardMemo.analyzing}
       onAnalyze={boardMemo.analyze}

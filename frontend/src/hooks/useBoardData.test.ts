@@ -43,18 +43,47 @@ afterEach(() => {
 describe("useBoardLinks", () => {
   it("asks for the edges once two or more pins show, after a short pause", async () => {
     vi.useFakeTimers();
-    vi.mocked(fetchBoardLinks).mockResolvedValue({ edges: [EDGE], coCoverageChecked: false });
+    vi.mocked(fetchBoardLinks).mockResolvedValue({
+      edges: [EDGE],
+      coCoverageChecked: false,
+      rejected: [],
+    });
     const { result, rerender } = renderHook(({ items, on }) => useBoardLinks(items, on), {
       initialProps: { items: ["thread:1"], on: true },
     });
-    expect(result.current).toEqual({ edges: [], coCoverageChecked: true, loading: false });
+    expect(result.current).toEqual({
+      edges: [],
+      coCoverageChecked: true,
+      loading: false,
+      failed: false,
+    });
     rerender({ items: ["thread:1", "thread:2"], on: true });
     expect(result.current.loading).toBe(true);
     await act(async () => {
       await vi.runAllTimersAsync();
     });
     expect(fetchBoardLinks).toHaveBeenCalledWith(["thread:1", "thread:2"], expect.any(AbortSignal));
-    expect(result.current).toEqual({ edges: [EDGE], coCoverageChecked: false, loading: false });
+    expect(result.current).toEqual({
+      edges: [EDGE],
+      coCoverageChecked: false,
+      loading: false,
+      failed: false,
+    });
+  });
+
+  it("says when the edges couldn't be had (a 429, an outage), with none drawn", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchBoardLinks).mockRejectedValue(new Error("API 429: Too Many Requests"));
+    const { result } = renderHook(() => useBoardLinks(["thread:1", "thread:2"], true));
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(result.current).toEqual({
+      edges: [],
+      coCoverageChecked: true,
+      loading: false,
+      failed: true,
+    });
   });
 
   it("asks nothing while the board is closed", () => {
@@ -64,11 +93,19 @@ describe("useBoardLinks", () => {
 
   it("ignores an answer for pins that have changed since", async () => {
     vi.useFakeTimers();
-    let answer: (v: { edges: (typeof EDGE)[]; coCoverageChecked: boolean }) => void = () => {};
+    let answer: (v: {
+      edges: (typeof EDGE)[];
+      coCoverageChecked: boolean;
+      rejected: string[];
+    }) => void = () => {};
     vi.mocked(fetchBoardLinks).mockImplementationOnce(
       () => new Promise((resolve) => (answer = resolve)),
     );
-    vi.mocked(fetchBoardLinks).mockResolvedValue({ edges: [], coCoverageChecked: true });
+    vi.mocked(fetchBoardLinks).mockResolvedValue({
+      edges: [],
+      coCoverageChecked: true,
+      rejected: [],
+    });
     const { result, rerender } = renderHook(({ items }) => useBoardLinks(items, true), {
       initialProps: { items: ["thread:1", "thread:2"] },
     });
@@ -77,7 +114,7 @@ describe("useBoardLinks", () => {
     });
     rerender({ items: ["thread:1", "thread:3"] });
     await act(async () => {
-      answer({ edges: [EDGE], coCoverageChecked: true });
+      answer({ edges: [EDGE], coCoverageChecked: true, rejected: [] });
       await vi.runAllTimersAsync();
     });
     expect(result.current.edges).toEqual([]);
@@ -163,7 +200,7 @@ describe("useBoardRefresh", () => {
     const { result, rerender } = renderHook(
       ({ open }) => {
         const board = useBoard();
-        useBoardRefresh(open, board);
+        useBoardRefresh(open, board, vi.fn());
         return board;
       },
       { initialProps: { open: false } },
@@ -172,6 +209,33 @@ describe("useBoardRefresh", () => {
     rerender({ open: true });
     await waitFor(() => expect(result.current.pins[0].snapshot.title).toBe("New"));
     expect(resolveItems).toHaveBeenCalledWith(["thread:7"], expect.any(AbortSignal));
+  });
+
+  it("unpins what the server refuses, and says so", async () => {
+    localStorage.setItem(
+      BOARD_KEY,
+      JSON.stringify({
+        pins: ["thread:7", "link:FR-ZZ", "link:GB-ZZ"].map((item) => ({
+          item,
+          snapshot: snap(item),
+          x: 0,
+          y: 0,
+          pinnedAt: 1,
+        })),
+      }),
+    );
+    vi.mocked(resolveItems).mockResolvedValue({
+      items: [{ item: "thread:7", snapshot: null }],
+      rejected: ["link:FR-ZZ", "link:GB-ZZ"],
+    });
+    const announce = vi.fn();
+    const { result } = renderHook(() => {
+      const board = useBoard();
+      useBoardRefresh(true, board, announce);
+      return board;
+    });
+    await waitFor(() => expect(result.current.pins.map((p) => p.item)).toEqual(["thread:7"]));
+    expect(announce).toHaveBeenCalledWith("Removed 2 pins the server no longer accepts.");
   });
 });
 
