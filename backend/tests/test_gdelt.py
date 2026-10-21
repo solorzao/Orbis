@@ -7,11 +7,13 @@ import zipfile
 from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from app.services import gdelt
 from app.services.gdelt import (
     _HTML_COMMENT_RE,
+    Download,
     _clean_title,
     _gdelt_https_url,
     _is_stale_recrawl,
@@ -26,7 +28,9 @@ from app.services.gdelt import (
     _parse_themes,
     _parse_tone_detail,
     _url_date,
+    download_capped,
     fetch_raw_gkg,
+    parse_lastupdate,
     scrape_titles,
 )
 
@@ -1169,3 +1173,84 @@ class TestGdeltHttpsUrl:
         with patch("app.services.gdelt._download_bytes", mock):
             assert await fetch_raw_gkg() == []
         assert mock.await_count == 1
+
+
+LASTUPDATE = (
+    "80351 4e89d1d989499fe69f4f102292247399 "
+    "http://data.gdeltproject.org/gdeltv2/20261021123000.export.CSV.zip\n"
+    "119531 ae8ab8e83b1347bb8fae2af1f9b8c6dd "
+    "http://data.gdeltproject.org/gdeltv2/20261021123000.mentions.CSV.zip\n"
+    "4631710 f231d70b0b4425c19613644c5d48cfc8 "
+    "http://data.gdeltproject.org/gdeltv2/20261021123000.gkg.csv.zip\n"
+)
+
+
+class TestParseLastupdate:
+    def test_reads_each_kind(self):
+        entries = parse_lastupdate(LASTUPDATE)
+        assert entries["export"].size == 80351
+        assert entries["export"].md5 == "4e89d1d989499fe69f4f102292247399"
+        assert entries["export"].url.endswith("20261021123000.export.CSV.zip")
+        assert entries["gkg"].size == 4631710
+
+    def test_skips_malformed_lines(self):
+        assert parse_lastupdate("garbage\nabc def http://x/1.export.CSV.zip\n") == {}
+
+
+def _client_with(monkeypatch, handler):
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        gdelt.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
+    )
+    monkeypatch.setattr(gdelt.asyncio, "sleep", AsyncMock())
+
+
+class TestDownloadCapped:
+    @pytest.mark.asyncio
+    async def test_returns_the_body_under_the_cap(self, monkeypatch):
+        _client_with(monkeypatch, lambda req: httpx.Response(200, content=b"x" * 10))
+        assert await download_capped("https://data.gdeltproject.org/a", 10) == Download(
+            "ok", b"x" * 10
+        )
+
+    @pytest.mark.asyncio
+    async def test_refuses_a_body_over_the_cap(self, monkeypatch):
+        _client_with(monkeypatch, lambda req: httpx.Response(200, content=b"x" * 11))
+        assert (await download_capped("https://data.gdeltproject.org/a", 10)).status == "too_big"
+
+    @pytest.mark.asyncio
+    async def test_a_404_is_missing_and_not_retried(self, monkeypatch):
+        calls = []
+        _client_with(monkeypatch, lambda req: calls.append(req) or httpx.Response(404))
+        assert (await download_capped("https://data.gdeltproject.org/a", 10)).status == "missing"
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_never_follows_a_redirect(self, monkeypatch):
+        _client_with(
+            monkeypatch,
+            lambda req: httpx.Response(302, headers={"location": "https://evil.test/a"}),
+        )
+        assert (await download_capped("https://data.gdeltproject.org/a", 10)).status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_refuses_any_url_off_gdelts_https_data_host(self, monkeypatch):
+        calls = []
+        _client_with(monkeypatch, lambda req: calls.append(req) or httpx.Response(200))
+        for url in (
+            "http://data.gdeltproject.org/a",
+            "https://data.gdeltproject.org.evil.test/a",
+            "https://evil.test/https://data.gdeltproject.org/a",
+        ):
+            with pytest.raises(ValueError, match="data.gdeltproject.org"):
+                await download_capped(url, 10)
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_attempts_and_timeout_are_the_callers(self, monkeypatch):
+        calls = []
+        _client_with(monkeypatch, lambda req: calls.append(req) or httpx.Response(503))
+        got = await download_capped("https://data.gdeltproject.org/a", 10, attempts=2, timeout=10)
+        assert got.status == "failed" and len(calls) == 2

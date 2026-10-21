@@ -10,6 +10,7 @@ import math
 import re
 import zipfile
 from datetime import date, datetime, timezone
+from typing import NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -181,6 +182,94 @@ async def _download_bytes(url: str) -> bytes | None:
                 await asyncio.sleep(wait)
     logger.error("Download failed after %d attempts: %s", _MAX_RETRIES, url)
     return None
+
+
+class LastUpdateEntry(NamedTuple):
+    """One file lastupdate.txt lists: its size in bytes, MD5 and URL."""
+
+    size: int
+    md5: str
+    url: str
+
+
+_LASTUPDATE_KINDS = (
+    ("export", ".export.csv.zip"),
+    ("mentions", ".mentions.csv.zip"),
+    ("gkg", ".gkg.csv.zip"),
+)
+
+
+def parse_lastupdate(text: str) -> dict[str, LastUpdateEntry]:
+    """lastupdate.txt's lines (``SIZE MD5 URL``), keyed by kind: export, mentions, gkg."""
+    entries: dict[str, LastUpdateEntry] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        name = parts[2].lower()
+        for kind, suffix in _LASTUPDATE_KINDS:
+            if name.endswith(suffix) and kind not in entries:
+                entries[kind] = LastUpdateEntry(int(parts[0]), parts[1].lower(), parts[2])
+    return entries
+
+
+async def fetch_lastupdate() -> dict[str, LastUpdateEntry] | None:
+    """The newest 15-minute files, from the lastupdate.txt the GKG path reads too."""
+    raw = await _download_bytes(_GKG_LASTUPDATE_URL)
+    return parse_lastupdate(raw.decode("utf-8", errors="replace")) if raw else None
+
+
+class Download(NamedTuple):
+    """A capped download: ok (with its bytes), missing (404), too_big or failed."""
+
+    status: str
+    body: bytes = b""
+
+
+_CAPPED_TIMEOUT = 30.0  # seconds
+_GDELT_HTTPS = f"https://{_GDELT_HOST}/"
+
+
+async def download_capped(
+    url: str,
+    max_bytes: int,
+    *,
+    attempts: int = _MAX_RETRIES,
+    timeout: float = _CAPPED_TIMEOUT,
+) -> Download:
+    """GET *url*, reading at most *max_bytes*, and never following a redirect.
+
+    Only URLs on GDELT's data host over https: anything else is a ValueError,
+    before any request (callers build the URL; this is the last check). A 404
+    is "missing" (GDELT skips the odd slot) and isn't retried. Other errors (a
+    redirect, 5xx, a timeout) are tried *attempts* times in all, then "failed".
+    """
+    if not url.startswith(_GDELT_HTTPS):
+        raise ValueError(f"Refusing {url!r}: only {_GDELT_HTTPS} is fetched.")
+    name = url.rsplit("/", 1)[-1]
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code == 404:
+                        return Download("missing")
+                    resp.raise_for_status()  # raises on 3xx too: redirects are refused
+                    length = resp.headers.get("content-length", "")
+                    if length.isdigit() and int(length) > max_bytes:
+                        return Download("too_big")
+                    body = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        body += chunk
+                        if len(body) > max_bytes:
+                            return Download("too_big")
+                    return Download("ok", bytes(body))
+        except Exception as exc:
+            logger.warning(
+                "Download attempt %d/%d failed for %s (%s).", attempt, attempts, name, exc
+            )
+            if attempt < attempts:
+                await asyncio.sleep(_BACKOFF_BASE**attempt)
+    return Download("failed")
 
 
 def _parse_gkg_date(date_str: str) -> datetime:
