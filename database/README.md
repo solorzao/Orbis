@@ -34,6 +34,37 @@ PostgreSQL schema for the Orbis globe news explorer, powered by **Supabase** wit
 | `counts`          | JSONB                   | GKG typed counts (killed, arrested, ...); default `'[]'` |
 | `mentioned_countries` | TEXT[]              | ISO 3166-1 alpha-2 codes of the countries the article mentions (GDELT country-level locations), filled by ingestion; links between places are computed from it; default `'{}'` (migration 011) |
 
+### `event_pairs_daily` and `event_files`
+
+Daily country-pair rollups of the machine-coded events in GDELT 2.0's 15-minute export files, and the log of the files added (migration 021). Nothing is stored per event, and nothing references `articles`. Both are filled by `app/services/events.py` (PR 19b), which deletes rollups older than `retention_days`.
+
+`event_pairs_daily`: one row per (actor 1 country, actor 2 country, UTC day, QuadClass). Primary key `(a_iso, b_iso, day, quad_class)`; index `idx_event_pairs_day` on `day`; `fillfactor = 70`, so a cycle's additions, which change no indexed column, are HOT updates.
+
+| Column          | Type             | Notes |
+|-----------------|------------------|-------|
+| `a_iso`         | TEXT             | ISO 3166-1 alpha-2 of `Actor1CountryCode` (CAMEO codes mapped by `app/services/cameo_countries.py`) |
+| `b_iso`         | TEXT             | ISO 3166-1 alpha-2 of `Actor2CountryCode`. Never equal to `a_iso`: domestic events are not stored |
+| `day`           | DATE             | The UTC day GDELT added the events (`DATEADDED`), not the day they happened (`SQLDATE`), so retention and windows follow reporting |
+| `quad_class`    | SMALLINT         | 1 verbal cooperation, 2 material cooperation, 3 verbal conflict, 4 material conflict |
+| `n_events`      | INT              | Events, summed across files |
+| `mentions`      | INT              | `NumMentions` summed: each event's first 15 minutes only |
+| `goldstein_sum` | DOUBLE PRECISION | Goldstein scale summed; reads divide by `n_events` |
+| `tone_sum`      | DOUBLE PRECISION | Average tone summed; reads divide by `n_events` |
+| `sample_urls`   | TEXT[]           | Up to 3 first-report URLs (http(s) only), first seen first; default `'{}'` |
+| `outlets`       | TEXT[]           | Up to 8 distinct outlet hosts, first seen first; reads count the distinct union across a pair's rows; default `'{}'` |
+
+There is no report count: distinct URLs per row can't be summed across rows without counting one article several times.
+
+`event_files`: one row per 15-minute export added, found missing, or found unreadable (never retried), so a file is never added twice: rollups are sums.
+
+| Column         | Type        | Notes |
+|----------------|-------------|-------|
+| `slot`         | TIMESTAMPTZ (PK) | The file's 15-minute timestamp (UTC) |
+| `status`       | TEXT        | `ok`, `missing` or `unreadable` |
+| `n_rows`       | INT         | Events in the file; default 0 |
+| `n_kept`       | INT         | Events added to the rollups; default 0 |
+| `processed_at` | TIMESTAMPTZ | Default `now()` |
+
 ### SQL Functions
 
 | Function              | Purpose                                         |

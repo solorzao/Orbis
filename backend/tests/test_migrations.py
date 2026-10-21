@@ -53,6 +53,7 @@ TABLE_MIGRATIONS = [
     "013_threads.sql",
     "015_thread_indexes.sql",
     "017_kg_entity_names.sql",
+    "021_event_pairs_daily.sql",
 ]
 
 
@@ -184,3 +185,19 @@ def test_synopsis_retries_migration_only_adds_two_columns_without_a_rewrite():
         "ALTER TABLE threads ADD COLUMN IF NOT EXISTS synopsis_failures INT NOT NULL DEFAULT 0,"
         " ADD COLUMN IF NOT EXISTS synopsis_retry_at TIMESTAMPTZ",
     ]
+
+
+def test_events_migration_creates_only_its_two_tables():
+    """New tables only (nothing references articles or anything else), room on each
+    page for HOT updates, and no data statements."""
+    sql = " ".join(_sql_without_comments("021_event_pairs_daily.sql").split())
+    assert sql.startswith("SET lock_timeout = '5s';")
+    creates = re.findall(r"CREATE (TABLE|INDEX) IF NOT EXISTS (\w+)", sql)
+    assert creates == [
+        ("TABLE", "event_pairs_daily"),
+        ("INDEX", "idx_event_pairs_day"),
+        ("TABLE", "event_files"),
+    ]
+    assert "WITH (fillfactor = 70)" in sql
+    assert "REFERENCES" not in sql.upper()
+    assert not re.search(r"\b(ALTER|DROP|DELETE|UPDATE|INSERT)\b", sql, re.IGNORECASE)
