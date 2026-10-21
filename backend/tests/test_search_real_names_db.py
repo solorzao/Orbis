@@ -74,7 +74,7 @@ async def _explain(conn, sql: str, *args) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(conn):
+async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(conn, capsys):
     """Production's shape: ~56K real-looking people and organisations among 150K
     headlines in kg_nodes, and 100K thread members. No enable_seqscan here: these are
     the planner's own choices.
@@ -119,6 +119,26 @@ async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(
         conn, search._COUNTS_SQL, ["Joe Biden", "Hunter Biden", "Jill Biden"], week_ago, 100
     )
     assert "idx_thread_members_entities" in counts["indexes"], counts
+    # REPRO diagnostics (throwaway branch only).
+    await conn.execute("CREATE EXTENSION IF NOT EXISTS pageinspect")
+    gin = await conn.fetchrow(
+        "SELECT * FROM gin_metapage_info(get_raw_page('idx_kg_entity_names_trgm', 0))"
+    )
+    vacuums = await conn.fetch(
+        "SELECT relname, n_live_tup, n_dead_tup, vacuum_count, autovacuum_count,"
+        " analyze_count, autoanalyze_count FROM pg_stat_user_tables"
+        " WHERE relname IN ('kg_nodes', 'kg_entity_names', 'thread_members')"
+    )
+    plan_text = await conn.fetch(
+        "EXPLAIN " + entities._RESOLVE_SQL, "PERSON", "benjamin netanyahu", week_ago, 100
+    )
+    with capsys.disabled():
+        print("\n=== REPRO resolve ===")
+        print("gin metapage:", dict(gin))
+        for row in vacuums:
+            print("stats:", dict(row))
+        print("\n".join(r[0] for r in plan_text))
+        print("=== END REPRO resolve ===")
     # Resolution: the narrow table too, never kg_nodes.
     resolve = await _explain(
         conn, entities._RESOLVE_SQL, "PERSON", "benjamin netanyahu", week_ago, 100

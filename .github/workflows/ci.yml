@@ -93,7 +93,26 @@ jobs:
             echo "Applying: $(basename "$f")"
             docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 -q < "$f"
           done
-      - run: python -m pytest tests/ -v
+      - name: "REPRO order 1: after the #101 and #106 tests"
+        continue-on-error: true
+        run: python -m pytest -v -p no:randomly tests/test_threads_db.py tests/test_thread_synopsis_db.py tests/test_search_real_names_db.py
+        env:
+          ORBIS_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
+      - name: "REPRO order 2: before them"
+        continue-on-error: true
+        run: python -m pytest -v -p no:randomly tests/test_search_real_names_db.py tests/test_threads_db.py tests/test_thread_synopsis_db.py
+        env:
+          ORBIS_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
+      - name: "REPRO order 3: after a vacuum of the names tables, as autovacuum may run"
+        continue-on-error: true
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "VACUUM kg_nodes, kg_entity_names, thread_members"
+          python -m pytest -v -p no:randomly tests/test_search_real_names_db.py
+        env:
+          ORBIS_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
+      - name: "REPRO order 4: the whole suite"
+        continue-on-error: true
+        run: python -m pytest tests/ -v
         env:
           ORBIS_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
 
