@@ -2,8 +2,8 @@ import type { PanelQuery, Topic } from "@/types/news";
 import { windowBounds, windowLabel, type TimeWindow } from "@/lib/timeWindow";
 
 /**
- * Places and links open at once in the Inspect tab (its recent pills); a new
- * one closes the oldest.
+ * Places, links and relations open at once in the Inspect tab (its recent
+ * pills); a new one closes the oldest.
  */
 export const MAX_PANELS = 5;
 
@@ -40,17 +40,19 @@ export function samePanelQuery(a: PanelQuery, b: PanelQuery): boolean {
 }
 
 /**
- * The place or link to close so one more can open: the oldest of them once
- * MAX_PANELS are open, else null.
+ * The place, link or relation to close so one more can open: the oldest of
+ * them once MAX_PANELS are open, else null.
  */
 export function recentToEvict(
   places: readonly { panelId: string; createdAt: number }[],
   links: readonly { linkId: string; createdAt: number }[],
+  relations: readonly { relationId: string; createdAt: number }[] = [],
 ): string | null {
-  if (places.length + links.length < MAX_PANELS) return null;
+  if (places.length + links.length + relations.length < MAX_PANELS) return null;
   const all = [
     ...places.map((p) => ({ id: p.panelId, createdAt: p.createdAt })),
     ...links.map((l) => ({ id: l.linkId, createdAt: l.createdAt })),
+    ...relations.map((r) => ({ id: r.relationId, createdAt: r.createdAt })),
   ];
   return all.reduce((oldest, r) => (r.createdAt < oldest.createdAt ? r : oldest)).id;
 }

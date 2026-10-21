@@ -126,6 +126,17 @@ describe("recentToEvict", () => {
       ),
     ).toBe("p0");
   });
+
+  const relation = (relationId: string, createdAt: number) => ({ relationId, createdAt });
+
+  it("counts relations among them, and evicts the oldest of all three", () => {
+    const places = [place("p1", 1), place("p3", 3)];
+    const links = [link("l2", 2)];
+    const relations = [relation("r4", 4)];
+    expect(recentToEvict(places, links, relations)).toBeNull(); // 4 open
+    expect(recentToEvict(places, links, [relation("r0", 0), ...relations])).toBe("r0");
+    expect(recentToEvict(places, links, [...relations, relation("r5", 5)])).toBe("p1");
+  });
 });
 
 describe("queryWindowWords", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import dynamic from "next/dynamic";
 import type {
   ArticleThread,
@@ -10,9 +10,16 @@ import type {
   PanelEntry,
   PanelFilters,
   PanelQuery,
+  RelationEntry,
   Topic,
 } from "@/types/news";
-import { fetchClusterArticles, fetchClusterSummary, fetchLinkDetail } from "@/lib/api";
+import {
+  fetchClusterArticles,
+  fetchClusterSummary,
+  fetchLinkDetail,
+  fetchRelationDetail,
+  retryOnce503,
+} from "@/lib/api";
 import { apiArticlesToNewsArticles } from "@/lib/clustering";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/panelQuery";
@@ -38,6 +45,17 @@ import {
   type LinkRank,
 } from "@/lib/links";
 import {
+  labelledRelations,
+  relationKey,
+  relationPill,
+  relationsStatus,
+  relationsUnavailable,
+  toRelationDetail,
+  type Relation,
+  type RelationKind,
+} from "@/lib/relations";
+import { NO_OVERLAYS, overlayNote, overlays, type OverlayAction } from "@/lib/overlays";
+import {
   THREAD_PAGE,
   fetchThread,
   replayAnnouncement,
@@ -49,6 +67,7 @@ import {
 import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
+import { useRelations } from "@/hooks/useRelations";
 import { useLinkExplain } from "@/hooks/useLinkExplain";
 import { useBreaking } from "@/hooks/useBreaking";
 import { useLastVisit } from "@/hooks/useLastVisit";
@@ -69,6 +88,9 @@ import TimelineCapsule from "@/components/TimelineCapsule";
 import NewsPanel from "@/components/NewsPanel";
 import LinkInspector from "@/components/LinkInspector";
 import LinkList from "@/components/LinkList";
+import RelationInspector from "@/components/RelationInspector";
+import RelationList from "@/components/RelationList";
+import ArcLabels from "@/components/ArcLabels";
 import RecentPlaces from "@/components/RecentPlaces";
 import TopBar from "@/components/TopBar";
 import CoPilot from "@/components/CoPilot";
@@ -102,6 +124,8 @@ import type { GlobeControls, GlobeFocus } from "@/components/Globe";
 /** The tracked entity's dossier among the Inspect tab's places and links. */
 const ENTITY_ID = "entity";
 
+const NO_RELATIONS: Relation[] = [];
+
 /** Whether a key press is typing (in a field), where "/" and Escape aren't the page's. */
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
@@ -130,8 +154,27 @@ export default function Home() {
   // The dots for the window and topic, filtered on the server (same array until new dots land)
   const { points, error: apiError, loading } = useGlobePoints(timeWindow, activeTopic);
   const [layer, setLayer] = useState<GlobeLayer>("dots");
+  // The arc overlays, Links and Relations: one at a time (lib/overlays), and
+  // what the announcer says when turning one on turns the other off.
+  const [overlay, dispatchOverlay] = useReducer(overlays, NO_OVERLAYS);
+  const [overlaySwitchNote, setOverlaySwitchNote] = useState("");
+  const switchOverlay = useCallback(
+    (action: OverlayAction) => {
+      setOverlaySwitchNote(overlayNote(overlay, action) ?? "");
+      dispatchOverlay(action);
+    },
+    [overlay],
+  );
+  const handleLinksChange = useCallback(
+    (on: boolean) => switchOverlay({ type: "links", on }),
+    [switchOverlay],
+  );
+  const handleRelationsChange = useCallback(
+    (on: boolean) => switchOverlay({ type: "relations", on }),
+    [switchOverlay],
+  );
   // The Links overlay: co-coverage arcs over either base layer, ranked by lift or count.
-  const [linksOn, setLinksOn] = useState(false);
+  const linksOn = overlay.links;
   const [linkRank, setLinkRank] = useState<LinkRank>("lift");
   const linksResult = useLinks(timeWindow, activeTopic, linkRank, linksOn);
   const { links } = linksResult;
@@ -141,6 +184,22 @@ export default function Home() {
   const [hoveredLink, setHoveredLink] = useState<CountryLink | null>(null);
   // The timeline's replay: the status pill says Replay rather than flashing each step's load.
   const [replaying, setReplaying] = useState(false);
+  // The Relations overlay: GDELT's reported events between countries over a
+  // fixed 7-day lens, whatever the timeline shows (so never under a range or a
+  // replay, and back on a live window without a click), by class.
+  const relationsOn = overlay.relations;
+  const [relationKind, setRelationKind] = useState<RelationKind>("all");
+  const relationsNotHere = relationsUnavailable(timeWindow, replaying);
+  const relationsShown = relationsOn && relationsNotHere === null;
+  const relationsResult = useRelations(relationKind, relationsShown);
+  const relationsDrawn = relationsShown ? relationsResult.relations : NO_RELATIONS;
+  // Said when Relations draws nothing: an empty lens, or relations that failed to load.
+  const relationsNote = relationsShown
+    ? relationsStatus({ ...relationsResult, count: relationsResult.relations.length })
+    : null;
+  // The relation arc under the pointer, and the list row with the focus: each named by the pill.
+  const [hoveredRelation, setHoveredRelation] = useState<Relation | null>(null);
+  const [focusedRelation, setFocusedRelation] = useState<Relation | null>(null);
   // What is breaking now, for the topic: only for a live window (a range or a
   // replay looks back), polled every 5 minutes. The ticker and the rings show it.
   const breaking = useBreaking(activeTopic, timeWindow.kind === "live" && !replaying);
@@ -150,10 +209,11 @@ export default function Home() {
   const sinceDelta = useDelta(lastVisit);
   const [sinceDismissed, setSinceDismissed] = useState(readSinceDismissed);
 
-  // What the Inspect tab holds: places (their stories) and links, up to
-  // MAX_PANELS together, and the one shown (a panelId or a linkId).
+  // What the Inspect tab holds: places (their stories), links and relations,
+  // up to MAX_PANELS together, and the one shown (a panelId, linkId or relationId).
   const [panelQueue, setPanelQueue] = useState<PanelEntry[]>([]);
   const [linkQueue, setLinkQueue] = useState<LinkEntry[]>([]);
+  const [relationQueue, setRelationQueue] = useState<RelationEntry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
 
   // Side panel (Co-pilot | Inspect, and Threads below 1180px): open by default on wide screens
@@ -452,15 +512,18 @@ export default function Home() {
         createdAt: Date.now(),
       };
 
-      // The oldest place or link closes to make room (MAX_PANELS in all).
-      const evict = recentToEvict(panelQueue, linkQueue);
+      // The oldest place, link or relation closes to make room (MAX_PANELS in all).
+      const evict = recentToEvict(panelQueue, linkQueue, relationQueue);
       setPanelQueue((prev) => [...prev.filter((p) => p.panelId !== evict), newEntry]);
-      if (evict) setLinkQueue((prev) => prev.filter((l) => l.linkId !== evict));
+      if (evict) {
+        setLinkQueue((prev) => prev.filter((l) => l.linkId !== evict));
+        setRelationQueue((prev) => prev.filter((r) => r.relationId !== evict));
+      }
 
       setActiveId(panelId);
       fetchPanelData(panelId, point, query);
     },
-    [panelQueue, linkQueue, activeTopic, timeWindow, fetchPanelData, showInspect],
+    [panelQueue, linkQueue, relationQueue, activeTopic, timeWindow, fetchPanelData, showInspect],
   );
 
   // A breaking story: fly to its place and open it in Inspect, by its cell's
@@ -836,17 +899,102 @@ export default function Home() {
         explaining: false,
         createdAt,
       };
-      const evict = recentToEvict(panelQueue, linkQueue);
+      const evict = recentToEvict(panelQueue, linkQueue, relationQueue);
       setLinkQueue((prev) => [...prev.filter((l) => l.linkId !== evict), entry]);
-      if (evict) setPanelQueue((prev) => prev.filter((p) => p.panelId !== evict));
+      if (evict) {
+        setPanelQueue((prev) => prev.filter((p) => p.panelId !== evict));
+        setRelationQueue((prev) => prev.filter((r) => r.relationId !== evict));
+      }
       setActiveId(linkId);
       fetchLinkData(linkId, link, query);
     },
-    [panelQueue, linkQueue, activeTopic, timeWindow, fetchLinkData, showInspect, resetSpreadReplay],
+    [
+      panelQueue,
+      linkQueue,
+      relationQueue,
+      activeTopic,
+      timeWindow,
+      fetchLinkData,
+      showInspect,
+      resetSpreadReplay,
+    ],
   );
 
   // Explain this link: one request per link at a time (useLinkExplain).
   const handleExplain = useLinkExplain(updateLink);
+
+  const updateRelation = useCallback((relationId: string, updates: Partial<RelationEntry>) => {
+    setRelationQueue((prev) =>
+      prev.map((r) => (r.relationId === relationId ? { ...r, ...updates } : r)),
+    );
+  }, []);
+
+  // A relation's detail: every class, over the same lens. A 404 (the pair's
+  // last day left the lens around UTC midnight) is said as text, not an error.
+  const fetchRelationData = useCallback(
+    async (relationId: string, relation: Relation) => {
+      try {
+        // A 503 (a read stopped at a cycle's boundary) is asked once more, as the arcs are.
+        const api = await retryOnce503(
+          () => fetchRelationDetail({ a: relation.a.iso, b: relation.b.iso }),
+          new AbortController().signal,
+        );
+        if (api === null) updateRelation(relationId, { detailLoading: false, notFound: true });
+        else updateRelation(relationId, { detail: toRelationDetail(api), detailLoading: false });
+      } catch {
+        updateRelation(relationId, { detailLoading: false, detailError: true });
+      }
+    },
+    [updateRelation],
+  );
+
+  // An arc's click (or a list row) opens its relation in the Inspect tab, as a
+  // link opens (or the one already open for the pair: the lens is one window).
+  const handleRelationOpen = useCallback(
+    (relation: Relation) => {
+      // Its highlight, not a thread's arcs or a tracked entity's focus.
+      resetSpreadReplay();
+      setSelectedThread(null);
+      setTracked(null);
+      setFocusedRelation(null); // its row goes with the list
+      const key = relationKey(relation.a.iso, relation.b.iso);
+      const existing = relationQueue.find(
+        (r) => relationKey(r.relation.a.iso, r.relation.b.iso) === key,
+      );
+      showInspect();
+      if (existing) {
+        setActiveId(existing.relationId);
+        return;
+      }
+      const createdAt = Date.now();
+      const relationId = `relation-${key}-${createdAt}`;
+      const entry: RelationEntry = {
+        relationId,
+        relation,
+        lens: relationsResult.lens,
+        detail: null,
+        detailLoading: true,
+        createdAt,
+      };
+      const evict = recentToEvict(panelQueue, linkQueue, relationQueue);
+      setRelationQueue((prev) => [...prev.filter((r) => r.relationId !== evict), entry]);
+      if (evict) {
+        setPanelQueue((prev) => prev.filter((p) => p.panelId !== evict));
+        setLinkQueue((prev) => prev.filter((l) => l.linkId !== evict));
+      }
+      setActiveId(relationId);
+      fetchRelationData(relationId, relation);
+    },
+    [
+      panelQueue,
+      linkQueue,
+      relationQueue,
+      relationsResult.lens,
+      fetchRelationData,
+      showInspect,
+      resetSpreadReplay,
+    ],
+  );
 
   // A dot's click opens its panel. On a touch screen the first tap shows its
   // hover card instead, and a second tap (or the card's Open stories) opens it.
@@ -877,14 +1025,15 @@ export default function Home() {
 
   const handleZoomChange = useCallback(() => {}, []);
 
-  // Closing or minimizing works the same for a place, a link and the tracked
-  // entity's dossier (by id): closing that stops tracking.
+  // Closing or minimizing works the same for a place, a link, a relation and
+  // the tracked entity's dossier (by id): closing that stops tracking.
   const handleClosePanel = useCallback(
     (id: string) => {
       // Focus goes to the open pill, or to the tab when it was this one.
       keepInspectFocus(id === activeId ? null : activeId);
       setPanelQueue((prev) => prev.filter((p) => p.panelId !== id));
       setLinkQueue((prev) => prev.filter((l) => l.linkId !== id));
+      setRelationQueue((prev) => prev.filter((r) => r.relationId !== id));
       if (id === threadStoriesId) setThreadStories(null);
       if (id === ENTITY_ID) setTracked(null);
       setActiveId((prev) => (prev === id ? null : prev));
@@ -913,19 +1062,48 @@ export default function Home() {
     [updatePanel],
   );
 
-  // Inspect tab: the recent places and links, then the one inspected
+  // Inspect tab: the recent places, links and relations, then the one inspected
   const expandedPanel = panelQueue.find((p) => p.panelId === activeId) ?? null;
   const activeLink = linkQueue.find((l) => l.linkId === activeId) ?? null;
+  const activeRelation = relationQueue.find((r) => r.relationId === activeId) ?? null;
   // The inspected link's highlight, unless a thread's arcs are drawn (one or the other).
   const inspectedLink =
     activeLink && !selectedThread ? linkKey(activeLink.link.a.iso, activeLink.link.b.iso) : null;
   const activeThreadStories = threadStories && activeId === threadStoriesId ? threadStories : null;
+  // Nothing is open in Inspect: it lists the arcs drawn (LinkList, RelationList).
+  const inspectEmpty =
+    !(tracked && activeId === ENTITY_ID) &&
+    !activeLink &&
+    !activeRelation &&
+    !expandedPanel &&
+    !activeThreadStories;
 
   // The arc pill names the hovered arc, else the inspected one, while it is drawn.
   const drawn = (key: string | null) =>
     key === null ? null : (links.find((l) => linkKey(l.a.iso, l.b.iso) === key) ?? null);
   const pillLink =
     drawn(hoveredLink && linkKey(hoveredLink.a.iso, hoveredLink.b.iso)) ?? drawn(inspectedLink);
+
+  // Relations follow the links' rules: muted under the same focus (an entity
+  // tracked, the board shown), the inspected one highlighted unless a thread's
+  // arcs are drawn. The focused list row's arc is labelled as hovering does.
+  const relationsMuted = globeFocus !== null || boardMirror !== null;
+  const keyOf = (r: Relation) => relationKey(r.a.iso, r.b.iso);
+  const inspectedRelation =
+    (focusedRelation && relationsOn && inspectEmpty ? keyOf(focusedRelation) : null) ??
+    (activeRelation ? keyOf(activeRelation.relation) : null);
+  const drawnRelation = (key: string | null) =>
+    key === null ? null : (relationsDrawn.find((r) => keyOf(r) === key) ?? null);
+  const pillRelation =
+    drawnRelation(hoveredRelation && keyOf(hoveredRelation)) ??
+    (selectedThread || relationsMuted ? null : drawnRelation(inspectedRelation));
+  const arcPill = pillRelation ? relationPill(pillRelation) : pillLink ? linkPill(pillLink) : null;
+  // The 5 strongest arcs' labels: the one with the pill yields to it (none on touch screens).
+  const labelYield = !touch && pillRelation ? keyOf(pillRelation) : null;
+  const relationLabels = labelledRelations(relationsDrawn, {
+    muted: relationsMuted,
+    yieldTo: labelYield,
+  }).length;
 
   // Co-pilot: "Show stories here" takes the click path for the dot at an action's place.
   const showStoriesFor = useCallback(
@@ -940,9 +1118,9 @@ export default function Home() {
   const showLinksFor = useCallback(
     (actions: GlobeAction[]) =>
       actionCountries(actions, points).length >= 2
-        ? { on: linksOn, turnOn: () => setLinksOn(true) }
+        ? { on: linksOn, turnOn: () => handleLinksChange(true) }
         : null,
-    [linksOn, points],
+    [linksOn, points, handleLinksChange],
   );
 
   // "Since your last visit": under the brand from 1180px, a co-pilot callout below.
@@ -963,6 +1141,7 @@ export default function Home() {
       <RecentPlaces
         places={panelQueue}
         links={linkQueue}
+        relations={relationQueue}
         entity={tracked ? { id: ENTITY_ID, name: dossier?.name ?? tracked.name } : null}
         activeId={activeId}
         onSelect={handleSelectRecent}
@@ -990,6 +1169,13 @@ export default function Home() {
           onMinimize={() => handleMinimizePanel(activeLink.linkId)}
           onExplain={() => handleExplain(activeLink)}
           onTrack={handleTrack}
+        />
+      ) : activeRelation ? (
+        <RelationInspector
+          key={activeRelation.relationId}
+          entry={activeRelation}
+          onClose={() => handleClosePanel(activeRelation.relationId)}
+          onMinimize={() => handleMinimizePanel(activeRelation.relationId)}
         />
       ) : expandedPanel ? (
         <NewsPanel
@@ -1024,13 +1210,23 @@ export default function Home() {
       ) : (
         <>
           <p className="side-empty">
-            {panelQueue.length + linkQueue.length > 0
+            {panelQueue.length + linkQueue.length + relationQueue.length > 0
               ? "Pick one above, or click a dot on the globe."
               : "Click a dot on the globe to see its stories here."}
           </p>
           {/* With Links on, its links: open one without pointing at its arc. */}
           {linksOn && (
             <LinkList links={links} rank={linkRank} status={linksNote} onOpen={handleLinkOpen} />
+          )}
+          {/* With Relations on, every relation drawn, named in words: the arcs' keyboard way in. */}
+          {relationsOn && (
+            <RelationList
+              relations={relationsDrawn}
+              lens={relationsResult.lens}
+              status={relationsNotHere ?? relationsNote}
+              onOpen={handleRelationOpen}
+              onFocusRelation={setFocusedRelation}
+            />
           )}
         </>
       )}
@@ -1067,6 +1263,11 @@ export default function Home() {
         inspectedLink={inspectedLink}
         onArcHover={setHoveredLink}
         onArcClick={handleLinkOpen}
+        relations={relationsDrawn}
+        inspectedRelation={inspectedRelation}
+        onRelationHover={setHoveredRelation}
+        onRelationClick={handleRelationOpen}
+        relationLabels={relationLabels}
         thread={globeThread}
         threadLit={spreadReplay.lit}
         onGrab={handleGrab}
@@ -1088,8 +1289,15 @@ export default function Home() {
         reduced={reduced}
       />
 
-      {/* The hovered arc's pill, over the globe and under the chrome */}
-      <ArcPill label={pillLink && linkPill(pillLink)} project={projectPoint} touch={touch} />
+      {/* The strongest relation arcs' labels, then the hovered arc's pill above them,
+          over the globe and under the chrome */}
+      <ArcLabels
+        relations={relationsDrawn}
+        muted={relationsMuted}
+        yieldTo={labelYield}
+        project={projectPoint}
+      />
+      <ArcPill label={arcPill} project={projectPoint} touch={touch} />
 
       {/* Top bar: brand, topics, status and About in one grid */}
       <TopBar
@@ -1110,7 +1318,15 @@ export default function Home() {
         boardButtonRef={boardButtonRef}
       />
       {/* The left column from 1180px: since your last visit, then the threads rail */}
-      <div className={linksOn ? "left-stack links-on" : "left-stack"}>
+      <div
+        className={
+          linksOn
+            ? "left-stack links-on"
+            : relationsShown
+              ? "left-stack relations-on"
+              : "left-stack"
+        }
+      >
         {since("strip")}
         {wide && threadsOn && (
           <ThreadsRail
@@ -1134,7 +1350,9 @@ export default function Home() {
         onTabChange={handleSideTab}
         open={side.open}
         onOpenChange={side.setOpen}
-        inspectCount={panelQueue.length + linkQueue.length + (tracked ? 1 : 0)}
+        inspectCount={
+          panelQueue.length + linkQueue.length + relationQueue.length + (tracked ? 1 : 0)
+        }
         inspectRef={inspectRef}
         copilotRef={copilotRef}
         threadsRef={threadsTabRef}
@@ -1204,19 +1422,28 @@ export default function Home() {
           onChange={setLayer}
           unavailable={lowPower ? { intensity: "Intensity is off in low-power mode" } : undefined}
           links={linksOn}
-          onLinksChange={setLinksOn}
+          onLinksChange={handleLinksChange}
           rank={linkRank}
           onRankChange={setLinkRank}
           linksStatus={linksNote}
           threads={threadsOn}
           onThreadsChange={handleThreadsChange}
+          relations={relationsOn}
+          onRelationsChange={handleRelationsChange}
+          relationKind={relationKind}
+          onRelationKindChange={setRelationKind}
+          relationsStatus={relationsNote}
+          relationLens={relationsResult.lens}
+          relationsUnavailable={relationsNotHere}
         />
-        {/* Where the layers are hidden (phones), Links has a chip of its own. */}
-        {linksOn && (
+        {/* Where the layers are hidden (phones), the arc overlay on has a chip of its own. */}
+        {(linksOn || relationsOn) && (
           <LinksChip
-            status={linksNote}
+            label={linksOn ? "Links" : "Relations"}
+            status={linksOn ? linksNote : (relationsNote ?? relationsNotHere)}
             onOff={() => {
-              setLinksOn(false);
+              if (linksOn) handleLinksChange(false);
+              else handleRelationsChange(false);
               playRef.current?.focus(); // the chip goes: the focus moves on, not to the page
             }}
           />
@@ -1246,10 +1473,15 @@ export default function Home() {
       </BottomBar>
 
       {/* For screen readers, always present so each new message is read: the hover
-          card's label, and the Links status. Each in its own node, read when it changes. */}
+          card's label, the Links and Relations statuses (and why Relations can't show
+          under a range or a replay), and one overlay turning the other off. Each in its
+          own node, read when it changes. */}
       <p className="sr-only" aria-live="polite" data-testid="hover-announcer">
         <span>{cardPoint ? cardLabel(cardPoint) : ""}</span>
         <span>{linksNote ?? ""}</span>
+        <span>{relationsNote ?? ""}</span>
+        <span>{relationsOn ? (relationsNotHere ?? "") : ""}</span>
+        <span>{overlaySwitchNote}</span>
         <span>{replayAnnouncement(globeThread?.spread ?? [], spreadReplay.phase)}</span>
         <span>{searchNote}</span>
         <span>{trackNote}</span>

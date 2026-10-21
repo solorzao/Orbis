@@ -26,7 +26,7 @@ interface SidePanelProps {
   search?: ReactNode;
   /** The investigation board's list (below 1180px, opened from the top bar), in the tabs' place. */
   board?: ReactNode;
-  /** Places and links open in the Inspect tab, shown as a badge on the collapsed pill. */
+  /** Places, links and relations open in the Inspect tab, shown as a badge on the collapsed pill. */
   inspectCount?: number;
   /** The Inspect tab panel, where focus lands when a place's controls go (useKeepFocus). */
   inspectRef?: Ref<HTMLDivElement>;
@@ -42,7 +42,7 @@ function isShown(el: HTMLElement): boolean {
 }
 
 /**
- * Co-pilot and Inspect (a place's stories, or a link), and below 1180px Threads, in one
+ * Co-pilot and Inspect (a place's stories, a link or a relation), and below 1180px Threads, in one
  * glass panel (mockup `.side`). From 1180px it
  * floats on the right and collapses to a pill at the same corner; below that
  * it is a bottom sheet that collapses to its tab bar (soft-orbit.css).
