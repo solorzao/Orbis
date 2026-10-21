@@ -12,14 +12,17 @@ changed anywhere.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 
 from app.services import events
 from app.services.events import AlreadyIngested, FileResult, Rollup, plan_slots, store_rollups
+from app.services.gdelt import Download
 from tests import db_plans
 from tests.events_fixture import fill_week
 
@@ -79,6 +82,9 @@ class _OnePool:
 
     def __init__(self, connection):
         self._conn = connection
+
+    async def fetch(self, sql, *args):
+        return await self._conn.fetch(sql, *args)
 
     @contextlib.asynccontextmanager
     async def acquire(self):
@@ -176,6 +182,48 @@ async def test_missing_and_unreadable_files_are_recorded_and_add_no_rows(conn):
     # DONE_SQL reads every status, so neither is planned again.
     done = {r["slot"] for r in await conn.fetch(events.DONE_SQL, NOW - timedelta(hours=3))}
     assert plan_slots(NOW, done) == [NOW, NOW - 3 * Q, NOW - 4 * Q, NOW - 5 * Q]
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_during_the_store_claims_and_adds_nothing(conn, monkeypatch, caplog):
+    """Another writer holds the events lock (a deploy's overlap, a slow commit): the
+    step times out while it waits, and the claim and the upsert roll back together,
+    so the file is tried again next cycle and nothing is counted twice."""
+    import asyncpg
+
+    from tests.test_events import T, _event, _export_zip, _index
+
+    key = ("US", "IR", T.date(), 3)
+    await conn.execute(
+        "INSERT INTO event_pairs_daily (a_iso, b_iso, day, quad_class, n_events, mentions,"
+        " goldstein_sum, tone_sum) VALUES ($1, $2, $3, $4, 4, 40, -8, -12)",
+        *key,
+    )
+    body = _export_zip(_event())
+    holder = await asyncpg.connect(DATABASE_URL)
+    held = holder.transaction()
+    await held.start()
+    try:
+        await holder.execute("SELECT pg_advisory_xact_lock($1)", events._EVENTS_LOCK)
+        monkeypatch.setattr(events, "EVENTS_STEP_TIMEOUT_S", 1.0)
+        monkeypatch.setattr(events, "_last_newest", None)
+        with (
+            patch("app.services.events.fetch_lastupdate", AsyncMock(return_value=_index(body))),
+            patch(
+                "app.services.events.download_capped",
+                AsyncMock(return_value=Download("ok", body)),
+            ),
+            patch("app.services.events.get_pool", AsyncMock(return_value=_OnePool(conn))),
+            caplog.at_level(logging.WARNING, logger="orbis.events"),
+        ):
+            await events.ingest_events(now=T)
+    finally:
+        await held.rollback()
+        await holder.close()
+
+    assert "timed out" in caplog.text
+    assert await conn.fetchval("SELECT count(*) FROM event_files WHERE slot = $1", T) == 0
+    assert (await _row(conn, *key))["n_events"] == 4
 
 
 @pytest.mark.asyncio

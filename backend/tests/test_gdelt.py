@@ -1,5 +1,6 @@
 """Tests for GDELT raw GKG file parsing and title scraping."""
 
+import asyncio
 import io
 import threading
 import time
@@ -29,6 +30,8 @@ from app.services.gdelt import (
     _parse_tone_detail,
     _url_date,
     download_capped,
+    download_worst_case_s,
+    fetch_lastupdate,
     fetch_raw_gkg,
     parse_lastupdate,
     scrape_titles,
@@ -1254,3 +1257,54 @@ class TestDownloadCapped:
         _client_with(monkeypatch, lambda req: calls.append(req) or httpx.Response(503))
         got = await download_capped("https://data.gdeltproject.org/a", 10, attempts=2, timeout=10)
         assert got.status == "failed" and len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_its_worst_case_is_its_attempts_timeouts_and_backoffs(self, monkeypatch):
+        """download_worst_case_s is what the events step budgets with: every attempt
+        times out, and the backoffs between them are slept."""
+        _client_with(monkeypatch, lambda req: httpx.Response(503))
+        await download_capped("https://data.gdeltproject.org/a", 10, attempts=3, timeout=7)
+        slept = sum(call.args[0] for call in gdelt.asyncio.sleep.await_args_list)
+        assert download_worst_case_s(3, 7) == 3 * 7 + slept
+        assert download_worst_case_s(1, 7) == 7
+
+    @pytest.mark.asyncio
+    async def test_a_slow_drip_is_cut_at_the_attempts_timeout(self, monkeypatch):
+        """httpx's timeout is per read: a host sending a byte just inside it would keep
+        an attempt going for ever. Each attempt has a deadline of its own."""
+        real_sleep = asyncio.sleep
+
+        async def drip():
+            for _ in range(100):
+                await real_sleep(0.02)
+                yield b"x"
+
+        _client_with(monkeypatch, lambda req: httpx.Response(200, content=drip()))
+        started = time.monotonic()
+        got = await download_capped(
+            "https://data.gdeltproject.org/a", 1000, attempts=1, timeout=0.1
+        )
+        assert got.status == "failed"
+        assert time.monotonic() - started < 1.0
+
+
+class TestFetchLastupdate:
+    @pytest.mark.asyncio
+    async def test_reads_the_index_capped_on_gdelts_https_host(self):
+        download = AsyncMock(return_value=Download("ok", LASTUPDATE.encode()))
+        with patch("app.services.gdelt.download_capped", download):
+            entries = await fetch_lastupdate()
+        assert entries["export"].size == 80351
+        download.assert_awaited_once_with(
+            "https://data.gdeltproject.org/gdeltv2/lastupdate.txt",
+            gdelt.LASTUPDATE_MAX_BYTES,
+            attempts=gdelt.LASTUPDATE_ATTEMPTS,
+            timeout=gdelt.LASTUPDATE_TIMEOUT_S,
+        )
+        assert gdelt.LASTUPDATE_MAX_BYTES == 16 * 1024
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["missing", "too_big", "failed"])
+    async def test_anything_but_a_body_is_none(self, status):
+        with patch("app.services.gdelt.download_capped", AsyncMock(return_value=Download(status))):
+            assert await fetch_lastupdate() is None

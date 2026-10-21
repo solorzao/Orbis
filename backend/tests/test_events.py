@@ -90,6 +90,24 @@ def test_unmapped_blank_and_regional_actors_are_dropped_and_counted():
     assert stats.unmapped == {"AFR": 1, "EUR": 1, "XYZ": 1}
 
 
+def test_unmapped_codes_that_arent_three_letters_are_counted_as_other():
+    """The counts reach the log: raw GDELT text never does."""
+    rows = (_event(a="<script>"), _event(b="usa\x1b[31m"), _event(a="ABCD"), _event(b="AFR"))
+    _, stats = _parse(*rows)
+    assert stats.unmapped == {"other": 3, "AFR": 1}
+
+
+def test_a_giant_row_is_split_no_further_than_a_row_has_fields(monkeypatch):
+    """str.split without a limit would allocate a list as long as the row has tabs
+    (an OOM kill can't be caught); the field count still rejects the row."""
+    seen: list[int] = []
+    real = events._event
+    monkeypatch.setattr(events, "_event", lambda fields: seen.append(len(fields)) or real(fields))
+    _, stats = _parse(_event() + "\t" * 100_000)
+    assert stats.malformed == 1
+    assert seen == [events.COLUMNS + 1]
+
+
 def test_domestic_events_are_dropped():
     rollups, stats = _parse(_event(a="USA", b="USA"))
     assert rollups == {} and stats.same_country == 1
@@ -415,7 +433,10 @@ class TestIngestEvents:
         ):
             await events.ingest_events(now=T)
         newest_call, catch_up_call = download.await_args_list
-        assert newest_call.kwargs == {}
+        assert newest_call.kwargs == {
+            "attempts": events.NEWEST_ATTEMPTS,
+            "timeout": events.NEWEST_TIMEOUT_S,
+        }
         assert catch_up_call.kwargs == {
             "attempts": events.CATCHUP_ATTEMPTS,
             "timeout": events.CATCHUP_TIMEOUT_S,
@@ -438,7 +459,8 @@ class TestIngestEvents:
         ):
             await events.ingest_events(now=T)  # returns, doesn't hang
         store.assert_not_awaited()
-        assert "timed out" in caplog.text
+        # A COMMIT can complete as the timeout fires: the log can't say "nothing added".
+        assert "timed out" in caplog.text and "may not have been added" in caplog.text
 
     @pytest.mark.asyncio
     async def test_slots_that_left_the_window_unadded_are_logged_as_lost(self, monkeypatch, caplog):
@@ -457,6 +479,69 @@ class TestIngestEvents:
         assert "1 slot lost" in caplog.text
         assert f"{T - window:%Y%m%d%H%M%S}" in caplog.text
         assert events._last_newest == T
+
+    @pytest.mark.asyncio
+    async def test_after_a_restart_slots_lost_meanwhile_are_still_reported(
+        self, monkeypatch, caplog
+    ):
+        """A deploy or an outage: the new process has no previous cycle, so it counts
+        from the newest slot the database says was added."""
+        monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 1)
+        last_added = T - timedelta(hours=3)  # the old process's last cycle
+        body = _export_zip(_event())
+        p = _patches(
+            _index(body),
+            [Download("ok", body)],
+            _Pool(done=[last_added]),
+            AsyncMock(return_value=1),
+        )
+        with p[0], p[1], p[2], p[3], caplog.at_level(logging.WARNING, logger="orbis.events"):
+            await events.ingest_events(now=T)
+        # Left the window since: (last_added - 2 h, T - 2 h], 12 slots, one of them added.
+        assert "11 slots lost" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_catch_up_waits_for_the_next_cycle_once_the_download_budget_is_spent(
+        self, monkeypatch, caplog
+    ):
+        """A slow host: the newest file is always tried, and a catch-up file only while
+        it can finish its tries inside DOWNLOAD_BUDGET_S, so the step never times out
+        and loses what it downloaded."""
+        monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 3)
+        monkeypatch.setattr(events, "DOWNLOAD_BUDGET_S", 0.0)
+        body = _export_zip(_event())
+        download = AsyncMock(side_effect=[Download("ok", body)])
+        store = AsyncMock(return_value=1)
+        with (
+            patch("app.services.events.fetch_lastupdate", AsyncMock(return_value=_index(body))),
+            patch("app.services.events.download_capped", download),
+            patch(
+                "app.services.events.get_pool",
+                AsyncMock(return_value=_Pool(done=[T - 3 * Q])),
+            ),
+            patch("app.services.events.store_rollups", store),
+            caplog.at_level(logging.INFO, logger="orbis.events"),
+        ):
+            await events.ingest_events(now=T)
+        assert download.await_count == 1  # the newest only
+        _, _, files = store.await_args.args
+        assert files == [events.FileResult(T, "ok", 1, 1)]  # T - Q, T - 2Q: next cycle
+        assert "2 catch-up slots left for the next cycle" in caplog.text
+
+
+def test_every_download_fits_the_steps_time_bound():
+    """At worst every attempt times out: lastupdate.txt, then the newest file, take
+    the download budget, catch-up files only start inside it, and the parse and the
+    store keep STORE_ALLOWANCE_S, all under EVENTS_STEP_TIMEOUT_S."""
+    from app.services import gdelt
+
+    index = gdelt.download_worst_case_s(gdelt.LASTUPDATE_ATTEMPTS, gdelt.LASTUPDATE_TIMEOUT_S)
+    newest = gdelt.download_worst_case_s(events.NEWEST_ATTEMPTS, events.NEWEST_TIMEOUT_S)
+    catch_up = gdelt.download_worst_case_s(events.CATCHUP_ATTEMPTS, events.CATCHUP_TIMEOUT_S)
+    assert (index, newest, catch_up) == (21.5, 31.5, 21.5)
+    assert index + newest <= events.DOWNLOAD_BUDGET_S
+    assert events.DOWNLOAD_BUDGET_S + events.STORE_ALLOWANCE_S <= events.EVENTS_STEP_TIMEOUT_S
+    assert events.STORE_ALLOWANCE_S >= 5
 
 
 @contextlib.asynccontextmanager

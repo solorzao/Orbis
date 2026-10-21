@@ -37,9 +37,12 @@ from app.services.cameo_countries import cameo_to_iso2
 from app.services.database import get_pool
 from app.services.gdelt import (
     _GDELT_HOST,
+    LASTUPDATE_ATTEMPTS,
+    LASTUPDATE_TIMEOUT_S,
     LastUpdateEntry,
     _gdelt_https_url,
     download_capped,
+    download_worst_case_s,
     fetch_lastupdate,
 )
 from app.services.urls import outlet, web_url
@@ -61,12 +64,24 @@ SLOT = timedelta(minutes=15)
 # about 2 files a cycle; 4 covers a long cycle. Never further back than this.
 MAX_FILES_PER_CYCLE = 4
 CATCHUP_HOURS = 2
-# The whole step's bound: on a timeout nothing is claimed, so it's retried
-# next cycle. Catch-up files get one retry and a short timeout; the newest
-# gets download_capped's defaults (3 tries, 30 s each).
+# The whole step's bound: on a timeout the claim and the upsert roll back
+# together (unless the COMMIT completed as it fired), and the files are retried
+# next cycle.
 EVENTS_STEP_TIMEOUT_S = 60
+# The downloads fit inside it, so a slow host can't make every cycle time out and
+# lose what it did download: lastupdate.txt (gdelt.LASTUPDATE_*) and the newest
+# file take the download budget at worst; a catch-up file starts only while it
+# could finish its tries inside the budget, else it waits for the next cycle
+# (its slot stays in the catch-up window). The parse and the store keep
+# STORE_ALLOWANCE_S at worst (tests/test_events.py checks the sum).
+NEWEST_ATTEMPTS = 2
+NEWEST_TIMEOUT_S = 15.0
 CATCHUP_ATTEMPTS = 2
 CATCHUP_TIMEOUT_S = 10.0
+DOWNLOAD_BUDGET_S = download_worst_case_s(
+    LASTUPDATE_ATTEMPTS, LASTUPDATE_TIMEOUT_S
+) + download_worst_case_s(NEWEST_ATTEMPTS, NEWEST_TIMEOUT_S)
+STORE_ALLOWANCE_S = 5.0
 # Caps on untrusted input. Exports are about 80 KB zipped (2026-10-21), about
 # 1,200 rows; these leave 25x headroom and bound the work.
 MAX_ZIP_BYTES = 2_000_000
@@ -79,6 +94,9 @@ MAX_OUTLETS = 8  # per rollup row: outlets
 
 _EXPORT_URL = re.compile(r"/(\d{14})\.export\.CSV\.zip$", re.IGNORECASE)
 _EXPORT_MEMBER = re.compile(r"\d{14}\.export\.CSV", re.IGNORECASE)
+# An unmapped actor code is counted (and logged) as itself only when it looks like
+# one; anything else in that untrusted field is counted as "other".
+_CAMEO_CODE = re.compile(r"[A-Z]{3}")
 
 Key = tuple[str, str, date, int]  # (a_iso, b_iso, day, quad_class)
 
@@ -207,7 +225,9 @@ def parse_events(raw: str, today: date, rollups: dict[Key, Rollup]) -> ParseStat
             stats.truncated = True
             break
         stats.rows += 1
-        event = _event(line.split("\t"))
+        # At most COLUMNS + 1 pieces, however many tabs a hostile row holds (an
+        # unbounded split could exhaust memory); _event rejects a longer row.
+        event = _event(line.split("\t", COLUMNS))
         if event is None:
             stats.malformed += 1
             continue
@@ -222,7 +242,7 @@ def parse_events(raw: str, today: date, rollups: dict[Key, Rollup]) -> ParseStat
             stats.no_pair += 1
             for code, iso in ((event.a, a), (event.b, b)):
                 if code and not iso:
-                    stats.unmapped[code] += 1
+                    stats.unmapped[code if _CAMEO_CODE.fullmatch(code) else "other"] += 1
             continue
         if a == b:
             stats.same_country += 1
@@ -442,10 +462,13 @@ _last_newest: datetime | None = None
 async def ingest_events(now: datetime | None = None) -> None:
     """Add the newest export, and missed ones, to the rollups. Never raises.
 
-    Bounded by EVENTS_STEP_TIMEOUT_S. On a timeout nothing has been claimed (the
-    claim and the upsert are one transaction, rolled back when cancelled), so the
-    same files are tried again next cycle; a parse already running in its worker
-    thread finishes on its own and is dropped.
+    Bounded by EVENTS_STEP_TIMEOUT_S (its downloads by DOWNLOAD_BUDGET_S). On a
+    timeout the claim and the upsert, one transaction, roll back together when
+    cancelled, so the same files are tried again next cycle; but a COMMIT can
+    complete as the timeout fires, so the files may have been added after all
+    (and then aren't tried again). Either way no file is added twice or in
+    part. A parse already running in its worker thread finishes on its own and
+    is dropped.
     """
     if not settings.events_ingestion_enabled:
         return
@@ -453,7 +476,8 @@ async def ingest_events(now: datetime | None = None) -> None:
         await asyncio.wait_for(_ingest(now or datetime.now(timezone.utc)), EVENTS_STEP_TIMEOUT_S)
     except TimeoutError:
         logger.warning(
-            "Events: the step timed out after %s s; nothing added, retried next cycle.",
+            "Events: the step timed out after %s s; this cycle's files may not have been"
+            " added (any that weren't are retried next cycle).",
             EVENTS_STEP_TIMEOUT_S,
         )
     except AlreadyIngested as exc:
@@ -479,12 +503,27 @@ async def _ingest(now: datetime) -> None:
     window = timedelta(hours=CATCHUP_HOURS)
     # The added slots back to lost_slots' reach (a primary-key range, ~100 rows at most).
     done = {r["slot"] for r in await pool.fetch(DONE_SQL, newest - window - LOST_LOOKBACK)}
-    lost = lost_slots(_last_newest, newest, done)
+    # After a restart (a deploy, an outage) this process has run no cycle: count
+    # from the newest slot added, so slots lost meanwhile are still reported.
+    previous = _last_newest if _last_newest is not None else max(done, default=None)
+    lost = lost_slots(previous, newest, done)
     rollups: dict[Key, Rollup] = {}
     files: list[FileResult] = []
     totals = ParseStats()
     timing = {"download": 0.0, "parse": 0.0, "store": 0.0}
-    for slot in plan_slots(newest, done):
+    catch_up_worst = download_worst_case_s(CATCHUP_ATTEMPTS, CATCHUP_TIMEOUT_S)
+    slots = plan_slots(newest, done)
+    for i, slot in enumerate(slots):
+        if slot != newest and time.monotonic() - began + catch_up_worst > DOWNLOAD_BUDGET_S:
+            left = len(slots) - i
+            logger.info(
+                "Events: download budget (%.0f s) spent; %d catch-up slot%s left for the"
+                " next cycle.",
+                DOWNLOAD_BUDGET_S,
+                left,
+                "" if left == 1 else "s",
+            )
+            break
         try:
             result = await _add_file(
                 slot, entry if slot == newest else None, now.date(), rollups, totals, timing
@@ -553,8 +592,9 @@ async def _add_file(
     *rollups* only once it has parsed whole. Returns what to record, or None to
     try the slot again next cycle (a failed download, a failed MD5 check).
 
-    *entry* is lastupdate.txt's line for the newest file (its size and MD5);
-    None for a catch-up slot, which gets one retry and a short timeout.
+    *entry* is lastupdate.txt's line for the newest file (its size and MD5), which
+    gets NEWEST_ATTEMPTS of NEWEST_TIMEOUT_S; None for a catch-up slot, which
+    gets CATCHUP_ATTEMPTS of CATCHUP_TIMEOUT_S.
     """
     name = _name(slot)
     if entry is not None and entry.size > MAX_ZIP_BYTES:
@@ -568,7 +608,9 @@ async def _add_file(
             slot_url(slot), MAX_ZIP_BYTES, attempts=CATCHUP_ATTEMPTS, timeout=CATCHUP_TIMEOUT_S
         )
     else:
-        got = await download_capped(slot_url(slot), MAX_ZIP_BYTES)
+        got = await download_capped(
+            slot_url(slot), MAX_ZIP_BYTES, attempts=NEWEST_ATTEMPTS, timeout=NEWEST_TIMEOUT_S
+        )
     timing["download"] += time.monotonic() - started
     if got.status == "missing" and entry is None:
         return FileResult(slot, "missing", 0, 0)

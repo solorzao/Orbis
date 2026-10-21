@@ -103,7 +103,9 @@ async def main(n_files: int) -> int:
                     "zip_kb": len(got.body) / 1024,
                     "csv_kb": len(raw) / 1024,
                     "rows": stats.rows,
-                    "fields_61": sum(len(line.split("\t")) == events.COLUMNS for line in lines),
+                    "fields_61": sum(
+                        len(line.split("\t", events.COLUMNS)) == events.COLUMNS for line in lines
+                    ),
                     "parse_ms": (time.perf_counter() - started) * 1000,
                 }
             )
