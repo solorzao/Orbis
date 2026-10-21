@@ -259,4 +259,25 @@ describe("SidePanel", () => {
     );
     expect(screen.queryByTestId("side-search")).toBeNull();
   });
+
+  it("shows the board's list over the tabs' content when given one", () => {
+    render(
+      <SidePanel
+        tab="copilot"
+        onTabChange={() => {}}
+        open
+        onOpenChange={() => {}}
+        copilot={<p>Co-pilot content</p>}
+        inspect={<p>Inspect content</p>}
+        board={<p>The board</p>}
+      />,
+    );
+    const board = screen.getByTestId("side-board");
+    expect(board).toHaveTextContent("The board");
+    expect(board).toHaveClass("gbody");
+    const panels = screen.getAllByRole("tabpanel", { hidden: true });
+    expect(board.compareDocumentPosition(panels[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
 });

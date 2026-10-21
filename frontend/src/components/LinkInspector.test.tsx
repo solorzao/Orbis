@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import LinkInspector from "./LinkInspector";
+import { PinContext } from "./PinButton";
 import type { LinkDetail, LinkEntry, NewsArticle } from "@/types/news";
 
 const US = { iso: "US", name: "United States", lat: 39.5, lng: -99.06 };
@@ -308,5 +309,26 @@ describe("LinkInspector", () => {
       );
       expect(screen.getByRole("heading", { level: 2 })).toHaveFocus();
     });
+  });
+});
+
+describe("LinkInspector pin", () => {
+  it("pins the link, its countries in code order", () => {
+    const toggle = vi.fn();
+    render(
+      <PinContext.Provider value={{ has: () => false, full: false, toggle }}>
+        <LinkInspector
+          entry={loaded()}
+          onClose={vi.fn()}
+          onMinimize={vi.fn()}
+          onExplain={vi.fn()}
+        />
+      </PinContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pin to board" }));
+    expect(toggle).toHaveBeenCalledWith(
+      "link:IR-US",
+      expect.objectContaining({ title: "Iran and United States", place: null }),
+    );
   });
 });

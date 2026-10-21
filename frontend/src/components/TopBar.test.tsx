@@ -37,6 +37,26 @@ describe("TopBar", () => {
     expect(props.onSearchOpen).toHaveBeenCalled();
   });
 
+  it("has the Board button after the status, its pins counted in a badge", () => {
+    const props = setup({ boardCount: 3, boardOpen: false, onBoard: vi.fn() });
+    const button = screen.getByRole("button", { name: "Board 3 pins" });
+    expect(button).toHaveAttribute("data-testid", "board-open");
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(button.querySelector(".board-n")).toHaveTextContent("3");
+    const status = screen.getByTestId("status-pill");
+    expect(status.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(button);
+    expect(props.onBoard).toHaveBeenCalled();
+  });
+
+  it("says one pin, and when the board is open", () => {
+    setup({ boardCount: 1, boardOpen: true, onBoard: vi.fn() });
+    expect(screen.getByRole("button", { name: "Board 1 pin" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
   it("says when the sheet's search is open", () => {
     setup({ searchOpen: true });
     expect(screen.getByRole("button", { name: "Track search" })).toHaveAttribute(

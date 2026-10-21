@@ -18,6 +18,9 @@ import {
 import { formatAgo, sparkPaths } from "@/lib/hoverCard";
 import { isWebUrl } from "@/hooks/useAgent";
 import { useMinuteNow } from "@/hooks/useMinuteNow";
+import { entityItem } from "@/lib/board";
+import { entitySnapshot } from "@/lib/boardSnapshots";
+import PinButton from "@/components/PinButton";
 
 interface EntityDossierProps {
   /** What is tracked, as asked (a dossier may spell it otherwise). */
@@ -233,6 +236,12 @@ export default function EntityDossier({
           )}
         </div>
         <div className="end">
+          {dossier && (
+            <PinButton
+              item={entityItem(dossier.type, dossier.name)}
+              snapshot={() => entitySnapshot(dossier)}
+            />
+          )}
           <button
             type="button"
             className="iconbtn"

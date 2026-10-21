@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import NewsPanel from "./NewsPanel";
+import { PinContext } from "./PinButton";
 import type { GlobePoint, NewsArticle } from "@/types/news";
 import { fetchSelectionSummary } from "@/lib/api";
 
@@ -316,5 +317,40 @@ describe("NewsPanel's 'part of' chips", () => {
   it("shows no chip where nothing can open the thread", () => {
     render(<NewsPanel point={point({ articles: withThread })} onClose={() => {}} />);
     expect(screen.queryByRole("button", { name: /^Part of/ })).toBeNull();
+  });
+});
+
+describe("NewsPanel pins", () => {
+  const UUID = "4f6c2a7e-1d2b-4c3d-9e8f-0a1b2c3d4e5f";
+
+  it("the header pins the place; a story with a server id pins the story", () => {
+    const toggle = vi.fn();
+    render(
+      <PinContext.Provider value={{ has: (i) => i === `article:${UUID}`, full: false, toggle }}>
+        <NewsPanel
+          point={point({ articles: [article(UUID, "A pinned story", 0, []), ...ARTICLES] })}
+          onClose={() => {}}
+        />
+      </PinContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pin to board" }));
+    expect(toggle).toHaveBeenCalledWith(
+      "place:48:2",
+      expect.objectContaining({ title: "Paris, France", lat: 48.86, lng: 2.35 }),
+    );
+    const story = screen.getByRole("button", { name: "Pinned: A pinned story" });
+    expect(story).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(story);
+    expect(toggle).toHaveBeenLastCalledWith(
+      `article:${UUID}`,
+      expect.objectContaining({ title: "A pinned story", url: `https://example.com/${UUID}` }),
+    );
+    // A story without a server id ("a1") can't be pinned.
+    expect(screen.queryByRole("button", { name: /France announces/ })).toBeNull();
+  });
+
+  it("shows no pins without a board", () => {
+    render(<NewsPanel point={point()} onClose={() => {}} />);
+    expect(screen.queryByRole("button", { name: /Pin to board/ })).toBeNull();
   });
 });

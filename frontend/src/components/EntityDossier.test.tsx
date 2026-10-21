@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import EntityDossier from "./EntityDossier";
+import { PinContext } from "./PinButton";
 import type { EntityDossier as Dossier, EntityRef } from "@/lib/entities";
 
 const NOW = Date.parse("2026-10-20T12:00:00Z");
@@ -197,5 +198,42 @@ describe("EntityDossier", () => {
   it("never says linked", () => {
     const { container } = setup({ dossier: dossier({ capped: true }) });
     expect(container.textContent).not.toMatch(/linked/i);
+  });
+});
+
+describe("EntityDossier pin", () => {
+  function renderPinned(over: Partial<Parameters<typeof EntityDossier>[0]>) {
+    const toggle = vi.fn();
+    render(
+      <PinContext.Provider value={{ has: () => false, full: false, toggle }}>
+        <EntityDossier
+          entity={{ name: "emmanuel macron" }}
+          dossier={dossier()}
+          loading={false}
+          notFound={false}
+          error={false}
+          onPivot={vi.fn()}
+          onPlace={vi.fn()}
+          onStop={vi.fn()}
+          onMinimize={vi.fn()}
+          {...over}
+        />
+      </PinContext.Provider>,
+    );
+    return toggle;
+  }
+
+  it("pins the person or organisation by the dossier's name", () => {
+    const toggle = renderPinned({});
+    fireEvent.click(screen.getByRole("button", { name: "Pin to board" }));
+    expect(toggle).toHaveBeenCalledWith(
+      "entity:person:Emmanuel Macron",
+      expect.objectContaining({ title: "Emmanuel Macron", place: "Paris, France" }),
+    );
+  });
+
+  it("has nothing to pin until the dossier lands", () => {
+    renderPinned({ dossier: null, loading: true });
+    expect(screen.queryByRole("button", { name: "Pin to board" })).toBeNull();
   });
 });

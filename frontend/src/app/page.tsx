@@ -84,6 +84,18 @@ import ThreadsRail, { type ThreadRef } from "@/components/ThreadsRail";
 import ThreadStories from "@/components/ThreadStories";
 import TrackSearch from "@/components/TrackSearch";
 import EntityDossier from "@/components/EntityDossier";
+import Board from "@/components/Board";
+import BoardMergePrompt from "@/components/BoardMergePrompt";
+import { PinContext, type PinControls } from "@/components/PinButton";
+import { useBoard } from "@/hooks/useBoard";
+import {
+  useBoardLinks,
+  useBoardMemo,
+  useBoardMirror,
+  useBoardRefresh,
+  useSharedBoard,
+} from "@/hooks/useBoardData";
+import { boardEdges } from "@/lib/boardEdges";
 import type { GlobeControls, GlobeFocus } from "@/components/Globe";
 
 /** The tracked entity's dossier among the Inspect tab's places and links. */
@@ -145,7 +157,14 @@ export default function Home() {
 
   // Side panel (Co-pilot | Inspect, and Threads below 1180px): open by default on wide screens
   const side = useSidePanel();
-  const { showInspect } = side;
+  // The investigation board: its split view from 1180px, a list in the sheet below.
+  // Anything opened in Inspect closes it (the globe shows one focus at a time).
+  const [boardOpen, setBoardOpen] = useState(false);
+  const { showInspect: showSideInspect } = side;
+  const showInspect = useCallback(() => {
+    setBoardOpen(false);
+    showSideInspect();
+  }, [showSideInspect]);
   // From 1180px Threads is a rail in the left column; below, a tab in the sheet.
   const wide = useWideScreen();
   const sideTab = wide && side.tab === "threads" ? "copilot" : side.tab;
@@ -490,6 +509,7 @@ export default function Home() {
         setSelectedThread(null);
       }
       if (on && !wide) {
+        setBoardOpen(false); // the sheet's Threads tab, not the board's list
         setSideTab("threads");
         setSideOpen(true);
       }
@@ -515,6 +535,7 @@ export default function Home() {
       if (thread) {
         setThreadsOn(true);
         endTracking();
+        setBoardOpen(false);
       }
     },
     [resetSpreadReplay, endTracking],
@@ -573,16 +594,18 @@ export default function Home() {
   // The search button (below 1180px) opens the Track search in the sheet, or closes it.
   const handleSearchOpen = useCallback(() => {
     setSheetSearch((open) => !open);
+    setBoardOpen(false);
     setSideOpen(true);
   }, [setSideOpen]);
   const closeSheetSearch = useCallback(() => {
     setSheetSearch(false);
     searchButtonRef.current?.focus();
   }, []);
-  // The search has the sheet while it is open: a tab picked closes it.
+  // The search (or the board's list) has the sheet while it is open: a tab picked closes it.
   const handleSideTab = useCallback(
     (tab: SideTab) => {
       setSheetSearch(false);
+      setBoardOpen(false);
       setSideTab(tab);
     },
     [setSideTab],
@@ -614,9 +637,87 @@ export default function Home() {
     onAnnounce: setSearchNote,
   });
 
+  // The investigation board (localStorage): pins from the panels, the board's
+  // view of them with their edges and memo, and the globe's mirror of it.
+  const board = useBoard();
+  const [boardNote, setBoardNote] = useState("");
+  const boardButtonRef = useRef<HTMLButtonElement>(null);
+  // Shown: the split view from 1180px, or the list while the sheet is open below.
+  const boardShown = boardOpen && (wide || side.open === true);
+  // Opening it ends the globe's other focus (a selected thread, a tracked entity).
+  const openBoard = useCallback(() => {
+    resetSpreadReplay();
+    setSelectedThread(null);
+    endTracking();
+    dismissHoverCard();
+    setSheetSearch(false);
+    setBoardOpen(true);
+    if (!wide) setSideOpen(true);
+  }, [resetSpreadReplay, endTracking, dismissHoverCard, wide, setSideOpen]);
+  // Closed by its button or Escape: the focus goes back to the Board button.
+  const closeBoard = useCallback(() => {
+    setBoardOpen(false);
+    boardButtonRef.current?.focus();
+  }, []);
+  const toggleBoard = useCallback(
+    () => (boardShown ? closeBoard() : openBoard()),
+    [boardShown, closeBoard, openBoard],
+  );
+  const { has: pinned, full: boardFull, toggle: togglePin, unpin } = board;
+  const pinControls = useMemo<PinControls>(
+    () => ({
+      has: pinned,
+      full: boardFull,
+      toggle: (item, snapshot) => {
+        const done = togglePin(item, snapshot);
+        setBoardNote(
+          done === "pinned"
+            ? `Pinned to the board: ${snapshot.title}.`
+            : done === "unpinned"
+              ? `Removed from the board: ${snapshot.title}.`
+              : "The board is full: remove a pin to add another.",
+        );
+      },
+    }),
+    [pinned, boardFull, togglePin],
+  );
+  const boardItems = useMemo(() => board.pins.map((p) => p.item), [board.pins]);
+  const boardLinks = useBoardLinks(boardItems, boardShown);
+  const edges = useMemo(
+    () => boardEdges(boardLinks.edges, board.pins),
+    [boardLinks.edges, board.pins],
+  );
+  const boardMirror = useBoardMirror(board.pins, edges, boardShown);
+  const boardMemo = useBoardMemo(board.pins);
+  useBoardRefresh(boardShown, board, setBoardNote);
+  const sharedBoard = useSharedBoard(board, { onOpen: openBoard, announce: setBoardNote });
+  const handleUnpin = useCallback(
+    (item: string) => {
+      unpin(item);
+      setBoardNote("Removed from the board.");
+    },
+    [unpin],
+  );
+  const boardView = (variant: "split" | "sheet") => (
+    <Board
+      variant={variant}
+      pins={board.pins}
+      edges={edges}
+      coCoverageChecked={boardLinks.coCoverageChecked}
+      edgesFailed={boardLinks.failed}
+      memo={boardMemo.memo}
+      analyzing={boardMemo.analyzing}
+      onAnalyze={boardMemo.analyze}
+      onDismissMemo={boardMemo.dismiss}
+      onMove={board.move}
+      onRemove={handleUnpin}
+      onClose={closeBoard}
+    />
+  );
+
   // "/" focuses the Track search (the mockup's shortcut): the top bar's pill
   // from 1180px, the sheet's below. Escape on the page (nothing focused, no
-  // hover card to hide first) stops tracking.
+  // hover card to hide first) closes the board, or stops tracking.
   const hoverShown = hover.card !== null;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -632,11 +733,13 @@ export default function Home() {
         return;
       }
       const onPage = !document.activeElement || document.activeElement === document.body;
-      if (e.key === "Escape" && tracked && onPage && !hoverShown) endTracking();
+      if (e.key !== "Escape" || !onPage || hoverShown) return;
+      if (boardOpen) closeBoard();
+      else if (tracked) endTracking();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [wide, tracked, hoverShown, endTracking, setSideOpen]);
+  }, [wide, tracked, hoverShown, endTracking, setSideOpen, boardOpen, closeBoard]);
 
   // "All {n} stories": the thread's stories in Inspect, the detail's first page
   // at once, then 20 more a page.
@@ -933,8 +1036,12 @@ export default function Home() {
     </>
   );
 
-  return (
-    <main className="relative h-screen w-screen overflow-hidden">
+  // From 1180px the open board takes the left of the screen: the other panels
+  // hide and the globe slides right (soft-orbit.css .board-open).
+  const split = boardOpen && wide;
+
+  const content = (
+    <main className={`relative h-screen w-screen overflow-hidden${split ? " board-open" : ""}`}>
       {/* Starfield, under everything */}
       <Sky />
 
@@ -963,6 +1070,8 @@ export default function Home() {
         threadLit={spreadReplay.lit}
         onGrab={handleGrab}
         focus={globeFocus}
+        board={boardMirror}
+        shifted={split}
       />
 
       {/* Orbital rings around the globe */}
@@ -994,6 +1103,10 @@ export default function Home() {
         onSearchOpen={handleSearchOpen}
         searchOpen={!wide && sheetSearch}
         searchButtonRef={searchButtonRef}
+        boardCount={board.pins.length}
+        boardOpen={boardShown}
+        onBoard={toggleBoard}
+        boardButtonRef={boardButtonRef}
       />
       {/* The left column from 1180px: since your last visit, then the threads rail */}
       <div className={linksOn ? "left-stack links-on" : "left-stack"}>
@@ -1024,6 +1137,7 @@ export default function Home() {
         inspectRef={inspectRef}
         copilotRef={copilotRef}
         threadsRef={threadsTabRef}
+        board={!wide && boardOpen ? boardView("sheet") : undefined}
         search={
           !wide && sheetSearch ? (
             <div ref={sheetSearchRef}>
@@ -1077,6 +1191,9 @@ export default function Home() {
           )
         }
       />
+
+      {/* The investigation board's split view, from 1180px (below, its list is in the sheet) */}
+      {split && boardView("split")}
 
       {/* Bottom row: layers and the timeline, centred on the page. After the side
           panel: below 1180px the CSS lifts it above the sheet by sibling selectors. */}
@@ -1135,7 +1252,20 @@ export default function Home() {
         <span>{replayAnnouncement(globeThread?.spread ?? [], spreadReplay.phase)}</span>
         <span>{searchNote}</span>
         <span>{trackNote}</span>
+        <span>{boardNote}</span>
       </p>
+
+      {/* A share link's pins, for a board with pins of its own: asked, never merged by itself */}
+      {sharedBoard.offer && (
+        <BoardMergePrompt
+          {...sharedBoard.offer}
+          onAdd={sharedBoard.accept}
+          onKeep={() => {
+            sharedBoard.decline();
+            boardButtonRef.current?.focus();
+          }}
+        />
+      )}
 
       {/* City hover card: GlobeHud places it beside its dot (docked on touch screens) */}
       {shownCard && cardPoint && (
@@ -1162,4 +1292,7 @@ export default function Home() {
       )}
     </main>
   );
+
+  // Pin buttons in any panel reach the board through this.
+  return <PinContext.Provider value={pinControls}>{content}</PinContext.Provider>;
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import ThreadsRail from "./ThreadsRail";
+import { PinContext } from "./PinButton";
 import {
   toThread,
   toThreadDetail,
@@ -248,5 +249,30 @@ describe("ThreadsRail", () => {
     renderRail({ selected: { id: 99, title: "Port strike in Antwerp" }, detail: null });
     expect(rows()[0]).toHaveTextContent("Port strike in Antwerp");
     expect(rows()[0]).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+describe("ThreadsRail pin", () => {
+  it("the open thread's detail pins the thread", () => {
+    const toggle = vi.fn();
+    render(
+      <PinContext.Provider value={{ has: () => false, full: false, toggle }}>
+        <ThreadsRail
+          variant="rail"
+          threads={[RED_SEA]}
+          status={null}
+          loading={false}
+          selected={SELECTED}
+          detail={detail()}
+          lit={null}
+          onSelect={vi.fn()}
+        />
+      </PinContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pin to board" }));
+    expect(toggle).toHaveBeenCalledWith(
+      "thread:7",
+      expect.objectContaining({ title: "Red Sea shipping attacks", place: "Yemen" }),
+    );
   });
 });
