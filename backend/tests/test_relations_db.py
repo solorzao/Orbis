@@ -23,7 +23,7 @@ import pytest_asyncio
 
 from app.services import relations
 from tests import db_plans
-from tests.events_fixture import ISO, fill_week
+from tests.events_fixture import BUSY_PAIR, fill_week
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
 
@@ -208,7 +208,9 @@ async def test_the_detail_takes_titles_from_our_articles(conn):
 
 # Pages each read may touch, custom or generic (the plan's table, 19c.3).
 _SINCE_PAGES = 10  # the day index's first entry in the lens
-_DETAIL_PAGES = 60  # 14 heap pages at most (7 days x 2 directions), plus the index's
+# 56 heap pages at most (7 days x 4 classes x 2 directions, each row written apart,
+# as in production), plus the primary key's two descents.
+_DETAIL_PAGES = 7 * 4 * 2 + 14
 _TITLES_PAGES = 60  # 10 lookups by source_url
 
 
@@ -332,8 +334,9 @@ async def test_the_since_checks_fail_without_the_day_index(big, capsys):
 
 
 def _busy_pair() -> tuple[str, str]:
-    """A pair events_fixture writes every day (g = 1): its rows sit on a page a day."""
-    return ISO[1], ISO[2]
+    """The pair events_fixture writes every day, in every class, both ways round, each
+    row on a page of its own: production's worst layout for a detail."""
+    return BUSY_PAIR
 
 
 @pytest.mark.asyncio
@@ -341,7 +344,14 @@ async def test_at_production_scale_the_detail_reads_the_primary_key(big, capsys)
     await fill_week(big, TODAY)
     a, b = _busy_pair()
     args = (a, b, FIRST, LAST)
-    assert len(await big.fetch(relations.DETAIL_SQL, *args)) == 28  # 7 days x 4 classes
+    rows = await big.fetch(
+        "SELECT (ctid::text::point)[0] AS page FROM event_pairs_daily"
+        " WHERE ((a_iso = $1 AND b_iso = $2) OR (a_iso = $2 AND b_iso = $1))"
+        " AND day BETWEEN $3 AND $4",
+        *args,
+    )
+    assert len(rows) == 7 * 4 * 2  # days x classes x directions
+    assert len({r["page"] for r in rows}) == len(rows)  # each on a page of its own
     custom = await db_plans.custom_plan(big, relations.DETAIL_SQL, *args)
     generic = await db_plans.generic_plan(
         big,
