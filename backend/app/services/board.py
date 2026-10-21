@@ -30,7 +30,6 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
-from urllib.parse import urlsplit
 
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.services import llm_budget
@@ -44,6 +43,7 @@ from app.services.thread_reads import merge_chain, shown_text
 from app.services.thread_synopsis import _acceptable, _clean_reply
 from app.services.threads import GENERIC_ENTITY_SHARE, GENERIC_SQL
 from app.services.titles import display_title
+from app.services.urls import web_url
 
 logger = logging.getLogger(__name__)
 
@@ -188,22 +188,6 @@ ENTITY_SAMPLE_SQL = """
         LIMIT $3
     ) s
 """
-
-_MAX_URL = 2048
-_URL_UNSAFE = re.compile(r"[\x00-\x20\x7f]")
-
-
-def web_url(url: object) -> str | None:
-    """*url* when it is an absolute http(s) link with a host, else None."""
-    if not isinstance(url, str) or len(url) > _MAX_URL or _URL_UNSAFE.search(url):
-        return None
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return None
-    if parts.scheme not in ("http", "https") or not parts.netloc or not parts.hostname:
-        return None
-    return url
 
 
 def _json(value: Any) -> Any:
