@@ -261,19 +261,23 @@ def _start_thread_synopses() -> None:
 
 async def stop_background_tasks() -> None:
     """Cancel the cycle's background tasks (a cache warm, thread synopses), and any
-    read of the week's stories for the wk:* caches (the warm's, or one a request's
-    miss started), and wait until they stop.
+    read of the week's stories for the wk:globe: and wk:links: caches (the
+    warm's, or one a request's miss started), and wait until they stop.
 
     At shutdown, before Redis and the pool close, so a warm cannot reopen
     them; and as a cycle starts, so a warm cannot write answers back after
     the cycle has invalidated them, nor a week read run on into its writes.
-    A request waiting on a week read gets a 503 then. Waits at most
-    _STOP_TIMEOUT seconds, then logs what is still stopping and goes on.
+    A request waiting on one of those week reads gets a 503 then. A
+    wk:relations: read is rollups only, so it is left to finish and answer
+    its request. Waits at most _STOP_TIMEOUT seconds, then logs what is still
+    stopping and goes on.
     """
     tasks = list(_background_tasks)
     for task in tasks:
         task.cancel()
-    tasks += cancel_flights("wk:")
+    # The week reads that are expensive (a week of articles): a relations read is
+    # rollups only, so one in flight finishes and answers its request.
+    tasks += cancel_flights("wk:globe:") + cancel_flights("wk:links:")
     if not tasks:
         return
     done, pending = await asyncio.wait(tasks, timeout=_STOP_TIMEOUT)

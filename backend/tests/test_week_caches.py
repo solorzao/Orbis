@@ -296,6 +296,47 @@ class TestStopping:
         assert not ingestion._background_tasks
 
     @pytest.mark.asyncio
+    async def test_a_cycle_start_stops_the_weeks_stories_reads_not_a_relations_read(self, redis):
+        """Only wk:globe: and wk:links: read a week of stories. A relations read is
+        rollups only: one in flight finishes and answers its request."""
+        from app.services import cache, ingestion
+
+        relations_started, release = asyncio.Event(), asyncio.Event()
+
+        async def relations_read():
+            relations_started.set()
+            await release.wait()
+            return "relations"
+
+        links_started, links_cancelled = asyncio.Event(), asyncio.Event()
+
+        async def links_read():
+            links_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                links_cancelled.set()
+                raise
+
+        relations_request = asyncio.create_task(
+            cache.single_flight("wk:relations:v1:20261015-20261021:all:40", relations_read)
+        )
+        links_request = asyncio.create_task(cache.single_flight(WEEK_LINKS_KEY, links_read))
+        await asyncio.wait_for(relations_started.wait(), 1)
+        await asyncio.wait_for(links_started.wait(), 1)
+
+        await ingestion.stop_background_tasks()
+
+        assert links_cancelled.is_set()
+        with pytest.raises(cache.FlightCancelled):
+            await links_request
+        assert not relations_request.done()
+        release.set()
+        assert await asyncio.wait_for(relations_request, 1) == "relations"
+        await asyncio.sleep(0)
+        assert not cache._in_flight
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(("path", "mock"), [("/api/news", "globes"), ("/api/links", "links")])
     async def test_a_request_whose_week_read_is_cancelled_gets_a_503_to_retry(
         self, monkeypatch, redis, week, caplog, path, mock

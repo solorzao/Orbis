@@ -134,13 +134,15 @@ npm run test:e2e
 
 ## API Endpoints
 
-| Method | Path                | Description                          |
-| ------ | ------------------- | ------------------------------------ |
-| GET    | `/api/news`         | Globe data points (clustered)        |
-| GET    | `/api/news/cluster` | Articles near a lat/lng              |
-| GET    | `/api/news/summary` | AI-generated cluster summary         |
-| GET    | `/api/topics`       | Topic categories with article counts |
-| GET    | `/health`           | Health check (DB + Redis status)     |
+| Method | Path                    | Description                                                                                      |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------------------ |
+| GET    | `/api/news`             | Globe data points (clustered)                                                                    |
+| GET    | `/api/news/cluster`     | Articles near a lat/lng                                                                          |
+| GET    | `/api/news/summary`     | AI-generated cluster summary                                                                     |
+| GET    | `/api/topics`           | Topic categories with article counts                                                             |
+| GET    | `/api/relations`        | Relations between countries over the last 7 days, from GDELT's reported events (`kind`, `limit`) |
+| GET    | `/api/relations/detail` | One pair's reported events: both classes, directions, each day, sample reports (`a`, `b`)        |
+| GET    | `/health`               | Health check (DB + Redis status)                                                                 |
 
 ## License
 
