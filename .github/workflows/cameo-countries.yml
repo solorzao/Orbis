@@ -1,0 +1,35 @@
+name: CAMEO country table
+
+# Checks the hand-written backend/app/services/cameo_countries.py against GeoNames
+# countryInfo.txt and GDELT's documented CAMEO country list, both downloaded here
+# on the runner, never on a developer's machine. Read-only: it writes nothing and
+# pushes nothing. A table that differs fails with a diff, in the log and the job
+# summary; fix the table by hand.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - backend/app/services/cameo_countries.py
+      - backend/scripts/check_cameo_countries.py
+      - .github/workflows/cameo-countries.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: CAMEO country table
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check the table against its references
+        run: python -m scripts.check_cameo_countries
