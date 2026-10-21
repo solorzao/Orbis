@@ -1908,15 +1908,15 @@ button.cite:hover {
 }
 /*
  * Where the overlays' line is short of room (below 1440px), a toggle drops its
- * dot and shows its state as the base layers do, by a fill (aria-pressed
- * still carries it): three overlays fit a 222px track at 1180.
+ * dot and shows its state by the selected fill instead (aria-pressed still
+ * carries it): three overlays fit a 222px track at 1180.
  */
 @media (width < 1440px) {
   .layers .tg::before {
     display: none;
   }
   .layers .tg[aria-pressed="true"] {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-selected);
   }
 }
 /*
