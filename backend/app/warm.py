@@ -8,6 +8,8 @@ way the frontend's first visit does (the same code path and cache key; the
 7-day globe's seven topics come from one pass, under their requests' keys),
 one at a time to spare the database, each within WARM_TIMEOUT seconds or its
 own WARMER_TIMEOUTS. A warmer that fails or times out is logged and skipped.
+The 7-day window's answers are kept under ``wk:*`` instead, which no cycle
+invalidates, and their warmers refresh them about hourly.
 """
 
 from __future__ import annotations
@@ -31,6 +33,9 @@ Warmer = Callable[[], Awaitable[object]]
 # every topic: the ticker's, and the delta's count), then the threads rail's
 # default list (24 hours, all topics, 20), then the 7-day globe for every topic
 # pill (one pass over the week; the slowest). Another endpoint's warmer joins here.
+# The two 7-day warmers read the week's stories, so they refresh their wk:*
+# entries (which no cycle invalidates) only once those are 55 minutes old
+# (cache.week_fresh): one cycle an hour, and the others skip them.
 WARMERS: tuple[Warmer, ...] = (
     warm_globe,
     warm_volume,

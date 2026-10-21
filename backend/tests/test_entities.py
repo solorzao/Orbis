@@ -512,6 +512,21 @@ class TestEntityRoute:
         assert value["since"] == SINCE.isoformat().replace("+00:00", "Z")
 
     @pytest.mark.asyncio
+    async def test_a_cached_dossier_that_no_longer_fits_the_model_is_recomputed(
+        self, monkeypatch, service
+    ):
+        """An entry cached before a required field (capped) was added: a miss, not a 500."""
+        resolve, dossier, set_cached = service
+        stale = {"name": "Abbas Araghchi", "type": "person"}
+        with patch("app.routers.entities.get_cached", new_callable=AsyncMock, return_value=stale):
+            async with _client(monkeypatch) as client:
+                resp = await client.get("/api/entities/person/Abbas Araghchi")
+        assert resp.status_code == 200
+        assert resp.json()["capped"] is False
+        dossier.assert_awaited_once()
+        set_cached.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_serves_the_cached_dossier(self, monkeypatch, service):
         resolve, dossier, _ = service
         cached = _dossier_body()

@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import json
 import logging
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 import redis.asyncio as aioredis
+from pydantic import ValidationError
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 _redis_client: aioredis.Redis | None = None
 
 # Allowance for a cycle (minutes, mostly embeddings; it invalidates db:* as it
 # ends) and the cache warm after it (app.warm) to finish.
 _WARM_ALLOWANCE = 600
+
+# The week-long answers (the 7-day globe and links list) are under wk:*, which
+# no cycle invalidates: each refresh reads a week of stories, so app.warm
+# refreshes one at its first warm once it is WEEK_REFRESH_AGE old, about hourly,
+# rather than every cycle. They live WEEK_TTL: 25 minutes past the refresh age,
+# a cycle's interval and then some for cycles that run long, so an hourly
+# refresh lands before the entry expires.
+WEEK_TTL = 80 * 60
+WEEK_REFRESH_AGE = 55 * 60
 
 
 def loggable_key(key: str) -> str:
@@ -34,6 +49,68 @@ def cycle_ttl(ttl: int) -> int:
     before anyone asks for it. Entries change only when a cycle runs.
     """
     return max(ttl, settings.ingestion_interval_seconds + _WARM_ALLOWANCE)
+
+
+async def week_fresh(key: str) -> bool:
+    """Whether a week-long entry is under WEEK_REFRESH_AGE old.
+
+    Its age is its TTL's: stored with WEEK_TTL, it is WEEK_TTL minus the TTL
+    left old. A missing entry, or one stored briefly (an empty answer), is
+    never fresh; nor is anything without Redis.
+    """
+    r = await get_redis()
+    if r is None:
+        return False
+    try:
+        left = await r.ttl(key)
+    except Exception:
+        logger.warning("Redis TTL failed for key=%s", key, exc_info=True)
+        return False
+    return left > WEEK_TTL - WEEK_REFRESH_AGE
+
+
+def cached_model(key: str, cached: Any, parse: Callable[[Any], T]) -> T | None:
+    """*key*'s cached entry, *cached*, parsed by *parse*: or None, a miss, when it no
+    longer fits its model.
+
+    An entry cached before its model gained a required field (as #91's
+    ``capped`` was) would otherwise fail every request until it expired: the
+    caller recomputes it instead, and one line is logged. Other errors raise.
+    """
+    try:
+        return parse(cached)
+    except ValidationError as exc:
+        logger.warning(
+            "Cached %s no longer fits its model (%d errors); recomputing.",
+            key,
+            exc.error_count(),
+        )
+        return None
+
+
+# The computation running for each key (single_flight).
+_in_flight: dict[str, asyncio.Task[Any]] = {}
+
+
+async def single_flight(key: str, compute: Callable[[], Awaitable[T]]) -> T:
+    """``compute()``'s answer, run once for concurrent callers of *key*.
+
+    Callers that come while it runs wait for it and get its answer, or its
+    error; the next caller after it lands runs it again. A caller that is
+    cancelled (a browser aborting) leaves it running for the others.
+    """
+    task = _in_flight.get(key)
+    if task is None:
+        task = asyncio.create_task(compute())
+        _in_flight[key] = task
+        task.add_done_callback(functools.partial(_landed, key))
+    return await asyncio.shield(task)
+
+
+def _landed(key: str, task: asyncio.Task[Any]) -> None:
+    """Forget a finished computation, so the next caller runs a new one."""
+    if _in_flight.get(key) is task:
+        del _in_flight[key]
 
 
 async def get_redis() -> aioredis.Redis | None:

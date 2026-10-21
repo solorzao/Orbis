@@ -9,7 +9,7 @@ import pytest
 
 from app.config import settings
 from app.routers.http_cache import EDGE_CACHE_CONTROL
-from app.services.cache import cycle_ttl
+from app.services.cache import WEEK_TTL, cycle_ttl
 from app.services.links import TOPIC_TAGS
 
 NOW = datetime(2026, 10, 12, 15, 37, tzinfo=timezone.utc)
@@ -174,15 +174,40 @@ class TestGetLinks:
             c.args for c in mock_set.await_args_list
         ]
         hours = timespan.removesuffix("h")
-        assert warmed_key == requested_key == f"db:links:v5:live:{hours}::lift:40"
+        # The week's list lives outside db:*, which each cycle invalidates: refreshed hourly.
+        prefix = "wk" if hours == "168" else "db"
+        assert warmed_key == requested_key == f"{prefix}:links:v5:live:{hours}::lift:40"
         assert (warmed, warmed_ttl) == (requested, ttl)
-        # Warmed after one cycle, it lasts until the next cycle's warm.
+        # Warmed after one cycle, it lasts until the next cycle's warm (the week's, the hour's).
         assert warmed_ttl > settings.ingestion_interval_seconds
+        if hours == "168":
+            assert warmed_ttl == WEEK_TTL
 
         with patch("app.routers.links.get_cached", new_callable=AsyncMock, return_value=warmed):
             async with _client(monkeypatch) as client:
                 hit = await client.get("/api/links", params={"timespan": timespan})
         assert hit.content == miss.content
+
+    @pytest.mark.asyncio
+    async def test_a_cached_answer_that_no_longer_fits_the_model_is_recomputed(
+        self, monkeypatch, db
+    ):
+        """Links cached before the model gained a required field: a miss, not a 500;
+        and for the board, no 7-day list (it skips co-coverage) rather than an error."""
+        from app.routers import links as links_router
+
+        stale = [{"a": {"iso": "IR"}, "b": {"iso": "US"}, "n": 7}]
+        with (
+            patch("app.routers.links.get_cached", new_callable=AsyncMock, return_value=stale),
+            patch("app.routers.links.set_cached", new_callable=AsyncMock) as mock_set,
+        ):
+            async with _client(monkeypatch) as client:
+                resp = await client.get("/api/links")
+            assert await links_router.cached_links_7d() is None
+        assert resp.status_code == 200
+        assert resp.json()[0]["n"] == 10
+        db.assert_awaited_once()
+        mock_set.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_serves_the_cached_answer(self, monkeypatch, db):

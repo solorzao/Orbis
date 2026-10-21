@@ -35,7 +35,15 @@ from app.services.ai_summary import (
     summarise_selection,
 )
 from app.services.breaking import get_breaking
-from app.services.cache import cycle_ttl, get_cached, set_cached
+from app.services.cache import (
+    WEEK_TTL,
+    cached_model,
+    cycle_ttl,
+    get_cached,
+    set_cached,
+    single_flight,
+    week_fresh,
+)
 from app.services.database import (
     get_articles_in_bounds,
     get_cell_entities,
@@ -183,14 +191,58 @@ async def cached_globe(
 ) -> list[GlobeDataPoint]:
     """/api/news' answer: cached, else computed and cached.
 
-    The request and its cache warmer both come here, so a warmed entry has
-    the key and the bytes a request would have stored.
+    The request and its cache warmers come here, or store what it would, so a
+    warmed entry has the key and the bytes a request would have stored. An
+    entry that no longer fits GlobeDataPoint is a miss.
+
+    The 7-day window's answers are week-long entries (wk:*, refreshed hourly
+    by warm_globe_week). A miss there is computed once for concurrent
+    requests: for the frontend's limit, by the one pass that stores every
+    topic's, so clicking through topics reads the week once.
     """
     cache_k = _globe_key(hours, start_time, end_time, limit, tag)
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
-        return [GlobeDataPoint(**p) for p in cached]
+        points = cached_model(cache_k, cached, _globe_points)
+        if points is not None:
+            return points
 
+    load = functools.partial(_load_globe, cache_k, hours, start_time, end_time, limit, tag)
+    if not _is_week(hours, start_time, end_time):
+        return await load()
+    if limit == _FIRST_VISIT_GLOBE_LIMIT:
+        return (await single_flight(_GLOBE_WEEK_FLIGHT, _refresh_globe_week))[tag]
+    return await single_flight(cache_k, load)
+
+
+def _is_week(hours: int, start_time: str | None, end_time: str | None) -> bool:
+    """Whether a globe request is the 7-day window's (live, 168 hours)."""
+    return hours == _WEEK_HOURS and not start_time and not end_time
+
+
+def _globe_key(
+    hours: int, start_time: str | None, end_time: str | None, limit: int, tag: str | None
+) -> str:
+    """cached_globe's key for a request: the 7-day window's under wk:, which no
+    cycle invalidates (see cache.WEEK_TTL), the others under db:."""
+    # v2: points carry the hover card's lead, topic mix and tone.
+    prefix = "wk" if _is_week(hours, start_time, end_time) else "db"
+    return f"{prefix}:globe:v2:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
+
+
+def _globe_points(cached: list) -> list[GlobeDataPoint]:
+    return [GlobeDataPoint.model_validate(p) for p in cached]
+
+
+async def _load_globe(
+    cache_k: str,
+    hours: int,
+    start_time: str | None,
+    end_time: str | None,
+    limit: int,
+    tag: str | None,
+) -> list[GlobeDataPoint]:
+    """Compute one globe (one topic's) and cache it under *cache_k*."""
     rows = await get_globe_points(
         timespan_hours=hours,
         cell_size=1.0,
@@ -199,21 +251,18 @@ async def cached_globe(
         end_time=_parse_iso(end_time),
         topic=tag,
     )
-    return await _cache_globe(cache_k, rows)
+    return await _cache_globe(cache_k, rows, week=_is_week(hours, start_time, end_time))
 
 
-def _globe_key(
-    hours: int, start_time: str | None, end_time: str | None, limit: int, tag: str | None
-) -> str:
-    """cached_globe's key for a request."""
-    # v2: points carry the hover card's lead, topic mix and tone.
-    return f"db:globe:v2:{start_time or hours}:{end_time or ''}:{limit}:{tag or ''}"
-
-
-async def _cache_globe(cache_k: str, rows: list[dict]) -> list[GlobeDataPoint]:
-    """Cache a globe's points until the next cycle ends; an empty globe only briefly."""
+async def _cache_globe(cache_k: str, rows: list[dict], *, week: bool) -> list[GlobeDataPoint]:
+    """Cache a globe's points: a week's for WEEK_TTL, empty or not (it is refreshed
+    hourly, and a miss reads the week); others until the next cycle ends, an
+    empty one only briefly."""
     points = [GlobeDataPoint(**r) for r in rows]
-    ttl = cycle_ttl(settings.db_cache_ttl) if points else _EMPTY_GLOBE_TTL
+    if week:
+        ttl = WEEK_TTL
+    else:
+        ttl = cycle_ttl(settings.db_cache_ttl) if points else _EMPTY_GLOBE_TTL
     await set_cached(cache_k, [p.model_dump(mode="json") for p in points], ttl)
     return points
 
@@ -231,20 +280,36 @@ async def warm_globe() -> None:
 # The timeline's 7-day preset (frontend LiveHours).
 _WEEK_HOURS = 168
 
+# The one pass that refreshes the 7-day globe's seven entries (single_flight).
+_GLOBE_WEEK_FLIGHT = "wk:globe:v2:168::500:*"
+
 
 async def warm_globe_week() -> None:
-    """Cache the 7-day globe for All and each topic pill (app.warm, after each cycle).
+    """Refresh the 7-day globe for All and each topic pill about hourly (app.warm).
 
-    One query reads the week's stories once for all seven (get_globe_points_by_topic);
-    each is cached under the key, bytes and TTL its request would cache, so a topic
-    click on the 7-day window is a hit. Each was its own query, 20-73 s cold on
-    production, and a click kept the last topic's dots up meanwhile.
+    Nothing while it is fresh (cache.week_fresh: under 55 minutes old), so most
+    cycles skip it: each refresh reads the week's stories (25 s on production).
+    Joins a refresh that a request's miss has started.
     """
+    if await week_fresh(_globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, None)):
+        return
+    await single_flight(_GLOBE_WEEK_FLIGHT, _refresh_globe_week)
+
+
+async def _refresh_globe_week() -> dict[str | None, list[GlobeDataPoint]]:
+    """Compute the 7-day globe for All and each topic from one pass over the week
+    (get_globe_points_by_topic), and cache each for WEEK_TTL under the key, and as
+    the bytes, its request would cache. Each was its own query, 20-73 s cold on
+    production, and a topic click kept the last topic's dots up meanwhile."""
     globes = await get_globe_points_by_topic(
         timespan_hours=_WEEK_HOURS, cell_size=1.0, limit=_FIRST_VISIT_GLOBE_LIMIT
     )
-    for tag, rows in globes.items():
-        await _cache_globe(_globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, tag), rows)
+    return {
+        tag: await _cache_globe(
+            _globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, tag), rows, week=True
+        )
+        for tag, rows in globes.items()
+    }
 
 
 # Grid cell size must match get_globe_points() call in get_globe_data().
@@ -476,8 +541,9 @@ async def get_place_preview(
     topic_suffix = f":{tag}" if tag else ""
     cache_k = f"preview:v1:{cell_lat}:{cell_lng}:{_window_key(start, end)}{topic_suffix}"
     cached = await get_cached(cache_k)
-    if cached is not None:
-        return PlacePreview(**cached)
+    preview = None if cached is None else cached_model(cache_k, cached, PlacePreview.model_validate)
+    if preview is not None:
+        return preview
 
     min_lat = cell_lat * _CELL_SIZE
     min_lng = cell_lng * _CELL_SIZE
@@ -525,7 +591,11 @@ async def _cached_breaking() -> list[BreakingStory]:
     """
     cached = await get_cached(_BREAKING_KEY)
     if cached is not None:  # [] is a cached answer too
-        return [BreakingStory(**s) for s in cached]
+        stories = cached_model(
+            _BREAKING_KEY, cached, lambda c: [BreakingStory.model_validate(s) for s in c]
+        )
+        if stories is not None:
+            return stories
 
     task = _breaking_in_flight.get(_BREAKING_KEY)
     if task is None:
@@ -636,8 +706,9 @@ async def get_news_delta(
     # v2: surging became breaking.
     cache_k = f"db:delta:v2:{start:%Y%m%d%H%M}"
     cached = await get_cached(cache_k)
-    if cached is not None:
-        return Delta(**cached)
+    delta = None if cached is None else cached_model(cache_k, cached, Delta.model_validate)
+    if delta is not None:
+        return delta
 
     changes, stories = await asyncio.gather(get_delta(start), _cached_breaking())
     delta = Delta(**changes, breaking=len(stories[:_MAX_BREAKING]))
@@ -653,7 +724,11 @@ async def get_article_density(
     cache_k = f"db:density:{offset_days}"
     cached = await get_cached(cache_k)
     if cached:
-        return [HourlyDensity(**d) for d in cached]
+        density = cached_model(
+            cache_k, cached, lambda c: [HourlyDensity.model_validate(d) for d in c]
+        )
+        if density is not None:
+            return density
 
     data = await get_hourly_density(offset_days=offset_days)
     result = [HourlyDensity(hour=h, count=data.get(h, 0)) for h in range(24)]
@@ -676,7 +751,11 @@ async def cached_volume(days: int) -> list[HourlyVolume]:
     cache_k = f"db:volume:{days}"
     cached = await get_cached(cache_k)
     if cached:
-        return [HourlyVolume(**v) for v in cached]
+        volume = cached_model(
+            cache_k, cached, lambda c: [HourlyVolume.model_validate(v) for v in c]
+        )
+        if volume is not None:
+            return volume
 
     result = [HourlyVolume(**r) for r in await get_hourly_volume(days)]
     if result:
@@ -701,7 +780,9 @@ async def get_topics() -> list[TopicCount]:
     cache_k = "db:topics"
     cached = await get_cached(cache_k)
     if cached:
-        return [TopicCount(**t) for t in cached]
+        topics = cached_model(cache_k, cached, lambda c: [TopicCount.model_validate(t) for t in c])
+        if topics is not None:
+            return topics
 
     counts = await get_topic_counts()
     result = [TopicCount(topic=t, count=c) for t, c in counts.items()]

@@ -161,6 +161,20 @@ class TestListThreads:
         reads.listing.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_a_cached_list_that_no_longer_fits_the_model_is_recomputed(
+        self, monkeypatch, reads
+    ):
+        """An entry cached before the model gained a required field is a miss, not a 500."""
+        reads.get_cached.return_value = [{"id": 7, "title": "Strikes"}]
+
+        resp = await _get(monkeypatch, "/api/threads")
+
+        assert resp.status_code == 200
+        assert resp.json() == [_json(_item())]
+        reads.listing.assert_awaited_once()
+        reads.set_cached.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_the_answer_is_cached_until_the_next_cycle(self, monkeypatch, reads):
         await _get(monkeypatch, "/api/threads", timespan="6h", topic="Climate", limit=5)
 

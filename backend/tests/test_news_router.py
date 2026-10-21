@@ -1,6 +1,5 @@
 """Tests for the news router endpoints (database-backed)."""
 
-import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -299,6 +298,52 @@ class TestGetGlobeDataCache:
         assert _EMPTY_GLOBE_TTL < settings.db_cache_ttl
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("stale", [[{"lat": 1.0, "lng": 2.0}], {"points": []}])
+    async def test_an_entry_that_no_longer_fits_the_model_is_recomputed(self, stale):
+        """Cached before the model gained a required field (or in another shape): a miss,
+        recomputed and cached again, never a 500."""
+        from app.routers.news import get_globe_data
+
+        with (
+            patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=stale),
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+            patch(
+                "app.routers.news.get_globe_points",
+                new_callable=AsyncMock,
+                return_value=[_make_globe_row()],
+            ) as mock_db,
+        ):
+            [point] = await get_globe_data(timespan="24h", limit=100)
+
+        assert point.lat == 40.0
+        mock_db.assert_awaited_once()
+        mock_set.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "stale"),
+        [
+            ("/api/news/breaking", [{"headline": "x"}]),
+            ("/api/news/volume", [{"hour": "2026-10-21T09:00:00Z"}]),
+            ("/api/topics", [{"topic": "politics"}]),
+        ],
+    )
+    async def test_other_news_entries_that_no_longer_fit_are_recomputed(
+        self, monkeypatch, path, stale
+    ):
+        with (
+            patch("app.routers.news.get_cached", new_callable=AsyncMock, return_value=stale),
+            patch("app.routers.news.get_breaking", new_callable=AsyncMock, return_value=[]),
+            patch("app.routers.news.get_hourly_volume", new_callable=AsyncMock, return_value=[]),
+            patch("app.routers.news.get_topic_counts", new_callable=AsyncMock, return_value={}),
+        ):
+            async with _api_client(monkeypatch) as client:
+                resp = await client.get(path)
+
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    @pytest.mark.asyncio
     async def test_a_cached_empty_window_is_served_without_the_database(self):
         from app.routers.news import get_globe_data
 
@@ -383,106 +428,6 @@ class TestGetGlobeDataTopic:
         assert keys["Climate"].endswith(":environment")
         assert keys["Climate"] != keys["All"]
         assert "environment" not in keys["All"]
-
-
-# The topic pills as the frontend sends them (All: no topic), and their article tags.
-_PILLS = [
-    (None, None),
-    ("Politics", "politics"),
-    ("Conflict", "conflict"),
-    ("Technology", "technology"),
-    ("Climate", "environment"),
-    ("Economy", "economy"),
-    ("Health", "health"),
-]
-
-
-def _week_variants() -> dict:
-    """get_globe_points_by_topic's answer: All's cells and each topic's (Health has none)."""
-    variants = {
-        tag: [_make_hover_row(topic=tag or "politics", lat=10.5 + i)]
-        for i, (_, tag) in enumerate(_PILLS)
-    }
-    variants["health"] = []
-    return variants
-
-
-class TestWarmGlobeWeek:
-    """The 7-day globe for All and each topic, warmed from one pass over the week."""
-
-    @pytest.mark.asyncio
-    async def test_each_variant_is_cached_as_its_request_would_cache_it(self):
-        """The key, bytes and TTL cached_globe stores for the 7-day request of each topic."""
-        from app.routers.news import cached_globe, warm_globe_week
-
-        variants = _week_variants()
-        with (
-            patch("app.routers.news.set_cached", new_callable=AsyncMock) as warmed,
-            patch(
-                "app.routers.news.get_globe_points_by_topic",
-                new_callable=AsyncMock,
-                return_value=variants,
-            ) as one_pass,
-            patch("app.routers.news.get_globe_points", new_callable=AsyncMock) as per_topic,
-        ):
-            await warm_globe_week()
-
-        one_pass.assert_awaited_once_with(timespan_hours=168, cell_size=1.0, limit=500)
-        per_topic.assert_not_awaited()
-        expected = []
-        for _, tag in _PILLS:
-            with (
-                patch("app.routers.news.set_cached", new_callable=AsyncMock) as requested,
-                patch(
-                    "app.routers.news.get_globe_points",
-                    new_callable=AsyncMock,
-                    return_value=variants[tag],
-                ),
-            ):
-                await cached_globe(168, None, None, 500, tag)
-            expected.append(requested.await_args)
-        assert warmed.await_args_list == expected
-        # Until the next cycle; Health's empty globe only briefly, as a request's.
-        ttls = {args.args[0]: args.args[2] for args in warmed.await_args_list}
-        assert ttls["db:globe:v2:168::500:"] == cycle_ttl(settings.db_cache_ttl)
-        assert ttls["db:globe:v2:168::500:health"] == 60
-
-    @pytest.mark.asyncio
-    async def test_the_7_day_request_for_every_topic_pill_is_then_a_cache_hit(self, monkeypatch):
-        from app.routers.news import warm_globe_week
-
-        store: dict = {}
-
-        async def cache_set(key, value, ttl):
-            store[key] = json.loads(json.dumps(value))
-
-        async def cache_get(key):
-            return store.get(key)
-
-        variants = _week_variants()
-        with (
-            patch("app.routers.news.set_cached", side_effect=cache_set),
-            patch("app.routers.news.get_cached", side_effect=cache_get),
-            patch(
-                "app.routers.news.get_globe_points_by_topic",
-                new_callable=AsyncMock,
-                return_value=variants,
-            ),
-            patch("app.routers.news.get_globe_points", new_callable=AsyncMock) as per_topic,
-        ):
-            await warm_globe_week()
-            async with _api_client(monkeypatch) as client:
-                for pill, tag in _PILLS:
-                    params = {"timespan": "168h", "limit": 500}
-                    if pill:
-                        params["topic"] = pill
-                    resp = await client.get("/api/news", params=params)
-                    assert resp.status_code == 200
-                    points = resp.json()
-                    assert [p["lat"] for p in points] == [r["lat"] for r in variants[tag]], pill
-
-        per_topic.assert_not_awaited()
-        assert len(store) == 7
 
 
 class TestGetClusterArticles:

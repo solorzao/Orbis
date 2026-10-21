@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal, NamedTuple
@@ -12,7 +13,15 @@ from app.models.links import Link, LinkDetail, LinkExplainRequest, LinkExplanati
 from app.routers.http_cache import edge_cached
 from app.routers.news import _deduplicate_articles, _globe_topic_tag, _parse_iso, _row_to_article
 from app.services.ai_summary import _window_key
-from app.services.cache import cycle_ttl, get_cached, set_cached
+from app.services.cache import (
+    WEEK_TTL,
+    cached_model,
+    cycle_ttl,
+    get_cached,
+    set_cached,
+    single_flight,
+    week_fresh,
+)
 from app.services.country_centroids import centroid
 from app.services.links import explain_link, get_link_detail, get_link_pairs, rank_links
 
@@ -123,25 +132,55 @@ async def get_links(
     return await cached_links(window, tag, rank, limit)
 
 
+# The 7-day window's cache-key part: its answers are week-long entries.
+_WEEK_WINDOW = "live:168"
+
+
 def _links_key(window: Window, tag: str | None, rank: str, limit: int) -> str:
-    return f"db:links:v5:{window.key}:{tag or ''}:{rank}:{limit}"
+    """The 7-day window's under wk:, which no cycle invalidates (see
+    cache.WEEK_TTL), the others under db:."""
+    prefix = "wk" if window.key == _WEEK_WINDOW else "db"
+    return f"{prefix}:links:v5:{window.key}:{tag or ''}:{rank}:{limit}"
+
+
+def _parse_links(cached: list) -> list[Link]:
+    return [Link.model_validate(link) for link in cached]
 
 
 async def cached_links(window: Window, tag: str | None, rank: str, limit: int) -> list[Link]:
     """/api/links' answer for the window: cached, else computed and cached.
 
     The request and the cache warmers both come here, so a warmed entry has
-    the key and the bytes a request would have stored.
+    the key and the bytes a request would have stored. An entry that no
+    longer fits Link is a miss. The 7-day window's answers are week-long
+    entries (wk:*, refreshed hourly by warm_links_7d); a miss there is
+    computed once for concurrent requests.
     """
     cache_k = _links_key(window, tag, rank, limit)
     cached = await get_cached(cache_k)
     if cached is not None:  # [] is a cached empty window
-        return [Link.model_validate(link) for link in cached]
+        links = cached_model(cache_k, cached, _parse_links)
+        if links is not None:
+            return links
 
+    load = functools.partial(_load_links, cache_k, window, tag, rank, limit)
+    if window.key == _WEEK_WINDOW:
+        return await single_flight(cache_k, load)
+    return await load()
+
+
+async def _load_links(
+    cache_k: str, window: Window, tag: str | None, rank: str, limit: int
+) -> list[Link]:
+    """Compute the window's links and cache them: a week's for WEEK_TTL, others
+    until the next cycle ends, an empty answer briefly."""
     rows = await get_link_pairs(window.start, window.end, tag)
     links = [Link.model_validate(link) for link in rank_links(rows, rank, limit, tag)]
 
-    ttl = cycle_ttl(_LINKS_TTL) if links else _EMPTY_LINKS_TTL
+    if window.key == _WEEK_WINDOW:
+        ttl = WEEK_TTL
+    else:
+        ttl = cycle_ttl(_LINKS_TTL) if links else _EMPTY_LINKS_TTL
     await set_cached(cache_k, [link.model_dump(by_alias=True) for link in links], ttl)
     return links
 
@@ -158,16 +197,26 @@ def _default_7d() -> tuple[Window, None, str, int]:
 
 
 async def warm_links_7d() -> None:
-    """Cache the default 7-day /api/links answer: 4.7 s cold on production."""
-    await cached_links(*_default_7d())
+    """Refresh the default 7-day /api/links answer about hourly (app.warm).
+
+    Nothing while it is fresh (cache.week_fresh: under 55 minutes old), so most
+    cycles skip it: each refresh reads the week's stories (12-27 s, and past
+    30 s, on production). Joins a computation a request's miss has started.
+    """
+    window, tag, rank, limit = _default_7d()
+    cache_k = _links_key(window, tag, rank, limit)
+    if await week_fresh(cache_k):
+        return
+    await single_flight(cache_k, functools.partial(_load_links, cache_k, window, tag, rank, limit))
 
 
 async def cached_links_7d() -> list[Link] | None:
-    """The default 7-day /api/links answer when it is cached (warm_links_7d fills it
-    after each cycle), else None. Never computed here: the board's co-coverage edges
-    read it, and skip themselves rather than run the 7-day query."""
-    cached = await get_cached(_links_key(*_default_7d()))
-    return None if cached is None else [Link.model_validate(link) for link in cached]
+    """The default 7-day /api/links answer when it is cached (warm_links_7d refreshes
+    it hourly), else None. Never computed here: the board's co-coverage edges read
+    it, and skip themselves rather than run the 7-day query."""
+    cache_k = _links_key(*_default_7d())
+    cached = await get_cached(cache_k)
+    return None if cached is None else cached_model(cache_k, cached, _parse_links)
 
 
 Country = Annotated[str, Query(max_length=8, description="ISO 3166-1 alpha-2 code")]
@@ -194,8 +243,9 @@ async def get_link(
 
     cache_k = f"db:links:detail:v11:{a}:{b}:{window.key}:{tag or ''}"
     cached = await get_cached(cache_k)
-    if cached is not None:
-        return LinkDetail.model_validate(cached)
+    found = None if cached is None else cached_model(cache_k, cached, LinkDetail.model_validate)
+    if found is not None:
+        return found
 
     detail = await get_link_detail(a, b, window.start, window.end, tag)
     # One row per story already; this merges what story_key cannot: copies
