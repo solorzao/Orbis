@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   CLOSE_IN_TIME_MS,
   EDGE_BOW,
+  LABEL_H,
   boardArcs,
   boardEdges,
   boardMirror,
@@ -149,6 +150,66 @@ describe("the edge layout", () => {
     expect(
       layoutEdges(centres, [{ a: "a", b: "z", kind: "same_place", label: "same place" }]),
     ).toEqual([]);
+  });
+});
+
+describe("where an edge's label goes", () => {
+  // Two cards far apart on a line; the edge between them bows up off it.
+  const centres = new Map([
+    ["a", { x: 100, y: 300 }],
+    ["b", { x: 700, y: 300 }],
+  ]);
+  const EDGE = { a: "a", b: "b", kind: "same_thread" as const, label: "same thread" };
+  const width = () => 100;
+  /** The curve's point at t, from its path. */
+  const at = (d: string, t: number) => {
+    const [, x0, y0, cx, cy, x1, y1] = d.split(/[ MQ]+/).map(Number);
+    const u = 1 - t;
+    return {
+      x: u * u * x0 + 2 * u * t * cx + t * t * x1,
+      y: u * u * y0 + 2 * u * t * cy + t * t * y1,
+    };
+  };
+  const overlaps = (
+    l: { x: number; y: number },
+    c: { x: number; y: number; w: number; h: number },
+  ) =>
+    !(
+      l.x + 50 <= c.x ||
+      c.x + c.w <= l.x - 50 ||
+      l.y + LABEL_H / 2 <= c.y ||
+      c.y + c.h <= l.y - LABEL_H / 2
+    );
+
+  it("sits at the curve's middle when that is clear of every card", () => {
+    const cards = [{ x: 0, y: 260, w: 200, h: 80 }];
+    const [e] = layoutEdges(centres, [EDGE], cards, width);
+    expect(e).toMatchObject(at(e.d, 0.5));
+    expect(e.under).toBe(false);
+  });
+
+  it("moves along the curve, nearest the middle first, off a card in its way", () => {
+    const [plain] = layoutEdges(centres, [EDGE]);
+    const mid = at(plain.d, 0.5);
+    // A card from just left of the middle: the label's box there (100 wide) meets it.
+    const card = { x: mid.x - 8, y: mid.y - 40, w: 120, h: 80 };
+    const [e] = layoutEdges(centres, [EDGE], [card], width);
+    expect(e).toMatchObject(at(e.d, 0.4));
+    expect(overlaps(e, card)).toBe(false);
+    expect(e.under).toBe(false);
+    // A card over the spots at 0.4 and 0.5: it goes to 0.6.
+    const left = at(plain.d, 0.4).x - 40;
+    const wide = { ...card, x: left, w: mid.x + 5 - left };
+    const [next] = layoutEdges(centres, [EDGE], [wide], width);
+    expect(next).toMatchObject(at(next.d, 0.6));
+    expect(overlaps(next, wide)).toBe(false);
+  });
+
+  it("goes under the cards, at the middle, when no spot is clear", () => {
+    const everything = [{ x: 0, y: 0, w: 1000, h: 1000 }];
+    const [e] = layoutEdges(centres, [EDGE], everything, width);
+    expect(e).toMatchObject(at(e.d, 0.5));
+    expect(e.under).toBe(true);
   });
 });
 

@@ -150,19 +150,44 @@ const EDGE_SPREAD = 48;
 export interface LaidEdge extends BoardEdge {
   key: string;
   d: string;
+  /** The label's centre. */
   x: number;
   y: number;
+  /** No spot along the curve was clear of the cards: the label goes under them. */
+  under: boolean;
+}
+
+/** A card's box on the canvas (px). */
+export interface CardBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A label's height (px): one line of --type-label in its pill. */
+export const LABEL_H = 24;
+/** Where along its curve a label may sit, in turn: the middle, then out from it. */
+const LABEL_SPOTS = [0.5, 0.4, 0.6, 0.3, 0.7];
+
+/** A label's width (px), about: 6.6px a character of --type-label, its padding, at most 300. */
+export function labelWidth(label: string): number {
+  return Math.min(300, 22 + 6.6 * label.length);
 }
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
 /**
  * The edges between the cards' centres (px), as quadratic curves bowed to one
- * side; the edges of one pair bow apart. Each label sits at its curve's middle.
+ * side; the edges of one pair bow apart. Each label sits at the first spot
+ * along its curve (the middle, then 0.4, 0.6, 0.3, 0.7) where its box clears
+ * every card; where none does, at the middle, under the cards.
  */
 export function layoutEdges(
   centres: ReadonlyMap<string, { x: number; y: number }>,
   edges: readonly BoardEdge[],
+  cards: readonly CardBox[] = [],
+  widthOf: (label: string) => number = labelWidth,
 ): LaidEdge[] {
   const pairs = new Map<string, number>();
   for (const e of edges) pairs.set(`${e.a}|${e.b}`, (pairs.get(`${e.a}|${e.b}`) ?? 0) + 1);
@@ -180,14 +205,32 @@ export function layoutEdges(
     const dy = q.y - p.y;
     const len = Math.hypot(dx, dy);
     const [nx, ny] = len < 1 ? [0, -1] : [dy / len, -dx / len];
+    const [x0, y0, x1, y1] = [r1(p.x), r1(p.y), r1(q.x), r1(q.y)];
     const cx = r1((p.x + q.x) / 2 + nx * bow);
     const cy = r1((p.y + q.y) / 2 + ny * bow);
+    const point = (t: number) => {
+      const u = 1 - t;
+      return {
+        x: u * u * x0 + 2 * u * t * cx + t * t * x1,
+        y: u * u * y0 + 2 * u * t * cy + t * t * y1,
+      };
+    };
+    const w = widthOf(e.label);
+    const clear = ({ x, y }: { x: number; y: number }) =>
+      cards.every(
+        (c) =>
+          x + w / 2 <= c.x ||
+          c.x + c.w <= x - w / 2 ||
+          y + LABEL_H / 2 <= c.y ||
+          c.y + c.h <= y - LABEL_H / 2,
+      );
+    const spot = LABEL_SPOTS.map(point).find(clear);
     laid.push({
       ...e,
       key: `${pair}|${e.kind}`,
-      d: `M${r1(p.x)} ${r1(p.y)} Q${cx} ${cy} ${r1(q.x)} ${r1(q.y)}`,
-      x: (r1(p.x) + 2 * cx + r1(q.x)) / 4,
-      y: (r1(p.y) + 2 * cy + r1(q.y)) / 4,
+      d: `M${x0} ${y0} Q${cx} ${cy} ${x1} ${y1}`,
+      ...(spot ?? point(0.5)),
+      under: spot === undefined,
     });
   }
   return laid;
