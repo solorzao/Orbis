@@ -29,20 +29,22 @@ logger = logging.getLogger("orbis.warm")
 Warmer = Callable[[], Awaitable[object]]
 
 # Run in order: the first visit's globe and timeline (24 hours, all topics),
-# then the links layer's default windows, then breaking stories (one list for
+# then the links layer's 24-hour window, then breaking stories (one list for
 # every topic: the ticker's, and the delta's count), then the threads rail's
-# default list (24 hours, all topics, 20), then the 7-day globe for every topic
-# pill (one pass over the week; the slowest). Another endpoint's warmer joins here.
-# The two 7-day warmers read the week's stories, so they refresh their wk:*
-# entries (which no cycle invalidates) only once those are 55 minutes old
-# (cache.week_fresh): one cycle an hour, and the others skip them.
+# default list (24 hours, all topics, 20). Another endpoint's warmer joins
+# there. Last, the two week reads: the 7-day links list and the 7-day globe for
+# every topic pill. They refresh their wk:* entries (which no cycle
+# invalidates) only once those are 55 minutes old (cache.week_fresh), so one
+# cycle an hour runs them and the others skip them; run last, they never hold
+# up the cycle's own warmers (links-7d's 26.5 s ran breaking past its 30 s on
+# production, 2026-10-21).
 WARMERS: tuple[Warmer, ...] = (
     warm_globe,
     warm_volume,
     warm_links_24h,
-    warm_links_7d,
     warm_breaking,
     warm_threads,
+    warm_links_7d,
     warm_globe_week,
 )
 
