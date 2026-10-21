@@ -45,6 +45,9 @@ from app.services.titles import display_title
 logger = logging.getLogger("orbis.thread_synopsis")
 
 SYNOPSES_PER_CYCLE = 6
+# The board's cached thread pins (board.item_key("thread:{id}")), which show a
+# thread's title. Spelled out: the board imports this module.
+BOARD_THREAD_ITEMS = "db:board:item:v1:thread:*"
 STORIES_PER_PROMPT = 15  # the newest distinct stories
 # Eligible: enough coverage to be worth a synopsis, and grown since the last one.
 MIN_STORIES = 5
@@ -235,8 +238,9 @@ async def summarise_threads(now: datetime | None = None) -> int:
     """Write synopses for this cycle's eligible threads; return how many were written.
 
     Then, if any were, invalidate the caches that show a thread's title (the
-    threads lists and details, and search's thread results) and rewarm the first
-    list, so they show the new titles without waiting for the next cycle. Cluster
+    threads lists and details, search's thread results and the board's thread
+    pins) and rewarm the first list, so they show the new titles without waiting
+    for the next cycle. Cluster
     articles' thread chips are read live, never cached. *now* is for tests.
     """
     now = now or datetime.now(timezone.utc)
@@ -273,6 +277,7 @@ async def summarise_threads(now: datetime | None = None) -> int:
 
         await invalidate("db:threads*")
         await invalidate("db:search*")
+        await invalidate(BOARD_THREAD_ITEMS)
         await warm_threads()
     logger.info("Thread synopses: %d of %d eligible written.", written, len(threads))
     return written
