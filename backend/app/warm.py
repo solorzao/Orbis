@@ -51,11 +51,11 @@ WARMERS: tuple[Warmer, ...] = (
 # Seconds each warmer may take.
 WARM_TIMEOUT = 30
 
-# Warmers allowed longer, both reading the week's stories on a slow disk. 7-day
-# globe queries took 20-73 s each, cold, on production; its one pass reads them
-# once. The 7-day links warm took 12-27 s, then passed 30 s on 2026-10-21 and
-# was skipped, leaving the links layer's week and the board's co-coverage
-# edges cold for a cycle.
+# Warmers allowed longer, both reading the week's stories on a slow disk, about
+# once an hour: the 7-day globe's one pass took 25-33 s on production, and the
+# 7-day links warm 12-27 s, once past 30 s (2026-10-21). One cut off is
+# cancelled, read and all; its entry, stored for 80 minutes and refreshed at
+# 55, serves on for up to 25 more, and the next cycle's warm retries it.
 WARMER_TIMEOUTS: dict[Warmer, float] = {warm_globe_week: 90, warm_links_7d: 90}
 
 
