@@ -99,6 +99,12 @@ def cached_model(key: str, cached: Any, parse: Callable[[Any], T]) -> T | None:
 _in_flight: dict[str, asyncio.Task[Any]] = {}
 
 
+class FlightCancelled(RuntimeError):
+    """A single_flight computation was cancelled under a caller still waiting on it
+    (a week read stopped at a cycle's boundary). Its message names only the key's
+    prefix (``wk:*``)."""
+
+
 async def single_flight(
     key: str, compute: Callable[[], Awaitable[T]], *, cancel_with_caller: bool = False
 ) -> T:
@@ -109,7 +115,8 @@ async def single_flight(
     cancelled (a browser aborting) leaves it running for the others, unless
     it passes *cancel_with_caller* (a cache warmer, whose timeout or stop must
     end its week read). A caller whose computation is cancelled under it
-    (cancel_flights, or another caller's) gets a RuntimeError.
+    (cancel_flights, or another caller's) gets FlightCancelled. A cancelled
+    computation is forgotten at once, so a newcomer starts afresh.
     """
     task = _in_flight.get(key)
     if task is None:
@@ -122,17 +129,22 @@ async def single_flight(
         current = asyncio.current_task()
         if current is not None and current.cancelling():  # this caller is cancelled
             if cancel_with_caller:
+                _landed(key, task)
                 task.cancel()
             raise
-        raise RuntimeError(f"The computation for {key.split(':')[0]}:* was cancelled.") from None
+        raise FlightCancelled(f"The computation for {key.split(':')[0]}:* was cancelled") from None
 
 
 def cancel_flights(prefix: str) -> list[asyncio.Task[Any]]:
-    """Cancel the running computations whose keys start with *prefix*; return them,
-    for the caller to wait on. Their callers get a RuntimeError."""
-    tasks = [task for key, task in _in_flight.items() if key.startswith(prefix)]
-    for task in tasks:
-        task.cancel()
+    """Cancel the running computations whose keys start with *prefix*, forgetting
+    them at once; return them, for the caller to wait on. Their callers get
+    FlightCancelled."""
+    tasks = []
+    for key, task in list(_in_flight.items()):
+        if key.startswith(prefix):
+            del _in_flight[key]
+            task.cancel()
+            tasks.append(task)
     return tasks
 
 

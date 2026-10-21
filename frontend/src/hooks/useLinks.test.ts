@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useLinks } from "./useLinks";
 import { FETCH_DEBOUNCE_MS } from "./useGlobePoints";
-import { fetchLinks, type ApiLink } from "@/lib/api";
+import { ApiError, fetchLinks, type ApiLink } from "@/lib/api";
 import type { LinkRank } from "@/lib/links";
 import type { TimeWindow } from "@/lib/timeWindow";
 import type { Topic } from "@/types/news";
 
-vi.mock("@/lib/api", () => ({ fetchLinks: vi.fn() }));
+// The fetch mocked; ApiError and the 503 retry as they are.
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchLinks: vi.fn(),
+}));
 const mockFetch = vi.mocked(fetchLinks);
 
 const US = { iso: "US", name: "United States", lat: 39.8, lng: -98.6 };
@@ -117,6 +121,32 @@ describe("useLinks", () => {
       lift.resolve([apiLink(41)]); // late: ignored
     });
     expect(result.current.links.map((l) => l.n)).toEqual([90]);
+  });
+
+  it("asks once more after a 503, showing no error meanwhile", async () => {
+    mockFetch
+      .mockRejectedValueOnce(new ApiError(503, "Service Unavailable", 15_000))
+      .mockResolvedValueOnce([apiLink(41)]);
+    const { result } = render({ w: LIVE_24H, topic: "All", rank: "lift", on: true });
+    await settle();
+    expect(result.current).toEqual({ links: [], loading: true, error: false });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.current.links).toHaveLength(1);
+    expect(result.current).toMatchObject({ loading: false, error: false });
+  });
+
+  it("shows the error after a second 503", async () => {
+    mockFetch.mockRejectedValue(new ApiError(503, "Service Unavailable"));
+    const { result } = render({ w: LIVE_24H, topic: "All", rank: "lift", on: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FETCH_DEBOUNCE_MS + 2_000);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.current).toEqual({ links: [], loading: false, error: true });
   });
 
   it("shows no arcs once Links is off, and a failed load as an error", async () => {

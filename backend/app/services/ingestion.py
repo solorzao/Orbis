@@ -208,6 +208,10 @@ async def _assign_threads(article_ids: list) -> None:
 # The cycle's background tasks, held so they are not garbage-collected mid-run.
 _background_tasks: set[asyncio.Task] = set()
 
+# Seconds stop_background_tasks waits for what it cancelled: asyncpg releases a
+# connection only once the server acknowledges a cancelled query.
+_STOP_TIMEOUT = 15
+
 
 async def _warm_caches() -> None:
     try:
@@ -255,13 +259,27 @@ async def stop_background_tasks() -> None:
     At shutdown, before Redis and the pool close, so a warm cannot reopen
     them; and as a cycle starts, so a warm cannot write answers back after
     the cycle has invalidated them, nor a week read run on into its writes.
-    A request waiting on a week read gets an error then.
+    A request waiting on a week read gets a 503 then. Waits at most
+    _STOP_TIMEOUT seconds, then logs what is still stopping and goes on.
     """
     tasks = list(_background_tasks)
     for task in tasks:
         task.cancel()
     tasks += cancel_flights("wk:")
-    await asyncio.gather(*tasks, return_exceptions=True)
+    if not tasks:
+        return
+    done, pending = await asyncio.wait(tasks, timeout=_STOP_TIMEOUT)
+    for task in done:
+        if not task.cancelled():
+            task.exception()  # retrieved: how a cancelled task ended is no news
+    if pending:
+        names = sorted(getattr(t.get_coro(), "__qualname__", t.get_name()) for t in pending)
+        logger.warning(
+            "%d background tasks still stopping after %s s (%s); going on.",
+            len(pending),
+            _STOP_TIMEOUT,
+            ", ".join(names),
+        )
 
 
 async def run_ingestion_cycle() -> int:

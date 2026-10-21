@@ -13,11 +13,13 @@ class FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.ttls: dict[str, float] = {}
+        self.writes: list[str] = []  # every key set, in order
 
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.writes.append(key)
         self.values[key] = value
         if ex is None:
             self.ttls.pop(key, None)

@@ -242,10 +242,41 @@ class TestSingleFlight:
         assert len(stopped) == 1
         await asyncio.gather(*stopped, return_exceptions=True)
         assert week_cancelled.is_set()
-        with pytest.raises(RuntimeError, match="cancelled"):
+        with pytest.raises(cache.FlightCancelled, match="wk:"):
             await joined
         release.set()
         assert await other == "day"
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_flight_is_forgotten_so_a_newcomer_starts_afresh(self):
+        """Never joins a computation that is on its way out."""
+        dying, started, _ = _blocked()
+
+        async def fresh():
+            return "fresh"
+
+        joined = asyncio.create_task(cache.single_flight("wk:x", dying))
+        await started.wait()
+        cache.cancel_flights("wk:")
+
+        assert await cache.single_flight("wk:x", fresh) == "fresh"
+        with pytest.raises(cache.FlightCancelled):
+            await joined
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_warmer_forgets_its_flight_too(self):
+        dying, started, _ = _blocked()
+
+        async def fresh():
+            return "fresh"
+
+        warmer = asyncio.create_task(cache.single_flight("wk:x", dying, cancel_with_caller=True))
+        await started.wait()
+        warmer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await warmer
+
+        assert await cache.single_flight("wk:x", fresh) == "fresh"
 
     @pytest.mark.asyncio
     async def test_concurrent_callers_share_one_computation(self):

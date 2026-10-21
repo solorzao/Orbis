@@ -819,6 +819,36 @@ class TestStartCacheWarm:
         assert running_at_ingest == [False]
         assert old_warm.cancelled()
 
+    @pytest.mark.asyncio
+    async def test_stopping_waits_a_bounded_time_and_logs_what_is_left(self, caplog):
+        """A task slow to stop (asyncpg waits for the server to acknowledge a cancelled
+        query) must not hold a cycle's start, or shutdown, for ever."""
+        from app.services import ingestion
+
+        started = asyncio.Event()
+
+        async def stubborn_warm():
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                await asyncio.sleep(60)  # still releasing its connection
+
+        with (
+            patch("app.warm.warm_caches", new=stubborn_warm),
+            patch.object(ingestion, "_STOP_TIMEOUT", 0.05),
+            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
+        ):
+            ingestion._start_cache_warm()
+            [task] = ingestion._background_tasks
+            await started.wait()
+            await asyncio.wait_for(ingestion.stop_background_tasks(), 1)  # bounded
+
+        [record] = [r for r in caplog.records if "still stopping" in r.getMessage()]
+        assert "_warm_caches" in record.getMessage()
+        task.cancel()  # let it go for good
+        await asyncio.gather(task, return_exceptions=True)
+
 
 class TestMLClassificationIntegration:
     """Verify that ML classification is wired into the ingestion pipeline."""

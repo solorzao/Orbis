@@ -81,14 +81,57 @@ export interface ApiTopicCount {
   count: number;
 }
 
-/** A failed API answer, with its HTTP status (a 404 means no such thing). */
+/**
+ * A failed API answer, with its HTTP status (a 404 means no such thing) and,
+ * for a 503, how long its Retry-After asks the caller to wait.
+ */
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     statusText: string,
+    readonly retryAfterMs?: number,
   ) {
     super(`API ${status}: ${statusText}`);
     this.name = "ApiError";
+  }
+}
+
+/** A Retry-After header's seconds, in ms; undefined for none (or an HTTP date). */
+function retryAfterMs(header: string | null | undefined): number | undefined {
+  if (!header || !/^\d+$/.test(header.trim())) return undefined;
+  return Number(header.trim()) * 1000;
+}
+
+/** How long a 503 that names no Retry-After waits before its one retry. */
+export const RETRY_503_MS = 2000;
+
+/** The longest a Retry-After may hold the one retry. */
+const MAX_RETRY_503_MS = 30_000;
+
+/**
+ * `call()`'s answer, asking once more after a 503: the API's answer when a
+ * 7-day read was stopped at an ingestion cycle's boundary. The retry waits
+ * the 503's Retry-After (else about 2 s); a second failure, any other error,
+ * or an abort while waiting is passed on.
+ */
+export async function retryOnce503<T>(call: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.status !== 503 || signal.aborted) throw err;
+    const wait = Math.min(err.retryAfterMs ?? RETRY_503_MS, MAX_RETRY_503_MS);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, wait);
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+        },
+        { once: true },
+      );
+    });
+    return call();
   }
 }
 
@@ -106,7 +149,7 @@ export async function apiFetch<T>(
   }
   const res = await fetch(url.toString(), signal ? { signal } : undefined);
   if (!res.ok) {
-    throw new ApiError(res.status, res.statusText);
+    throw new ApiError(res.status, res.statusText, retryAfterMs(res.headers?.get("Retry-After")));
   }
   return res.json() as Promise<T>;
 }
