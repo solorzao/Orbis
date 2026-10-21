@@ -2,12 +2,16 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add relation arcs between countries from GDELT's machine-coded Events. Ingestion keeps only daily country-pair rollups. The globe draws cooperation and conflict arcs, always labelled as *reported events*, with an inspector that shows how the events split and samples of the reports they came from.
+**Goal:** Add relation arcs between countries from GDELT's machine-coded Events. Ingestion keeps only daily country-pair rollups of root events. The globe draws cooperation and conflict arcs over a fixed **7-day lens**, always labelled as *reported events*, with an inspector that shows how the events split, day by day, and samples of the reports they came from.
 
 **Architecture:**
-- **Ingestion.** Each ingestion cycle reads GDELT's `lastupdate.txt` and fetches the newest 15-minute `export.CSV.zip`, plus any earlier slots no cycle has added (at most 4 files, from the last 2 hours). It parses them in memory, aggregates them in Python by (actor 1 country, actor 2 country, UTC day, QuadClass), then writes the cycle's rollups to a narrow table `event_pairs_daily` in **one batched upsert**. The same transaction records the files in `event_files`, so a file is never added twice. Nothing is stored per event, and nothing touches `articles`.
-- **Reading.** `/api/relations` and `/api/relations/detail` read only the rollups, through indexes. They are cached under `db:*` per cycle, except the 7-day window, which uses PR #108's hourly `wk:*` family.
-- **The layer.** A Relations overlay sits beside Links. The two are mutually exclusive: both draw country-to-country arcs between the same label points. The overlay has a class switch (All / Cooperation / Conflict), a persistent legend, and an inspector in the side panel's Inspect tab.
+- **Ingestion.** Each ingestion cycle reads GDELT's `lastupdate.txt` and fetches the newest 15-minute `export.CSV.zip`, plus any earlier slots no cycle has added (at most 4 files, from the last 2 hours). It parses them in memory, keeps root events between two different mapped countries, and aggregates them in Python by (actor 1 country, actor 2 country, UTC day, QuadClass). It then writes the cycle's rollups to a narrow table `event_pairs_daily` in **one batched upsert**. The same transaction records the files in `event_files`, so a file is never added twice. Nothing is stored per event, and nothing touches `articles`.
+- **Reading.** `/api/relations` and `/api/relations/detail` always answer for the last 7 UTC days, whatever the timeline shows. They read only the rollups, and are cached in PR #108's hourly `wk:*` family.
+- **The layer.** A Relations overlay sits beside Links. The two are mutually exclusive: both draw country-to-country arcs between the same label points.
+  - It has a class switch (All / Cooperation / Conflict) and a persistent legend ("Relations · last 7 days").
+  - The 5 strongest arcs carry persistent labels.
+  - It's unavailable under a range or a replay.
+  - An inspector opens in the side panel's Inspect tab.
 
 **Tech Stack:**
 - Backend: FastAPI and asyncpg on Azure PostgreSQL 16 B1ms (P4 disk: about 120 IOPS, 25 MB/s); Upstash Redis; httpx; the standard library's `zipfile`.
@@ -21,6 +25,30 @@
 - `docs/redesign/ui/soft-orbit/tokens.md`, "Connection arcs" (lines 101–109): `--arc-relation-cooperation` `#8fb8ff` and `--arc-relation-conflict` `#f2949c`. These are **already defined** in `frontend/src/app/tokens.css:54-55` (verified 2026-10-21).
 - `docs/plans/2026-10-12-soft-orbit-phase-3.md`, PR 13a–c: the links layer the relation arcs sit beside, and copy each pattern from: `useLinks`, `LinkInspector`, `LinkList`, `ArcPill`, `LinksChip`, `data-arcs`.
 - `docs/plans/2026-10-18-soft-orbit-phase-4.md`: "What Phase 3 taught us" and the working rules, extended below.
+
+---
+
+## Decisions (2026-10-21, provisional while the owner is away)
+
+The controller decided these while the owner is away; the owner may revise any of them. The tasks below follow them.
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Windows.** Relations is a **7-day lens**: always the last 7 UTC days (today and the 6 before), labelled "Relations · last 7 days", whatever the timeline shows. Under a range or a replay it's unavailable, with a short note. The inspector shows the daily breakdown. Daily rollups stay; no hourly rollups. | One honest, fixed window reads better than day-granular rollups stretched to fit 1h or 6h. It also keeps every read in the cheap, hourly `wk:*` family. |
+| 2 | **Topic pill.** Ignored for relations. The legend has a one-line note that topics don't apply. | Events carry no topic tags. |
+| 3 | **Root events.** Count only `IsRootEvent = 1`. | Lead-paragraph events are the higher signal; the rest add machine-coding noise. |
+| 4 | **Domestic events.** Drop them (`a_iso == b_iso`). | They can't be drawn as arcs. |
+| 5 | **Exclusivity.** Relations and Links are mutually exclusive. Relation arcs are muted under entity focus and the board, as links are. | Both draw arcs between the same label points. |
+| 6 | **Labels.** The 5 strongest arcs carry persistent labels. Every arc is labelled on hover or focus, and all of them in the keyboard list and the inspector. | Arcs are always labelled, without cluttering the globe. |
+| 7 | **Arcs.** One arc per pair, coloured by the dominant class under All. The Cooperation and Conflict switch filters to that class's counts. The inspector always shows both classes. | One arc per pair stays readable; the inspector keeps the full picture. |
+| 8 | **Thresholds.** `MIN_EVENTS` 5, `MIN_REPORTS` 3 and `MIN_OUTLETS` 2 are starting values, kept as named constants that "Measure on prod" (19b+) recalibrates. | They can only be tuned on live data. |
+| 9 | **Board.** Relations are not pinnable in Phase 5 (see "After Phase 5"). | It would need a new board item kind in 18a's API. |
+| 10 | **#108.** It's merging now, so 19c relies on its `WEEK_TTL`, `single_flight` and `cached_model`. Fallback, should it not land: keep the lens under `db:*` with `cycle_ttl` and plain get and set, since it's cheap either way. | The 7-day lens is a week read. |
+| 11 | **CAMEO reference downloads.** The generator runs **on CI** (a workflow step on the runner), which commits the generated table. Nothing is downloaded locally. | The owner approves downloads case by case. |
+| 12 | **GKG cadence finding.** Out of Phase 5's scope: catching up the GKG roughly doubles embeddings and their IOPS, an owner decision on cost, recorded with its numbers under "After Phase 5". The events path keeps its own catch-up, since its files are small. | Cost and IOPS are the owner's call. |
+| 13 | **Phones.** Relations is unavailable at phone width, like Links. | As Links today. |
+
+**Migration number:** #106 (merged) used `020_synopsis_retries.sql`, so this phase's migration is **021**. Before writing it, check `ls database/migrations` on the latest `origin/main`. If 021 is taken by then, use the next free number and rename it everywhere: file, static test and commit message.
 
 ---
 
@@ -50,7 +78,7 @@ No data file was downloaded on the owner's machine. 19b's CI repro measures real
 |---|---|---|
 | 7 | `Actor1CountryCode` | 3-character CAMEO country code. Blank when unknown ("unidentified gunmen"). It reflects the actor's affiliation, not where it is: "French minister in Moscow" is FRA. |
 | 17 | `Actor2CountryCode` | The same, for the actor acted upon. |
-| 25 | `IsRootEvent` | 1 when found in the lead paragraph, a rough importance proxy. Counted in the repro, not stored (see open questions). |
+| 25 | `IsRootEvent` | 1 when found in the lead paragraph, a rough importance proxy. **Only root events are kept** (decision 3). The rest are counted as "not root" in the log and the repro. |
 | 29 | `QuadClass` | 1 verbal cooperation, 2 material cooperation, 3 verbal conflict, 4 material conflict. |
 | 30 | `GoldsteinScale` | −10 to +10, scored by **event type**, not magnitude: two riots score the same whatever their size. |
 | 31 | `NumMentions` | Mentions **during the 15-minute update in which the event was first seen** only. Later mentions go to the Mentions table. |
@@ -72,23 +100,29 @@ The other columns are not read: `ActionGeo_*` (51–58, FIPS country and coordin
   - `BAG` Baghdad (IQ)
   - `ANT` Netherlands Antilles (dissolved, so left unmapped)
 - **Regional codes name no country** and are left unmapped: `AFR ASA BLK CRB CAU CFR CAS CEU EIN EAF EEU EUR LAM MEA MDT NAF NMR PGS SCN SAM SAS SEA SAF WAF WST`.
-- The mapping ships as a generated static table, `backend/app/services/cameo_countries.py`, built by `scripts/gen_cameo_countries.py` as `country_codes.py` is (Task 19b.1). The repro reports the unmapped codes a day of real data contains.
+- The mapping ships as a generated static table, `backend/app/services/cameo_countries.py`. It's built by `scripts/gen_cameo_countries.py`, which **runs on CI**, never locally, and CI commits the table (decision 11, Task 19b.1). The repro reports the unmapped codes a day of real data contains.
 
 **Volumes (estimates; 19b's repro replaces them with measurements):**
+
+The root share is unknown until the repro runs. The kept and row estimates below assume about half of all events are root events. Rows shrink less than events do, because busy pairs keep their rows and the long tail thins.
 
 | Quantity | Estimate | Basis |
 |---|---|---|
 | Events per file | 1,000–1,500 | an 80 KB zip at about 6:1 is about 0.5 MB of tab-separated text, at about 400 B a row |
 | Events per day | 100K–140K | 96 files |
-| Kept per file (both actors' countries mapped, and different) | 150–450 (15–30%) | many events lack an actor country; domestic pairs (USA→USA) are dropped |
-| Rollup groups per file | 100–300 | grouped by (a, b, day, quad) |
-| **Rows upserted per cycle** | **200–600** | the cycle starts about every 30 min, so about 2 files a cycle (see the scheduler finding below) |
-| **Rows per day** | **3K–6K** | distinct directed (a, b, quad) per day |
-| **Rows kept** (8 UTC days) | **25K–50K**, about 15–30 MB with indexes | about 500 B a row with 3 sample URLs and up to 8 outlets |
+| Kept per file (root, both actors' countries mapped, and different) | 75–250 (7–17%) | many events lack an actor country; domestic pairs (USA→USA) and non-root events are dropped |
+| Rollup groups per file | 60–200 | grouped by (a, b, day, quad) |
+| **Rows upserted per cycle** | **120–400** | the cycle starts about every 30 min, so about 2 files a cycle (see the scheduler finding below) |
+| **Rows per day** | **2K–5K** | distinct directed (a, b, quad) per day |
+| **Rows kept** (8 UTC days) | **16K–40K**, about 10–25 MB with indexes | about 500 B a row with 3 sample URLs and up to 8 outlets |
 | Download per cycle | about 160 KB | 2 × 80 KB, plus a 300 B index |
 | Parse CPU per file | 10–50 ms | `str.split` of about 1,200 lines × 61 fields, in a worker thread |
 
-**Scheduler finding (pre-existing, not changed here).** `scheduler._ingestion_loop` sleeps `ingestion_interval_seconds` (900) **after** each cycle, and cycles take 13–16 min (mostly embeddings). So cycles start about every **28–31 minutes**, and the GKG path, which reads only the newest file, misses about half of GDELT's 15-minute files. Events can't afford that, since rollups are counts, so 19b catches up missed slots. Whether the GKG path should do the same, or the scheduler should run at a fixed rate, is an open question for the controller.
+**Scheduler finding (pre-existing, not changed here).**
+- `scheduler._ingestion_loop` sleeps `ingestion_interval_seconds` (900) **after** each cycle, and cycles take 13–16 min (mostly embeddings).
+- So cycles start about every **28–31 minutes**, and the GKG path, which reads only the newest file, misses about half of GDELT's 15-minute files.
+- Events can't afford that, since rollups are counts, so 19b catches up missed slots: their files are about 80 KB.
+- The GKG is left as it is: it's an owner decision on cost (decision 12; the numbers are under "After Phase 5").
 
 ---
 
@@ -106,13 +140,13 @@ The other columns are not read: `ActionGeo_*` (51–58, FIPS country and coordin
    - **Mutation checks:** each plan test has a twin that drops the index inside a savepoint and shows the check fails, so it can't pass vacuously.
 3. **Per-cycle cost is a budget.**
    - The cycle already spends 13–16 min on embeddings, with disk IOPS peaking at 100%.
-   - The events step streams and is bounded: capped downloads, an in-memory unzip, aggregation in Python, **one batched upsert per cycle**, about 200–600 rows.
+   - The events step streams and is bounded: capped downloads, an in-memory unzip, aggregation in Python, **one batched upsert per cycle**, about 120–400 rows.
    - There are no per-event rows, and none are planned.
    - It runs before embeddings so it never contends with them, and it logs its own timing.
    - 19b's CI repro measures rows per cycle and per day, upsert time, table size and the HOT-update ratio.
 4. **Week reads refresh hourly outside `db:*`** (PR #108's pattern: `wk:*`, `WEEK_TTL`, `single_flight`, `cached_model`), never per cycle.
-   - The 7-day relations answers read rollups, so they're cheap by design, but they still live under `wk:`. Every other window lives under `db:` with `cycle_ttl`, since rollups change every cycle.
-   - 19c depends on #108 being merged. If #108 is dropped, see the open questions.
+   - Relations is a 7-day lens (decision 1), so every relations answer is a week read. They read rollups, so they're cheap by design, but they still live under `wk:`, refreshed at most hourly.
+   - 19c relies on #108, which is merging. The fallback is in decision 10.
 5. **Input from GDELT is untrusted.**
    - Only https URLs on `data.gdeltproject.org` are fetched, and no redirects are followed.
    - The index MD5 is checked on the newest file.
@@ -125,11 +159,15 @@ The other columns are not read: `ActionGeo_*` (51–58, FIPS country and coordin
    - **Docker is unreliable on the owner's machine:** don't spend time on a local Postgres. Push a draft PR and read Backend Checks (0 skipped), or reproduce on a throwaway branch's CI run.
    - **E2E runs on slow runners** (software WebGL, 8–23 min a suite, Playwright's 30 s per-test timeout). Keep each test to a few steps.
      - Activate controls with the keyboard (`locator.press("Enter")`), not WebGL clicks.
-     - Wait on deterministic `data-*` attributes (`data-relation-arcs`, `data-relation-highlight`, `data-relation-muted`), never on timing.
+     - Wait on deterministic `data-*` attributes (`data-relation-arcs`, `data-relation-highlight`, `data-relation-muted`, `data-relation-labels`), never on timing.
      - Use `test.slow()` only with a comment giving the reason. None is expected here.
 7. **Copy.**
    - Never "linked to", "caused" or "attacked".
-   - Arcs are always labelled: the class is in words in every pill, row and inspector, so colour never carries the meaning alone, and a legend shows while the layer is on.
+   - Arcs are always labelled (decision 6):
+     - the 5 strongest carry persistent labels;
+     - every arc is labelled on hover or keyboard focus, and in the list and the inspector;
+     - the class is always in words, so colour never carries the meaning alone;
+     - a legend shows while the layer is on.
    - Relation meaning comes only from QuadClass (verbal or material, cooperation or conflict).
    - The UI says these are **reported events, machine-coded from news reports, not verified facts**, and that one report can yield several events.
    - Goldstein is described as an event-type score.
@@ -163,37 +201,39 @@ The other columns are not read: `ActionGeo_*` (51–58, FIPS country and coordin
 | 19a | Migration 021: `event_pairs_daily` and `event_files`; static and DB schema tests; README | none |
 | 19b | Events ingestion: CAMEO→ISO table, capped fetch and catch-up, parse and aggregate, one batched upsert, purge, kill switch, **CI repro** | 19a deployed |
 | 19b+ | **Measure on prod** (the controller, no code) | 19b deployed, then 24 h |
-| 19c | `/api/relations`, `/api/relations/detail`: rollup reads, `db:`/`wk:` caching, production-scale plan tests | 19b merged; #108 merged |
-| 20 | Relations layer UI: toggle, class switch, legend, arcs, list, inspector, focus rules | 19c merged (it can start earlier against this plan's contract and mocked routes) |
+| 19c | `/api/relations`, `/api/relations/detail`: the 7-day lens over rollups, `wk:` caching, production-scale plan tests | 19b merged; #108 merged (merging 2026-10-21) |
+| 20 | Relations layer UI: toggle, class switch, legend, arcs with persistent labels, list, inspector, focus rules | 19c merged (it can start earlier against this plan's contract and mocked routes) |
 
 **Parallelism:**
 - 19c can be written while 19b's data accrues; its tests use fixtures, not production data.
 - PR 20 can start from the API contract in 19c (it's fixed here) with mocked routes, and merges after 19c.
 
-## Decisions this plan makes
+## Design choices (technical)
 
-Product questions go to the controller; see the PR description.
+These follow from the Decisions above.
 - **Rollup grain:**
   - Directed pairs: `a_iso` acts on `b_iso`.
   - The UTC day of `DATEADDED`.
   - QuadClass.
 - **Sums, not averages:** `goldstein_sum` and `tone_sum` add up across files; reads divide by `n_events`. The roadmap's `avg_goldstein, avg_tone` are derived this way, because averages can't be updated incrementally without drift.
 - **What's dropped:**
-  - Domestic events (`a = b`).
+  - Non-root events (decision 3).
+  - Domestic events (`a = b`, decision 4).
   - Events with a missing or unmapped actor country.
   - Events added more than `retention_days` before today.
-- **All events count,** not only root events. The repro reports the root share so the controller can decide.
 - **Robustness guards,** as "outlets beat stories":
   - `n_reports`: distinct first-report URLs, summed per cycle;
   - `outlets`: up to 8 distinct hosts per row.
-  - The read path requires `MIN_EVENTS` 5, `MIN_REPORTS` 3 and `MIN_OUTLETS` 2. These are named constants, calibrated on production after deploy.
-- **Windows:** rollups are daily, so a relations window is the UTC days it touches. The response names them (`first_day`, `last_day`), and the UI labels them ("20–21 Oct (UTC days)").
-- **Topics:** the topic pill doesn't filter relations, since events carry no topic tags. The legend says "All topics" when a topic is active.
-- **One arc per unordered pair:**
+  - The read path requires `MIN_EVENTS`, `MIN_REPORTS` and `MIN_OUTLETS` (decision 8).
+- **The lens** (decision 1):
+  - The API computes its days as `today - 6 .. today` (UTC) and names them (`first_day`, `last_day`). The UI labels them "Relations · last 7 days (15–21 Oct)".
+  - Retention keeps 8 UTC days, as for articles, so the lens is always fully covered.
+  - The lens moves at UTC midnight. Cache keys carry the days, so the new day is a new entry.
+- **One arc per unordered pair** (decision 7):
   - coloured by its majority class: conflict when conflict events outnumber cooperation; on a tie, by the Goldstein sign;
   - stroked by mentions;
   - starting at the country whose actors act in most of the events.
-  - The class switch shows only cooperation or only conflict events.
+  - The class switch shows only cooperation or only conflict events. The inspector shows both whatever the switch says: the detail takes no class.
 
 ---
 
@@ -456,10 +496,13 @@ git commit -m "feat(db): migration 021 adds GDELT event rollups (event_pairs_dai
 
 Branch: `claude/p5-events-ingest`. Merge only after 19a is deployed.
 
-### Task 19b.1: CAMEO → ISO table (generated, with tests)
+### Task 19b.1: CAMEO → ISO table (generated on CI, with tests)
+
+The generator downloads two small reference files, so it **runs only on CI** (decision 11). A workflow on the PR generates the table on the runner and commits it to the branch. Nothing is downloaded on the owner's machine.
 
 **Files:**
-- Create: `scripts/gen_cameo_countries.py`, `backend/app/services/cameo_countries.py` (generated), `backend/tests/test_cameo_countries.py`
+- Create: `scripts/gen_cameo_countries.py`, `.github/workflows/cameo-countries.yml`, `backend/tests/test_cameo_countries.py`
+- Generated by CI (never by hand): `backend/app/services/cameo_countries.py`
 
 **Step 1: Write the failing tests** (`backend/tests/test_cameo_countries.py`).
 
@@ -521,9 +564,9 @@ CAMEO country codes are ISO alpha-3 with a few exceptions (OVERRIDES), plus
 regional codes (REGIONAL) that name no country. Every GeoNames ISO3 maps to
 its ISO2, so a code CAMEO's list lacks but GDELT emits (e.g. SSD) still maps.
 
-Usage: python scripts/gen_cameo_countries.py
-It downloads two small reference files (about 31 KB and 5 KB): ask the owner
-before running it on their machine.
+Run on CI only, by .github/workflows/cameo-countries.yml, which commits the
+table. It downloads two small reference files (about 31 KB and 5 KB) on the
+runner. Don't run it locally: the owner approves downloads case by case.
 """
 
 import hashlib
@@ -619,23 +662,82 @@ with open(OUT, "w", encoding="utf-8", newline="\n") as fh:
 print(f"wrote {len(table)} codes to {OUT}")
 ```
 
-**Step 4: Run the generator** (ask the owner first: it downloads two small reference files).
+**Step 4: Write the workflow** (`.github/workflows/cameo-countries.yml`).
 
-Run: `python scripts/gen_cameo_countries.py && cd backend && python -m ruff format app/services/cameo_countries.py`
-Expected: `wrote 2xx codes to …/cameo_countries.py`.
-- If the generator refuses because a CAMEO code has no decision, add it to `OVERRIDES`, `UNMAPPED` or `REGIONAL` with a comment, and rerun.
+```yaml
+name: CAMEO country table
 
-**Step 5: Run the tests.**
+# Generates backend/app/services/cameo_countries.py on the runner: the generator
+# downloads GeoNames countryInfo.txt and GDELT's CAMEO.country.txt, which never
+# happens on a developer's machine. On a PR that changes the generator or the
+# table, a table that differs from the generator's output (or is missing) is
+# committed to the PR branch by the bot, and this check fails once: pull the
+# commit and push again, and it passes.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/gen_cameo_countries.py
+      - backend/app/services/cameo_countries.py
+      - .github/workflows/cameo-countries.yml
 
-Run: `cd backend && python -m pytest tests/test_cameo_countries.py -q`
-Expected: 5 passed. Put the `missing` list (the countries with no label point) in the PR description.
+permissions:
+  contents: write
 
-**Step 6: Commit.**
+jobs:
+  generate:
+    name: CAMEO country table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Generate the table
+        run: |
+          python scripts/gen_cameo_countries.py
+          ruff format backend/app/services/cameo_countries.py
+      - name: Commit it when it changed
+        run: |
+          table=backend/app/services/cameo_countries.py
+          if git ls-files --error-unmatch "$table" >/dev/null 2>&1 && git diff --quiet -- "$table"; then
+            echo "The committed table matches the generator."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add "$table"
+          git commit -m "chore(events): generate the CAMEO country table on CI"
+          git push origin "HEAD:${{ github.head_ref }}"
+          echo "::error::Generated the table and pushed it to this branch: pull it and push again."
+          exit 1
+```
+
+**Step 5: Commit the generator, the workflow and the tests, and push.**
 
 ```bash
-git add scripts/gen_cameo_countries.py backend/app/services/cameo_countries.py backend/tests/test_cameo_countries.py
-git commit -m "feat(events): CAMEO actor country codes to ISO alpha-2"
+git add scripts/gen_cameo_countries.py .github/workflows/cameo-countries.yml backend/tests/test_cameo_countries.py
+git commit -m "feat(events): CAMEO actor country codes to ISO alpha-2, generated on CI"
+git push -u origin claude/p5-events-ingest
 ```
+
+Expected on the PR:
+- **"CAMEO country table" fails once,** as designed: its log shows `wrote 2xx codes to …/cameo_countries.py`, and the branch gains a bot commit `chore(events): generate the CAMEO country table on CI`.
+- **Backend Checks fails on this commit** (`test_cameo_countries.py`: no module yet). That's expected; the next push fixes it.
+- **If the generator refuses** because a CAMEO code has no decision, the log names it. Add it to `OVERRIDES`, `UNMAPPED` or `REGIONAL` with a comment, push, and the job runs again.
+- **If the bot's push is refused** (the repository's workflow permissions are read-only), stop and ask the controller: the owner either allows write access for workflows or runs the generator.
+
+**Step 6: Pull the generated table and run the tests.**
+
+Run: `git pull --ff-only && cd backend && python -m pytest tests/test_cameo_countries.py -q`
+Expected: 5 passed. Put the `missing` list (the countries with no label point) in the PR description.
+
+This pulls a commit from our own repository. It isn't a data download.
+
+**Step 7:** The next push (the following tasks' commits) reruns the check, and it passes ("The committed table matches the generator."). Never edit `cameo_countries.py` by hand: change the generator, and CI regenerates it.
 
 ### Task 19b.2: one URL sanitiser, shared (`app/services/urls.py`)
 
@@ -919,7 +1021,14 @@ def test_one_event_makes_one_rollup():
     assert r.reports == {"https://www.example.com/a"}
     assert r.samples == ["https://www.example.com/a"]
     assert r.outlets == ["example.com"]
-    assert (stats.rows, stats.kept, stats.root) == (1, 1, 1)
+    assert (stats.rows, stats.kept, stats.not_root) == (1, 1, 0)
+
+
+def test_only_root_events_count():
+    """Decision 3: an event outside the lead paragraph adds nothing."""
+    rollups, stats = _parse(_event(root="0"), _event(root=""))
+    assert rollups == {}
+    assert (stats.rows, stats.kept, stats.not_root) == (2, 0, 2)
 
 
 def test_events_add_up_and_a_report_counts_once():
@@ -1072,10 +1181,11 @@ Each ingestion cycle adds the newest 15-minute Event export (the
 export.CSV.zip line of lastupdate.txt) to event_pairs_daily, plus earlier
 slots no cycle has added: a cycle starts about every half hour, so every
 other file would otherwise be missed, and rollups are counts. Nothing is
-stored per event. Each file is parsed in memory and aggregated in Python by
-(actor 1 country, actor 2 country, UTC day added, QuadClass); the cycle's
-rollups go to the database in one batched upsert, in the transaction that
-records the files in event_files, so no file is ever added twice.
+stored per event. Each file is parsed in memory; its root events between two
+different mapped countries are aggregated in Python by (actor 1 country,
+actor 2 country, UTC day added, QuadClass); the cycle's rollups go to the
+database in one batched upsert, in the transaction that records the files in
+event_files, so no file is ever added twice.
 
 GDELT data is untrusted: only https URLs on GDELT's data host are fetched
 (no redirects), the zip, its CSV and its rows are capped, malformed rows are
@@ -1164,8 +1274,8 @@ class ParseStats:
 
     rows: int = 0
     kept: int = 0
-    root: int = 0
     malformed: int = 0
+    not_root: int = 0
     no_pair: int = 0
     same_country: int = 0
     stale: int = 0
@@ -1173,7 +1283,7 @@ class ParseStats:
     unmapped: Counter = field(default_factory=Counter)
 
     def add(self, other: ParseStats) -> None:
-        for name in ("rows", "kept", "root", "malformed", "no_pair", "same_country", "stale"):
+        for name in ("rows", "kept", "malformed", "not_root", "no_pair", "same_country", "stale"):
             setattr(self, name, getattr(self, name) + getattr(other, name))
         self.truncated = self.truncated or other.truncated
         self.unmapped.update(other.unmapped)
@@ -1187,7 +1297,7 @@ class _Event(NamedTuple):
     mentions: int
     tone: float
     day: date
-    root: int
+    root: bool
     url: str | None
 
 
@@ -1219,7 +1329,7 @@ def _event(fields: list[str]) -> _Event | None:
         mentions=min(mentions, MAX_EVENT_MENTIONS),
         tone=max(-100.0, min(100.0, tone)),
         day=day,
-        root=1 if fields[_IS_ROOT].strip() == "1" else 0,
+        root=fields[_IS_ROOT].strip() == "1",
         url=web_url(url) if len(url) <= MAX_URL_CHARS else None,
     )
 
@@ -1227,9 +1337,9 @@ def _event(fields: list[str]) -> _Event | None:
 def parse_events(raw: str, today: date, rollups: dict[Key, Rollup]) -> ParseStats:
     """Add a decoded export file's events to *rollups*; return what the file held.
 
-    Kept: both actors' countries map to ISO and differ, and the event was added
-    within retention (up to a day ahead, for clock skew). CPU-bound: run it in a
-    worker thread.
+    Kept: a root event (IsRootEvent = 1, the lead paragraph: the higher signal),
+    whose actors' countries both map to ISO and differ, added within retention
+    (up to a day ahead, for clock skew). CPU-bound: run it in a worker thread.
     """
     stats = ParseStats()
     oldest = today - timedelta(days=settings.retention_days)
@@ -1245,6 +1355,9 @@ def parse_events(raw: str, today: date, rollups: dict[Key, Rollup]) -> ParseStat
         if event is None:
             stats.malformed += 1
             continue
+        if not event.root:
+            stats.not_root += 1
+            continue
         if not oldest <= event.day <= newest:
             stats.stale += 1
             continue
@@ -1259,7 +1372,6 @@ def parse_events(raw: str, today: date, rollups: dict[Key, Rollup]) -> ParseStat
             stats.same_country += 1
             continue
         stats.kept += 1
-        stats.root += event.root
         key = (a, b, event.day, event.quad)
         rollups.setdefault(key, Rollup()).add(event.mentions, event.goldstein, event.tone, event.url)
     return stats
@@ -1446,7 +1558,7 @@ class TestIngestEvents:
         with p[0], p[1], p[2], p[3], caplog.at_level(logging.INFO, logger="orbis.events"):
             await events.ingest_events(now=T)
         [line] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Events: 1 file")]
-        assert "3 rows, 1 kept" in line and "1 same country, 1 malformed" in line
+        assert "3 rows, 1 kept (0 not root" in line and "1 same country, 1 malformed" in line
 ```
 
 In `backend/tests/test_ingestion.py`:
@@ -1645,8 +1757,8 @@ async def _ingest(now: datetime) -> None:
     store_s = time.monotonic() - started
     ok = sum(f.status == "ok" for f in files)
     logger.info(
-        "Events: %d file%s (%d caught up, %d missing), %d rows, %d kept (%d no country pair, "
-        "%d same country, %d malformed, %d stale%s), %d rollups in %.2f s "
+        "Events: %d file%s (%d caught up, %d missing), %d rows, %d kept (%d not root, "
+        "%d no country pair, %d same country, %d malformed, %d stale%s), %d rollups in %.2f s "
         "(download %.2f s, parse %.2f s, store %.2f s).",
         ok,
         "" if ok == 1 else "s",
@@ -1654,6 +1766,7 @@ async def _ingest(now: datetime) -> None:
         sum(f.status == "missing" for f in files),
         totals.rows,
         totals.kept,
+        totals.not_root,
         totals.no_pair,
         totals.same_country,
         totals.malformed,
@@ -1716,7 +1829,7 @@ from datetime import date
 
 from app.services.country_centroids import COUNTRY_CENTROIDS
 
-ROWS_PER_DAY = 6000
+ROWS_PER_DAY = 5000
 ISO = sorted(COUNTRY_CENTROIDS)[:150]
 
 FILL_SQL = """
@@ -1790,7 +1903,7 @@ Expected: all skipped locally (`ORBIS_TEST_DATABASE_URL is not set`).
 |---|---|
 | Zip KB, CSV KB, rows per file (median, max) | per file |
 | Rows with exactly 61 fields (%) | its own `split("\t")` count |
-| Kept / no country pair / same country / malformed / stale / root (%) | `ParseStats` |
+| Kept / not root / no country pair / same country / malformed / stale (%), and the root share | `ParseStats` |
 | Repeated `GLOBALEVENTID`s across files (expect 0) | its own first-column `Counter` |
 | Top 10 unmapped actor codes | `ParseStats.unmapped` |
 | Parse ms per file (median, p95) | timed |
@@ -1919,8 +2032,8 @@ async def main(n_files: int) -> int:
         f"| CSV KB per file (median / max) | {statistics.median(f['csv_kb'] for f in per_file):.0f} / {max(f['csv_kb'] for f in per_file):.0f} |",
         f"| Rows per file (median / max) | {statistics.median(f['rows'] for f in per_file):.0f} / {max(f['rows'] for f in per_file)} |",
         f"| Rows with 61 fields | {100 * sum(f['fields_61'] for f in per_file) / rows:.2f}% |",
-        f"| Kept / no pair / same country / malformed / stale | {100 * totals.kept / rows:.1f}% / {100 * totals.no_pair / rows:.1f}% / {100 * totals.same_country / rows:.1f}% / {100 * malformed_share:.2f}% / {100 * totals.stale / rows:.2f}% |",
-        f"| Root events among kept | {100 * totals.root / max(totals.kept, 1):.1f}% |",
+        f"| Kept / not root / no pair / same country / malformed / stale | {100 * totals.kept / rows:.1f}% / {100 * totals.not_root / rows:.1f}% / {100 * totals.no_pair / rows:.1f}% / {100 * totals.same_country / rows:.1f}% / {100 * malformed_share:.2f}% / {100 * totals.stale / rows:.2f}% |",
+        f"| Root events among valid rows (only these are kept) | {100 * (1 - totals.not_root / max(rows - totals.malformed, 1)):.1f}% |",
         f"| Repeated event ids across files | {sum(n - 1 for n in ids.values() if n > 1)} |",
         f"| Unmapped actor codes (top 10) | {', '.join(f'{c} {n}' for c, n in totals.unmapped.most_common(10))} |",
         f"| Parse ms per file (median / p95) | {statistics.median(f['parse_ms'] for f in per_file):.0f} / {_p95([f['parse_ms'] for f in per_file]):.0f} |",
@@ -2080,12 +2193,19 @@ SELECT date_trunc('hour', slot) AS hour,
        count(*) FILTER (WHERE status = 'missing') AS missing
 FROM event_files GROUP BY 1 ORDER BY 1 DESC LIMIT 24;
 
--- Calibration for 19c's thresholds: how pairs spread by reports and outlets.
-WITH p AS (
-  SELECT least(a_iso, b_iso) a, greatest(a_iso, b_iso) b, sum(n_events) n, sum(n_reports) r
-  FROM event_pairs_daily WHERE day >= current_date - 1 GROUP BY 1, 2)
-SELECT width_bucket(r, ARRAY[1, 3, 5, 10, 25, 100]) AS bucket, count(*), sum(n)
-FROM p GROUP BY 1 ORDER BY 1;
+-- Calibration of MIN_EVENTS, MIN_REPORTS, MIN_OUTLETS (decision 8): how the
+-- lens's pairs spread by events, reports and outlets. Run once 7 days exist
+-- (sooner, over the days there are, for a first look).
+WITH r AS (
+  SELECT least(a_iso, b_iso) a, greatest(a_iso, b_iso) b, n_events, n_reports, outlets
+  FROM event_pairs_daily WHERE day >= current_date - 6),
+p AS (SELECT a, b, sum(n_events) n, sum(n_reports) rep FROM r GROUP BY 1, 2),
+o AS (SELECT a, b, count(DISTINCT x) outl FROM r, unnest(r.outlets) x GROUP BY 1, 2)
+SELECT width_bucket(p.n, ARRAY[1, 5, 10, 25, 100]) AS events_bucket,
+       width_bucket(p.rep, ARRAY[1, 3, 5, 10, 25]) AS reports_bucket,
+       width_bucket(coalesce(o.outl, 0), ARRAY[1, 2, 3, 5]) AS outlets_bucket,
+       count(*) AS pairs, sum(p.n) AS events
+FROM p LEFT JOIN o USING (a, b) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
 
 -- Sanity: today's busiest pairs (expect pairs like US-IR, RU-UA, IL-PS).
 SELECT least(a_iso, b_iso) a, greatest(a_iso, b_iso) b, sum(n_events) n, sum(mentions) m
@@ -2103,18 +2223,27 @@ FROM event_pairs_daily WHERE day = current_date GROUP BY 1, 2 ORDER BY m DESC LI
 
 The busiest pairs should be plausible. If `ROWS_PER_DAY` differs by more than 2×, update `events_fixture.ROWS_PER_DAY` in 19c. Post the numbers in the 19c PR.
 
+**Recalibrating the thresholds** (decision 8). From the calibration query, choose values that:
+- keep roughly the 40–80 strongest pairs above the line, enough to fill the 40-arc list after the per-country cap;
+- drop the single-report long tail.
+
+Put the new `MIN_EVENTS`, `MIN_REPORTS` and `MIN_OUTLETS`, each with the measured distribution in a comment, in 19c, or in a follow-up PR if 19c has merged. Re-check them once the lens holds 7 full days.
+
 ---
 
 ## PR 19c: The relations read API
 
 Branch: `claude/p5-relations-api`.
 
-**Depends on:** #108 merged, since the router uses `cache.WEEK_TTL`, `single_flight` and `cached_model`. Check with `gh pr view 108 --json state`. If #108 is still open, stop and ask the controller.
+**Depends on:** #108, since the router uses `cache.WEEK_TTL`, `single_flight` and `cached_model` (decision 10: it's merging). Check with `gh pr view 108 --json state`.
+- **If it has merged,** go on.
+- **If it hasn't landed,** use the fallback: the lens under `db:relations:…` with `cycle_ttl(600)` and plain `get_cached`/`set_cached`. Then tell the controller.
 
 ### API contract (fixed here; PR 20 builds against it)
 
+**Every answer is the 7-day lens** (decision 1): the last 7 UTC days, `today - 6 .. today`, whatever the timeline shows. There are no window parameters, and any others sent are ignored.
+
 `GET /api/relations` takes:
-- `timespan=1h|6h|24h|168h`, or `start_time=&end_time=` (validated exactly as `/api/links`, ranges at most 8 days);
 - `kind=all|cooperation|conflict` (default `all`);
 - `limit=1..60` (default 40).
 
@@ -2122,7 +2251,7 @@ It returns:
 
 ```json
 {
-  "first_day": "2026-10-20",
+  "first_day": "2026-10-15",
   "last_day": "2026-10-21",
   "relations": [
     {
@@ -2146,13 +2275,14 @@ It returns:
   - `cooperation` counts quad 1–2 only and `conflict` counts 3–4 only, so `n`, `quad` and `kind` describe the filtered events;
   - with `all`, `kind` is the majority class: conflict when quad 3+4 outnumber 1+2, and on a tie conflict when `goldstein < 0`.
 
-`GET /api/relations/detail?a=US&b=IR&<window>` returns the list item's fields for that pair, plus:
+`GET /api/relations/detail?a=US&b=IR` returns, for the same 7 days, the list item's fields for that pair over **all classes** (the detail takes no `kind`), plus:
 
 ```json
 {
   "directions": [{"from": "US", "to": "IR", "n": 200, "quad": {…}},
                  {"from": "IR", "to": "US", "n": 112, "quad": {…}}],
-  "daily": [{"day": "2026-10-20", "cooperation": 30, "conflict": 120},
+  "daily": [{"day": "2026-10-15", "cooperation": 30, "conflict": 120},
+            …,
             {"day": "2026-10-21", "cooperation": 22, "conflict": 140}],
   "samples": [{"url": "https://…", "outlet": "reuters.com", "title": "Iran says … " | null,
                "day": "2026-10-21", "quad_class": 3, "from": "US"}]
@@ -2161,23 +2291,25 @@ It returns:
 
 - **Field details:**
   - `directions` lists only directions that have events, a→b first;
-  - `daily` holds every day `first_day..last_day`, zero-filled;
+  - `daily` holds all 7 days, `first_day..last_day`, zero-filled: the inspector's daily breakdown;
   - `samples` holds up to 10, from the newest day first, then quad class, then direction. They're distinct and http(s) only (sanitised again), with `title` from our own article with that URL when we have one (`articles_source_url_key`, at most 10 lookups), else null.
 - **Errors:**
-  - **422** for an unknown code, `a = b` or a bad window;
-  - **404** when the pair has no events in those days (not cached).
+  - **422** for an unknown code, `a = b`, a bad `kind` or `limit`;
+  - **404** when the pair has no events in the 7 days (not cached).
 
-**Caching:**
+**Caching:** every answer is a week read, so all of it lives in #108's hourly family.
 
-| Window | Key | TTL |
+| Answer | Key | TTL |
 |---|---|---|
-| Live 168h | `wk:relations:v1:{YYYYMMDD}-{YYYYMMDD}:{kind}:{limit}` and `wk:relations:detail:v1:{a}:{b}:{days}` | `WEEK_TTL` |
-| Others | `db:relations:v1:…` and `db:relations:detail:v1:…` | `cycle_ttl(600)`; an empty list 60 s |
+| List | `wk:relations:v1:{YYYYMMDD}-{YYYYMMDD}:{kind}:{limit}` | `WEEK_TTL` (an empty list too: it's refreshed hourly anyway) |
+| Detail | `wk:relations:detail:v1:{a}:{b}:{YYYYMMDD}-{YYYYMMDD}` | `WEEK_TTL` |
 
+- The days in the key move the entry at UTC midnight.
 - Every miss goes through `single_flight`. A cached entry that no longer fits its model is a miss (`cached_model`).
 - `edge_cached` on both routes.
 - Rate group `data` (the default for `/api/`).
-- No warmer: the layer is off on first load, and a miss reads rollups only. If production's cold 168h exceeds 1 s, add `warm_relations_7d` after `warm_links_7d`, following #108's `week_fresh` pattern.
+- No `db:*` key, so the cycle's invalidation never touches these: they're up to about an hour old, which the legend's "last 7 days" tolerates.
+- No warmer: the layer is off on first load, and a miss reads rollups only. If production's cold list exceeds 1 s, add `warm_relations_7d` after `warm_links_7d`, following #108's `week_fresh` pattern.
 
 ### Task 19c.1: `app/services/relations.py` (pure parts first)
 
@@ -2191,7 +2323,7 @@ from datetime import date, datetime, timezone
 
 from app.services.relations import (
     MIN_EVENTS,
-    days_for,
+    lens_days,
     rank_relations,
     summarise_detail,
 )
@@ -2199,16 +2331,19 @@ from app.services.relations import (
 UTC = timezone.utc
 
 
-def test_days_for_a_live_window_spans_the_days_it_touches():
-    now = datetime(2026, 10, 21, 0, 30, tzinfo=UTC)
-    start = datetime(2026, 10, 20, 0, 30, tzinfo=UTC)
-    assert days_for(start, now) == (date(2026, 10, 20), date(2026, 10, 21))
+def test_the_lens_is_the_last_7_utc_days_including_today():
+    assert lens_days(datetime(2026, 10, 21, 0, 30, tzinfo=UTC)) == (
+        date(2026, 10, 15),
+        date(2026, 10, 21),
+    )
 
 
-def test_days_for_a_range_ending_at_midnight_stops_the_day_before():
-    assert days_for(
-        datetime(2026, 10, 19, 6, tzinfo=UTC), datetime(2026, 10, 21, 0, tzinfo=UTC)
-    ) == (date(2026, 10, 19), date(2026, 10, 20))
+def test_the_lens_follows_utc_not_local_time():
+    # 23:30 on the 21st in UTC-5 is 04:30 on the 22nd in UTC.
+    from datetime import timedelta
+
+    local = datetime(2026, 10, 21, 23, 30, tzinfo=timezone(timedelta(hours=-5)))
+    assert lens_days(local) == (date(2026, 10, 16), date(2026, 10, 22))
 
 
 def _row(a="IR", b="US", n=20, q=(2, 1, 12, 5), from_a=5, mentions=300, **over):
@@ -2278,8 +2413,8 @@ Expected: ERROR collecting, `ModuleNotFoundError: No module named 'app.services.
 """Relations between countries from GDELT's reported events (Phase 5, PR 19c).
 
 Reads only event_pairs_daily: the rollups ingestion keeps (app/services/events.py).
-Rollups are daily, so a window is the UTC days it touches. Events are machine-coded
-from news reports; nothing here calls them facts.
+Relations are a 7-day lens: always the last 7 UTC days, whatever the timeline
+shows. Events are machine-coded from news reports; nothing here calls them facts.
 """
 
 from __future__ import annotations
@@ -2294,11 +2429,13 @@ from app.services.titles import display_title
 from app.services.urls import outlet, web_url
 
 # A pair needs this much behind it to be drawn: one article can yield many
-# events. Named so production can tune them (19b+ measures the spread).
+# events. Starting values (Phase 5 decision 8), recalibrated from production's
+# spread by "Measure on prod" (19b+).
 MIN_EVENTS = 5
 MIN_REPORTS = 3
 MIN_OUTLETS = 2
 MAX_SAMPLES = 10
+LENS_DAYS = 7  # the lens: today and the 6 UTC days before
 
 QUADS = {"all": [1, 2, 3, 4], "cooperation": [1, 2], "conflict": [3, 4]}
 QUAD_NAMES = {1: "verbal_cooperation", 2: "material_cooperation",
@@ -2349,11 +2486,10 @@ WHERE ((a_iso = $1 AND b_iso = $2) OR (a_iso = $2 AND b_iso = $1))
 TITLES_SQL = "SELECT source_url, title FROM articles WHERE source_url = ANY($1::text[])"
 
 
-def days_for(start: datetime, end: datetime) -> tuple[date, date]:
-    """The UTC days a window touches, first and last; *end* is exclusive."""
-    first = start.astimezone(timezone.utc).date()
-    last = (end.astimezone(timezone.utc) - timedelta(microseconds=1)).date()
-    return first, max(first, last)
+def lens_days(now: datetime | None = None) -> tuple[date, date]:
+    """The lens's first and last UTC days: the last LENS_DAYS, today included."""
+    today = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
+    return today - timedelta(days=LENS_DAYS - 1), today
 
 
 def _quad(counts: dict[int, int]) -> dict[str, int]:
@@ -2498,13 +2634,17 @@ Expected: all pass.
 **Step 1: Write the failing router tests.** Model them on `tests/test_links_router.py`: the same `_client`, a fixed `_now`, Redis and the pool mocked.
 - **Shapes:**
   - `/api/relations` returns `first_day`, `last_day` and items with `from` (the alias);
-  - the detail returns `directions`, `daily` and `samples`.
-- **422s:** `timespan=2h`, `kind=war`, `limit=0`, `limit=61`, a 9-day range, `a=b`, `a=ZZ`.
+  - the detail returns `directions`, `daily` (7 entries) and `samples`.
+- **The lens:**
+  - At `NOW = 2026-10-21T00:30Z` both routes ask the pool for `2026-10-15..2026-10-21`.
+  - `?timespan=24h` and `?start_time=…&end_time=…` change nothing: same days, same key.
+- **422s:** `kind=war`, `limit=0`, `limit=61`, `a=b`, `a=ZZ`.
 - **Cache keys:**
-  - 24h at `NOW = 2026-10-21T00:30Z` → `db:relations:v1:20261020-20261021:all:40`, TTL `cycle_ttl(600)`;
-  - an empty list → TTL 60;
-  - 168h → `wk:relations:v1:20261014-20261021:all:40`, TTL `WEEK_TTL`;
-  - the detail of `b=US&a=IR` and of `a=US&b=IR` share one key.
+  - `wk:relations:v1:20261015-20261021:all:40`, TTL `WEEK_TTL`, an empty list included;
+  - `kind=conflict` → `wk:relations:v1:20261015-20261021:conflict:40`;
+  - the detail of `b=US&a=IR` and of `a=US&b=IR` share `wk:relations:detail:v1:IR:US:20261015-20261021`;
+  - after UTC midnight (`NOW = 2026-10-22T00:05Z`) the key is `…:20261016-20261022:…`.
+  - No key starts `db:`, so a cycle's `invalidate("db:*")` leaves them alone (assert with #108's fake Redis).
 - **Cache behaviour:**
   - a cached hit computes nothing;
   - an entry of the wrong shape is a miss, logged once (`cached_model`);
@@ -2532,12 +2672,10 @@ Expected: FAIL, 404s for `/api/relations` (the route doesn't exist yet).
     - `RelationDetail`: `Relation`'s fields plus `first_day`, `last_day`, `directions`, `daily` and `samples`.
   - Each field has a `description` that uses the copy rules: "reported events", "first reports", "event-type score".
 - `app/routers/relations.py`:
-  - Reuse `_window`, `_pair`, `Timespan`, `StartTime`, `EndTime` and `Country` from `app.routers.links`.
+  - Reuse `_pair` and `Country` from `app.routers.links`.
+  - There are no window parameters: the lens is fixed (decision 1).
 
 ```python
-_WEEK_WINDOW = "live:168"
-_RELATIONS_TTL = 600
-_EMPTY_TTL = 60
 DEFAULT_KIND = "all"
 DEFAULT_LIMIT = 40
 Kind = Annotated[
@@ -2546,15 +2684,8 @@ Kind = Annotated[
 ]
 
 
-def _key(window: Window, rest: str) -> str:
-    """The 7-day window's under wk: (hourly, cache.WEEK_TTL), others under db:."""
-    return f"{'wk' if window.key == _WEEK_WINDOW else 'db'}:relations:{rest}"
-
-
-def _ttl(window: Window, empty: bool) -> int:
-    if window.key == _WEEK_WINDOW:
-        return WEEK_TTL
-    return _EMPTY_TTL if empty else cycle_ttl(_RELATIONS_TTL)
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _days(first: date, last: date) -> str:
@@ -2563,20 +2694,17 @@ def _days(first: date, last: date) -> str:
 
 @router.get("/relations", response_model=Relations, dependencies=[Depends(edge_cached)])
 async def get_relations(
-    timespan: Timespan = "24h",
-    start_time: StartTime = None,
-    end_time: EndTime = None,
     kind: Kind = DEFAULT_KIND,
     limit: Annotated[int, Query(ge=1, le=60, description="Most relations to return")] = DEFAULT_LIMIT,
 ) -> Relations:
-    """Pairs of countries in GDELT's reported events, for arcs on the globe.
+    """Pairs of countries in GDELT's reported events over the last 7 UTC days.
 
     Machine-coded from news reports (not verified): who did what to whom, as
-    reported. Rollups are daily, so the window is the UTC days it touches.
+    reported. A week read, so it lives under wk: (cache.WEEK_TTL), refreshed
+    about hourly; the days in the key move it at UTC midnight.
     """
-    window = _window(timespan, start_time, end_time)
-    first, last = days_for(window.start, window.end)
-    key = _key(window, f"v1:{_days(first, last)}:{kind}:{limit}")
+    first, last = lens_days(_now())
+    key = f"wk:relations:v1:{_days(first, last)}:{kind}:{limit}"
     cached = await get_cached(key)
     if cached is not None:
         found = cached_model(key, cached, Relations.model_validate)
@@ -2586,11 +2714,11 @@ async def get_relations(
     async def load() -> Relations:
         rows = await get_relation_pairs(first, last, kind)
         result = Relations(
-            first_day=first, last_day=last,
+            first_day=first,
+            last_day=last,
             relations=[Relation.model_validate(r) for r in rank_relations(rows, limit)],
         )
-        await set_cached(key, result.model_dump(mode="json", by_alias=True),
-                         _ttl(window, not result.relations))
+        await set_cached(key, result.model_dump(mode="json", by_alias=True), WEEK_TTL)
         return result
 
     return await single_flight(key, load)
@@ -2598,16 +2726,17 @@ async def get_relations(
 
   - The detail route follows the same pattern:
     - `a, b = sorted(_pair(a, b))`;
-    - the key is `_key(window, f"detail:v1:{a}:{b}:{_days(first, last)}")`;
-    - `get_relation_detail`: `None` → `HTTPException(404, "No reported events between them in these days.")`, not cached;
-    - the result is cached with `_ttl(window, False)`.
+    - the key is `f"wk:relations:detail:v1:{a}:{b}:{_days(first, last)}"`;
+    - `get_relation_detail`: `None` → `HTTPException(404, "No reported events between them in the last 7 days.")`, not cached;
+    - the result is cached for `WEEK_TTL`.
+  - Fallback if #108 hasn't landed (decision 10): the same code with `db:` keys, `cycle_ttl(600)`, and no `single_flight` or `cached_model`.
 
 **Step 4: Run the tests.**
 
 Run: `cd backend && python -m pytest tests/test_relations.py tests/test_relations_router.py -q`
 Expected: all pass.
 
-**Step 5: Commit:** `feat(api): /api/relations and its detail, cached per cycle (hourly at 7 days)`.
+**Step 5: Commit:** `feat(api): /api/relations and its detail, a 7-day lens cached hourly`.
 
 ### Task 19c.3: DB tests, with production-scale plan checks and their mutation twins
 
@@ -2623,29 +2752,36 @@ Expected: all pass.
    - 4 events are dropped and 5 kept;
    - 2 reports are dropped and 3 kept;
    - 1 outlet is dropped, and 2 distinct across days are kept, even when one day has only 1.
-4. Days outside `first..last` are not read.
+4. The lens's days only: a row on `today - 7` (still kept by retention) is not read.
 5. The detail's titles come from an article with the sample's URL (insert one `zzrel` article).
 
-*Plans at production scale.* Fill the week: 8 days × `ROWS_PER_DAY`. Use no `enable_seqscan` changes anywhere; assert the planner's own choices, with custom and generic plans for each.
+*Plans at production scale.* Fill the week: 8 days × `ROWS_PER_DAY`, the retention's 8 days, of which the lens reads 7. Use no `enable_seqscan` changes anywhere; assert the planner's own choices, with custom and generic plans for each.
 
 | Read | Natural plan must | Pages (`db_plans.pages`, custom and generic) |
 |---|---|---|
-| List, 24h (2 of 8 days) | use `idx_event_pairs_day`; no Seq Scan on `event_pairs_daily` | ≤ `relpages × 3/8 + 100` |
-| List, 168h (all 8 days) | any plan: it reads the whole table once by design | ≤ `relpages + index pages + 100` (the table once, never per pair) |
-| Detail, one pair, 8 days | use `event_pairs_daily_pkey`; no Seq Scan | ≤ 60 |
+| List: the lens, 7 of 8 days | any plan: it reads most of the table, once, by design (a seq scan is the right choice here) | ≤ `relpages + index pages + 100`: the table once, never once per pair |
+| Detail, one pair, 7 days | use `event_pairs_daily_pkey`; no Seq Scan | ≤ 60 |
 | Titles, 10 URLs (after inserting 20K `zzrel` articles and `ANALYZE articles`) | use `articles_source_url_key`; no Seq Scan on `articles` | ≤ 60 |
 
+The list is a week read by design (decision 1). What keeps it cheap:
+- the table is small and narrow;
+- the answer is cached hourly under `wk:`;
+- misses are single-flighted.
+
+The page bound proves it reads the table once.
+
 *Mutation twins,* each in a savepoint, rolled back:
-- `DROP INDEX idx_event_pairs_day`: the 24h list now reports `event_pairs_daily` in `seq_scans`.
-- `ALTER TABLE event_pairs_daily DROP CONSTRAINT event_pairs_daily_pkey`: the detail now seq-scans.
+- **List:** run a per-pair variant of `LIST_SQL`, with the outlets counted by a `LATERAL` subquery against `event_pairs_daily` for each pair, the shape this plan rejected. Its pages exceed the bound.
+- **Detail:** `ALTER TABLE event_pairs_daily DROP CONSTRAINT event_pairs_daily_pkey`, and the detail now seq-scans.
+- **Purge:** 19b.6's `DROP INDEX idx_event_pairs_day` twin covers the day index.
 
 Each twin proves its check can fail.
 
-*Timing,* printed rather than asserted: the 168h list's execution time under `db_plans`' B1ms-like settings (`SET LOCAL max_parallel_workers_per_gather = 0, jit = off, work_mem = '4MB'`). Put it in the PR description.
+*Timing,* printed rather than asserted: the list's execution time under `db_plans`' B1ms-like settings (`SET LOCAL max_parallel_workers_per_gather = 0, jit = off, work_mem = '4MB'`). Put it in the PR description.
 
 **Step 2: Push and read Backend Checks.** Expected: `test_relations_db.py` all passed, 0 skipped.
 
-**Step 3: Extend the repro.** After building the week, `events_repro.py` also runs `relations.LIST_SQL` for 24h and 168h and `DETAIL_SQL` for the busiest pair under `EXPLAIN (ANALYZE, BUFFERS)`, and reports ms and buffers. Gate: 168h ≤ 300 ms on CI.
+**Step 3: Extend the repro.** After building the week, `events_repro.py` also runs `relations.LIST_SQL` over the lens's 7 days and `DETAIL_SQL` for the busiest pair under `EXPLAIN (ANALYZE, BUFFERS)`, and reports ms and buffers. Gate: the list ≤ 300 ms on CI.
 
 **Step 4: Commit:** `test(api): relations reads are index-bounded at production scale`.
 
@@ -2659,9 +2795,10 @@ Each twin proves its check can fail.
 - the repro's read timings.
 
 **After deploy (the controller):**
-- Time `/api/relations?timespan=24h` and `…168h` cold and warm, and one detail.
-- Expected: warm < 0.3 s; cold 168h < 1 s (else add the warmer).
+- Time `/api/relations` cold and warm, and one detail.
+- Expected: warm < 0.3 s; cold < 1 s (else add the warmer).
 - Spot-check the top 10 pairs for plausibility, and that no sample URL is non-http(s).
+- Apply 19b+'s threshold recalibration, if it isn't in this PR.
 
 **Rollback:** revert. Nothing reads the API until PR 20, so revert PR 20 first if it has merged.
 
@@ -2671,19 +2808,22 @@ Each twin proves its check can fail.
 
 Branch: `claude/p5-relations-ui`. Frontend only. It builds against 19c's contract, with mocked routes until 19c merges.
 
-### One focus at a time (decided here)
+### One focus at a time (decisions 1, 5, 6 and 13)
 
 | Situation | Relations arcs | Links arcs |
 |---|---|---|
-| Relations turned on | drawn | **turned off**: Links and Relations are mutually exclusive overlays |
+| Relations turned on (a live window) | drawn: the 7-day lens, whatever the live preset; the 5 strongest labelled | **turned off**: Links and Relations are mutually exclusive overlays |
 | Links turned on | **turned off** | drawn |
+| A range, or a replay running | **unavailable**: hidden; the toggle is `aria-disabled` with the note "Relations cover the last 7 days: not available for a range or replay"; back on a live window they return | (unchanged) |
 | Threads on, no thread selected | drawn | (unchanged) |
 | A thread selected | drawn; the inspected relation's highlight hidden, as an inspected link's is | (unchanged) |
-| An entity tracked, or the board open | **muted** (`--arc-muted`), no highlight, no flow, as links are | (unchanged) |
-| A relation opened (arc click, list row) | its arc highlighted | n/a |
+| An entity tracked, or the board open | **muted** (`--arc-muted`), no highlight, no flow, no persistent labels, as links are | (unchanged) |
+| A relation opened (arc click, list row) or a list row focused | its arc highlighted, its pill shown | n/a |
+| Phone width (≤ 760 px) | unavailable to turn on, like Links. If it was on at a wider width, the "Relations ✕" chip turns it off. | (unchanged) |
 
 - Opening a relation also ends the selected thread and the tracked entity, and closes the board, exactly as `handleLinkOpen` does.
 - Turning Relations off keeps opened relations in Inspect, as panels. Their arcs simply aren't drawn.
+- The topic pill never changes the arcs (decision 2).
 
 ### Task 20.1: API client and `lib/relations.ts`
 
@@ -2696,12 +2836,16 @@ Branch: `claude/p5-relations-ui`. Frontend only. It builds against 19c's contrac
 ```ts
 import { describe, expect, it } from "vitest";
 import {
+  RELATIONS_UNAVAILABLE,
   relationArcs,
   relationDaysWords,
   relationKey,
   relationPillText,
+  relationTag,
   relationWords,
   relationsStatus,
+  relationsUnavailable,
+  strongestRelations,
   type Relation,
 } from "@/lib/relations";
 
@@ -2788,10 +2932,35 @@ describe("relationsStatus", () => {
   it("says why nothing is drawn, and nothing while loading", () => {
     expect(relationsStatus({ loading: true, error: false, count: 0 })).toBeNull();
     expect(relationsStatus({ loading: false, error: false, count: 0 })).toBe(
-      "No reported events between countries in these days",
+      "No reported events between countries in the last 7 days",
     );
     expect(relationsStatus({ loading: false, error: true, count: 0 })).toBe("Relations couldn't load");
     expect(relationsStatus({ loading: false, error: false, count: 3 })).toBeNull();
+  });
+});
+
+describe("persistent labels (decision 6)", () => {
+  it("labels the 5 strongest by mentions", () => {
+    const many = Array.from({ length: 7 }, (_, i) =>
+      rel({ a: { ...IR, iso: `X${i}` }, mentions: 100 * (i + 1) }),
+    );
+    expect(strongestRelations(many).map((r) => r.mentions)).toEqual([700, 600, 500, 400, 300]);
+  });
+  it("puts the class in words, from the acting country", () => {
+    expect(relationTag(rel())).toBe("US–IR · 100 · conflict");
+  });
+});
+
+describe("relationsUnavailable (decision 1)", () => {
+  it("is available on any live window, and not under a range or a replay", () => {
+    expect(relationsUnavailable({ kind: "live", hours: 1 }, false)).toBeNull();
+    expect(relationsUnavailable({ kind: "live", hours: 24 }, true)).toBe(RELATIONS_UNAVAILABLE);
+    expect(
+      relationsUnavailable(
+        { kind: "range", startTime: "2026-10-19T00:00:00Z", endTime: "2026-10-20T00:00:00Z" },
+        false,
+      ),
+    ).toBe(RELATIONS_UNAVAILABLE);
   });
 });
 ```
@@ -2805,13 +2974,15 @@ Expected: FAIL, `Failed to resolve import "@/lib/relations"`.
 
 ```ts
 /**
- * Relations between countries (/api/relations): GDELT's reported events, the
- * Relations layer's arcs, and the words that name one. Events are machine-coded
- * from news reports: the UI calls them reported events, never facts, and the
- * class is always in words, so colour never carries the meaning alone.
+ * Relations between countries (/api/relations): GDELT's reported events over a
+ * fixed 7-day lens, the Relations layer's arcs, and the words that name one.
+ * Events are machine-coded from news reports: the UI calls them reported events,
+ * never facts, and the class is always in words, so colour never carries the
+ * meaning alone.
  */
 import type { ApiRelation, ApiRelations } from "@/lib/api";
 import { arcStroke, linkKey, type GlobeArc } from "@/lib/links";
+import type { TimeWindow } from "@/lib/timeWindow";
 import type { LinkCountry } from "@/types/news";
 
 export type RelationKind = "all" | "cooperation" | "conflict";
@@ -2924,14 +3095,36 @@ export function relationDaysWords(first: string, last: string): string {
 export function relationsStatus(s: { loading: boolean; error: boolean; count: number }): string | null {
   if (s.loading) return null;
   if (s.error) return "Relations couldn't load";
-  return s.count === 0 ? "No reported events between countries in these days" : null;
+  return s.count === 0 ? "No reported events between countries in the last 7 days" : null;
+}
+
+/** How many arcs carry a persistent label (decision 6). */
+export const LABELLED_ARCS = 5;
+
+/** The strongest relations, by mentions then events: those labelled on the globe. */
+export function strongestRelations(relations: readonly Relation[], n = LABELLED_ARCS): Relation[] {
+  return [...relations].sort((x, y) => y.mentions - x.mentions || y.n - x.n).slice(0, n);
+}
+
+/** A persistent label: "US–IR · 312 · conflict", from the acting country, the class in words. */
+export function relationTag(rel: Relation): string {
+  const [from, to] = relationEnds(rel);
+  return `${from.iso}–${to.iso} · ${rel.n} · ${rel.kind}`;
+}
+
+export const RELATIONS_UNAVAILABLE =
+  "Relations cover the last 7 days: not available for a range or replay";
+
+/** Why the 7-day lens can't show now (a range, or a replay running), or null. */
+export function relationsUnavailable(window: TimeWindow, replaying: boolean): string | null {
+  return window.kind !== "live" || replaying ? RELATIONS_UNAVAILABLE : null;
 }
 ```
 
 - **`api.ts`:** the types follow the contract exactly.
-  - `fetchRelations({ window, kind, limit = RELATIONS_LIMIT, signal })` calls `apiFetch("/api/relations", { ...windowParams(window), kind, limit: String(limit) }, signal)`.
-  - `fetchRelationDetail({ a, b, query })` calls `apiFetch("/api/relations/detail", { a, b, ...windowParams(queryWindow(query)) })`.
-  - Add both to `api.test.ts`'s URL tests.
+  - `fetchRelations({ kind, limit = RELATIONS_LIMIT, signal })` calls `apiFetch("/api/relations", { kind, limit: String(limit) }, signal)`. There are no window parameters: the lens is fixed.
+  - `fetchRelationDetail({ a, b })` calls `apiFetch("/api/relations/detail", { a, b })`.
+  - Add both to `api.test.ts`'s URL tests, including that no `timespan` is sent.
 - **`links.ts`:** export `arcStroke` if it isn't exported, and document `GlobeArc.relation`.
 
 **Step 4: Run the tests.**
@@ -2946,17 +3139,21 @@ Expected: all pass.
 **Files:**
 - Create: `frontend/src/hooks/useRelations.ts`, `frontend/src/hooks/useRelations.test.ts`
 
-Copy `useLinks` exactly, keyed on `(timeWindow, kind)`:
+Copy `useLinks`, keyed on `kind` only, since the lens doesn't follow the timeline:
 - it fetches only while enabled, after `FETCH_DEBOUNCE_MS`;
 - it aborts and ignores late answers;
 - it forgets the answer when turned off.
+- While on, it refetches every 30 minutes, so a page left open keeps up with the hourly lens.
+- `enabled` is false under a range or a replay (decision 1), so nothing is fetched then.
 
 It returns `{ relations, firstDay, lastDay, loading, error }`.
 
-**Tests** (mirror `useLinks.test.ts`):
+**Tests** (mirror `useLinks.test.ts`, with fake timers):
 - off fetches nothing;
 - on fetches once with `kind=all&limit=40`;
 - a kind change refetches and ignores the late first answer;
+- a timeline change alone fetches nothing;
+- 30 minutes on refetches once;
 - an error is reported, and turning off then on doesn't show the old error.
 
 **Commands:**
@@ -2969,20 +3166,27 @@ It returns `{ relations, firstDay, lastDay, loading, error }`.
 - Modify: `frontend/src/components/LayerSwitcher.tsx` (+ test), `frontend/src/components/LinksChip.tsx` (+ test), `frontend/src/app/soft-orbit.css`
 
 **Behaviour:**
-- **The toggle:** a **Relations** `.tg` toggle after Threads, `aria-pressed`, with the title "Reported events between countries (GDELT)". New props: `relations`, `onRelationsChange`, `relationKind`, `onRelationKindChange`, `relationsStatus`, `relationDays`.
-- **While Relations is on, beside the pill** (as `.link-rank` floats):
+- **The toggle:**
+  - a **Relations** `.tg` toggle after Threads, `aria-pressed`, with the title "Reported events between countries over the last 7 days (GDELT)";
+  - new props: `relations`, `onRelationsChange`, `relationKind`, `onRelationKindChange`, `relationsStatus`, `relationDays`, `relationsUnavailable` (the note, or null).
+- **Unavailable** (a range or a replay, decision 1): the toggle is `aria-disabled` and keeps its pressed state. The note comes from `relationsUnavailable` and is shown and announced through the same `aria-describedby` and `sr-only` pattern the base layers' `unavailable` uses. While it's unavailable, the kind switch and the legend are hidden.
+- **While Relations is on and available, beside the pill** (as `.link-rank` floats):
   - a `.seg` group "Show relations": **All / Cooperation / Conflict** (`data-testid="relation-kind"`).
-  - a legend `p.relations-legend` (`data-testid="relations-legend"`): a cooperation swatch "Cooperation" and a conflict swatch "Conflict", then "Reported events from news, machine-coded by GDELT. Not verified. {days}". When a topic is active it adds "All topics".
+  - a legend `p.relations-legend` (`data-testid="relations-legend"`), three short lines:
+    1. **"Relations · last 7 days ({days})"**;
+    2. a cooperation swatch "Cooperation" and a conflict swatch "Conflict", then "Reported events from news, machine-coded by GDELT. Not verified.";
+    3. **"Topic filters don't apply to relations."** (decision 2).
   - its status, when it draws nothing, as `linksStatus` is shown.
-- **Phones:** `LinksChip` gains `label` ("Links" | "Relations") and `aria-label` "Turn {label} off". Phones (≤ 760 px) show it for whichever overlay is on.
+- **Phones:** unavailable to turn on at ≤ 760 px, like Links (decision 13). `LinksChip` gains `label` ("Links" | "Relations") and `aria-label` "Turn {label} off". Phones show it for whichever overlay is on.
 - **CSS:**
   - `.relations-legend` and its `.sw-coop`/`.sw-conf` swatches use `--arc-relation-cooperation`/`--arc-relation-conflict`;
   - `.relation-kind` copies `.link-rank`'s rules, including the 760 and 1180 breakpoints and `.board-open:has(...)`.
 
 **Tests** (`LayerSwitcher.test.tsx`):
 - the toggle's state and title;
-- the kind switch and legend only while on;
-- the legend text contains "Not verified" and the days;
+- the kind switch and legend only while on and available;
+- the legend reads "Relations · last 7 days", "Not verified", and "Topic filters don't apply";
+- unavailable: `aria-disabled`, the note described, no switch or legend, and a press calls nothing;
 - choosing Conflict calls `onRelationKindChange("conflict")`.
 
 The mutual exclusion is the page's job and is tested in e2e.
@@ -2991,13 +3195,14 @@ The mutual exclusion is the page's job and is tested in e2e.
 - Run `cd frontend && npx vitest run src/components/LayerSwitcher.test.tsx src/components/LinksChip.test.tsx`: the new cases FAIL first, then pass.
 - Commit: `feat(ui): relations toggle, kind switch and legend`.
 
-### Task 20.4: Globe arcs and the arc pill
+### Task 20.4: Globe arcs, the arc pill and persistent labels
 
 **Files:**
 - Modify: `frontend/src/components/Globe.tsx`, `frontend/src/components/ArcPill.tsx` (+ test)
+- Create: `frontend/src/components/ArcLabels.tsx` (+ test)
 
 **Globe:**
-- **New props:** `relations: Relation[]`, `inspectedRelation: string | null`, `onRelationHover`, `onRelationClick`.
+- **New props:** `relations: Relation[]`, `inspectedRelation: string | null` (the opened relation, else the focused list row's: decision 6), `onRelationHover`, `onRelationClick`.
 - **Tokens:** read `--arc-relation-cooperation` and `--arc-relation-conflict` (fallbacks `#8fb8ff` and `#f2949c`) into `tokens.relations`.
 - **Arcs:** in the arcs effect, build them with `relationArcs` under their own memo key `[relations, inspectedRelation, flow, focused]`. `muted` is the existing `focused` (entity focus or the board). The highlight is hidden while a thread is selected (`inspected: thread ? null : inspectedRelation`). Concatenate them with the other sets.
 - **Events:** `onArcHover` and `onArcClick` dispatch on `arc.relation` versus `arc.link`.
@@ -3012,9 +3217,21 @@ The mutual exclusion is the page's job and is tested in e2e.
 - Callers pass `linkPill(link)` (from `arcPillText`/`linkEnds`) or `relationPill(rel)` (from `relationPillText`/`relationEnds`).
 - Update `ArcPill.test.tsx` and add a relation case: "312 reported events between United States and Iran, mostly verbal conflict".
 
+**ArcLabels** (decision 6: the 5 strongest arcs carry persistent labels):
+- **What:** up to `LABELLED_ARCS` small `.arc-tag` chips, one per `strongestRelations(relations)`, reading `relationTag(rel)` ("US–IR · 312 · conflict"). Each sits at its arc's apex (`arcApex`, as `ArcPill` uses).
+- **One frame loop** places them all, the way `ArcPill` places its pill. A label whose apex is on the far side of the globe is hidden.
+- **They yield** when that arc is hovered, focused or inspected (its pill says more), when another focus mutes the arcs (entity, board), and at ≤ 760 px (CSS).
+- **Accessibility:** `aria-hidden="true"` and `pointer-events: none`. The keyboard list and the inspector carry the same words to everyone.
+- **Test attribute:** the globe container's `data-relation-labels` is the number of labels rendered.
+- **Unit tests:**
+  - 7 relations give 5 labels, the strongest;
+  - muted gives none;
+  - the inspected one's label yields;
+  - the label text names the class.
+
 **Commands:**
-- Run `cd frontend && npx vitest run src/components/ArcPill.test.tsx`: the new case FAILs first, then passes.
-- Commit: `feat(ui): relation arcs on the globe`.
+- Run `cd frontend && npx vitest run src/components/ArcPill.test.tsx src/components/ArcLabels.test.tsx`: the new cases FAIL first, then pass.
+- Commit: `feat(ui): relation arcs on the globe, the strongest labelled`.
 
 ### Task 20.5: `RelationList` and `RelationInspector`
 
@@ -3024,12 +3241,13 @@ The mutual exclusion is the page's job and is tested in e2e.
 
 **RelationList:**
 - Shown in Inspect while nothing is open there and Relations is on, as `LinkList` is.
-- A labelled list of buttons: "{From} and {To}: {n} reported events, {words}". Each opens the relation.
+- A labelled list of buttons, "Relations · last 7 days": "{From} and {To}: {n} reported events, {words}". Every arc is listed, so every arc is labelled here (decision 6). Each opens the relation.
+- **Focusing a row labels its arc on the globe** (decision 6, "on focus"): `onFocusRelation(rel | null)` lets the page highlight that arc and show its pill, as hovering does. Blur clears it.
 - Rows carry `data-relation="IR-US"`.
 
 **RelationInspector** (`data-testid="relation-inspector"`, the `.insp` structure of `LinkInspector`):
 - **Header:**
-  - kicker "Relation · reported events, {days words}";
+  - kicker "Relation · last 7 days ({days words})";
   - heading "{From} and {To}" (focused on open, as the link's is);
   - caption: **"Events GDELT machine-coded from news reports: who did what to whom, as reported. Not verified facts; one report can yield several events."**
 - **Readouts:**
@@ -3038,23 +3256,25 @@ The mutual exclusion is the page's job and is tested in e2e.
   - Outlets ({outlets}, titled "at least": rows keep up to 8 outlets each, so the union is a lower bound);
   - Goldstein ({goldstein}, with the sub-label "event-type score, −10 conflict to +10 cooperation");
   - Tone ({tone}, "first reports"). Its `.sent` colour uses `sentimentKey(clamp(tone / 10, -1, 1))`.
-- **By class:** four rows, each with a label, a count, a percentage and a small bar coloured by side. They're text, so colour isn't the only signal.
+- **By class:** four rows, each with a label, a count, a percentage and a small bar coloured by side. They're text, so colour isn't the only signal. Both cooperation and conflict always show, whatever the layer's class switch says (decision 7).
 - **Directions:** "{From} → {To}: {n} events, {words}" for each direction present.
-- **By day (UTC):** small paired bars per day (cooperation, conflict) with an accessible table under them (`sr-only`).
+- **By day (UTC), the daily breakdown** (decision 1): all 7 days, with small paired bars per day (cooperation, conflict) and an accessible table under them (`sr-only`).
 - **Sample reports:**
   - `.art` rows with `title ?? outlet`, the outlet, the day, the class in words, and "{From} → {To}";
   - a link only when `isWebUrl(url)` (`target="_blank" rel="noopener noreferrer"`), else plain text.
 - **Controls:**
   - Minimize and Close, as in `LinkInspector`;
   - Escape minimizes;
-  - a Pin button: **none in this PR**. A relation pin needs a board item kind, which is an open question.
+  - no Pin button: relations aren't pinnable in Phase 5 (decision 9).
 - **Copy:** the component never renders "linked", "caused" or "attack". A unit test greps its rendered text for `/linked|caus|attack/i` and finds nothing.
 
 **Tests** (Vitest):
 - the list rows and Enter opening a relation;
+- focusing a row calls `onFocusRelation` with it, and blur with null;
 - the inspector:
   - renders the list item's numbers before the detail lands;
-  - the class rows' text;
+  - the class rows' text, all four, with the class switch on Conflict;
+  - 7 day rows;
   - a `javascript:` sample renders as text, not a link;
   - the caption is present;
   - the copy grep.
@@ -3070,16 +3290,25 @@ The mutual exclusion is the page's job and is tested in e2e.
 - Modify: `frontend/src/app/page.tsx`, `frontend/src/types/news.ts` (`RelationEntry`, like `LinkEntry` without the explanation), `frontend/src/components/SidePanel.tsx`, `frontend/src/components/RecentPlaces.tsx` (+ tests)
 
 **Wiring:**
-- **State:** `relationsOn`, `relationKind`, `hoveredRelation`, `relationQueue: RelationEntry[]`, and `useRelations(timeWindow, relationKind, relationsOn)`.
+- **State:** `relationsOn`, `relationKind`, `hoveredRelation`, `focusedRelation` (the focused list row), `relationQueue: RelationEntry[]`.
+- **The lens's availability:**
+  - `const unavailable = relationsUnavailable(timeWindow, replaying)`, then `const relationsShown = relationsOn && unavailable === null`;
+  - `useRelations(relationKind, relationsShown)`.
+  - Turning to a range or starting a replay hides the arcs and announces the note once. Going back to a live window shows them again without a click.
 - **Exclusive toggles:** `handleLinksChange(on)` sets Links and, when on, turns Relations off; `handleRelationsChange(on)` mirrors it. The co-pilot's "Show links" uses `handleLinksChange(true)`. The announcer says "Relations on. Links off." (or the reverse) when one turns the other off.
 - **`handleRelationOpen(rel)`:** copies `handleLinkOpen`:
   - reset the spread replay;
   - deselect the thread and stop tracking;
   - close the board (`showInspect`);
-  - reuse an open entry for the same pair and query;
-  - else create `relation-{key}-{createdAt}` and fetch its detail with the query frozen at open time.
+  - reuse an open entry for the same pair (the lens has one window, so the pair alone is the key);
+  - else create `relation-{key}-{createdAt}` and fetch its detail.
 - **Inspect:** an active id starting `relation-` renders `RelationInspector`. `RecentPlaces` shows relation pills "US ↔ IR · events" alongside places and links, under the same `MAX_PANELS`.
-- **Globe:** `relations={relationsOn ? relations : []}`, `inspectedRelation` is the active relation's key, and the hover and click callbacks are passed in. `ArcPill` shows the hovered relation, else the inspected one, else the link equivalents.
+- **Globe:**
+  - `relations={relationsShown ? relations : []}`;
+  - `inspectedRelation` is the focused row's key, else the active relation's;
+  - the hover and click callbacks are passed in.
+  - `ArcPill` shows the hovered relation, else the focused or inspected one, else the link equivalents.
+  - `ArcLabels` gets `strongestRelations(relations)` with the same yield rules.
 
 **Tests:**
 - unit tests where the logic is pure (the exclusive toggles as a small reducer `overlays(state, action)` in `lib/overlays.ts`, + test);
@@ -3109,21 +3338,30 @@ The mutual exclusion is the page's job and is tested in e2e.
 - Modify: `frontend/e2e/layout.spec.ts` (the `relation-kind` and `relations-legend` boxes against the timeline, bottom row and side panel at 1440, 1280 and 1180)
 
 **`relations.spec.ts`** (viewport 1440×900 unless stated; each test a few steps; keyboard activation; waits on `data-*`):
-1. **Relations draws arcs, and turns Links off.**
+1. **Relations draws the lens, labelled, and turns Links off.**
    - `gotoStillGlobe` with a recorder.
-   - Relations → `press("Enter")`. `data-relation-arcs="3"`; the request is `{timespan: "24h", kind: "all", limit: "40"}`; the legend contains "Not verified".
+   - Relations → `press("Enter")`:
+     - `data-relation-arcs="3"` and `data-relation-labels="3"`;
+     - the request is exactly `{kind: "all", limit: "40"}`, with no window;
+     - the legend contains "Relations · last 7 days", "Not verified" and "Topic filters don't apply".
    - Links → `press("Enter")`. Relations is `aria-pressed="false"` and `data-relation-arcs="0"`.
-2. **The kind switch refetches.** Relations on, then Conflict → `press("Enter")`. The last request has `kind=conflict`, and `data-relation-arcs="1"`.
-3. **A relation opens from the list.**
+2. **The kind switch refetches; the timeline doesn't.**
+   - Relations on, then Conflict → `press("Enter")`: the last request has `kind=conflict`, and `data-relation-arcs="1"`.
+   - Then the 6h preset → Enter: no new relations request.
+3. **A range makes the lens unavailable.**
+   - Relations on. Choose a range: the timeline's day step, as `timeline.spec` does.
+   - The toggle is `aria-disabled="true"`, its description holds the note, and `data-relation-arcs="0"`.
+   - Back to the 24h preset: `data-relation-arcs="3"` again.
+4. **A relation is labelled on focus, and opens from the list.**
    - Relations on.
-   - Focus the first `[data-relation]` row in Inspect and press Enter.
-   - `relation-inspector` shows the heading "United States and Iran", the caption "Not verified facts", and the class row "Verbal conflict".
-   - The `javascript:` sample isn't a link (`getByRole("link", { name: … })` count 0).
-   - `data-relation-highlight="IR-US"`.
-4. **Another focus mutes the arcs.**
+   - Focus the first `[data-relation]` row in Inspect: `data-relation-highlight="IR-US"`, and `arc-pill` contains "reported events".
+   - Press Enter:
+     - `relation-inspector` shows the heading "United States and Iran", the caption "Not verified facts", the class row "Verbal conflict" and 7 day rows;
+     - the `javascript:` sample isn't a link (`getByRole("link", { name: … })` count 0).
+5. **Another focus mutes the arcs.**
    - Relations on, then `seedBoard` and the Board button → Enter.
-   - `data-relation-muted="true"` and `data-relation-highlight=""`.
-5. **Phone, 390 wide.**
+   - `data-relation-muted="true"`, `data-relation-highlight=""` and `data-relation-labels="0"`.
+6. **Phone, 390 wide** (decision 13).
    - The layer switcher is hidden at ≤ 760 px, as it is for Links. So start at 1180 wide, turn Relations on, then resize to 390.
    - The "Relations ✕" chip shows, and Enter on it turns Relations off (`data-relation-arcs="0"`).
 
@@ -3144,8 +3382,9 @@ The mutual exclusion is the page's job and is tested in e2e.
 - the copy rules followed.
 
 **After deploy (the controller), on orbisapp.co:**
-- Relations draws plausible arcs with the legend, and Links turns it off.
-- The inspector's numbers match the arc's.
+- Relations draws plausible arcs with the legend ("Relations · last 7 days") and 5 labels, and Links turns it off.
+- A range makes it unavailable, with the note.
+- The inspector's numbers match the arc's, and its 7 days add up to them.
 - Sample links open the outlet in a new tab.
 - At 390 the chip works.
 
@@ -3163,11 +3402,24 @@ The mutual exclusion is the page's job and is tested in e2e.
     - distinct stories (`story_key`) and outlet exclusivity aren't additive across days: a syndicated story that spans midnight counts twice;
     - the existing week would need a backfill (a production data write, the owner's call).
   - Measure the drift against the live list before deciding.
-- **Board:** a `relation:{AA}-{BB}` pin kind (18a's resolve and edges), if the controller wants relations pinnable.
+- **Board:** relations are not pinnable in Phase 5 (decision 9). Pinning them later needs a `relation:{AA}-{BB}` item kind in 18a's resolve and edges, and in 18b's pins.
 - **Co-pilot:** a "Show relations" action pill, like "Show links".
 - **The Mentions table** (`mentions.CSV.zip`) as a "these articles report the same event" signal: large, and measure it first.
-- **GKG catch-up and the scheduler cadence** (the finding above).
-- **Hourly rollups,** if day-granular windows prove too coarse.
+- **Owner decision: the GKG cadence** (decision 12; pre-existing, out of Phase 5's scope).
+  - **What happens:**
+    - `scheduler._ingestion_loop` sleeps 900 s *after* each cycle, and a cycle takes 13–16 min, almost all of it embeddings.
+    - So cycles start every 28–31 min, and the GKG path, which reads only the newest file, ingests about 46–51 of GDELT's 96 files a day: **about half**.
+    - The site still takes in about 1,000 articles an hour (measured 2026-10-18). That's a uniform sample, so relative views (the globe, links, breaking, threads) hold; absolute counts are about half of GDELT's.
+  - **What catching up would cost:**
+    - It would roughly **double the articles**, to about 2,000 an hour.
+    - With them double the embedding writes: non-HOT `UPDATE`s through the HNSW index, about 1 min per 100 rows on production, at 100% IOPS at peak. The cycle's 13–16 min of embeddings would become about 26–32 min, longer than a 15-minute slot, so the cycle would fall further behind.
+    - OpenAI embedding spend roughly doubles too, though it stays small: under $2 a month becomes under $4.
+  - **Options for the owner:**
+    - (a) keep the half sample (no change);
+    - (b) a fixed-rate scheduler (start every 15 min, skip while one runs), which changes little while embeddings take 13–16 min;
+    - (c) catch the GKG up with a per-cycle cap *and* make embedding writes cheaper (batched writes, or a narrow embeddings table), which is a project of its own.
+  - **The events path** keeps its own catch-up regardless: its files are about 80 KB, and its writes are a few hundred HOT updates.
+- **Hourly rollups:** daily rollups stay (decision 1). Revisit only if the owner later wants relations to follow the timeline instead of the 7-day lens.
 
 ## Risks to watch
 
@@ -3176,6 +3428,7 @@ The mutual exclusion is the page's job and is tested in e2e.
 - **Double counting.** Rollups are sums. The claim on `event_files` under an advisory lock prevents it, including during a deploy overlap. Watch for `another process added` lines.
 - **Lost counts.** A missed slot's events are gone. The catch-up covers 2 hours; the 19b+ query checks about 4 files an hour.
 - **Disk.** The step runs before the embeddings, writes a few hundred narrow rows as HOT updates, and reads a table that stays in `shared_buffers`. Watch the existing IOPS and bandwidth alerts after 19b.
-- **#108.** 19c depends on its `wk:` helpers. If #108 changes shape, 19c follows it.
+- **#108.** 19c depends on its `wk:` helpers (decision 10). If #108 changes shape, 19c follows it; if it doesn't land, 19c uses the `db:*` fallback.
+- **The lens lags.** Answers can be about an hour old (`wk:*`), and the lens moves at UTC midnight. The legend says "last 7 days" and names the dates, so neither misleads.
 - **GDELT format changes.** The 61-field check and the malformed counter make a change visible in the log and the repro rather than silent.
 - **Sensitive pairs** (IL–PS, RU–UA). Copy stays neutral: class words from QuadClass only, and no verbs of blame.
