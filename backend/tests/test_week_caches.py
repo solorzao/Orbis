@@ -29,6 +29,8 @@ PILLS = [
     ("Health", "health"),
 ]
 WEEK_GLOBE_KEYS = [f"wk:globe:v2:168::500:{tag or ''}" for _, tag in PILLS]
+# Health's week is empty in these tests: cached a minute only.
+FULL_WEEK_KEYS = [key for key in WEEK_GLOBE_KEYS if not key.endswith(":health")]
 WEEK_LINKS_KEY = "wk:links:v5:live:168::lift:40"
 CYCLE = 15 * 60
 
@@ -74,7 +76,10 @@ def _pair() -> dict:
 @pytest.fixture
 def redis():
     fake = FakeRedis()
-    with patch("app.services.cache.get_redis", AsyncMock(return_value=fake)):
+    with (
+        patch("app.services.cache.get_redis", AsyncMock(return_value=fake)),
+        patch("app.warm.get_redis", AsyncMock(return_value=fake)),
+    ):
         yield fake
 
 
@@ -124,11 +129,11 @@ class TestHourlyWarm:
     @pytest.mark.asyncio
     async def test_a_day_of_cycles_reads_the_week_hourly_not_every_cycle(self, redis, week):
         """96 cycles a day each read the week twice (192 reads); now one cycle an hour
-        refreshes each, and neither entry is ever missing between refreshes."""
+        refreshes each, and no entry with stories is ever missing between refreshes."""
         for _ in range(96):  # a day of 15-minute cycles, each ending in an invalidation
             await invalidate("db:*")
             await _warm_week()
-            assert all(key in redis.values for key in [*WEEK_GLOBE_KEYS, WEEK_LINKS_KEY])
+            assert all(key in redis.values for key in [*FULL_WEEK_KEYS, WEEK_LINKS_KEY])
             redis.elapse(CYCLE)
 
         # Refreshed once 55 minutes old: every fourth cycle (at 0, 60, 120 ... minutes).
@@ -161,9 +166,24 @@ class TestHourlyWarm:
         assert all(key in redis.values for key in [*WEEK_GLOBE_KEYS, WEEK_LINKS_KEY])
 
     @pytest.mark.asyncio
+    async def test_an_empty_week_is_cached_a_minute_and_refreshed_by_the_next_warm(
+        self, redis, week
+    ):
+        """As any empty answer: new stories show soon. So it is never fresh."""
+        from app.routers.links import warm_links_7d
+
+        week.links.return_value = []
+        await warm_links_7d()
+        assert json.loads(redis.values[WEEK_LINKS_KEY]) == []
+        assert redis.ttls[WEEK_LINKS_KEY] == 60
+
+        await warm_links_7d()
+        assert week.links.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_each_globe_variant_is_stored_as_its_request_reads_it(self, redis, week):
-        """Under the request's key, as the request's bytes, for the week's TTL: an empty
-        topic too (refreshed hourly anyway; a miss would read the whole week again)."""
+        """Under the request's key, as the request's bytes, for the week's TTL; an empty
+        topic only a minute, as any empty globe."""
         from app.models.news import GlobeDataPoint
         from app.routers.news import warm_globe_week
 
@@ -176,7 +196,68 @@ class TestHourlyWarm:
             assert json.loads(redis.values[key]) == dumped, key
         assert redis.ttls[WEEK_GLOBE_KEYS[0]] == WEEK_TTL
         assert json.loads(redis.values["wk:globe:v2:168::500:health"]) == []
-        assert redis.ttls["wk:globe:v2:168::500:health"] == WEEK_TTL
+        assert redis.ttls["wk:globe:v2:168::500:health"] == 60
+
+
+def _blocking(mock: AsyncMock) -> tuple[asyncio.Event, asyncio.Event]:
+    """Make *mock* wait until cancelled: events for its start and its cancellation."""
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def wait(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    mock.side_effect = wait
+    return started, cancelled
+
+
+class TestStopping:
+    """A week read must end with the warm that started it: never run on, untracked, into
+    the next cycle's writes (shield keeps a request's from its cancellation)."""
+
+    @pytest.mark.asyncio
+    async def test_a_timed_out_week_refresh_is_cancelled(self, redis, week):
+        from app import warm
+        from app.routers.news import warm_globe_week
+        from app.services import cache
+
+        started, cancelled = _blocking(week.globes)
+
+        await warm.warm_caches((warm_globe_week,), timeout=0.05, timeouts={})
+
+        assert started.is_set()
+        await asyncio.wait_for(cancelled.wait(), 1)
+        await asyncio.sleep(0)
+        assert not cache._in_flight
+
+    @pytest.mark.asyncio
+    async def test_a_stopped_week_refresh_is_cancelled_and_one_a_request_started(self, redis, week):
+        """At a cycle's start or at shutdown (stop_background_tasks): the warm's week read,
+        and a request's cold miss of the other (that request gets an error)."""
+        from app.routers.links import warm_links_7d
+        from app.routers.news import cached_globe
+        from app.services import cache, ingestion
+
+        links_started, links_cancelled = _blocking(week.links)
+        globe_started, globe_cancelled = _blocking(week.globes)
+        request = asyncio.create_task(cached_globe(168, None, None, 500, "politics"))
+        with patch("app.warm.warm_caches", lambda: warm_links_7d()):
+            ingestion._start_cache_warm()
+            await asyncio.wait_for(links_started.wait(), 1)
+            await asyncio.wait_for(globe_started.wait(), 1)
+
+            await ingestion.stop_background_tasks()
+
+        assert links_cancelled.is_set() and globe_cancelled.is_set()
+        with pytest.raises(RuntimeError, match="cancelled"):
+            await request
+        await asyncio.sleep(0)
+        assert not cache._in_flight
+        assert not ingestion._background_tasks
 
 
 class TestReads:

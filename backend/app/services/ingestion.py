@@ -13,7 +13,7 @@ import logging
 import time
 
 from app.config import settings
-from app.services.cache import invalidate
+from app.services.cache import cancel_flights, invalidate
 from app.services.database import get_pool, upsert_articles
 from app.services.embeddings import generate_embeddings
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
@@ -248,16 +248,19 @@ def _start_thread_synopses() -> None:
 
 
 async def stop_background_tasks() -> None:
-    """Cancel the cycle's background tasks (a cache warm, thread synopses) and wait
-    until they stop.
+    """Cancel the cycle's background tasks (a cache warm, thread synopses), and any
+    read of the week's stories for the wk:* caches (the warm's, or one a request's
+    miss started), and wait until they stop.
 
     At shutdown, before Redis and the pool close, so a warm cannot reopen
     them; and as a cycle starts, so a warm cannot write answers back after
-    the cycle has invalidated them.
+    the cycle has invalidated them, nor a week read run on into its writes.
+    A request waiting on a week read gets an error then.
     """
     tasks = list(_background_tasks)
     for task in tasks:
         task.cancel()
+    tasks += cancel_flights("wk:")
     await asyncio.gather(*tasks, return_exceptions=True)
 
 

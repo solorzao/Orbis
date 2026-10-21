@@ -52,11 +52,12 @@ def cycle_ttl(ttl: int) -> int:
 
 
 async def week_fresh(key: str) -> bool:
-    """Whether a week-long entry is under WEEK_REFRESH_AGE old.
+    """Whether a week-long entry was stored under WEEK_REFRESH_AGE ago.
 
-    Its age is its TTL's: stored with WEEK_TTL, it is WEEK_TTL minus the TTL
-    left old. A missing entry, or one stored briefly (an empty answer), is
-    never fresh; nor is anything without Redis.
+    A week's answer is stored for WEEK_TTL, so the time since it was stored is
+    WEEK_TTL less the TTL it has left. A missing entry is never fresh, nor an
+    empty answer (stored for a minute, so the next warm retries it), nor
+    anything when Redis is unavailable.
     """
     r = await get_redis()
     if r is None:
@@ -75,15 +76,20 @@ def cached_model(key: str, cached: Any, parse: Callable[[Any], T]) -> T | None:
 
     An entry cached before its model gained a required field (as #91's
     ``capped`` was) would otherwise fail every request until it expired: the
-    caller recomputes it instead, and one line is logged. Other errors raise.
+    caller recomputes it instead, and one line is logged, naming the first
+    error's place and type (never the cached value). Other errors raise.
     """
     try:
         return parse(cached)
     except ValidationError as exc:
+        first = exc.errors()[0]
+        place = ".".join(str(part) for part in first["loc"]) or "the entry"
         logger.warning(
-            "Cached %s no longer fits its model (%d errors); recomputing.",
+            "Cached %s no longer fits its model (%d errors, first at %s (%s)); recomputing.",
             key,
             exc.error_count(),
+            place,
+            first["type"],
         )
         return None
 
@@ -92,19 +98,41 @@ def cached_model(key: str, cached: Any, parse: Callable[[Any], T]) -> T | None:
 _in_flight: dict[str, asyncio.Task[Any]] = {}
 
 
-async def single_flight(key: str, compute: Callable[[], Awaitable[T]]) -> T:
+async def single_flight(
+    key: str, compute: Callable[[], Awaitable[T]], *, cancel_with_caller: bool = False
+) -> T:
     """``compute()``'s answer, run once for concurrent callers of *key*.
 
     Callers that come while it runs wait for it and get its answer, or its
     error; the next caller after it lands runs it again. A caller that is
-    cancelled (a browser aborting) leaves it running for the others.
+    cancelled (a browser aborting) leaves it running for the others, unless
+    it passes *cancel_with_caller* (a cache warmer, whose timeout or stop must
+    end its week read). A caller whose computation is cancelled under it
+    (cancel_flights, or another caller's) gets a RuntimeError.
     """
     task = _in_flight.get(key)
     if task is None:
         task = asyncio.create_task(compute())
         _in_flight[key] = task
         task.add_done_callback(functools.partial(_landed, key))
-    return await asyncio.shield(task)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():  # this caller is cancelled
+            if cancel_with_caller:
+                task.cancel()
+            raise
+        raise RuntimeError(f"The computation for {key.split(':')[0]}:* was cancelled.") from None
+
+
+def cancel_flights(prefix: str) -> list[asyncio.Task[Any]]:
+    """Cancel the running computations whose keys start with *prefix*; return them,
+    for the caller to wait on. Their callers get a RuntimeError."""
+    tasks = [task for key, task in _in_flight.items() if key.startswith(prefix)]
+    for task in tasks:
+        task.cancel()
+    return tasks
 
 
 def _landed(key: str, task: asyncio.Task[Any]) -> None:

@@ -175,12 +175,76 @@ class TestCachedModel:
         assert record.getMessage().startswith("Cached db:search:v1:abbas no longer fits its model")
         assert record.exc_info is None  # one line, no traceback
 
+    def test_the_log_names_the_first_errors_place_and_type_never_its_value(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="app.services.cache"):
+            cache.cached_model(
+                "db:x", {"title": "a visitor's secret", "capped": "maybe"}, Story.model_validate
+            )
+
+        [record] = caplog.records
+        message = record.getMessage()
+        assert "first at capped (bool_parsing)" in message
+        assert "secret" not in message and "maybe" not in message
+
     def test_other_errors_are_not_a_miss(self):
         with pytest.raises(KeyError):
             cache.cached_model("db:x", {}, lambda entry: entry["missing"])
 
 
+def _blocked():
+    """A computation that waits until cancelled, with events for its start and its end."""
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def compute():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    return compute, started, cancelled
+
+
 class TestSingleFlight:
+    @pytest.mark.asyncio
+    async def test_cancel_with_caller_cancels_the_computation_with_its_caller(self):
+        """A week warmer's: its timeout, or a stopped warm, ends the week read too."""
+        compute, started, cancelled = _blocked()
+        caller = asyncio.create_task(cache.single_flight("wk:x", compute, cancel_with_caller=True))
+        await started.wait()
+
+        caller.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        await asyncio.wait_for(cancelled.wait(), 1)
+
+    @pytest.mark.asyncio
+    async def test_cancel_flights_cancels_its_prefixs_and_their_callers_get_an_error(self):
+        """A request joined to a week read a cycle stops gets an error, not a cancellation
+        of its own; other keys' computations go on."""
+        week, week_started, week_cancelled = _blocked()
+        release = asyncio.Event()
+
+        async def day():
+            await release.wait()
+            return "day"
+
+        joined = asyncio.create_task(cache.single_flight("wk:x", week))
+        other = asyncio.create_task(cache.single_flight("db:x", day))
+        await week_started.wait()
+
+        stopped = cache.cancel_flights("wk:")
+
+        assert len(stopped) == 1
+        await asyncio.gather(*stopped, return_exceptions=True)
+        assert week_cancelled.is_set()
+        with pytest.raises(RuntimeError, match="cancelled"):
+            await joined
+        release.set()
+        assert await other == "day"
+
     @pytest.mark.asyncio
     async def test_concurrent_callers_share_one_computation(self):
         calls = 0

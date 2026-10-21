@@ -255,14 +255,13 @@ async def _load_globe(
 
 
 async def _cache_globe(cache_k: str, rows: list[dict], *, week: bool) -> list[GlobeDataPoint]:
-    """Cache a globe's points: a week's for WEEK_TTL, empty or not (it is refreshed
-    hourly, and a miss reads the week); others until the next cycle ends, an
-    empty one only briefly."""
+    """Cache a globe's points: a week's for WEEK_TTL, others until the next cycle
+    ends; an empty globe only briefly, so new stories show soon."""
     points = [GlobeDataPoint(**r) for r in rows]
-    if week:
-        ttl = WEEK_TTL
+    if not points:
+        ttl = _EMPTY_GLOBE_TTL
     else:
-        ttl = cycle_ttl(settings.db_cache_ttl) if points else _EMPTY_GLOBE_TTL
+        ttl = WEEK_TTL if week else cycle_ttl(settings.db_cache_ttl)
     await set_cached(cache_k, [p.model_dump(mode="json") for p in points], ttl)
     return points
 
@@ -289,11 +288,12 @@ async def warm_globe_week() -> None:
 
     Nothing while it is fresh (cache.week_fresh: under 55 minutes old), so most
     cycles skip it: each refresh reads the week's stories (25 s on production).
-    Joins a refresh that a request's miss has started.
+    Joins a refresh that a request's miss has started; the warm's timeout, or a
+    stop (stop_background_tasks), cancels it.
     """
     if await week_fresh(_globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, None)):
         return
-    await single_flight(_GLOBE_WEEK_FLIGHT, _refresh_globe_week)
+    await single_flight(_GLOBE_WEEK_FLIGHT, _refresh_globe_week, cancel_with_caller=True)
 
 
 async def _refresh_globe_week() -> dict[str | None, list[GlobeDataPoint]]:

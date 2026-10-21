@@ -173,14 +173,14 @@ async def _load_links(
     cache_k: str, window: Window, tag: str | None, rank: str, limit: int
 ) -> list[Link]:
     """Compute the window's links and cache them: a week's for WEEK_TTL, others
-    until the next cycle ends, an empty answer briefly."""
+    until the next cycle ends; an empty answer briefly, so new stories show soon."""
     rows = await get_link_pairs(window.start, window.end, tag)
     links = [Link.model_validate(link) for link in rank_links(rows, rank, limit, tag)]
 
-    if window.key == _WEEK_WINDOW:
-        ttl = WEEK_TTL
+    if not links:
+        ttl = _EMPTY_LINKS_TTL
     else:
-        ttl = cycle_ttl(_LINKS_TTL) if links else _EMPTY_LINKS_TTL
+        ttl = WEEK_TTL if window.key == _WEEK_WINDOW else cycle_ttl(_LINKS_TTL)
     await set_cached(cache_k, [link.model_dump(by_alias=True) for link in links], ttl)
     return links
 
@@ -201,13 +201,15 @@ async def warm_links_7d() -> None:
 
     Nothing while it is fresh (cache.week_fresh: under 55 minutes old), so most
     cycles skip it: each refresh reads the week's stories (12-27 s, and past
-    30 s, on production). Joins a computation a request's miss has started.
+    30 s, on production). Joins a computation a request's miss has started; the
+    warm's timeout, or a stop (stop_background_tasks), cancels it.
     """
     window, tag, rank, limit = _default_7d()
     cache_k = _links_key(window, tag, rank, limit)
     if await week_fresh(cache_k):
         return
-    await single_flight(cache_k, functools.partial(_load_links, cache_k, window, tag, rank, limit))
+    load = functools.partial(_load_links, cache_k, window, tag, rank, limit)
+    await single_flight(cache_k, load, cancel_with_caller=True)
 
 
 async def cached_links_7d() -> list[Link] | None:
