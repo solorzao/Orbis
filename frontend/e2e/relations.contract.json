@@ -81,6 +81,64 @@
       }
     ]
   },
+  "list_cooperation": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "relations": [
+      {
+        "a": { "iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34 },
+        "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+        "n": 100,
+        "outlets": 11,
+        "mentions": 690,
+        "quad": {
+          "verbal_cooperation": 70,
+          "material_cooperation": 30,
+          "verbal_conflict": 0,
+          "material_conflict": 0
+        },
+        "kind": "cooperation",
+        "goldstein": 3.1,
+        "tone": 1.6,
+        "from": "US"
+      },
+      {
+        "a": { "iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29 },
+        "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+        "n": 52,
+        "outlets": 9,
+        "mentions": 300,
+        "quad": {
+          "verbal_cooperation": 40,
+          "material_cooperation": 12,
+          "verbal_conflict": 0,
+          "material_conflict": 0
+        },
+        "kind": "cooperation",
+        "goldstein": 2.2,
+        "tone": -0.5,
+        "from": "US"
+      },
+      {
+        "a": { "iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34 },
+        "b": { "iso": "NG", "name": "Nigeria", "lat": 9.55, "lng": 8.0 },
+        "n": 33,
+        "outlets": 5,
+        "mentions": 250,
+        "quad": {
+          "verbal_cooperation": 25,
+          "material_cooperation": 8,
+          "verbal_conflict": 0,
+          "material_conflict": 0
+        },
+        "kind": "cooperation",
+        "goldstein": 3.0,
+        "tone": 0.9,
+        "from": "FR"
+      }
+    ]
+  },
   "detail": {
     "first_day": "2026-10-15",
     "last_day": "2026-10-21",
