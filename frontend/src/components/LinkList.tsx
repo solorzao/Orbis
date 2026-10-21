@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useLayoutEffect, useRef, type FocusEvent } from "react";
+import { useId } from "react";
 import { linkKey, linkPairLabel, type LinkRank } from "@/lib/links";
+import { useRowFocus } from "@/hooks/useRowFocus";
 import type { CountryLink } from "@/types/news";
 
 interface LinkListProps {
@@ -26,35 +27,10 @@ const stories = (n: number) => `${n} ${n === 1 ? "story" : "stories"}`;
  */
 export default function LinkList({ links, rank, status, onOpen }: LinkListProps) {
   const labelId = useId();
-  const boxRef = useRef<HTMLDivElement>(null);
-  // The row that had the focus, until the focus leaves the list on purpose.
-  const focusedRow = useRef<string | null>(null);
-
-  // Layout effect: before anything else can move the focus that the row's
-  // removal dropped on the page.
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    const row = focusedRow.current;
-    if (!box || row === null) return;
-    const active = document.activeElement;
-    if (active && active !== document.body) return; // still on its row, or elsewhere
-    if (links.some((l) => linkKey(l.a.iso, l.b.iso) === row)) return; // listed: not ours to move
-    (box.querySelector<HTMLElement>(".link-row") ?? box).focus();
-  }, [links]);
-
-  const onFocus = (e: FocusEvent<HTMLDivElement>) => {
-    const row = e.target.closest<HTMLElement>("[data-link]")?.dataset.link;
-    if (row) focusedRow.current = row;
-  };
-  // Left on purpose (another control, or a click on the globe) while the row
-  // is still there: forget it. A row the list dropped is no longer connected.
-  const onBlur = (e: FocusEvent<HTMLDivElement>) => {
-    const target = e.target;
-    setTimeout(() => {
-      const box = boxRef.current;
-      if (target.isConnected && !box?.contains(document.activeElement)) focusedRow.current = null;
-    }, 0);
-  };
+  const { boxRef, onFocus, onBlur } = useRowFocus(
+    links.map((l) => linkKey(l.a.iso, l.b.iso)),
+    "data-link",
+  );
 
   return (
     <div

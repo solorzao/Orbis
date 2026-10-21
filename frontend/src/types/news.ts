@@ -1,4 +1,5 @@
 import type { LiveHours } from "@/lib/timeWindow";
+import type { Relation, RelationDetail, RelationLens } from "@/lib/relations";
 
 /** The story thread a cluster story is part of (/api/news/cluster), when it would be listed. */
 export interface ArticleThread {
@@ -156,6 +157,25 @@ export interface LinkDetail {
 export interface LinkExplanation {
   text: string;
   ai: boolean;
+}
+
+/**
+ * A relation open in the Inspect tab (like a LinkEntry, without an
+ * explanation). No query: every relation covers the same fixed 7-day lens,
+ * so the pair alone names it.
+ */
+export interface RelationEntry {
+  relationId: string;
+  /** The relation as its arc or list row had it: its ends, numbers and acting country. */
+  relation: Relation;
+  /** The lens the list answered for, until the detail names its own; null if unknown. */
+  lens: RelationLens | null;
+  detail: RelationDetail | null;
+  detailLoading: boolean;
+  detailError?: boolean;
+  /** The pair has no events left in the lens (a 404 around UTC midnight): said as text. */
+  notFound?: boolean;
+  createdAt: number;
 }
 
 /** A link open in the Inspect tab, its query fixed when it was opened (like a panel's). */
