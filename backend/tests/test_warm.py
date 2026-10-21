@@ -38,8 +38,9 @@ def test_the_first_visit_is_warmed_globe_first_then_the_links_layer_then_breakin
         warm_globe_week,
     )
     assert warm.WARM_TIMEOUT == 30
-    # The week's one pass gets longer: 168h queries took 20-73 s cold on production.
-    assert warm.WARMER_TIMEOUTS == {warm_globe_week: 90}
+    # The week's reads get longer: 168h globe queries took 20-73 s cold on
+    # production, and the 7-day links warm passed 30 s on 2026-10-21.
+    assert warm.WARMER_TIMEOUTS == {warm_globe_week: 90, warm_links_7d: 90}
 
 
 def test_a_cycles_entries_last_until_the_next_cycle_ends():
