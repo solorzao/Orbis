@@ -41,9 +41,9 @@ The controller proposed these and the owner approved all 13 on 2026-10-21. The t
 | 5 | **Exclusivity.** Relations and Links are mutually exclusive. Relation arcs are muted under entity focus and the board, as links are. | Both draw arcs between the same label points. |
 | 6 | **Labels.** The 5 strongest arcs carry persistent labels. Every arc is labelled on hover or focus, and all of them in the keyboard list and the inspector. | Arcs are always labelled, without cluttering the globe. |
 | 7 | **Arcs.** One arc per pair, coloured by the dominant class under All. The Cooperation and Conflict switch filters to that class's counts. The inspector always shows both classes. | One arc per pair stays readable; the inspector keeps the full picture. |
-| 8 | **Thresholds.** `MIN_EVENTS` 5, `MIN_REPORTS` 3 and `MIN_OUTLETS` 2 are starting values, kept as named constants that "Measure on prod" (19b+) recalibrates. | They can only be tuned on live data. |
+| 8 | **Thresholds.** `MIN_EVENTS` 5 and `MIN_OUTLETS` 2 are starting values, kept as named constants that "Measure on prod" (19b+) recalibrates. *(Plan review dropped `MIN_REPORTS` and the stored report count: per-row distinct URLs summed across directions, classes, days and cycles count one article several times. `MIN_OUTLETS` counts a distinct union across rows, so it holds.)* | They can only be tuned on live data. |
 | 9 | **Board.** Relations are not pinnable in Phase 5 (see "After Phase 5"). | It would need a new board item kind in 18a's API. |
-| 10 | **#108.** It's merging now, so 19c relies on its `WEEK_TTL`, `single_flight` and `cached_model`. Fallback, should it not land: keep the lens under `db:*` with `cycle_ttl` and plain get and set, since it's cheap either way. | The 7-day lens is a week read. |
+| 10 | **#108** (merged 2026-10-21). 19c relies on its `WEEK_TTL`, `single_flight` and `cached_model`. Fallback, should it not land: keep the lens under `db:*` with `cycle_ttl` and plain get and set, since it's cheap either way. | The 7-day lens is a week read. |
 | 11 | **CAMEO reference downloads.** The table is **written by hand** from GDELT's documented CAMEO country list and **verified on CI**: a read-only workflow downloads the references on the runner and fails with a diff if the committed table differs. Nothing is downloaded locally, there's no write access, and there are no bot pushes. *(The mechanism was revised on 2026-10-21 from CI generation with a bot commit, which needed Actions write permission, a security setting we won't change.)* | The owner approves downloads case by case; repository security settings stay as they are. |
 | 12 | **GKG cadence finding.** Out of Phase 5's scope: catching up the GKG roughly doubles embeddings and their IOPS, an owner decision on cost, recorded with its numbers under "After Phase 5". The events path keeps its own catch-up, since its files are small. | Cost and IOPS are the owner's call. |
 | 13 | **Phones.** Relations is unavailable at phone width, like Links. | As Links today. |
@@ -146,15 +146,17 @@ The root share is unknown until the repro runs. The kept and row estimates below
    - The events step streams and is bounded: capped downloads, an in-memory unzip, aggregation in Python, **one batched upsert per cycle**, about 120–400 rows.
    - There are no per-event rows, and none are planned.
    - It runs before embeddings so it never contends with them, and it logs its own timing.
+   - **It has a hard time bound** (plan review I3): the whole step runs under `asyncio.wait_for(…, EVENTS_STEP_TIMEOUT_S = 60)`. On a timeout nothing has been claimed, so the files are retried next cycle. Catch-up files get one retry and a 10 s timeout.
    - 19b's CI repro measures rows per cycle and per day, upsert time, table size and the HOT-update ratio.
 4. **Week reads refresh hourly outside `db:*`** (PR #108's pattern: `wk:*`, `WEEK_TTL`, `single_flight`, `cached_model`), never per cycle.
    - Relations is a 7-day lens (decision 1), so every relations answer is a week read. They read rollups, so they're cheap by design, but they still live under `wk:`, refreshed at most hourly.
-   - 19c relies on #108, which is merging. The fallback is in decision 10.
+   - 19c relies on #108 (merged 2026-10-21). The fallback in decision 10 is no longer needed.
 5. **Input from GDELT is untrusted.**
-   - Only https URLs on `data.gdeltproject.org` are fetched, and no redirects are followed.
+   - `download_capped` itself refuses any URL outside `https://data.gdeltproject.org/`, and no redirects are followed.
    - The index MD5 is checked on the newest file.
    - The zip is capped at 2 MB, the CSV at 20 MB, and rows at 30,000 per file. The zip must hold exactly one member named like an export.
-   - Malformed rows (wrong field count, bad numbers, bad dates) are counted and skipped, never fatal.
+   - Malformed rows (wrong field count, bad numbers, bad dates) are counted and skipped, never fatal. Rows are split on `"\n"` only, so a stray `\x0c` or ` ` inside a field can't split a row.
+   - **A file that can't be read** (a bad zip, an oversized member, a parse error) is recorded `unreadable` and never retried, so it can't wedge the step (plan review I2). Slots that leave the catch-up window unadded are logged as "N slots lost".
    - `SOURCEURL`s are kept only when `web_url` accepts them: absolute http(s), a host, no control characters, at most 1,000 characters.
    - The frontend opens them only through `isWebUrl`, with `rel="noopener noreferrer"`.
 6. **Tests and CI.**
@@ -201,10 +203,10 @@ The root share is unknown until the repro runs. The kept and row estimates below
 
 | PR | What | Depends on |
 |---|---|---|
-| 19a | Migration 021: `event_pairs_daily` and `event_files`; static and DB schema tests; README | none |
+| 19a | Migration 021: `event_pairs_daily` and `event_files`; static and DB schema tests; README; the repro's dispatch-only workflow file | none |
 | 19b | Events ingestion: CAMEO→ISO table, capped fetch and catch-up, parse and aggregate, one batched upsert, purge, kill switch, **CI repro** | 19a deployed |
 | 19b+ | **Measure on prod** (the controller, no code) | 19b deployed, then 24 h |
-| 19c | `/api/relations`, `/api/relations/detail`: the 7-day lens over rollups, `wk:` caching, production-scale plan tests | 19b merged; #108 merged (merging 2026-10-21) |
+| 19c | `/api/relations`, `/api/relations/detail`: the 7-day lens over rollups, `wk:` caching, production-scale plan tests | 19b merged; #108 (merged 2026-10-21) |
 | 20 | Relations layer UI: toggle, class switch, legend, arcs with persistent labels, list, inspector, focus rules | 19c merged (it can start earlier against this plan's contract and mocked routes) |
 
 **Parallelism:**
@@ -225,12 +227,13 @@ These follow from the Decisions above.
   - Events with a missing or unmapped actor country.
   - Events added more than `retention_days` before today.
 - **Robustness guards,** as "outlets beat stories":
-  - `n_reports`: distinct first-report URLs, summed per cycle;
-  - `outlets`: up to 8 distinct hosts per row.
-  - The read path requires `MIN_EVENTS`, `MIN_REPORTS` and `MIN_OUTLETS` (decision 8).
+  - `outlets`: up to 8 distinct hosts per row. Reads count the distinct union across a pair's rows.
+  - The read path requires `MIN_EVENTS` and `MIN_OUTLETS` (decision 8).
+  - No report count is stored. Distinct URLs per row can't be summed across rows without counting one article several times (plan review I1).
 - **The lens** (decision 1):
   - The API computes its days as `today - 6 .. today` (UTC) and names them (`first_day`, `last_day`). The UI labels them "Relations · last 7 days (15–21 Oct)".
-  - Retention keeps 8 UTC days, as for articles, so the lens is always fully covered.
+  - **The first-week ramp** (plan review I4): rollups only exist from 19b's deploy, so both answers carry `since`, the earliest rollup day in the lens. Until `since` reaches `first_day`, the legend and the inspector's kicker say "Relations · since {date}", as Phase 4's dossier ramp does.
+  - Retention keeps 8 UTC days, as for articles, so the lens is always fully covered once the ramp is over.
   - The lens moves at UTC midnight. Cache keys carry the days, so the new day is a new entry.
 - **One arc per unordered pair** (decision 7):
   - coloured by its majority class: conflict when conflict events outnumber cooperation; on a tie, by the Goldstein sign;
@@ -294,18 +297,20 @@ Expected: 2 FAILED, with `FileNotFoundError: … 021_event_pairs_daily.sql`: the
 --                  follow reporting, as articles.published_at does.
 --   quad_class     1 verbal cooperation, 2 material cooperation,
 --                  3 verbal conflict, 4 material conflict.
---   n_events, n_reports (distinct first-report URLs, summed per cycle),
---   mentions (NumMentions: each event's first 15 minutes only),
+--   n_events, mentions (NumMentions: each event's first 15 minutes only),
 --   goldstein_sum, tone_sum: sums, so each file adds to them; reads divide
---   by n_events.
+--   by n_events. No report count: distinct URLs per row can't be summed
+--   across rows without counting one article several times.
 --   sample_urls    up to 3 first-report URLs (http(s) only), first seen first.
---   outlets        up to 8 distinct outlet hosts, first seen first.
--- About 3K-6K rows a day, kept for retention_days (ingestion deletes older
+--   outlets        up to 8 distinct outlet hosts, first seen first; reads
+--                  count the distinct union across a pair's rows.
+-- About 2K-5K rows a day, kept for retention_days (ingestion deletes older
 -- days). fillfactor 70 leaves room on each page, so a cycle's additions,
 -- which change no indexed column, are HOT updates.
 --
--- event_files: one row per 15-minute export added (or found missing), so a
--- file is never added twice: rollups are sums.
+-- event_files: one row per 15-minute export added, found missing, or found
+-- unreadable (never retried), so a file is never added twice: rollups are
+-- sums.
 --
 -- New tables only, and nothing references articles or any other table:
 -- safe while the previous backend still serves.
@@ -317,14 +322,14 @@ CREATE TABLE IF NOT EXISTS event_pairs_daily (
     day           DATE NOT NULL,
     quad_class    SMALLINT NOT NULL CHECK (quad_class BETWEEN 1 AND 4),
     n_events      INT NOT NULL,
-    n_reports     INT NOT NULL,
     mentions      INT NOT NULL,
     goldstein_sum DOUBLE PRECISION NOT NULL,
     tone_sum      DOUBLE PRECISION NOT NULL,
     sample_urls   TEXT[] NOT NULL DEFAULT '{}',
     outlets       TEXT[] NOT NULL DEFAULT '{}',
     PRIMARY KEY (a_iso, b_iso, day, quad_class),
-    CHECK (a_iso <> b_iso)
+    CHECK (a_iso <> b_iso),
+    CHECK (char_length(a_iso) = 2 AND char_length(b_iso) = 2)
 ) WITH (fillfactor = 70);
 -- The relations list and the retention purge read by day; the primary key
 -- serves a pair's detail and the upsert.
@@ -332,7 +337,7 @@ CREATE INDEX IF NOT EXISTS idx_event_pairs_day ON event_pairs_daily (day);
 
 CREATE TABLE IF NOT EXISTS event_files (
     slot         TIMESTAMPTZ PRIMARY KEY,   -- the file's 15-minute timestamp (UTC)
-    status       TEXT NOT NULL CHECK (status IN ('ok', 'missing')),
+    status       TEXT NOT NULL CHECK (status IN ('ok', 'missing', 'unreadable')),
     n_rows       INT NOT NULL DEFAULT 0,    -- events in the file
     n_kept       INT NOT NULL DEFAULT 0,    -- events added to the rollups
     processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -407,7 +412,6 @@ async def test_each_table_has_exactly_its_planned_columns(conn):
         ("day", "date"),
         ("quad_class", "smallint"),
         ("n_events", "integer"),
-        ("n_reports", "integer"),
         ("mentions", "integer"),
         ("goldstein_sum", "double precision"),
         ("tone_sum", "double precision"),
@@ -448,25 +452,29 @@ async def test_keys_indexes_and_storage(conn):
 
 
 _ROW = (
-    "INSERT INTO event_pairs_daily (a_iso, b_iso, day, quad_class, n_events, n_reports,"
-    " mentions, goldstein_sum, tone_sum) VALUES ($1, $2, $3, $4, 1, 1, 1, 0, 0)"
+    "INSERT INTO event_pairs_daily (a_iso, b_iso, day, quad_class, n_events,"
+    " mentions, goldstein_sum, tone_sum) VALUES ($1, $2, $3, $4, 1, 1, 0, 0)"
 )
+_FILE = "INSERT INTO event_files (slot, status) VALUES (now() - $2::interval, $1)"
 
 
 @pytest.mark.asyncio
-async def test_checks_reject_a_bad_quad_class_and_a_domestic_pair(conn):
+async def test_checks_reject_bad_rows(conn):
+    """A bad quad class, a domestic pair, a code that isn't 2 letters, a bad status."""
     import asyncpg
 
-    await conn.execute(_ROW, "US", "IR", date(2026, 10, 21), 3)
-    for args in (("US", "IR", date(2026, 10, 21), 5), ("US", "US", date(2026, 10, 21), 1)):
+    day = date(2026, 10, 21)
+    await conn.execute(_ROW, "US", "IR", day, 3)
+    bad_rows = [("US", "IR", day, 5), ("US", "US", day, 1), ("USA", "IR", day, 1), ("U", "IR", day, 1)]
+    for args in bad_rows:
         with pytest.raises(asyncpg.CheckViolationError):
             async with conn.transaction():  # a savepoint
                 await conn.execute(_ROW, *args)
+    for i, status in enumerate(("ok", "missing", "unreadable")):
+        await conn.execute(_FILE, status, f"{15 * (i + 1)} minutes")
     with pytest.raises(asyncpg.CheckViolationError):
         async with conn.transaction():
-            await conn.execute(
-                "INSERT INTO event_files (slot, status) VALUES (now(), 'other')"
-            )
+            await conn.execute(_FILE, "other", "2 hours")
 ```
 
 **Step 6: Run locally.**
@@ -474,18 +482,24 @@ async def test_checks_reject_a_bad_quad_class_and_a_domestic_pair(conn):
 Run: `cd backend && python -m pytest tests/test_events_schema_db.py -q`
 Expected: `3 skipped`. They run on CI.
 
-### Task 19a.4: README and PR
+### Task 19a.4: the repro's workflow file, landed early
 
-**Step 7:** In `database/README.md`, after the `articles` table section, add `### event_pairs_daily and event_files` with a column table copied from the migration's comments. Add one line saying they're filled by `app/services/events.py` from PR 19b.
+19b's repro runs **by hand only** (`workflow_dispatch`, plan review I5): it's never a required check and never runs on its own. GitHub dispatches only workflows that exist on the default branch, so the workflow file lands here, in 19a. Then 19b can run it on its own branch with `gh workflow run events-repro.yml --ref claude/p5-events-ingest`. Until 19b adds `backend/scripts/events_repro.py`, nobody dispatches it.
 
-**Step 8: Commit.**
+**Step 7:** Create `.github/workflows/events-repro.yml` exactly as given in Task 19b.7. Its only trigger is `workflow_dispatch`.
+
+### Task 19a.5: README and PR
+
+**Step 8:** In `database/README.md`, after the `articles` table section, add `### event_pairs_daily and event_files` with a column table copied from the migration's comments. Add one line saying they're filled by `app/services/events.py` from PR 19b.
+
+**Step 9: Commit.**
 
 ```bash
-git add database/migrations/021_event_pairs_daily.sql backend/tests/test_migrations.py backend/tests/test_events_schema_db.py database/README.md
+git add database/migrations/021_event_pairs_daily.sql backend/tests/test_migrations.py backend/tests/test_events_schema_db.py database/README.md .github/workflows/events-repro.yml
 git commit -m "feat(db): migration 021 adds GDELT event rollups (event_pairs_daily, event_files)"
 ```
 
-**Step 9:** Push, then open the PR `feat(db): GDELT event rollup tables (PR 19a)`.
+**Step 10:** Push, then open the PR `feat(db): GDELT event rollup tables (PR 19a)`.
 - CI's Backend Checks must show `test_events_schema_db.py` as 3 passed, not skipped.
 - The description repeats the note about rerunning the Deploy workflow if the lock timeout trips.
 
@@ -1043,6 +1057,26 @@ class TestDownloadCapped:
             lambda req: httpx.Response(302, headers={"location": "https://evil.test/a"}),
         )
         assert (await download_capped("https://data.gdeltproject.org/a", 10)).status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_refuses_any_url_off_gdelts_https_data_host(self, monkeypatch):
+        calls = []
+        _client_with(monkeypatch, lambda req: calls.append(req) or httpx.Response(200))
+        for url in (
+            "http://data.gdeltproject.org/a",
+            "https://data.gdeltproject.org.evil.test/a",
+            "https://evil.test/https://data.gdeltproject.org/a",
+        ):
+            with pytest.raises(ValueError, match="data.gdeltproject.org"):
+                await download_capped(url, 10)
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_attempts_and_timeout_are_the_callers(self, monkeypatch):
+        calls = []
+        _client_with(monkeypatch, lambda req: calls.append(req) or httpx.Response(503))
+        got = await download_capped("https://data.gdeltproject.org/a", 10, attempts=2, timeout=10)
+        assert got.status == "failed" and len(calls) == 2
 ```
 
 **Step 2: Run them to verify they fail.**
@@ -1096,19 +1130,29 @@ class Download(NamedTuple):
 
 
 _CAPPED_TIMEOUT = 30.0  # seconds
+_GDELT_HTTPS = f"https://{_GDELT_HOST}/"
 
 
-async def download_capped(url: str, max_bytes: int) -> Download:
+async def download_capped(
+    url: str,
+    max_bytes: int,
+    *,
+    attempts: int = _MAX_RETRIES,
+    timeout: float = _CAPPED_TIMEOUT,
+) -> Download:
     """GET *url*, reading at most *max_bytes*, and never following a redirect.
 
-    A 404 is "missing" (GDELT skips the odd slot) and isn't retried. Other
-    errors (a redirect, 5xx, a timeout) are retried as _download_bytes does,
-    then "failed".
+    Only URLs on GDELT's data host over https: anything else is a ValueError,
+    before any request (callers build the URL; this is the last check). A 404
+    is "missing" (GDELT skips the odd slot) and isn't retried. Other errors (a
+    redirect, 5xx, a timeout) are tried *attempts* times in all, then "failed".
     """
+    if not url.startswith(_GDELT_HTTPS):
+        raise ValueError(f"Refusing {url!r}: only {_GDELT_HTTPS} is fetched.")
     name = url.rsplit("/", 1)[-1]
-    for attempt in range(1, _MAX_RETRIES + 1):
+    for attempt in range(1, attempts + 1):
         try:
-            async with httpx.AsyncClient(timeout=_CAPPED_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("GET", url) as resp:
                     if resp.status_code == 404:
                         return Download("missing")
@@ -1124,12 +1168,14 @@ async def download_capped(url: str, max_bytes: int) -> Download:
                     return Download("ok", bytes(body))
         except Exception as exc:
             logger.warning(
-                "Download attempt %d/%d failed for %s (%s).", attempt, _MAX_RETRIES, name, exc
+                "Download attempt %d/%d failed for %s (%s).", attempt, attempts, name, exc
             )
-            if attempt < _MAX_RETRIES:
+            if attempt < attempts:
                 await asyncio.sleep(_BACKOFF_BASE**attempt)
     return Download("failed")
 ```
+
+The prefix check rejects `http://`, look-alike hosts (`data.gdeltproject.org.evil.test`) and a GDELT URL embedded in another URL's path. The prefix ends with the host's `/`, so only that exact host matches.
 
 **Step 4: Run the tests.**
 
@@ -1157,7 +1203,15 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from app.services import events
-from app.services.events import Rollup, parse_events, plan_slots, read_export, slot_of, slot_url
+from app.services.events import (
+    Rollup,
+    lost_slots,
+    parse_events,
+    plan_slots,
+    read_export,
+    slot_of,
+    slot_url,
+)
 
 TODAY = date(2026, 10, 21)
 
@@ -1189,7 +1243,6 @@ def test_one_event_makes_one_rollup():
     rollups, stats = _parse(_event())
     r = rollups[("US", "IR", TODAY, 3)]
     assert (r.n_events, r.mentions, r.goldstein_sum, r.tone_sum) == (1, 10, -2.0, -3.5)
-    assert r.reports == {"https://www.example.com/a"}
     assert r.samples == ["https://www.example.com/a"]
     assert r.outlets == ["example.com"]
     assert (stats.rows, stats.kept, stats.not_root) == (1, 1, 0)
@@ -1202,10 +1255,20 @@ def test_only_root_events_count():
     assert (stats.rows, stats.kept, stats.not_root) == (2, 0, 2)
 
 
-def test_events_add_up_and_a_report_counts_once():
+def test_events_add_up_and_a_repeated_source_is_kept_once():
     rollups, _ = _parse(_event(), _event(mentions="5", goldstein="-4.0"))
     r = rollups[("US", "IR", TODAY, 3)]
-    assert (r.n_events, r.mentions, r.goldstein_sum, len(r.reports)) == (2, 15, -6.0, 1)
+    assert (r.n_events, r.mentions, r.goldstein_sum) == (2, 15, -6.0)
+    assert r.samples == ["https://www.example.com/a"] and r.outlets == ["example.com"]
+
+
+def test_a_control_character_inside_a_field_never_splits_a_row():
+    """Rows split on "\\n" only: str.splitlines() would also split on \\x0c, \\x1c or
+    \\u2028 inside a field (an actor name, a URL) and lose the event as malformed."""
+    fields = _event().split("\t")
+    fields[6] = "ACME\x0cCORP PLC"  # Actor1Name
+    rollups, stats = _parse("\t".join(fields))
+    assert (stats.rows, stats.kept, stats.malformed) == (1, 1, 0)
 
 
 def test_unmapped_blank_and_regional_actors_are_dropped_and_counted():
@@ -1248,7 +1311,7 @@ def test_events_added_before_retention_are_stale():
 def test_a_non_web_source_still_counts_but_is_never_kept():
     rollups, _ = _parse(_event(url="javascript:alert(1)"), _event(url="BBC Monitoring, 21 Oct"))
     r = rollups[("US", "IR", TODAY, 3)]
-    assert r.n_events == 2 and r.reports == set() and r.samples == [] and r.outlets == []
+    assert r.n_events == 2 and r.samples == [] and r.outlets == []
 
 
 def test_samples_and_outlets_are_capped_first_seen_first():
@@ -1257,7 +1320,18 @@ def test_samples_and_outlets_are_capped_first_seen_first():
     r = rollups[("US", "IR", TODAY, 3)]
     assert r.samples == urls[: events.MAX_SAMPLES]
     assert r.outlets == [f"site{i}.test" for i in range(events.MAX_OUTLETS)]
-    assert len(r.reports) == 10
+
+
+def test_merging_a_files_rollup_adds_sums_and_keeps_caps():
+    """A cycle parses each file on its own and merges it only once it parsed whole."""
+    into, part = Rollup(), Rollup()
+    into.add(10, -2.0, -3.0, "https://a.test/1")
+    for i in range(9):
+        part.add(1, 1.0, 1.0, f"https://s{i}.test/x")
+    into.merge(part)
+    assert (into.n_events, into.mentions, into.goldstein_sum, into.tone_sum) == (10, 19, 7.0, 6.0)
+    assert into.samples == ["https://a.test/1", "https://s0.test/x", "https://s1.test/x"]
+    assert len(into.outlets) == events.MAX_OUTLETS and into.outlets[0] == "a.test"
 
 
 def test_mentions_and_tone_are_clamped():
@@ -1305,6 +1379,13 @@ class TestReadExport:
         monkeypatch.setattr(events, "MAX_CSV_BYTES", 4)
         assert read_export(_zip({"20261021123000.export.CSV": b"12345"})) is None
 
+    def test_a_corrupt_stream_is_none_whatever_it_raises(self):
+        """Untrusted bytes: a damaged deflate stream raises zlib.error, an odd
+        compression method NotImplementedError. Every error is None, never a raise."""
+        body = bytearray(_zip({"20261021123000.export.CSV": bytes(range(256)) * 40}))
+        body[60:120] = b"\xff" * 60  # inside the compressed data
+        assert read_export(bytes(body)) is None
+
 
 T = datetime(2026, 10, 21, 12, 30, tzinfo=timezone.utc)
 Q = timedelta(minutes=15)
@@ -1330,6 +1411,28 @@ class TestSlots:
         monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 100)
         slots = plan_slots(T, {T - 30 * Q})
         assert min(slots) > T - timedelta(hours=events.CATCHUP_HOURS)
+
+
+class TestLostSlots:
+    """The slots that left the catch-up window since the last cycle, never added."""
+
+    W = timedelta(hours=events.CATCHUP_HOURS)
+
+    def test_none_before_this_process_ran_a_cycle(self):
+        assert lost_slots(None, T, set()) == []
+
+    def test_the_slots_that_left_the_window_unadded(self):
+        # Two slots left the window since the last cycle (30 minutes ago); one was added.
+        prev = T - 2 * Q
+        assert lost_slots(prev, T, {T - self.W - Q}) == [T - self.W]
+
+    def test_none_lost_when_every_slot_was_added(self):
+        prev = T - 2 * Q
+        assert lost_slots(prev, T, {T - self.W, T - self.W - Q}) == []
+
+    def test_a_long_gap_counts_at_most_a_day(self):
+        lost = lost_slots(T - timedelta(days=3), T, set())
+        assert len(lost) == 96 and max(lost) == T - self.W
 
 
 def test_a_rollup_records_each_event():
@@ -1360,7 +1463,9 @@ event_files, so no file is ever added twice.
 
 GDELT data is untrusted: only https URLs on GDELT's data host are fetched
 (no redirects), the zip, its CSV and its rows are capped, malformed rows are
-counted and skipped, and source URLs are kept only when they are http(s).
+counted and skipped, a file that can't be read is recorded unreadable (never
+retried), and source URLs are kept only when they are http(s). The whole step
+is time-bounded (EVENTS_STEP_TIMEOUT_S).
 """
 
 from __future__ import annotations
@@ -1396,6 +1501,12 @@ SLOT = timedelta(minutes=15)
 # about 2 files a cycle; 4 covers a long cycle. Never further back than this.
 MAX_FILES_PER_CYCLE = 4
 CATCHUP_HOURS = 2
+# The whole step's bound: on a timeout nothing is claimed, so it's retried
+# next cycle. Catch-up files get one retry and a short timeout; the newest
+# gets download_capped's defaults (3 tries, 30 s each).
+EVENTS_STEP_TIMEOUT_S = 60
+CATCHUP_ATTEMPTS = 2
+CATCHUP_TIMEOUT_S = 10.0
 # Caps on untrusted input. Exports are about 80 KB zipped (2026-10-21), about
 # 1,200 rows; these leave 25x headroom and bound the work.
 MAX_ZIP_BYTES = 2_000_000
@@ -1420,7 +1531,6 @@ class Rollup:
     mentions: int = 0
     goldstein_sum: float = 0.0
     tone_sum: float = 0.0
-    reports: set[str] = field(default_factory=set)
     samples: list[str] = field(default_factory=list)
     outlets: list[str] = field(default_factory=list)
 
@@ -1429,14 +1539,26 @@ class Rollup:
         self.mentions += mentions
         self.goldstein_sum += goldstein
         self.tone_sum += tone
-        if url is None:
-            return
-        self.reports.add(url)
-        if len(self.samples) < MAX_SAMPLES and url not in self.samples:
-            self.samples.append(url)
-        host = outlet(url)
-        if host and len(self.outlets) < MAX_OUTLETS and host not in self.outlets:
-            self.outlets.append(host)
+        if url is not None:
+            self._keep([url], [outlet(url)])
+
+    def merge(self, other: Rollup) -> None:
+        """Add another file's rollup for the same group (a file merges only once it
+        has parsed whole, so a file that fails halfway adds nothing)."""
+        self.n_events += other.n_events
+        self.mentions += other.mentions
+        self.goldstein_sum += other.goldstein_sum
+        self.tone_sum += other.tone_sum
+        self._keep(other.samples, other.outlets)
+
+    def _keep(self, urls: list[str], hosts: list[str]) -> None:
+        """Keep the first-seen sample URLs and outlets, without repeats, up to their caps."""
+        for url in urls:
+            if len(self.samples) < MAX_SAMPLES and url not in self.samples:
+                self.samples.append(url)
+        for host in hosts:
+            if host and len(self.outlets) < MAX_OUTLETS and host not in self.outlets:
+                self.outlets.append(host)
 
 
 @dataclass
@@ -1515,7 +1637,10 @@ def parse_events(raw: str, today: date, rollups: dict[Key, Rollup]) -> ParseStat
     stats = ParseStats()
     oldest = today - timedelta(days=settings.retention_days)
     newest = today + timedelta(days=1)
-    for line in raw.splitlines():
+    # "\n" only: str.splitlines() also splits on \x0b, \x0c, \x1c-\x1e, \x85 and
+    #  - , which can sit inside a field and would break the row.
+    for line in raw.split("\n"):
+        line = line.rstrip("\r")
         if not line:
             continue
         if stats.rows == MAX_ROWS:
@@ -1550,7 +1675,13 @@ def parse_events(raw: str, today: date, rollups: dict[Key, Rollup]) -> ParseStat
 
 def read_export(body: bytes) -> str | None:
     """A downloaded export zip's CSV, decoded, or None unless the zip holds exactly
-    one export member within MAX_CSV_BYTES (whatever size it declares)."""
+    one export member within MAX_CSV_BYTES (whatever size it declares).
+
+    The bytes are untrusted, and unzipping them can raise almost anything
+    (BadZipFile, zlib.error, NotImplementedError for an odd compression method,
+    EOFError, ...): every error is None, so a bad file is recorded unreadable
+    rather than failing the step.
+    """
     try:
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
             members = zf.infolist()
@@ -1560,7 +1691,7 @@ def read_export(body: bytes) -> str | None:
                 return None
             with zf.open(members[0]) as fh:
                 data = fh.read(MAX_CSV_BYTES + 1)
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, RuntimeError):
+    except Exception:
         return None
     if len(data) > MAX_CSV_BYTES:
         return None
@@ -1602,6 +1733,35 @@ def plan_slots(newest: datetime, done: set[datetime]) -> list[datetime]:
             slots.append(slot)
         slot -= SLOT
     return slots
+
+
+# A long outage counts as at most a day of lost slots.
+LOST_LOOKBACK = timedelta(days=1)
+
+
+def lost_slots(
+    prev_newest: datetime | None, newest: datetime, done: set[datetime]
+) -> list[datetime]:
+    """The slots that left the catch-up window since the previous cycle, never added:
+    their events are lost for good (rollups are counts). Newest first.
+
+    A slot is in the window while it's later than newest - CATCHUP_HOURS
+    (plan_slots). Empty before this process has run a cycle (*prev_newest* is
+    None); after a long gap, at most LOST_LOOKBACK of them. *done* must hold
+    the added slots that far back (DONE_SQL reads them).
+    """
+    if prev_newest is None:
+        return []
+    window = timedelta(hours=CATCHUP_HOURS)
+    high = newest - window
+    low = max(prev_newest - window, high - LOST_LOOKBACK)
+    lost: list[datetime] = []
+    slot = high
+    while slot > low:
+        if slot not in done:
+            lost.append(slot)
+        slot -= SLOT
+    return lost
 ```
 
 **Step 4: Run the tests.**
@@ -1656,6 +1816,12 @@ def _patches(index, downloads, pool, store):
         patch("app.services.events.get_pool", AsyncMock(return_value=pool)),
         patch("app.services.events.store_rollups", store),
     )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_process(monkeypatch):
+    """Each test starts as a process that hasn't run a cycle yet."""
+    monkeypatch.setattr(events, "_last_newest", None)
 
 
 class TestIngestEvents:
@@ -1730,7 +1896,116 @@ class TestIngestEvents:
             await events.ingest_events(now=T)
         [line] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Events: 1 file")]
         assert "3 rows, 1 kept (0 not root" in line and "1 same country, 1 malformed" in line
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_file_is_recorded_so_it_is_never_retried(self):
+        body = b"not a zip at all"
+        store = AsyncMock(return_value=0)
+        p = _patches(_index(body), [Download("ok", body)], _Pool(), store)
+        with p[0], p[1], p[2], p[3]:
+            await events.ingest_events(now=T)
+        _, rollups, files = store.await_args.args
+        assert rollups == {} and files == [events.FileResult(T, "unreadable", 0, 0)]
+
+    @pytest.mark.asyncio
+    async def test_a_file_that_fails_halfway_adds_nothing_and_is_recorded(self):
+        body = _export_zip(_event())
+
+        def half_then_fail(raw, today, part):
+            part[("US", "IR", today, 3)] = Rollup(n_events=7)
+            raise RuntimeError("a bug, or a hostile file")
+
+        store = AsyncMock(return_value=0)
+        p = _patches(_index(body), [Download("ok", body)], _Pool(), store)
+        with p[0], p[1], p[2], p[3], patch("app.services.events.parse_events", half_then_fail):
+            await events.ingest_events(now=T)
+        _, rollups, files = store.await_args.args
+        assert rollups == {}  # its half never merged
+        assert files == [events.FileResult(T, "unreadable", 0, 0)]
+
+    @pytest.mark.asyncio
+    async def test_catch_up_files_get_one_retry_and_a_short_timeout(self, monkeypatch):
+        monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 2)
+        body = _export_zip(_event())
+        download = AsyncMock(side_effect=[Download("ok", body), Download("failed")])
+        store = AsyncMock(return_value=1)
+        with (
+            patch("app.services.events.fetch_lastupdate", AsyncMock(return_value=_index(body))),
+            patch("app.services.events.download_capped", download),
+            patch("app.services.events.get_pool", AsyncMock(return_value=_Pool(done=[T - 2 * Q]))),
+            patch("app.services.events.store_rollups", store),
+        ):
+            await events.ingest_events(now=T)
+        newest_call, catch_up_call = download.await_args_list
+        assert newest_call.kwargs == {}
+        assert catch_up_call.kwargs == {
+            "attempts": events.CATCHUP_ATTEMPTS,
+            "timeout": events.CATCHUP_TIMEOUT_S,
+        }
+        _, _, files = store.await_args.args
+        assert files == [events.FileResult(T, "ok", 1, 1)]  # the failed one: next cycle
+
+    @pytest.mark.asyncio
+    async def test_a_hanging_step_times_out_and_claims_nothing(self, monkeypatch, caplog):
+        monkeypatch.setattr(events, "EVENTS_STEP_TIMEOUT_S", 0.05)
+
+        async def hang():
+            await asyncio.Event().wait()
+
+        store = AsyncMock()
+        with (
+            patch("app.services.events.fetch_lastupdate", hang),
+            patch("app.services.events.store_rollups", store),
+            caplog.at_level(logging.WARNING, logger="orbis.events"),
+        ):
+            await events.ingest_events(now=T)  # returns, doesn't hang
+        store.assert_not_awaited()
+        assert "timed out" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_slots_that_left_the_window_unadded_are_logged_as_lost(self, monkeypatch, caplog):
+        monkeypatch.setattr(events, "MAX_FILES_PER_CYCLE", 1)
+        monkeypatch.setattr(events, "_last_newest", T - 2 * Q)
+        window = timedelta(hours=events.CATCHUP_HOURS)
+        body = _export_zip(_event())
+        p = _patches(
+            _index(body), [Download("ok", body)], _Pool(done=[T - window - Q]), AsyncMock(return_value=1)
+        )
+        with p[0], p[1], p[2], p[3], caplog.at_level(logging.WARNING, logger="orbis.events"):
+            await events.ingest_events(now=T)
+        assert "1 slot lost" in caplog.text
+        assert f"{T - window:%Y%m%d%H%M%S}" in caplog.text
+        assert events._last_newest == T
+
+
+@contextlib.asynccontextmanager
+async def _no_transaction():
+    yield
+
+
+class TestPurgeEvents:
+    @pytest.mark.asyncio
+    async def test_forces_custom_plans_before_deleting(self):
+        sent: list[str] = []
+
+        class Conn:
+            async def execute(self, sql, *args):
+                sent.append(sql)
+
+            def transaction(self):
+                return _no_transaction()
+
+        class Pool:
+            @contextlib.asynccontextmanager
+            async def acquire(self):
+                yield Conn()
+
+        await events.purge_events(Pool(), 7, T)
+        assert sent[0] == "SET LOCAL plan_cache_mode = force_custom_plan"
+        assert sent[1:] == [events.PURGE_PAIRS_SQL, events.PURGE_FILES_SQL]
 ```
+
+Add `import asyncio` and `import contextlib` to the test module's imports.
 
 In `backend/tests/test_ingestion.py`:
 - Add a module-level autouse fixture, so no cycle test reaches the network:
@@ -1743,7 +2018,8 @@ In `backend/tests/test_ingestion.py`:
 - Extend `test_steps_run_in_order`: add `patch("app.services.ingestion.ingest_events", side_effect=_record("events"))`, and expect `["ingest", "purge", "events", "embed", ("threads", pool, embedded)]`.
 - In `TestPurgeOldArticles`, patch `app.services.ingestion.purge_events` in both tests:
   - the first expects `[("threads", …), ("events", (pool, settings.retention_days)), ("articles", …)]`;
-  - add `test_a_failed_events_purge_still_purges_the_articles`, which asserts the articles delete and "Events purge failed" in the log.
+  - add `test_a_failed_events_purge_still_purges_the_articles`, which asserts the articles delete and "Events purge failed" in the log;
+  - add `test_the_kill_switch_leaves_the_events_purge_running` (Minor 9): with `settings.events_ingestion_enabled` False, `_purge_old_articles()` still awaits `purge_events`, so the rows age out after a switch-off.
 
 **Step 2: Run them to verify they fail.**
 
@@ -1763,7 +2039,13 @@ Expected: FAILs, with `AttributeError: module 'app.services.events' has no attri
     )
 ```
 
-Append to `events.py`. Add `import asyncio`, `hashlib`, `logging`, `time`; `from typing import Any`; `from app.services.database import get_pool`; and `from app.services.gdelt import _gdelt_https_url, download_capped, fetch_lastupdate`.
+Append to `events.py`. Add these imports:
+- `import asyncio`, `hashlib`, `logging`, `time`;
+- `from typing import Any`;
+- `from app.services.database import get_pool`;
+- `from app.services.gdelt import LastUpdateEntry, _gdelt_https_url, download_capped, fetch_lastupdate`.
+
+The events step reads `lastupdate.txt` itself, one 300-byte request. Reusing the GKG step's copy would save that request, but it's an optional tidy-up, not in this PR.
 
 ```python
 logger = logging.getLogger("orbis.events")
@@ -1776,7 +2058,7 @@ _EVENTS_LOCK = 20_261_021
 
 class FileResult(NamedTuple):
     slot: datetime
-    status: str  # ok | missing
+    status: str  # ok | missing | unreadable
     n_rows: int
     n_kept: int
 
@@ -1795,24 +2077,23 @@ RETURNING slot
 """
 
 # Sums add up. Sample URLs and outlets keep the first seen, without repeats,
-# up to their caps ($12, $13: MAX_SAMPLES, MAX_OUTLETS).
+# up to their caps ($11, $12: MAX_SAMPLES, MAX_OUTLETS).
 UPSERT_SQL = """
 INSERT INTO event_pairs_daily AS e
-    (a_iso, b_iso, day, quad_class, n_events, n_reports, mentions,
+    (a_iso, b_iso, day, quad_class, n_events, mentions,
      goldstein_sum, tone_sum, sample_urls, outlets)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (a_iso, b_iso, day, quad_class) DO UPDATE SET
     n_events      = e.n_events + EXCLUDED.n_events,
-    n_reports     = e.n_reports + EXCLUDED.n_reports,
     mentions      = e.mentions + EXCLUDED.mentions,
     goldstein_sum = e.goldstein_sum + EXCLUDED.goldstein_sum,
     tone_sum      = e.tone_sum + EXCLUDED.tone_sum,
     sample_urls   = ARRAY(
         SELECT u FROM unnest(e.sample_urls || EXCLUDED.sample_urls) WITH ORDINALITY AS s(u, i)
-        GROUP BY u ORDER BY min(i) LIMIT $12),
+        GROUP BY u ORDER BY min(i) LIMIT $11),
     outlets       = ARRAY(
         SELECT o FROM unnest(e.outlets || EXCLUDED.outlets) WITH ORDINALITY AS s(o, i)
-        GROUP BY o ORDER BY min(i) LIMIT $13)
+        GROUP BY o ORDER BY min(i) LIMIT $12)
 """
 
 PURGE_PAIRS_SQL = "DELETE FROM event_pairs_daily WHERE day < $1::date - $2::int"
@@ -1824,11 +2105,12 @@ async def store_rollups(pool: Any, rollups: dict[Key, Rollup], files: list[FileR
 
     One executemany (asyncpg pipelines the rows), as upsert_articles does. The
     advisory lock and the claim keep a file from being added twice; if any file
-    was already recorded, nothing is written (AlreadyIngested).
+    was already recorded, nothing is written (AlreadyIngested). Cancelled (the
+    step's timeout), the transaction rolls back and nothing is claimed.
     """
     rows = [
-        (a, b, day, quad, r.n_events, len(r.reports), r.mentions, r.goldstein_sum,
-         r.tone_sum, r.samples, r.outlets, MAX_SAMPLES, MAX_OUTLETS)
+        (a, b, day, quad, r.n_events, r.mentions, r.goldstein_sum, r.tone_sum,
+         r.samples, r.outlets, MAX_SAMPLES, MAX_OUTLETS)
         for (a, b, day, quad), r in sorted(rollups.items())
     ]
     slots = [f.slot for f in files]
@@ -1856,6 +2138,7 @@ async def purge_events(pool: Any, retention_days: int, now: datetime | None = No
     Custom plans only: a generic plan guesses that ``day < $1`` matches a third of
     the table and seq-scans it every cycle, as 18a found for place lookups. With
     the values, it is an index range that is empty on all but one cycle a day.
+    Runs whatever EVENTS_INGESTION_ENABLED says, so switched off, rows age out.
     """
     now = now or datetime.now(timezone.utc)
     async with pool.acquire() as conn, conn.transaction():
@@ -1864,19 +2147,39 @@ async def purge_events(pool: Any, retention_days: int, now: datetime | None = No
         await conn.execute(PURGE_FILES_SQL, now)
 
 
+# The previous cycle's newest slot, in this process: where lost_slots counts from.
+_last_newest: datetime | None = None
+
+
 async def ingest_events(now: datetime | None = None) -> None:
-    """Add the newest export, and missed ones, to the rollups. Never raises."""
+    """Add the newest export, and missed ones, to the rollups. Never raises.
+
+    Bounded by EVENTS_STEP_TIMEOUT_S. On a timeout nothing has been claimed (the
+    claim and the upsert are one transaction, rolled back when cancelled), so the
+    same files are tried again next cycle; a parse already running in its worker
+    thread finishes on its own and is dropped.
+    """
     if not settings.events_ingestion_enabled:
         return
     try:
-        await _ingest(now or datetime.now(timezone.utc))
+        await asyncio.wait_for(_ingest(now or datetime.now(timezone.utc)), EVENTS_STEP_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning(
+            "Events: the step timed out after %s s; nothing added, retried next cycle.",
+            EVENTS_STEP_TIMEOUT_S,
+        )
     except AlreadyIngested as exc:
         logger.warning("Events: another process added %s; nothing added this cycle.", exc)
     except Exception:
         logger.warning("Events ingestion failed; continuing.", exc_info=True)
 
 
+def _name(slot: datetime) -> str:
+    return slot_url(slot).rsplit("/", 1)[-1]
+
+
 async def _ingest(now: datetime) -> None:
+    global _last_newest
     began = time.monotonic()
     index = await fetch_lastupdate()
     entry = (index or {}).get("export")
@@ -1885,56 +2188,50 @@ async def _ingest(now: datetime) -> None:
         logger.warning("Events: no GDELT export file in lastupdate.txt.")
         return
     pool = await get_pool()
-    since = newest - timedelta(hours=CATCHUP_HOURS)
-    done = {r["slot"] for r in await pool.fetch(DONE_SQL, since)}
+    window = timedelta(hours=CATCHUP_HOURS)
+    # The added slots back to lost_slots' reach (a primary-key range, ~100 rows at most).
+    done = {r["slot"] for r in await pool.fetch(DONE_SQL, newest - window - LOST_LOOKBACK)}
+    lost = lost_slots(_last_newest, newest, done)
     rollups: dict[Key, Rollup] = {}
     files: list[FileResult] = []
     totals = ParseStats()
-    download_s = parse_s = 0.0
+    timing = {"download": 0.0, "parse": 0.0, "store": 0.0}
     for slot in plan_slots(newest, done):
-        name = slot_url(slot).rsplit("/", 1)[-1]
-        if slot == newest and entry.size > MAX_ZIP_BYTES:
-            logger.warning("Events: %s is %d bytes, over %d; skipped.", name, entry.size, MAX_ZIP_BYTES)
-            continue
+        try:
+            result = await _add_file(
+                slot, entry if slot == newest else None, now.date(), rollups, totals, timing
+            )
+        except Exception:
+            # A bug or a hostile file: recorded, so it can't fail every cycle.
+            logger.warning("Events: %s failed; recorded unreadable.", _name(slot), exc_info=True)
+            result = FileResult(slot, "unreadable", 0, 0)
+        if result is not None:
+            files.append(result)
+    upserted = 0
+    if files:
         started = time.monotonic()
-        got = await download_capped(slot_url(slot), MAX_ZIP_BYTES)
-        download_s += time.monotonic() - started
-        if got.status == "missing" and slot != newest:
-            files.append(FileResult(slot, "missing", 0, 0))
-            continue
-        if got.status != "ok":
-            logger.warning("Events: %s download %s; retried next cycle.", name, got.status)
-            continue
-        if (
-            slot == newest
-            and _MD5.fullmatch(entry.md5)
-            and hashlib.md5(got.body, usedforsecurity=False).hexdigest() != entry.md5
-        ):
-            logger.warning("Events: %s failed its MD5 check; retried next cycle.", name)
-            continue
-        raw = read_export(got.body)
-        if raw is None:
-            logger.warning("Events: %s is not one capped export CSV; skipped.", name)
-            continue
-        started = time.monotonic()
-        stats = await asyncio.to_thread(parse_events, raw, now.date(), rollups)
-        parse_s += time.monotonic() - started
-        totals.add(stats)
-        files.append(FileResult(slot, "ok", stats.rows, stats.kept))
+        upserted = await store_rollups(pool, rollups, files)
+        timing["store"] = time.monotonic() - started
+    _last_newest = newest
+    if lost:
+        logger.warning(
+            "Events: %d slot%s lost (left the catch-up window unadded): %s.",
+            len(lost),
+            "" if len(lost) == 1 else "s",
+            ", ".join(f"{s:%Y%m%d%H%M%S}" for s in lost[:8]) + (" …" if len(lost) > 8 else ""),
+        )
     if not files:
         return
-    started = time.monotonic()
-    upserted = await store_rollups(pool, rollups, files)
-    store_s = time.monotonic() - started
     ok = sum(f.status == "ok" for f in files)
     logger.info(
-        "Events: %d file%s (%d caught up, %d missing), %d rows, %d kept (%d not root, "
-        "%d no country pair, %d same country, %d malformed, %d stale%s), %d rollups in %.2f s "
-        "(download %.2f s, parse %.2f s, store %.2f s).",
+        "Events: %d file%s (%d caught up, %d missing, %d unreadable), %d rows, %d kept "
+        "(%d not root, %d no country pair, %d same country, %d malformed, %d stale%s), "
+        "%d rollups, %d slot%s lost, in %.2f s (download %.2f s, parse %.2f s, store %.2f s).",
         ok,
         "" if ok == 1 else "s",
         sum(f.status == "ok" and f.slot != newest for f in files),
         sum(f.status == "missing" for f in files),
+        sum(f.status == "unreadable" for f in files),
         totals.rows,
         totals.kept,
         totals.not_root,
@@ -1944,14 +2241,74 @@ async def _ingest(now: datetime) -> None:
         totals.stale,
         ", truncated" if totals.truncated else "",
         upserted,
+        len(lost),
+        "" if len(lost) == 1 else "s",
         time.monotonic() - began,
-        download_s,
-        parse_s,
-        store_s,
+        timing["download"],
+        timing["parse"],
+        timing["store"],
     )
     if totals.unmapped:
         top = ", ".join(f"{c} {n}" for c, n in totals.unmapped.most_common(5))
         logger.info("Events: unmapped actor codes: %s.", top)
+
+
+async def _add_file(
+    slot: datetime,
+    entry: LastUpdateEntry | None,
+    today: date,
+    rollups: dict[Key, Rollup],
+    totals: ParseStats,
+    timing: dict[str, float],
+) -> FileResult | None:
+    """Fetch, check, read and parse one slot's file. Its rollups merge into
+    *rollups* only once it has parsed whole. Returns what to record, or None to
+    try the slot again next cycle (a failed download, a failed MD5 check).
+
+    *entry* is lastupdate.txt's line for the newest file (its size and MD5);
+    None for a catch-up slot, which gets one retry and a short timeout.
+    """
+    name = _name(slot)
+    if entry is not None and entry.size > MAX_ZIP_BYTES:
+        logger.warning(
+            "Events: %s is %d bytes, over %d; recorded unreadable.", name, entry.size, MAX_ZIP_BYTES
+        )
+        return FileResult(slot, "unreadable", 0, 0)
+    started = time.monotonic()
+    if entry is None:
+        got = await download_capped(
+            slot_url(slot), MAX_ZIP_BYTES, attempts=CATCHUP_ATTEMPTS, timeout=CATCHUP_TIMEOUT_S
+        )
+    else:
+        got = await download_capped(slot_url(slot), MAX_ZIP_BYTES)
+    timing["download"] += time.monotonic() - started
+    if got.status == "missing" and entry is None:
+        return FileResult(slot, "missing", 0, 0)
+    if got.status == "too_big":
+        logger.warning("Events: %s is over %d bytes; recorded unreadable.", name, MAX_ZIP_BYTES)
+        return FileResult(slot, "unreadable", 0, 0)
+    if got.status != "ok":
+        logger.warning("Events: %s download %s; retried next cycle.", name, got.status)
+        return None
+    if (
+        entry is not None
+        and _MD5.fullmatch(entry.md5)
+        and hashlib.md5(got.body, usedforsecurity=False).hexdigest() != entry.md5
+    ):
+        logger.warning("Events: %s failed its MD5 check; retried next cycle.", name)
+        return None
+    raw = read_export(got.body)
+    if raw is None:
+        logger.warning("Events: %s is not one capped export CSV; recorded unreadable.", name)
+        return FileResult(slot, "unreadable", 0, 0)
+    started = time.monotonic()
+    part: dict[Key, Rollup] = {}
+    stats = await asyncio.to_thread(parse_events, raw, today, part)
+    timing["parse"] += time.monotonic() - started
+    for key, rollup in part.items():
+        rollups.setdefault(key, Rollup()).merge(rollup)
+    totals.add(stats)
+    return FileResult(slot, "ok", stats.rows, stats.kept)
 ```
 
 `backend/app/services/ingestion.py`:
@@ -1991,7 +2348,10 @@ Expected: all pass; the DB tests are skipped locally.
 
 ROWS_PER_DAY comes from 19b's repro (rows a day): update it from the repro's
 report and from production's measure. Rows are as wide as ingestion writes
-them: three sample URLs and four outlets each.
+them: three sample URLs and four outlets each. They're written day by day
+(ORDER BY d, g, q), as ingestion writes them, so one pair's rows sit on a
+different page each day: the detail's page bound sees production's layout,
+not a pair's whole week packed onto one page.
 """
 
 from __future__ import annotations
@@ -2004,12 +2364,12 @@ ROWS_PER_DAY = 5000
 ISO = sorted(COUNTRY_CENTROIDS)[:150]
 
 FILL_SQL = """
-INSERT INTO event_pairs_daily (a_iso, b_iso, day, quad_class, n_events, n_reports, mentions,
+INSERT INTO event_pairs_daily (a_iso, b_iso, day, quad_class, n_events, mentions,
                                goldstein_sum, tone_sum, sample_urls, outlets)
 SELECT ($3::text[])[1 + g % 150],
        ($3::text[])[1 + (g % 150 + 1 + (g / 150) % 149) % 150],
        $1::date - d, q,
-       1 + g % 40, 1 + g % 20, 10 + g % 400, -1.5 * (1 + g % 40), -2.0 * (1 + g % 40),
+       1 + g % 40, 10 + g % 400, -1.5 * (1 + g % 40), -2.0 * (1 + g % 40),
        ARRAY['https://zzevents' || g % 97 || '.test/2026/10/21/a-story-slug-of-usual-length-'
              || g || '-' || q,
              'https://zzevents' || g % 89 || '.test/2026/10/21/another-story-slug-' || g || '-' || q,
@@ -2017,6 +2377,7 @@ SELECT ($3::text[])[1 + g % 150],
        ARRAY['zzevents' || g % 97 || '.test', 'zzevents' || g % 89 || '.test',
              'zzevents' || g % 83 || '.test', 'zzevents' || g % 79 || '.test']
 FROM generate_series(0, $2::int - 1) d, generate_series(1, $4::int) g, generate_series(1, 4) q
+ORDER BY d DESC, g, q
 """
 
 
@@ -2035,11 +2396,11 @@ A **mutation check** raises a sentinel exception inside `async with conn.transac
 **Step 1: Write the tests:**
 1. **Two cycles add up:**
    - store `{("US","IR",D,3): Rollup(n=1, …, samples [u1], outlets [o1])}`, then `{… n=2, samples [u1, u2, u3, u4], outlets [o2 … o9]}`;
-   - the row then has `n_events = 3`, the summed `mentions`, `goldstein_sum` and `n_reports`;
+   - the row then has `n_events = 3`, the summed `mentions` and `goldstein_sum`;
    - `sample_urls = [u1, u2, u3]` (first seen, no repeat, capped at 3);
    - `outlets` has 8 entries, starting with `o1`.
 2. **A file is never added twice:** `store_rollups` with a slot already in `event_files` raises `AlreadyIngested`, and the rollup row is unchanged.
-3. **Missing files:** they're recorded with `status = 'missing'` and add no rows.
+3. **Missing and unreadable files:** they're recorded with `status = 'missing'` or `'unreadable'` and add no rows. Neither is in `plan_slots`' next answer, since `DONE_SQL` reads every status.
 4. **Purge:** with rows on `today - 8` and `today - 7`, `purge_events(_OnePool(conn), 7, now)` deletes only `today - 8`. `event_files` rows older than 2 days go too.
 5. **HOT updates at production scale:**
    - Fill the week (`fill_week`, 8 days).
@@ -2066,7 +2427,12 @@ Expected: all skipped locally (`ORBIS_TEST_DATABASE_URL is not set`).
 ### Task 19b.7: the CI repro of per-cycle cost
 
 **Files:**
-- Create: `backend/scripts/events_repro.py`, `.github/workflows/events-repro.yml`
+- Create: `backend/scripts/events_repro.py`
+- The workflow, `.github/workflows/events-repro.yml`, landed in 19a (Task 19a.4), so it can be dispatched from this branch.
+
+**How it runs** (plan review I5):
+- **By hand only.** It's a `workflow_dispatch` run, once per PR that changes the events code, recorded in the PR description. It's never a required check and never triggered by a push.
+- **What fails it:** only format problems with GDELT's data, meaning fewer than 99.9% of rows with 61 fields, or repeated event ids across files. A network failure, whether GDELT unreachable or files missing, is reported, never a failure.
 
 **What it does.** On a CI runner (never on the owner's machine), it downloads the last `--files` exports (default 96, one day, about 8 MB) and runs them through the real code paths: `download_capped`, `read_export`, `parse_events` and `store_rollups`, two files per simulated cycle. That's the ~30-minute cadence. It writes into CI's throwaway Postgres, under B1ms-like session settings, and reports:
 
@@ -2088,11 +2454,15 @@ Expected: all skipped locally (`ORBIS_TEST_DATABASE_URL is not set`).
 ```python
 """Measure GDELT Events ingestion on CI: what a cycle costs and what a week stores.
 
-Run by .github/workflows/events-repro.yml against CI's throwaway Postgres
-(ORBIS_TEST_DATABASE_URL, migrations applied). Downloads the last --files
-15-minute exports from GDELT (about 80 KB each) on the runner. Prints a
-Markdown report, also written to $GITHUB_STEP_SUMMARY on CI. Exits 1 only
-if a file can't be read or more than 1% of rows are malformed.
+Run by hand (.github/workflows/events-repro.yml, workflow_dispatch) against
+CI's throwaway Postgres (ORBIS_TEST_DATABASE_URL, migrations applied).
+Downloads the last --files 15-minute exports from GDELT (about 80 KB each) on
+the runner. Prints a Markdown report, also written to $GITHUB_STEP_SUMMARY on
+CI.
+
+Exits 1 only on a format problem in GDELT's data: under 99.9% of rows with 61
+fields, or an event id repeated across files (rollups would double-count). A
+network failure (GDELT unreachable, files missing) is reported, and exits 0.
 
 Usage: cd backend && python -m scripts.events_repro --files 96
 """
@@ -2115,6 +2485,7 @@ from app.services.gdelt import download_capped, fetch_lastupdate
 
 # One vCore and little memory, as on the B1ms (production numbers otherwise look better).
 B1MS = ("SET max_parallel_workers_per_gather = 0", "SET jit = off", "SET work_mem = '4MB'")
+MIN_FIELDS_61 = 0.999
 
 
 async def _b1ms(conn) -> None:
@@ -2122,15 +2493,38 @@ async def _b1ms(conn) -> None:
         await conn.execute(statement)
 
 
-def _p95(values: list[float]) -> float:
-    return statistics.quantiles(values, n=20)[-1] if len(values) >= 2 else (values or [0])[0]
+def _median(values) -> float:
+    values = list(values)
+    return statistics.median(values) if values else 0.0
+
+
+def _max(values) -> float:
+    return max(values, default=0)
+
+
+def _p95(values) -> float:
+    values = list(values)
+    if len(values) < 2:
+        return values[0] if values else 0.0
+    return statistics.quantiles(values, n=20)[-1]
+
+
+def _emit(text: str) -> None:
+    print(text)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write(text + "\n")
 
 
 async def main(n_files: int) -> int:
+    index = await fetch_lastupdate()
+    newest = events.slot_of(index["export"].url) if index and "export" in index else None
+    if newest is None:
+        _emit("## GDELT Events repro\n\nlastupdate.txt was unreachable or had no export: nothing measured.")
+        return 0
     pool = await asyncpg.create_pool(
         os.environ["ORBIS_TEST_DATABASE_URL"], min_size=1, max_size=1, init=_b1ms
     )
-    newest = events.slot_of((await fetch_lastupdate())["export"].url)
     slots = [newest - k * events.SLOT for k in range(n_files)][::-1]  # oldest first
     now = datetime.now(timezone.utc)
     per_file: list[dict] = []
@@ -2139,15 +2533,18 @@ async def main(n_files: int) -> int:
     cycles: list[tuple[int, float]] = []
     rollups: dict = {}
     files: list[events.FileResult] = []
-    failed = 0
+    unavailable = unreadable = 0
     for i, slot in enumerate(slots):
         got = await download_capped(events.slot_url(slot), events.MAX_ZIP_BYTES)
         raw = events.read_export(got.body) if got.status == "ok" else None
-        if raw is None:
-            failed += got.status != "missing"
+        if got.status != "ok":
+            unavailable += 1  # network or GDELT: reported, never a failure
             files.append(events.FileResult(slot, "missing", 0, 0))
+        elif raw is None:
+            unreadable += 1
+            files.append(events.FileResult(slot, "unreadable", 0, 0))
         else:
-            lines = [line for line in raw.splitlines() if line]
+            lines = [line.rstrip("\r") for line in raw.split("\n") if line.rstrip("\r")]
             ids.update(line.split("\t", 1)[0] for line in lines)
             started = time.perf_counter()
             stats = events.parse_events(raw, now.date(), rollups)
@@ -2177,7 +2574,7 @@ async def main(n_files: int) -> int:
         )
         await conn.execute(
             "INSERT INTO event_pairs_daily SELECT a_iso, b_iso, day - k, quad_class, n_events,"
-            " n_reports, mentions, goldstein_sum, tone_sum, sample_urls, outlets"
+            " mentions, goldstein_sum, tone_sum, sample_urls, outlets"
             " FROM event_pairs_daily, generate_series(1, 7) k ON CONFLICT DO NOTHING"
         )
         await conn.execute("VACUUM (ANALYZE) event_pairs_daily")
@@ -2192,34 +2589,43 @@ async def main(n_files: int) -> int:
     await pool.close()
 
     rows = max(totals.rows, 1)
-    malformed_share = totals.malformed / rows
-    store_ms = [ms for _, ms in cycles[1:]] or [cycles[0][1]]
+    fields_61 = sum(f["fields_61"] for f in per_file) / rows
+    repeated = sum(n - 1 for n in ids.values() if n > 1)
+    store_ms = [ms for _, ms in cycles[1:]] or [ms for _, ms in cycles]
     report = [
-        f"## GDELT Events repro: {len(per_file)} files ({n_files - len(per_file)} missing)",
+        f"## GDELT Events repro: {len(per_file)} of {n_files} files read"
+        f" ({unavailable} unavailable, {unreadable} unreadable)",
         "",
         "| Measure | Value |",
         "|---|---|",
-        f"| Zip KB per file (median / max) | {statistics.median(f['zip_kb'] for f in per_file):.0f} / {max(f['zip_kb'] for f in per_file):.0f} |",
-        f"| CSV KB per file (median / max) | {statistics.median(f['csv_kb'] for f in per_file):.0f} / {max(f['csv_kb'] for f in per_file):.0f} |",
-        f"| Rows per file (median / max) | {statistics.median(f['rows'] for f in per_file):.0f} / {max(f['rows'] for f in per_file)} |",
-        f"| Rows with 61 fields | {100 * sum(f['fields_61'] for f in per_file) / rows:.2f}% |",
-        f"| Kept / not root / no pair / same country / malformed / stale | {100 * totals.kept / rows:.1f}% / {100 * totals.not_root / rows:.1f}% / {100 * totals.no_pair / rows:.1f}% / {100 * totals.same_country / rows:.1f}% / {100 * malformed_share:.2f}% / {100 * totals.stale / rows:.2f}% |",
+        f"| Zip KB per file (median / max) | {_median(f['zip_kb'] for f in per_file):.0f} / {_max(f['zip_kb'] for f in per_file):.0f} |",
+        f"| CSV KB per file (median / max) | {_median(f['csv_kb'] for f in per_file):.0f} / {_max(f['csv_kb'] for f in per_file):.0f} |",
+        f"| Rows per file (median / max) | {_median(f['rows'] for f in per_file):.0f} / {_max(f['rows'] for f in per_file)} |",
+        f"| Rows with 61 fields | {100 * fields_61:.2f}% |",
+        f"| Kept / not root / no pair / same country / malformed / stale | {100 * totals.kept / rows:.1f}% / {100 * totals.not_root / rows:.1f}% / {100 * totals.no_pair / rows:.1f}% / {100 * totals.same_country / rows:.1f}% / {100 * totals.malformed / rows:.2f}% / {100 * totals.stale / rows:.2f}% |",
         f"| Root events among valid rows (only these are kept) | {100 * (1 - totals.not_root / max(rows - totals.malformed, 1)):.1f}% |",
-        f"| Repeated event ids across files | {sum(n - 1 for n in ids.values() if n > 1)} |",
+        f"| Repeated event ids across files | {repeated} |",
         f"| Unmapped actor codes (top 10) | {', '.join(f'{c} {n}' for c, n in totals.unmapped.most_common(10))} |",
-        f"| Parse ms per file (median / p95) | {statistics.median(f['parse_ms'] for f in per_file):.0f} / {_p95([f['parse_ms'] for f in per_file]):.0f} |",
-        f"| Rows upserted per cycle (median / max) | {statistics.median(n for n, _ in cycles):.0f} / {max(n for n, _ in cycles)} |",
-        f"| Store ms per cycle (first / median / p95) | {cycles[0][1]:.0f} / {statistics.median(store_ms):.0f} / {_p95(store_ms):.0f} |",
+        f"| Parse ms per file (median / p95) | {_median(f['parse_ms'] for f in per_file):.0f} / {_p95(f['parse_ms'] for f in per_file):.0f} |",
+        f"| Rows upserted per cycle (median / max) | {_median(n for n, _ in cycles):.0f} / {_max(n for n, _ in cycles)} |",
+        f"| Store ms per cycle (first / median / p95) | {(cycles[0][1] if cycles else 0):.0f} / {_median(store_ms):.0f} / {_p95(store_ms):.0f} |",
         f"| Rows after the day (upper bound for rows a day) | {day_rows} |",
         f"| HOT updates during the day | {hot} of {upd} ({100 * hot / max(upd, 1):.0f}%) |",
         f"| Week (8 days): rows, total, heap, pkey, day index | {week['rows']}, {week['total']}, {week['heap']}, {week['pkey']}, {week['day_index']} |",
     ]
-    text = "\n".join(report) + "\n"
-    print(text)
-    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write(text)
-    return 1 if failed or malformed_share > 0.01 else 0
+    _emit("\n".join(report))
+    if not per_file:
+        _emit("\nNo file could be read (network or GDELT): no format gate checked.")
+        return 0
+    failures = []
+    if fields_61 < MIN_FIELDS_61:
+        failures.append(f"only {100 * fields_61:.2f}% of rows have 61 fields: the format changed")
+    if repeated:
+        failures.append(f"{repeated} event ids repeat across files: rollups would double-count")
+    if failures:
+        _emit("\n**Format gates failed:** " + "; ".join(failures) + ".")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
@@ -2228,28 +2634,24 @@ if __name__ == "__main__":
     sys.exit(asyncio.run(main(parser.parse_args().files)))
 ```
 
-**Step 2: Write the workflow** (`.github/workflows/events-repro.yml`). The Postgres service, PostGIS install and migration steps are copied verbatim from `ci.yml`'s backend job.
+**Step 2: The workflow** (`.github/workflows/events-repro.yml`). It's created in 19a (Task 19a.4) exactly as below; this task changes nothing in it. The Postgres service, PostGIS install and migration steps are copied verbatim from `ci.yml`'s backend job.
 
 ```yaml
 name: Events repro
 
-# Measures GDELT Events ingestion against CI's throwaway Postgres: on PRs that
-# change it, and on demand. GDELT files are downloaded on the runner only.
+# Measures GDELT Events ingestion against CI's throwaway Postgres. Run by hand
+# only (once per PR that changes the events code; record the run in the PR):
+# never a required check. GDELT files are downloaded on the runner only. It
+# fails only on a format problem in GDELT's data, never on a network failure.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - backend/app/services/events.py
-      - backend/app/services/relations.py
-      - backend/app/services/cameo_countries.py
-      - backend/scripts/events_repro.py
-      - database/migrations/021_event_pairs_daily.sql
-      - .github/workflows/events-repro.yml
   workflow_dispatch:
     inputs:
       files:
         description: "15-minute export files to ingest (96 = a day)"
         default: "96"
+
+permissions:
+  contents: read
 
 jobs:
   repro:
@@ -2290,17 +2692,22 @@ jobs:
             docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 -q < "$f"
           done
       - name: Ingest GDELT exports and measure
-        run: python -m scripts.events_repro --files "${{ inputs.files || '96' }}"
+        run: python -m scripts.events_repro --files "${{ inputs.files }}"
         env:
           ORBIS_TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
 ```
 
-**Step 3: Push and read the job summary.** Paste the report into the PR description, then check it against these gates. If any gate fails, **stop and report to the controller**:
+**Step 3: Push, run it by hand, and read the job summary.**
+
+Run: `gh workflow run events-repro.yml --ref claude/p5-events-ingest -f files=96`, then `gh run watch` on the run it starts.
+
+Paste the report and the run's URL into the PR description. Only the two format gates fail the run. Check the rest by hand against these gates, and if any of them fails, **stop and report to the controller**:
 
 | Gate | Expected | If not |
 |---|---|---|
-| Rows with 61 fields | ≥ 99.9% | the format changed: stop |
-| Repeated event ids | 0 | rollups would double-count: stop |
+| Rows with 61 fields | ≥ 99.9% (fails the run) | the format changed: stop |
+| Repeated event ids | 0 (fails the run) | rollups would double-count: stop |
+| Files read | most of 96; some unavailable is fine | if most are unavailable, rerun later: it's GDELT or the network, not the code |
 | Parse ms per file, p95 | ≤ 100 | profile `parse_events` before going on |
 | Rows upserted per cycle, max | ≤ 1,500 | revisit the grain (drop `outlets`, or the caps) |
 | Store ms per cycle, p95 (CI's disk is faster than P4) | ≤ 500 | batch differently before going on |
@@ -2317,7 +2724,7 @@ Then set `events_fixture.ROWS_PER_DAY` to the measured rows a day, rounded up to
 **Step 1:** Run every backend check (expected: all pass).
 
 **Step 2:** Open the PR `feat(ingest): GDELT event rollups each cycle (PR 19b)`. The description includes:
-- the repro report;
+- the repro report, and the URL of the run dispatched by hand (19b.7);
 - the gates;
 - the `missing` label points (19b.1);
 - the per-cycle estimate against the measurement;
@@ -2336,12 +2743,13 @@ Then set `events_fixture.ROWS_PER_DAY` to the measured rows a day, rounded up to
 No code. Read-only. Report back before 19c merges.
 
 **First 3 cycles,** from the backend's logs:
-- Each cycle logs one `Events: N files (C caught up, M missing), R rows, K kept (…), U rollups in X s (download …, parse …, store …).` line, then possibly `Events: unmapped actor codes: …`.
+- Each cycle logs one `Events: N files (C caught up, M missing, U unreadable), R rows, K kept (…), X rollups, L slots lost, in S s (download …, parse …, store …).` line, then possibly `Events: unmapped actor codes: …`.
 - Expected:
-  - X ≤ 5 s;
+  - S ≤ 5 s (the step's hard bound is 60 s);
   - store ≤ 2 s;
   - N mostly 2, since the cycle starts about every 30 min;
-  - no `Events ingestion failed` and no `another process added`.
+  - U and L 0, and no separate `slots lost` warning;
+  - no `Events ingestion failed`, no `timed out` and no `another process added`.
 - The `Ingestion cycle complete` spacing is unchanged ± a few seconds.
 - Azure Monitor shows no IOPS rise during the step, which runs before the embeddings.
 
@@ -2352,7 +2760,7 @@ SELECT count(*) AS rows, count(DISTINCT day) AS days,
        pg_size_pretty(pg_total_relation_size('event_pairs_daily')) AS total
 FROM event_pairs_daily;
 
-SELECT day, count(*) AS rows, sum(n_events) AS events, sum(n_reports) AS reports
+SELECT day, count(*) AS rows, sum(n_events) AS events, sum(mentions) AS mentions
 FROM event_pairs_daily GROUP BY day ORDER BY day;
 
 SELECT n_tup_ins, n_tup_upd, n_tup_hot_upd, n_dead_tup, last_autovacuum
@@ -2361,22 +2769,22 @@ FROM pg_stat_user_tables WHERE relname = 'event_pairs_daily';
 -- About 4 files an hour means the catch-up works (a missed file is a lost count).
 SELECT date_trunc('hour', slot) AS hour,
        count(*) FILTER (WHERE status = 'ok') AS ok,
-       count(*) FILTER (WHERE status = 'missing') AS missing
+       count(*) FILTER (WHERE status = 'missing') AS missing,
+       count(*) FILTER (WHERE status = 'unreadable') AS unreadable
 FROM event_files GROUP BY 1 ORDER BY 1 DESC LIMIT 24;
 
--- Calibration of MIN_EVENTS, MIN_REPORTS, MIN_OUTLETS (decision 8): how the
--- lens's pairs spread by events, reports and outlets. Run once 7 days exist
--- (sooner, over the days there are, for a first look).
+-- Calibration of MIN_EVENTS and MIN_OUTLETS (decision 8): how the lens's pairs
+-- spread by events and distinct outlets. Run once 7 days exist (sooner, over
+-- the days there are, for a first look).
 WITH r AS (
-  SELECT least(a_iso, b_iso) a, greatest(a_iso, b_iso) b, n_events, n_reports, outlets
+  SELECT least(a_iso, b_iso) a, greatest(a_iso, b_iso) b, n_events, outlets
   FROM event_pairs_daily WHERE day >= current_date - 6),
-p AS (SELECT a, b, sum(n_events) n, sum(n_reports) rep FROM r GROUP BY 1, 2),
+p AS (SELECT a, b, sum(n_events) n FROM r GROUP BY 1, 2),
 o AS (SELECT a, b, count(DISTINCT x) outl FROM r, unnest(r.outlets) x GROUP BY 1, 2)
 SELECT width_bucket(p.n, ARRAY[1, 5, 10, 25, 100]) AS events_bucket,
-       width_bucket(p.rep, ARRAY[1, 3, 5, 10, 25]) AS reports_bucket,
        width_bucket(coalesce(o.outl, 0), ARRAY[1, 2, 3, 5]) AS outlets_bucket,
        count(*) AS pairs, sum(p.n) AS events
-FROM p LEFT JOIN o USING (a, b) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+FROM p LEFT JOIN o USING (a, b) GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- Sanity: today's busiest pairs (expect pairs like US-IR, RU-UA, IL-PS).
 SELECT least(a_iso, b_iso) a, greatest(a_iso, b_iso) b, sum(n_events) n, sum(mentions) m
@@ -2396,9 +2804,9 @@ The busiest pairs should be plausible. If `ROWS_PER_DAY` differs by more than 2�
 
 **Recalibrating the thresholds** (decision 8). From the calibration query, choose values that:
 - keep roughly the 40–80 strongest pairs above the line, enough to fill the 40-arc list after the per-country cap;
-- drop the single-report long tail.
+- drop the single-outlet long tail.
 
-Put the new `MIN_EVENTS`, `MIN_REPORTS` and `MIN_OUTLETS`, each with the measured distribution in a comment, in 19c, or in a follow-up PR if 19c has merged. Re-check them once the lens holds 7 full days.
+Put the new `MIN_EVENTS` and `MIN_OUTLETS`, each with the measured distribution in a comment, in 19c, or in a follow-up PR if 19c has merged. Re-check them once the lens holds 7 full days.
 
 ---
 
@@ -2406,11 +2814,15 @@ Put the new `MIN_EVENTS`, `MIN_REPORTS` and `MIN_OUTLETS`, each with the measure
 
 Branch: `claude/p5-relations-api`.
 
-**Depends on:** #108, since the router uses `cache.WEEK_TTL`, `single_flight` and `cached_model` (decision 10: it's merging). Check with `gh pr view 108 --json state`.
-- **If it has merged,** go on.
-- **If it hasn't landed,** use the fallback: the lens under `db:relations:…` with `cycle_ttl(600)` and plain `get_cached`/`set_cached`. Then tell the controller.
+**Depends on:** #108 (merged 2026-10-21): the router uses `cache.WEEK_TTL`, `single_flight` and `cached_model`.
 
-### API contract (fixed here; PR 20 builds against it)
+### API contract (pinned here; PR 20 builds against it in parallel)
+
+PR 20 starts against mocks while this PR is written, so the contract is pinned to the field. **One committed fixture is its source of truth:** `frontend/e2e/relations.contract.json` (Task 19c.0).
+- 19c's tests validate it against the Pydantic models, and against the rules below.
+- PR 20's mocks import it.
+
+A change to the contract changes the fixture, and both sides' tests see it.
 
 **Every answer is the 7-day lens** (decision 1): the last 7 UTC days, `today - 6 .. today`, whatever the timeline shows. There are no window parameters, and any others sent are ignored.
 
@@ -2424,11 +2836,12 @@ It returns:
 {
   "first_day": "2026-10-15",
   "last_day": "2026-10-21",
+  "since": "2026-10-15",
   "relations": [
     {
       "a": {"iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29},
       "b": {"iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06},
-      "n": 312, "reports": 140, "outlets": 23, "mentions": 2100,
+      "n": 312, "outlets": 23, "mentions": 2100,
       "quad": {"verbal_cooperation": 40, "material_cooperation": 12,
                "verbal_conflict": 210, "material_conflict": 50},
       "kind": "conflict", "goldstein": -3.1, "tone": -4.2, "from": "US"
@@ -2437,42 +2850,70 @@ It returns:
 }
 ```
 
-- **Pairs** come in code order (`a < b`). `from` is the country whose actors act in most of the pair's events, and the arc starts there.
-- **Ordering:** by mentions, then events, then codes. At most `MAX_ARCS_PER_COUNTRY` (6, shared with links) per country.
-- **Filtering:**
-  - pairs need `n ≥ MIN_EVENTS` (5), `reports ≥ MIN_REPORTS` (3) and `outlets ≥ MIN_OUTLETS` (2);
-  - pairs whose code has no label point are dropped.
-- **`kind`:**
-  - `cooperation` counts quad 1–2 only and `conflict` counts 3–4 only, so `n`, `quad` and `kind` describe the filtered events;
-  - with `all`, `kind` is the majority class: conflict when quad 3+4 outnumber 1+2, and on a tie conflict when `goldstein < 0`.
+**The list's rules:**
+1. **Pairs** are in code order: `a.iso < b.iso`.
+2. **`from`** is the country whose actors act in most of the pair's events, and the arc starts there. A tie goes to `a`.
+3. **`since`** is the earliest rollup day in the lens, the same for every pair; `null` when the lens holds no rollups at all. It's later than `first_day` only during the first week after 19b's deploy (the ramp: plan review I4). The UI then says "since {date}".
+4. **Order and caps:** by mentions, then events, then codes. At most `MAX_ARCS_PER_COUNTRY` (6, shared with links) per country, then `limit`.
+5. **Filtering:** pairs need `n ≥ MIN_EVENTS` (5) and `outlets ≥ MIN_OUTLETS` (2); pairs whose code has no label point are dropped. There is no report count (plan review I1).
+6. **Under `kind=all`:** `kind` is the majority class, conflict when quad 3+4 outnumber 1+2, and on a tie conflict when `goldstein < 0`.
+7. **Under `kind=cooperation` or `kind=conflict`:**
+   - `quad` still has **all four keys**, with zeros for the other class;
+   - `n`, `outlets`, `mentions`, `goldstein`, `tone` and `from` cover the filtered events only;
+   - `kind` equals the filter.
+8. **No `reports` field** anywhere.
 
-`GET /api/relations/detail?a=US&b=IR` returns, for the same 7 days, the list item's fields for that pair over **all classes** (the detail takes no `kind`), plus:
+`GET /api/relations/detail?a=US&b=IR` takes two ISO codes, in either order. It returns the pair **in code order whatever the request's order**: `a=US&b=IR` and `a=IR&b=US` give the same answer, with `a` = IR.
 
 ```json
 {
-  "directions": [{"from": "US", "to": "IR", "n": 200, "quad": {…}},
-                 {"from": "IR", "to": "US", "n": 112, "quad": {…}}],
-  "daily": [{"day": "2026-10-15", "cooperation": 30, "conflict": 120},
-            …,
-            {"day": "2026-10-21", "cooperation": 22, "conflict": 140}],
-  "samples": [{"url": "https://…", "outlet": "reuters.com", "title": "Iran says … " | null,
-               "day": "2026-10-21", "quad_class": 3, "from": "US"}]
+  "first_day": "2026-10-15",
+  "last_day": "2026-10-21",
+  "since": "2026-10-15",
+  "a": {"iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29},
+  "b": {"iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06},
+  "n": 312, "outlets": 23, "mentions": 2100,
+  "quad": {"verbal_cooperation": 40, "material_cooperation": 12,
+           "verbal_conflict": 210, "material_conflict": 50},
+  "kind": "conflict", "goldstein": -3.1, "tone": -4.2, "from": "US",
+  "directions": [{"from": "IR", "to": "US", "n": 112, "quad": {"…": "all four keys"}},
+                 {"from": "US", "to": "IR", "n": 200, "quad": {"…": "all four keys"}}],
+  "daily": [{"day": "2026-10-15", "cooperation": 6, "conflict": 30},
+            "…",
+            {"day": "2026-10-21", "cooperation": 7, "conflict": 40}],
+  "samples": [{"url": "https://news.example/2026/10/21/gulf-shipping", "outlet": "news.example",
+               "title": "Gulf shipping warnings traded", "day": "2026-10-21",
+               "quad_class": 3, "from": "US"}]
 }
 ```
 
-- **Field details:**
-  - `directions` lists only directions that have events, a→b first;
-  - `daily` holds all 7 days, `first_day..last_day`, zero-filled: the inspector's daily breakdown;
-  - `samples` holds up to 10, from the newest day first, then quad class, then direction. They're distinct and http(s) only (sanitised again), with `title` from our own article with that URL when we have one (`articles_source_url_key`, at most 10 lookups), else null.
-- **Errors:**
-  - **422** for an unknown code, `a = b`, a bad `kind` or `limit`;
-  - **404** when the pair has no events in the 7 days (not cached).
+**The detail's rules:**
+1. **Pair order:** `a.iso < b.iso`, and `directions` lists a→b first, then b→a, only those with events.
+2. **Classes:** the detail takes no `kind`. It covers **all classes**, so the inspector always shows both (decision 7).
+3. **No thresholds:** it applies no `MIN_*`. A listed pair always has a detail, and so does an unlisted one with events.
+4. **`first_day`, `last_day` and `since`:** as in the list.
+5. **`daily`:** all 7 days, `first_day..last_day`, zero-filled. The UI shows the days from `since` on.
+6. **`samples`:**
+   - up to 10, from the newest day first, then quad class, then direction;
+   - distinct, and http(s) only (sanitised again at read time);
+   - `title` comes from our own article with that URL when we have one (`articles_source_url_key`, at most 10 lookups), else null.
+
+**Errors** (the exact bodies; the UI depends on them):
+
+| Case | Status | Body |
+|---|---|---|
+| The pair has no events in the 7 days (not cached) | 404 | `{"detail": "No reported events between them in the last 7 days."}` |
+| An unknown code (`a=ZZ`) | 422 | `{"detail": "Unknown country 'ZZ': an ISO 3166-1 alpha-2 code with a label point."}` (links' `_pair`) |
+| `a = b` | 422 | `{"detail": "a and b must be different countries."}` |
+| A bad `kind` or `limit` | 422 | FastAPI's validation body: `{"detail": [{"type": "literal_error" or "greater_than_equal" or "less_than_equal", "loc": ["query", "kind" or "limit"], "msg": "…", "input": "…", …}]}` |
+
+A **404 for a pair that was listed** can happen around UTC midnight, when the lens moves and a pair's only day leaves it. The inspector shows the 404's message as text, not as an error.
 
 **Caching:** every answer is a week read, so all of it lives in #108's hourly family.
 
 | Answer | Key | TTL |
 |---|---|---|
-| List | `wk:relations:v1:{YYYYMMDD}-{YYYYMMDD}:{kind}:{limit}` | `WEEK_TTL` (an empty list too: it's refreshed hourly anyway) |
+| List | `wk:relations:v1:{YYYYMMDD}-{YYYYMMDD}:{kind}:{limit}` | `WEEK_TTL`; **an empty list 60 s**, matching #108's `_EMPTY_LINKS_TTL`, so new rollups show soon |
 | Detail | `wk:relations:detail:v1:{a}:{b}:{YYYYMMDD}-{YYYYMMDD}` | `WEEK_TTL` |
 
 - The days in the key move the entry at UTC midnight.
@@ -2480,7 +2921,155 @@ It returns:
 - `edge_cached` on both routes.
 - Rate group `data` (the default for `/api/`).
 - No `db:*` key, so the cycle's invalidation never touches these: they're up to about an hour old, which the legend's "last 7 days" tolerates.
+- **Cycle-start cancellation** (Minor 4): #108's `stop_background_tasks()` cancels every `wk:` flight, and a request waiting on one gets an error. Relations reads are cheap, so 19c narrows that to the week reads that are expensive, `wk:globe:` and `wk:links:` (Task 19c.2). A relations miss running at a cycle's start finishes and answers.
 - No warmer: the layer is off on first load, and a miss reads rollups only. If production's cold list exceeds 1 s, add `warm_relations_7d` after `warm_links_7d`, following #108's `week_fresh` pattern.
+
+### Task 19c.0: the contract fixture
+
+**Files:**
+- Create: `frontend/e2e/relations.contract.json`, `backend/tests/test_relations_contract.py`
+
+**Step 1: Write the fixture.** It holds the three answers PR 20's mocks serve, and the 404 body.
+
+```json
+{
+  "list": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "relations": [
+      {
+        "a": {"iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29},
+        "b": {"iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06},
+        "n": 312, "outlets": 23, "mentions": 2100,
+        "quad": {"verbal_cooperation": 40, "material_cooperation": 12, "verbal_conflict": 210, "material_conflict": 50},
+        "kind": "conflict", "goldstein": -3.1, "tone": -4.2, "from": "US"
+      },
+      {
+        "a": {"iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34},
+        "b": {"iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06},
+        "n": 120, "outlets": 12, "mentions": 800,
+        "quad": {"verbal_cooperation": 70, "material_cooperation": 30, "verbal_conflict": 15, "material_conflict": 5},
+        "kind": "cooperation", "goldstein": 2.4, "tone": 1.1, "from": "US"
+      },
+      {
+        "a": {"iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34},
+        "b": {"iso": "NG", "name": "Nigeria", "lat": 9.55, "lng": 8.0},
+        "n": 40, "outlets": 6, "mentions": 300,
+        "quad": {"verbal_cooperation": 25, "material_cooperation": 8, "verbal_conflict": 5, "material_conflict": 2},
+        "kind": "cooperation", "goldstein": 2.9, "tone": 0.8, "from": "FR"
+      }
+    ]
+  },
+  "list_conflict": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "relations": [
+      {
+        "a": {"iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29},
+        "b": {"iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06},
+        "n": 260, "outlets": 20, "mentions": 1800,
+        "quad": {"verbal_cooperation": 0, "material_cooperation": 0, "verbal_conflict": 210, "material_conflict": 50},
+        "kind": "conflict", "goldstein": -4.4, "tone": -5.0, "from": "US"
+      }
+    ]
+  },
+  "detail": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "a": {"iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29},
+    "b": {"iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06},
+    "n": 312, "outlets": 23, "mentions": 2100,
+    "quad": {"verbal_cooperation": 40, "material_cooperation": 12, "verbal_conflict": 210, "material_conflict": 50},
+    "kind": "conflict", "goldstein": -3.1, "tone": -4.2, "from": "US",
+    "directions": [
+      {"from": "IR", "to": "US", "n": 112,
+       "quad": {"verbal_cooperation": 15, "material_cooperation": 2, "verbal_conflict": 80, "material_conflict": 15}},
+      {"from": "US", "to": "IR", "n": 200,
+       "quad": {"verbal_cooperation": 25, "material_cooperation": 10, "verbal_conflict": 130, "material_conflict": 35}}
+    ],
+    "daily": [
+      {"day": "2026-10-15", "cooperation": 6, "conflict": 30},
+      {"day": "2026-10-16", "cooperation": 8, "conflict": 35},
+      {"day": "2026-10-17", "cooperation": 7, "conflict": 40},
+      {"day": "2026-10-18", "cooperation": 9, "conflict": 38},
+      {"day": "2026-10-19", "cooperation": 7, "conflict": 42},
+      {"day": "2026-10-20", "cooperation": 8, "conflict": 35},
+      {"day": "2026-10-21", "cooperation": 7, "conflict": 40}
+    ],
+    "samples": [
+      {"url": "https://news.example/2026/10/21/gulf-shipping", "outlet": "news.example",
+       "title": "Gulf shipping warnings traded", "day": "2026-10-21", "quad_class": 3, "from": "US"},
+      {"url": "https://wire.example/2026/10/20/talks", "outlet": "wire.example",
+       "title": null, "day": "2026-10-20", "quad_class": 1, "from": "IR"},
+      {"url": "https://daily.example/2026/10/19/sanctions", "outlet": "daily.example",
+       "title": null, "day": "2026-10-19", "quad_class": 4, "from": "US"}
+    ]
+  },
+  "not_found": {"detail": "No reported events between them in the last 7 days."}
+}
+```
+
+**Step 2: Write its test** (`backend/tests/test_relations_contract.py`). It validates the fixture against the models, and checks the contract's rules on it:
+
+```python
+"""The relations contract fixture PR 20's mocks import fits the API's models and rules."""
+
+import json
+from pathlib import Path
+
+from app.models.relations import RelationDetail, Relations
+from app.services.urls import web_url
+
+CONTRACT = json.loads(
+    (Path(__file__).resolve().parents[2] / "frontend/e2e/relations.contract.json").read_text(
+        encoding="utf-8"
+    )
+)
+QUADS = {"verbal_cooperation", "material_cooperation", "verbal_conflict", "material_conflict"}
+
+
+def test_every_answer_fits_its_model():
+    Relations.model_validate(CONTRACT["list"])
+    Relations.model_validate(CONTRACT["list_conflict"])
+    RelationDetail.model_validate(CONTRACT["detail"])
+    assert CONTRACT["not_found"] == {"detail": "No reported events between them in the last 7 days."}
+
+
+def test_pairs_are_in_code_order_with_every_quad_key_and_no_report_count():
+    for answer in (CONTRACT["list"], CONTRACT["list_conflict"]):
+        for rel in answer["relations"]:
+            assert rel["a"]["iso"] < rel["b"]["iso"]
+            assert set(rel["quad"]) == QUADS
+            assert "reports" not in rel
+            assert rel["n"] == sum(rel["quad"].values())
+
+
+def test_a_class_filter_zeroes_the_other_class_and_names_itself():
+    for rel in CONTRACT["list_conflict"]["relations"]:
+        assert rel["kind"] == "conflict"
+        assert rel["quad"]["verbal_cooperation"] == rel["quad"]["material_cooperation"] == 0
+
+
+def test_the_detail_lists_a_to_b_first_and_adds_up():
+    detail = CONTRACT["detail"]
+    a, b = detail["a"]["iso"], detail["b"]["iso"]
+    assert a < b
+    assert [(d["from"], d["to"]) for d in detail["directions"]] == [(a, b), (b, a)]
+    assert sum(d["n"] for d in detail["directions"]) == detail["n"]
+    assert len(detail["daily"]) == 7
+    assert sum(d["cooperation"] + d["conflict"] for d in detail["daily"]) == detail["n"]
+    assert all(web_url(s["url"]) for s in detail["samples"])
+```
+
+**Step 3: Run it.**
+
+Run: `cd backend && python -m pytest tests/test_relations_contract.py -q`
+Expected: ERROR collecting, `ModuleNotFoundError: No module named 'app.models.relations'`. It passes after Task 19c.2's models.
+
+**Step 4:** Commit it with 19c.2 (`feat(api): …`). The fixture is the contract, so it ships with the models it's checked against.
 
 ### Task 19c.1: `app/services/relations.py` (pure parts first)
 
@@ -2490,10 +3079,11 @@ It returns:
 **Step 1: Write the failing tests** (`backend/tests/test_relations.py`).
 
 ```python
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.services.relations import (
     MIN_EVENTS,
+    MIN_OUTLETS,
     lens_days,
     rank_relations,
     summarise_detail,
@@ -2511,66 +3101,92 @@ def test_the_lens_is_the_last_7_utc_days_including_today():
 
 def test_the_lens_follows_utc_not_local_time():
     # 23:30 on the 21st in UTC-5 is 04:30 on the 22nd in UTC.
-    from datetime import timedelta
-
     local = datetime(2026, 10, 21, 23, 30, tzinfo=timezone(timedelta(hours=-5)))
     assert lens_days(local) == (date(2026, 10, 16), date(2026, 10, 22))
 
 
 def _row(a="IR", b="US", n=20, q=(2, 1, 12, 5), from_a=5, mentions=300, **over):
-    row = {"a": a, "b": b, "n": n, "reports": 9, "outlets": 4, "mentions": mentions,
-           "goldstein": -2.0, "tone": -3.0, "q1": q[0], "q2": q[1], "q3": q[2], "q4": q[3],
-           "from_a": from_a}
+    row = {"a": a, "b": b, "n": n, "outlets": 4, "mentions": mentions, "goldstein": -2.0,
+           "tone": -3.0, "q1": q[0], "q2": q[1], "q3": q[2], "q4": q[3], "from_a": from_a}
     row.update(over)
     return row
 
 
 def test_rank_names_the_class_the_acting_country_and_the_label_points():
-    [rel] = rank_relations([_row()], limit=40)
+    [rel] = rank_relations([_row()], "all", limit=40)
     assert rel["kind"] == "conflict"
     assert rel["from"] == "US"  # IR acts in 5 of 20
     assert rel["a"]["name"] == "Iran" and rel["b"]["iso"] == "US"
     assert rel["quad"] == {"verbal_cooperation": 2, "material_cooperation": 1,
                            "verbal_conflict": 12, "material_conflict": 5}
+    assert "reports" not in rel
 
 
-def test_a_tie_goes_by_the_goldstein_sign():
-    assert rank_relations([_row(q=(5, 5, 5, 5), goldstein=1.0)], 40)[0]["kind"] == "cooperation"
-    assert rank_relations([_row(q=(5, 5, 5, 5), goldstein=-1.0)], 40)[0]["kind"] == "conflict"
+def test_a_class_tie_goes_by_the_goldstein_sign():
+    assert rank_relations([_row(q=(5, 5, 5, 5), goldstein=1.0)], "all", 40)[0]["kind"] == "cooperation"
+    assert rank_relations([_row(q=(5, 5, 5, 5), goldstein=-1.0)], "all", 40)[0]["kind"] == "conflict"
+
+
+def test_a_from_tie_goes_to_a():
+    assert rank_relations([_row(n=20, from_a=10)], "all", 40)[0]["from"] == "IR"
+
+
+def test_a_class_filter_names_itself_and_zeroes_the_other_class():
+    [rel] = rank_relations([_row(n=17, q=(0, 0, 12, 5), goldstein=1.5)], "conflict", 40)
+    assert rel["kind"] == "conflict"  # the filter, whatever the Goldstein sign says
+    assert rel["quad"] == {"verbal_cooperation": 0, "material_cooperation": 0,
+                           "verbal_conflict": 12, "material_conflict": 5}
 
 
 def test_pairs_without_a_label_point_are_dropped_and_hubs_are_capped():
     rows = [_row(a="ZZ")] + [_row(a=c, b="US", mentions=100 - i) for i, c in
                              enumerate(["CN", "DE", "FR", "GB", "IL", "IN", "JP"])]
-    ranked = rank_relations(rows, 40)
+    ranked = rank_relations(rows, "all", 40)
     assert all(r["a"]["iso"] != "ZZ" for r in ranked)
     assert sum("US" in (r["a"]["iso"], r["b"]["iso"]) for r in ranked) == 6
 
 
-def test_detail_sums_directions_days_and_samples():
-    d = date(2026, 10, 21)
-    rows = [
-        {"a_iso": "US", "b_iso": "IR", "day": d, "quad_class": 3, "n_events": 4,
-         "n_reports": 2, "mentions": 40, "goldstein_sum": -8.0, "tone_sum": -12.0,
+D = date(2026, 10, 21)
+
+
+def _rows():
+    return [
+        {"a_iso": "US", "b_iso": "IR", "day": D, "quad_class": 3, "n_events": 4,
+         "mentions": 40, "goldstein_sum": -8.0, "tone_sum": -12.0,
          "sample_urls": ["https://a.test/1", "javascript:x"], "outlets": ["a.test"]},
         {"a_iso": "IR", "b_iso": "US", "day": date(2026, 10, 20), "quad_class": 1,
-         "n_events": 1, "n_reports": 1, "mentions": 5, "goldstein_sum": 1.0, "tone_sum": 2.0,
+         "n_events": 1, "mentions": 5, "goldstein_sum": 1.0, "tone_sum": 2.0,
          "sample_urls": ["https://b.test/2", "https://a.test/1"], "outlets": ["b.test"]},
     ]
-    detail = summarise_detail("IR", "US", date(2026, 10, 19), d, rows, {"https://a.test/1": "Talks - Reuters"})
+
+
+def test_detail_sums_directions_days_and_samples_in_code_order():
+    first = date(2026, 10, 15)
+    titles = {"https://a.test/1": "Talks - Reuters"}
+    detail = summarise_detail("IR", "US", first, D, date(2026, 10, 20), _rows(), titles)
+    assert detail["a"]["iso"] == "IR" and detail["b"]["iso"] == "US"
+    assert (detail["first_day"], detail["last_day"], detail["since"]) == (first, D, date(2026, 10, 20))
     assert detail["n"] == 5 and detail["outlets"] == 2 and detail["from"] == "US"
-    assert [x["from"] for x in detail["directions"]] == ["IR", "US"]
-    assert [x["day"] for x in detail["daily"]] == [date(2026, 10, 19), date(2026, 10, 20), d]
+    assert "reports" not in detail
+    assert [(x["from"], x["to"]) for x in detail["directions"]] == [("IR", "US"), ("US", "IR")]
+    assert [x["day"] for x in detail["daily"]] == [first + timedelta(days=i) for i in range(7)]
     assert [s["url"] for s in detail["samples"]] == ["https://a.test/1", "https://b.test/2"]
     assert detail["samples"][0]["title"] == "Talks" and detail["samples"][1]["title"] is None
 
 
+def test_detail_applies_no_threshold():
+    """One event is enough for a detail; only the list has MIN_EVENTS and MIN_OUTLETS."""
+    [one] = [r for r in _rows() if r["n_events"] == 1]
+    detail = summarise_detail("IR", "US", date(2026, 10, 15), D, D, [one], {})
+    assert detail["n"] == 1 < MIN_EVENTS and detail["outlets"] == 1 < MIN_OUTLETS
+
+
 def test_detail_of_no_rows_is_none():
-    assert summarise_detail("IR", "US", date(2026, 10, 21), date(2026, 10, 21), [], {}) is None
+    assert summarise_detail("IR", "US", date(2026, 10, 15), D, None, [], {}) is None
 
 
 def test_thresholds_are_named():
-    assert MIN_EVENTS == 5
+    assert (MIN_EVENTS, MIN_OUTLETS) == (5, 2)
 ```
 
 **Step 2: Run them to verify they fail.**
@@ -2600,10 +3216,10 @@ from app.services.titles import display_title
 from app.services.urls import outlet, web_url
 
 # A pair needs this much behind it to be drawn: one article can yield many
-# events. Starting values (Phase 5 decision 8), recalibrated from production's
-# spread by "Measure on prod" (19b+).
+# events, and outlets (a distinct union across the pair's rows) beat them.
+# Starting values (Phase 5 decision 8), recalibrated from production's spread
+# by "Measure on prod" (19b+). The detail applies neither.
 MIN_EVENTS = 5
-MIN_REPORTS = 3
 MIN_OUTLETS = 2
 MAX_SAMPLES = 10
 LENS_DAYS = 7  # the lens: today and the 6 UTC days before
@@ -2615,14 +3231,13 @@ QUAD_NAMES = {1: "verbal_cooperation", 2: "material_cooperation",
 LIST_SQL = """
 WITH r AS MATERIALIZED (
     SELECT least(a_iso, b_iso) AS a, greatest(a_iso, b_iso) AS b, a_iso, quad_class,
-           n_events, n_reports, mentions, goldstein_sum, tone_sum, outlets
+           n_events, mentions, goldstein_sum, tone_sum, outlets
     FROM event_pairs_daily
     WHERE day BETWEEN $1 AND $2 AND quad_class = ANY($3::smallint[])
 ),
 p AS (
     SELECT a, b,
            sum(n_events)::int AS n,
-           sum(n_reports)::int AS reports,
            sum(mentions)::bigint AS mentions,
            sum(goldstein_sum) / sum(n_events) AS goldstein,
            sum(tone_sum) / sum(n_events) AS tone,
@@ -2633,7 +3248,7 @@ p AS (
            coalesce(sum(n_events) FILTER (WHERE a_iso = a), 0)::int AS from_a
     FROM r
     GROUP BY a, b
-    HAVING sum(n_events) >= $4 AND sum(n_reports) >= $5
+    HAVING sum(n_events) >= $4
 ),
 o AS (
     SELECT r.a, r.b, count(DISTINCT x)::int AS outlets
@@ -2642,12 +3257,16 @@ o AS (
 )
 SELECT p.*, o.outlets
 FROM p JOIN o USING (a, b)
-WHERE o.outlets >= $6
+WHERE o.outlets >= $5
 ORDER BY p.mentions DESC, p.n DESC, p.a, p.b
 """
 
+# The ramp (plan review I4): the earliest rollup day in the lens, the same for
+# every pair. The day index's first entry in the range.
+SINCE_SQL = "SELECT min(day) FROM event_pairs_daily WHERE day BETWEEN $1 AND $2"
+
 DETAIL_SQL = """
-SELECT a_iso, b_iso, day, quad_class, n_events, n_reports, mentions,
+SELECT a_iso, b_iso, day, quad_class, n_events, mentions,
        goldstein_sum, tone_sum, sample_urls, outlets
 FROM event_pairs_daily
 WHERE ((a_iso = $1 AND b_iso = $2) OR (a_iso = $2 AND b_iso = $1))
@@ -2664,6 +3283,7 @@ def lens_days(now: datetime | None = None) -> tuple[date, date]:
 
 
 def _quad(counts: dict[int, int]) -> dict[str, int]:
+    """All four classes, by name, zeros included (the contract's rule 7)."""
     return {name: int(counts.get(q, 0)) for q, name in QUAD_NAMES.items()}
 
 
@@ -2673,16 +3293,20 @@ def _kind(cooperation: int, conflict: int, goldstein: float) -> str:
     return "conflict" if goldstein < 0 else "cooperation"
 
 
+async def get_since(first: date, last: date) -> date | None:
+    pool = await get_pool()
+    return await pool.fetchval(SINCE_SQL, first, last)
+
+
 async def get_relation_pairs(first: date, last: date, kind: str) -> list[dict]:
     pool = await get_pool()
-    rows = await pool.fetch(
-        LIST_SQL, first, last, QUADS[kind], MIN_EVENTS, MIN_REPORTS, MIN_OUTLETS
-    )
+    rows = await pool.fetch(LIST_SQL, first, last, QUADS[kind], MIN_EVENTS, MIN_OUTLETS)
     return [dict(r) for r in rows]
 
 
-def rank_relations(rows: list[dict], limit: int) -> list[dict]:
-    """The pairs to draw, in order: label points known, at most MAX_ARCS_PER_COUNTRY each."""
+def rank_relations(rows: list[dict], kind: str, limit: int) -> list[dict]:
+    """The pairs to draw, in order: label points known, at most MAX_ARCS_PER_COUNTRY
+    each. Under a class filter, *kind* names the filter (the rows hold its events only)."""
     ranked: list[dict] = []
     per_country: Counter = Counter()
     for row in rows:
@@ -2692,20 +3316,20 @@ def rank_relations(rows: list[dict], limit: int) -> list[dict]:
         if per_country[a] >= MAX_ARCS_PER_COUNTRY or per_country[b] >= MAX_ARCS_PER_COUNTRY:
             continue
         per_country.update((a, b))
-        ends = _country(a), _country(b)
         ranked.append(
             {
-                "a": ends[0],
-                "b": ends[1],
+                "a": _country(a),
+                "b": _country(b),
                 "n": row["n"],
-                "reports": row["reports"],
                 "outlets": row["outlets"],
                 "mentions": row["mentions"],
                 "quad": _quad({1: row["q1"], 2: row["q2"], 3: row["q3"], 4: row["q4"]}),
-                "kind": _kind(row["q1"] + row["q2"], row["q3"] + row["q4"], row["goldstein"]),
+                "kind": kind
+                if kind != "all"
+                else _kind(row["q1"] + row["q2"], row["q3"] + row["q4"], row["goldstein"]),
                 "goldstein": round(row["goldstein"], 2),
                 "tone": round(row["tone"], 2),
-                "from": a if 2 * row["from_a"] >= row["n"] else b,
+                "from": a if 2 * row["from_a"] >= row["n"] else b,  # a tie goes to a
             }
         )
         if len(ranked) == limit:
@@ -2734,15 +3358,16 @@ def _samples(rows: list[dict]) -> list[dict]:
     return picked
 
 
-def summarise_detail(a: str, b: str, first: date, last: date, rows: list[dict],
-                     titles: dict[str, str]) -> dict | None:
-    """One pair's numbers, both directions, each day and sample reports; None without rows."""
+def summarise_detail(a: str, b: str, first: date, last: date, since: date | None,
+                     rows: list[dict], titles: dict[str, str]) -> dict | None:
+    """One pair's numbers over every class, both directions (a→b first: *a* < *b*),
+    each of the lens's days and sample reports; None without rows. No thresholds."""
     if not rows:
         return None
     quad: Counter = Counter()
     directions = {(a, b): Counter(), (b, a): Counter()}
     daily = {first + timedelta(days=i): [0, 0] for i in range((last - first).days + 1)}
-    n = reports = mentions = 0
+    n = mentions = 0
     goldstein = tone = 0.0
     outlets: dict[str, None] = {}
     for row in rows:
@@ -2751,7 +3376,6 @@ def summarise_detail(a: str, b: str, first: date, last: date, rows: list[dict],
         directions[(row["a_iso"], row["b_iso"])][q] += k
         daily.setdefault(row["day"], [0, 0])[0 if q <= 2 else 1] += k
         n += k
-        reports += row["n_reports"]
         mentions += row["mentions"]
         goldstein += row["goldstein_sum"]
         tone += row["tone_sum"]
@@ -2762,11 +3386,12 @@ def summarise_detail(a: str, b: str, first: date, last: date, rows: list[dict],
         sample["title"] = display_title(title) if title else None
     by_a = sum(directions[(a, b)].values())
     return {
-        "a": _country(a), "b": _country(b), "first_day": first, "last_day": last,
-        "n": n, "reports": reports, "outlets": len(outlets), "mentions": mentions,
+        "first_day": first, "last_day": last, "since": since,
+        "a": _country(a), "b": _country(b),
+        "n": n, "outlets": len(outlets), "mentions": mentions,
         "quad": _quad(quad), "kind": _kind(quad[1] + quad[2], quad[3] + quad[4], goldstein / n),
         "goldstein": round(goldstein / n, 2), "tone": round(tone / n, 2),
-        "from": a if 2 * by_a >= n else b,
+        "from": a if 2 * by_a >= n else b,  # a tie goes to a
         "directions": [
             {"from": x, "to": y, "n": sum(c.values()), "quad": _quad(c)}
             for (x, y), c in directions.items() if c
@@ -2778,13 +3403,15 @@ def summarise_detail(a: str, b: str, first: date, last: date, rows: list[dict],
 
 
 async def get_relation_detail(a: str, b: str, first: date, last: date) -> dict | None:
+    """The pair's detail, *a* < *b* (the router sorts them), or None when it has no events."""
     pool = await get_pool()
     rows = [dict(r) for r in await pool.fetch(DETAIL_SQL, a, b, first, last)]
     if not rows:
         return None
     urls = [s["url"] for s in _samples(rows)]
     titles = {r["source_url"]: r["title"] for r in await pool.fetch(TITLES_SQL, urls)} if urls else {}
-    return summarise_detail(a, b, first, last, rows, titles)
+    since = await pool.fetchval(SINCE_SQL, first, last)
+    return summarise_detail(a, b, first, last, since, rows, titles)
 ```
 
 The detail test's `samples[0]["title"] == "Talks"` relies on `display_title` dropping the outlet suffix: `display_title("Talks - Reuters") == "Talks"` (checked 2026-10-21).
@@ -2796,22 +3423,32 @@ Expected: all pass.
 
 **Step 5: Commit:** `feat(api): relations from GDELT event rollups`.
 
-### Task 19c.2: models and router
+### Task 19c.2: models, router, cycle-start cancellation and the README
 
 **Files:**
 - Create: `backend/app/models/relations.py`, `backend/app/routers/relations.py`, `backend/tests/test_relations_router.py`
-- Modify: `backend/app/main.py` (`app.include_router(relations_router)` after the links router)
+- Modify:
+  - `backend/app/main.py` (`app.include_router(relations_router)` after the links router);
+  - `backend/app/services/ingestion.py` (`stop_background_tasks`, Minor 4);
+  - `backend/tests/test_week_caches.py`;
+  - `README.md` (the API table).
 
 **Step 1: Write the failing router tests.** Model them on `tests/test_links_router.py`: the same `_client`, a fixed `_now`, Redis and the pool mocked.
 - **Shapes:**
-  - `/api/relations` returns `first_day`, `last_day` and items with `from` (the alias);
-  - the detail returns `directions`, `daily` (7 entries) and `samples`.
+  - `/api/relations` returns `first_day`, `last_day`, `since` and items with `from` (the alias) and no `reports`;
+  - the detail returns the same fields plus `directions`, `daily` (7 entries) and `samples`.
 - **The lens:**
   - At `NOW = 2026-10-21T00:30Z` both routes ask the pool for `2026-10-15..2026-10-21`.
   - `?timespan=24h` and `?start_time=…&end_time=…` change nothing: same days, same key.
-- **422s:** `kind=war`, `limit=0`, `limit=61`, `a=b`, `a=ZZ`.
+- **The contract's rules,** as listed in the API contract:
+  - `?kind=conflict`: every item has `kind == "conflict"` and all four `quad` keys;
+  - `a=US&b=IR` answers with `a.iso == "IR"`, and `directions[0]["from"] == "IR"`;
+  - a 404's body is exactly `{"detail": "No reported events between them in the last 7 days."}`;
+  - `a=ZZ` and `a=US&b=US` give the 422 bodies in the errors table.
+- **Other 422s:** `kind=war`, `limit=0`, `limit=61`. Assert the status, and that `detail[0]["loc"]` names the parameter.
 - **Cache keys:**
-  - `wk:relations:v1:20261015-20261021:all:40`, TTL `WEEK_TTL`, an empty list included;
+  - `wk:relations:v1:20261015-20261021:all:40`, TTL `WEEK_TTL`;
+  - **an empty list:** the same key, TTL 60 (Minor 3);
   - `kind=conflict` → `wk:relations:v1:20261015-20261021:conflict:40`;
   - the detail of `b=US&a=IR` and of `a=US&b=IR` share `wk:relations:detail:v1:IR:US:20261015-20261021`;
   - after UTC midnight (`NOW = 2026-10-22T00:05Z`) the key is `…:20261016-20261022:…`.
@@ -2824,23 +3461,27 @@ Expected: all pass.
   - `Cache-Control` is `EDGE_CACHE_CONTROL` on both routes;
   - `security._get_rate_group("/api/relations") == "data"`.
 - **Concurrency:** two concurrent misses on one key run the query once (`single_flight`).
+- **Cycle-start cancellation** (in `test_week_caches.py`, next to `test_a_stopped_week_refresh_is_cancelled_and_one_a_request_started`):
+  - start a blocking `wk:relations:` computation through `single_flight`, and a blocking `wk:links:` one;
+  - `await ingestion.stop_background_tasks()`;
+  - the links one is cancelled, and the relations one finishes and its caller gets the answer.
 
 **Step 2: Run them to verify they fail.**
 
-Run: `cd backend && python -m pytest tests/test_relations_router.py -q`
-Expected: FAIL, 404s for `/api/relations` (the route doesn't exist yet).
+Run: `cd backend && python -m pytest tests/test_relations_router.py tests/test_week_caches.py tests/test_relations_contract.py -q`
+Expected: FAIL, with 404s for `/api/relations` (the route doesn't exist yet), the relations flight cancelled, and the contract test's `ModuleNotFoundError`.
 
 **Step 3: Implement.**
 - `app/models/relations.py`:
   - **List models:**
-    - `QuadCounts` (four ints);
-    - `Relation`: `a`, `b` (`LinkCountry`), `n`, `reports`, `outlets`, `mentions`, `quad`, `kind: Literal["cooperation", "conflict"]`, `goldstein`, `tone`, and `from_` with `alias="from"`; `populate_by_name=True`;
-    - `Relations` (`first_day: date`, `last_day: date`, `relations: list[Relation]`).
+    - `QuadCounts`: four ints, `verbal_cooperation`, `material_cooperation`, `verbal_conflict`, `material_conflict`, all required;
+    - `Relation`: `a`, `b` (`LinkCountry`), `n`, `outlets`, `mentions`, `quad`, `kind: Literal["cooperation", "conflict"]`, `goldstein`, `tone`, and `from_` with `alias="from"`; `populate_by_name=True`. **No `reports`.**
+    - `Relations`: `first_day: date`, `last_day: date`, `since: date | None`, `relations: list[Relation]`.
   - **Detail models:**
     - `RelationDirection` (`from_`/`from`, `to`, `n`, `quad`);
     - `RelationDay` (`day`, `cooperation`, `conflict`);
     - `RelationReport` (`url`, `outlet`, `title: str | None`, `day`, `quad_class: int = Field(ge=1, le=4)`, `from_`/`from`);
-    - `RelationDetail`: `Relation`'s fields plus `first_day`, `last_day`, `directions`, `daily` and `samples`.
+    - `RelationDetail`: `Relation`'s fields plus `first_day`, `last_day`, `since`, `directions`, `daily` and `samples`.
   - Each field has a `description` that uses the copy rules: "reported events", "first reports", "event-type score".
 - `app/routers/relations.py`:
   - Reuse `_pair` and `Country` from `app.routers.links`.
@@ -2849,6 +3490,9 @@ Expected: FAIL, 404s for `/api/relations` (the route doesn't exist yet).
 ```python
 DEFAULT_KIND = "all"
 DEFAULT_LIMIT = 40
+# An empty list briefly, as #108's links do (_EMPTY_LINKS_TTL), so new rollups show soon.
+_EMPTY_TTL = 60
+NOT_FOUND = "No reported events between them in the last 7 days."
 Kind = Annotated[
     Literal["all", "cooperation", "conflict"],
     Query(description="Which reported events: all, cooperation (quad 1-2) or conflict (3-4)"),
@@ -2887,27 +3531,43 @@ async def get_relations(
         result = Relations(
             first_day=first,
             last_day=last,
-            relations=[Relation.model_validate(r) for r in rank_relations(rows, limit)],
+            since=await get_since(first, last),
+            relations=[Relation.model_validate(r) for r in rank_relations(rows, kind, limit)],
         )
-        await set_cached(key, result.model_dump(mode="json", by_alias=True), WEEK_TTL)
+        ttl = WEEK_TTL if result.relations else _EMPTY_TTL
+        await set_cached(key, result.model_dump(mode="json", by_alias=True), ttl)
         return result
 
     return await single_flight(key, load)
 ```
 
   - The detail route follows the same pattern:
-    - `a, b = sorted(_pair(a, b))`;
+    - `a, b = sorted(_pair(a, b))`, so the answer is in code order whatever the request's order;
     - the key is `f"wk:relations:detail:v1:{a}:{b}:{_days(first, last)}"`;
-    - `get_relation_detail`: `None` → `HTTPException(404, "No reported events between them in the last 7 days.")`, not cached;
+    - `get_relation_detail`: `None` → `HTTPException(404, NOT_FOUND)`, not cached;
     - the result is cached for `WEEK_TTL`.
-  - Fallback if #108 hasn't landed (decision 10): the same code with `db:` keys, `cycle_ttl(600)`, and no `single_flight` or `cached_model`.
+- **`app/services/ingestion.py`, `stop_background_tasks`** (Minor 4): replace `tasks += cancel_flights("wk:")` with
+  ```python
+      # The week reads that are expensive (a week of articles): a relations read is
+      # rollups only, so one in flight finishes and answers its request.
+      tasks += cancel_flights("wk:globe:") + cancel_flights("wk:links:")
+  ```
+  Update its docstring to match. #108's existing test of the globe and links cancellation must still pass.
+- **`README.md`:** add both routes to the "API Endpoints" table:
+  - `GET /api/relations`: "Relations between countries over the last 7 days, from GDELT's reported events (`kind`, `limit`)";
+  - `GET /api/relations/detail`: "One pair's reported events: both classes, directions, each day, sample reports (`a`, `b`)".
 
 **Step 4: Run the tests.**
 
-Run: `cd backend && python -m pytest tests/test_relations.py tests/test_relations_router.py -q`
+Run: `cd backend && python -m pytest tests/test_relations.py tests/test_relations_router.py tests/test_relations_contract.py tests/test_week_caches.py -q`
 Expected: all pass.
 
-**Step 5: Commit:** `feat(api): /api/relations and its detail, a 7-day lens cached hourly`.
+**Step 5: Commit:**
+
+```bash
+git add backend/app/models/relations.py backend/app/routers/relations.py backend/app/main.py backend/app/services/ingestion.py backend/tests/test_relations_router.py backend/tests/test_relations_contract.py backend/tests/test_week_caches.py frontend/e2e/relations.contract.json README.md
+git commit -m "feat(api): /api/relations and its detail, a 7-day lens cached hourly, with its contract fixture"
+```
 
 ### Task 19c.3: DB tests, with production-scale plan checks and their mutation twins
 
@@ -2917,21 +3577,27 @@ Expected: all pass.
 **Step 1: Write the tests.**
 
 *Semantics* (small hand-built rows, `conn` fixture):
-1. Both directions merge into one pair, and `from` follows the majority.
+1. Both directions merge into one pair, and `from` follows the majority, a tie going to `a`.
 2. The `kind=conflict` filter counts quad 3–4 only.
-3. The thresholds:
+3. **The thresholds:**
    - 4 events are dropped and 5 kept;
-   - 2 reports are dropped and 3 kept;
-   - 1 outlet is dropped, and 2 distinct across days are kept, even when one day has only 1.
+   - 1 outlet is dropped, and 2 distinct across days are kept, even when one day has only 1;
+   - **one article coded three ways is one outlet.** US→IR verbal conflict, US→IR material conflict and IR→US verbal conflict, all with the same URL and outlet, over 5 events, give `outlets = 1`, so the pair is dropped. That's the I1 case `MIN_REPORTS` let through.
 4. The lens's days only: a row on `today - 7` (still kept by retention) is not read.
-5. The detail's titles come from an article with the sample's URL (insert one `zzrel` article).
+5. `SINCE_SQL` gives the earliest rollup day in the lens: `null` with no rows; `today - 3` when that's the first day with rows.
+6. The detail's titles come from an article with the sample's URL. Insert one `zzrel` article with the NOT NULL columns `INSERT INTO articles` in `tests/test_threads_db.py` uses (around lines 241–255: title, `source_url`, `source_name`, `published_at`, latitude, longitude and `location`).
 
-*Plans at production scale.* Fill the week: 8 days × `ROWS_PER_DAY`, the retention's 8 days, of which the lens reads 7. Use no `enable_seqscan` changes anywhere; assert the planner's own choices, with custom and generic plans for each.
+*Plans at production scale.*
+- **The data:** fill the week, 8 days × `ROWS_PER_DAY`: the retention's 8 days, of which the lens reads 7.
+- **The rules:** no `enable_seqscan` change anywhere. Assert the planner's own choices, with custom and generic plans for each.
+- **Rows written day by day,** as production writes them. `fill_week`'s `ORDER BY d DESC, g, q` puts a pair's rows on a different page each day (Minor 5), so the detail's bound sees production's layout.
+- **The titles test** fills 20K `zzrel` articles. Like `test_board_db.big`, its fixture runs `VACUUM (ANALYZE) articles` after the rollback, outside the transaction (Minor 6), since ANALYZE's counts outlive a rollback and later tests' plans would be made for them.
 
 | Read | Natural plan must | Pages (`db_plans.pages`, custom and generic) |
 |---|---|---|
 | List: the lens, 7 of 8 days | any plan: it reads most of the table, once, by design (a seq scan is the right choice here) | ≤ `relpages + index pages + 100`: the table once, never once per pair |
-| Detail, one pair, 7 days | use `event_pairs_daily_pkey`; no Seq Scan | ≤ 60 |
+| `SINCE_SQL` | use `idx_event_pairs_day`; no Seq Scan | ≤ 10 |
+| Detail, one pair, 7 days | use `event_pairs_daily_pkey`; no Seq Scan | ≤ 60: 14 heap pages at most (7 days × 2 directions, rows written day by day) plus the index's |
 | Titles, 10 URLs (after inserting 20K `zzrel` articles and `ANALYZE articles`) | use `articles_source_url_key`; no Seq Scan on `articles` | ≤ 60 |
 
 The list is a week read by design (decision 1). What keeps it cheap:
@@ -2944,7 +3610,7 @@ The page bound proves it reads the table once.
 *Mutation twins,* each in a savepoint, rolled back:
 - **List:** run a per-pair variant of `LIST_SQL`, with the outlets counted by a `LATERAL` subquery against `event_pairs_daily` for each pair, the shape this plan rejected. Its pages exceed the bound.
 - **Detail:** `ALTER TABLE event_pairs_daily DROP CONSTRAINT event_pairs_daily_pkey`, and the detail now seq-scans.
-- **Purge:** 19b.6's `DROP INDEX idx_event_pairs_day` twin covers the day index.
+- **`SINCE_SQL` and the purge:** `DROP INDEX idx_event_pairs_day`, and `SINCE_SQL` now seq-scans. 19b.6's twin covers the purge.
 
 Each twin proves its check can fail.
 
@@ -2977,7 +3643,7 @@ Each twin proves its check can fail.
 
 ## PR 20: The Relations layer and inspector
 
-Branch: `claude/p5-relations-ui`. Frontend only. It builds against 19c's contract, with mocked routes until 19c merges.
+Branch: `claude/p5-relations-ui`. Frontend only. It builds against 19c's pinned contract, in parallel with 19c, with mocked routes until 19c merges. The mocks import the committed contract fixture, `frontend/e2e/relations.contract.json` (Task 19c.0). If 19c hasn't committed it yet, this branch adds the same file verbatim, and whichever merges second takes the other's copy.
 
 ### One focus at a time (decisions 1, 5, 6 and 13)
 
@@ -3011,6 +3677,7 @@ import {
   relationArcs,
   relationDaysWords,
   relationKey,
+  relationLensLabel,
   relationPillText,
   relationTag,
   relationWords,
@@ -3025,7 +3692,7 @@ const IR = { iso: "IR", name: "Iran", lat: 32.0, lng: 53.7 };
 
 function rel(over: Partial<Relation> = {}): Relation {
   return {
-    a: IR, b: US, n: 100, reports: 40, outlets: 6, mentions: 900,
+    a: IR, b: US, n: 100, outlets: 6, mentions: 900,
     quad: { verbal_cooperation: 10, material_cooperation: 5, verbal_conflict: 60, material_conflict: 25 },
     kind: "conflict", goldstein: -3.2, tone: -4.1, from: "US",
     ...over,
@@ -3097,6 +3764,24 @@ describe("relationDaysWords", () => {
   it("names a span", () => expect(relationDaysWords("2026-10-15", "2026-10-21")).toBe("15–21 Oct (UTC days)"));
   it("names a span across months", () =>
     expect(relationDaysWords("2026-09-28", "2026-10-02")).toBe("28 Sep – 2 Oct (UTC days)"));
+});
+
+describe("relationLensLabel (the first-week ramp, plan review I4)", () => {
+  it("says last 7 days once the lens is covered", () => {
+    expect(relationLensLabel({ firstDay: "2026-10-15", lastDay: "2026-10-21", since: "2026-10-15" })).toBe(
+      "Relations · last 7 days · 15–21 Oct (UTC days)",
+    );
+  });
+  it("says since a date while the rollups are younger than the lens", () => {
+    expect(relationLensLabel({ firstDay: "2026-10-15", lastDay: "2026-10-21", since: "2026-10-19" })).toBe(
+      "Relations · since 19 Oct (UTC)",
+    );
+  });
+  it("says last 7 days when there are no rollups at all", () => {
+    expect(relationLensLabel({ firstDay: "2026-10-15", lastDay: "2026-10-21", since: null })).toMatch(
+      /^Relations · last 7 days/,
+    );
+  });
 });
 
 describe("relationsStatus", () => {
@@ -3172,7 +3857,7 @@ export interface Relation {
   b: LinkCountry;
   /** Reported events between the two, either way. */
   n: number;
-  reports: number;
+  /** Distinct outlets among those recorded (a lower bound). */
   outlets: number;
   /** Mentions in each event's first 15 minutes, summed: the arc's width. */
   mentions: number;
@@ -3186,8 +3871,20 @@ export interface Relation {
 
 export const relationKey = linkKey;
 
-export function toRelations(api: ApiRelations): { firstDay: string; lastDay: string; relations: Relation[] } {
-  return { firstDay: api.first_day, lastDay: api.last_day, relations: api.relations.map(toRelation) };
+/** The lens's days, and since when it holds rollups (null: none at all). */
+export interface RelationLens {
+  firstDay: string;
+  lastDay: string;
+  since: string | null;
+}
+
+export function toRelations(api: ApiRelations): RelationLens & { relations: Relation[] } {
+  return {
+    firstDay: api.first_day,
+    lastDay: api.last_day,
+    since: api.since,
+    relations: api.relations.map(toRelation),
+  };
 }
 
 export function toRelation(r: ApiRelation): Relation {
@@ -3263,6 +3960,18 @@ export function relationDaysWords(first: string, last: string): string {
     : `${DAY.format(a)} – ${DAY.format(b)} (UTC days)`;
 }
 
+/**
+ * The legend's and the inspector kicker's label. During the first week after
+ * ingestion starts, the lens isn't covered yet, so it says since when it is
+ * (as Phase 4's dossier ramp does).
+ */
+export function relationLensLabel({ firstDay, lastDay, since }: RelationLens): string {
+  if (since !== null && since > firstDay) {
+    return `Relations · since ${DAY.format(new Date(`${since}T00:00:00Z`))} (UTC)`;
+  }
+  return `Relations · last 7 days · ${relationDaysWords(firstDay, lastDay)}`;
+}
+
 export function relationsStatus(s: { loading: boolean; error: boolean; count: number }): string | null {
   if (s.loading) return null;
   if (s.error) return "Relations couldn't load";
@@ -3292,10 +4001,13 @@ export function relationsUnavailable(window: TimeWindow, replaying: boolean): st
 }
 ```
 
-- **`api.ts`:** the types follow the contract exactly.
+- **`api.ts`:** the types follow the pinned contract exactly: no `reports`; `since: string | null` on both answers; all four quad keys.
   - `fetchRelations({ kind, limit = RELATIONS_LIMIT, signal })` calls `apiFetch("/api/relations", { kind, limit: String(limit) }, signal)`. There are no window parameters: the lens is fixed.
-  - `fetchRelationDetail({ a, b })` calls `apiFetch("/api/relations/detail", { a, b })`.
-  - Add both to `api.test.ts`'s URL tests, including that no `timespan` is sent.
+  - `fetchRelationDetail({ a, b })` calls `apiFetch("/api/relations/detail", { a, b })`. It resolves `null` on a 404 (`err instanceof ApiError && err.status === 404`): a listed pair can have no events left around UTC midnight. Other errors throw.
+  - **Tests** in `api.test.ts`:
+    - the URL tests, including that no `timespan` is sent;
+    - `fetchRelationDetail` resolves `null` for a 404 with the contract's `not_found` body, and throws for a 500.
+  - The type tests feed `relations.contract.json`'s answers through `toRelations`.
 - **`links.ts`:** export `arcStroke` if it isn't exported, and document `GlobeArc.relation`.
 
 **Step 4: Run the tests.**
@@ -3339,12 +4051,12 @@ It returns `{ relations, firstDay, lastDay, loading, error }`.
 **Behaviour:**
 - **The toggle:**
   - a **Relations** `.tg` toggle after Threads, `aria-pressed`, with the title "Reported events between countries over the last 7 days (GDELT)";
-  - new props: `relations`, `onRelationsChange`, `relationKind`, `onRelationKindChange`, `relationsStatus`, `relationDays`, `relationsUnavailable` (the note, or null).
+  - new props: `relations`, `onRelationsChange`, `relationKind`, `onRelationKindChange`, `relationsStatus`, `relationLens` (a `RelationLens`, or null while loading), `relationsUnavailable` (the note, or null).
 - **Unavailable** (a range or a replay, decision 1): the toggle is `aria-disabled` and keeps its pressed state. The note comes from `relationsUnavailable` and is shown and announced through the same `aria-describedby` and `sr-only` pattern the base layers' `unavailable` uses. While it's unavailable, the kind switch and the legend are hidden.
 - **While Relations is on and available, beside the pill** (as `.link-rank` floats):
   - a `.seg` group "Show relations": **All / Cooperation / Conflict** (`data-testid="relation-kind"`).
   - a legend `p.relations-legend` (`data-testid="relations-legend"`), three short lines:
-    1. **"Relations · last 7 days ({days})"**;
+    1. **`relationLensLabel(relationLens)`:** "Relations · last 7 days · 15–21 Oct (UTC days)", or during the first week's ramp "Relations · since 19 Oct (UTC)" (plan review I4);
     2. a cooperation swatch "Cooperation" and a conflict swatch "Conflict", then "Reported events from news, machine-coded by GDELT. Not verified.";
     3. **"Topic filters don't apply to relations."** (decision 2).
   - its status, when it draws nothing, as `linksStatus` is shown.
@@ -3357,6 +4069,7 @@ It returns `{ relations, firstDay, lastDay, loading, error }`.
 - the toggle's state and title;
 - the kind switch and legend only while on and available;
 - the legend reads "Relations · last 7 days", "Not verified", and "Topic filters don't apply";
+- with `since` after `firstDay`, the legend reads "Relations · since 19 Oct (UTC)";
 - unavailable: `aria-disabled`, the note described, no switch or legend, and a press calls nothing;
 - choosing Conflict calls `onRelationKindChange("conflict")`.
 
@@ -3393,7 +4106,7 @@ The mutual exclusion is the page's job and is tested in e2e.
 - **One frame loop** places them all, the way `ArcPill` places its pill. A label whose apex is on the far side of the globe is hidden.
 - **They yield** when that arc is hovered, focused or inspected (its pill says more), when another focus mutes the arcs (entity, board), and at ≤ 760 px (CSS).
 - **Accessibility:** `aria-hidden="true"` and `pointer-events: none`. The keyboard list and the inspector carry the same words to everyone.
-- **Test attribute:** the globe container's `data-relation-labels` is the number of labels rendered.
+- **Test attribute:** the globe container's `data-relation-labels` is the number of labels **rendered in the DOM** (plan review I6.8), placed or not. A label hidden because its apex is on the far side still counts; one that yields (hovered, focused, inspected, muted) isn't rendered and doesn't. So the count is deterministic whatever the globe's rotation.
 - **Unit tests:**
   - 7 relations give 5 labels, the strongest;
   - muted gives none;
@@ -3412,24 +4125,24 @@ The mutual exclusion is the page's job and is tested in e2e.
 
 **RelationList:**
 - Shown in Inspect while nothing is open there and Relations is on, as `LinkList` is.
-- A labelled list of buttons, "Relations · last 7 days": "{From} and {To}: {n} reported events, {words}". Every arc is listed, so every arc is labelled here (decision 6). Each opens the relation.
+- A labelled list of buttons, under `relationLensLabel(lens)`: "{From} and {To}: {n} reported events, {words}". Every arc is listed, so every arc is labelled here (decision 6). Each opens the relation.
 - **Focusing a row labels its arc on the globe** (decision 6, "on focus"): `onFocusRelation(rel | null)` lets the page highlight that arc and show its pill, as hovering does. Blur clears it.
 - Rows carry `data-relation="IR-US"`.
 
 **RelationInspector** (`data-testid="relation-inspector"`, the `.insp` structure of `LinkInspector`):
 - **Header:**
-  - kicker "Relation · last 7 days ({days words})";
+  - kicker: `relationLensLabel` of the detail's `first_day`, `last_day` and `since`, so "Relation · since 19 Oct (UTC)" during the ramp (plan review I4);
   - heading "{From} and {To}" (focused on open, as the link's is);
   - caption: **"Events GDELT machine-coded from news reports: who did what to whom, as reported. Not verified facts; one report can yield several events."**
-- **Readouts:**
+- **When the detail is a 404** (`fetchRelationDetail` resolved `null`; around UTC midnight a listed pair can lose its last day): the body is the contract's message as text, "No reported events between them in the last 7 days.", not an error. Minimize and Close still work.
+- **Readouts** (no report count: plan review I1):
   - Events ({n});
-  - Reports ({reports});
   - Outlets ({outlets}, titled "at least": rows keep up to 8 outlets each, so the union is a lower bound);
   - Goldstein ({goldstein}, with the sub-label "event-type score, −10 conflict to +10 cooperation");
   - Tone ({tone}, "first reports"). Its `.sent` colour uses `sentimentKey(clamp(tone / 10, -1, 1))`.
 - **By class:** four rows, each with a label, a count, a percentage and a small bar coloured by side. They're text, so colour isn't the only signal. Both cooperation and conflict always show, whatever the layer's class switch says (decision 7).
 - **Directions:** "{From} → {To}: {n} events, {words}" for each direction present.
-- **By day (UTC), the daily breakdown** (decision 1): all 7 days, with small paired bars per day (cooperation, conflict) and an accessible table under them (`sr-only`).
+- **By day (UTC), the daily breakdown** (decision 1): the days from `since` (or `first_day`, whichever is later) to `last_day`, with small paired bars per day (cooperation, conflict) and an accessible table under them (`sr-only`). The contract always sends all 7; days before `since` aren't shown, since no rollups exist for them.
 - **Sample reports:**
   - `.art` rows with `title ?? outlet`, the outlet, the day, the class in words, and "{From} → {To}";
   - a link only when `isWebUrl(url)` (`target="_blank" rel="noopener noreferrer"`), else plain text.
@@ -3442,11 +4155,13 @@ The mutual exclusion is the page's job and is tested in e2e.
 **Tests** (Vitest):
 - the list rows and Enter opening a relation;
 - focusing a row calls `onFocusRelation` with it, and blur with null;
-- the inspector:
+- the inspector, fed the contract fixture's `detail` (`relations.contract.json`):
   - renders the list item's numbers before the detail lands;
+  - no "Reports" readout;
   - the class rows' text, all four, with the class switch on Conflict;
-  - 7 day rows;
-  - a `javascript:` sample renders as text, not a link;
+  - 7 day rows; with `since` = `2026-10-19`, 3 day rows and the kicker "Relation · since 19 Oct (UTC)";
+  - a 404 (`null`) shows "No reported events between them in the last 7 days." as text;
+  - a `javascript:` sample (the fixture's detail with one sample's URL overridden in the test) renders as text, not a link;
   - the caption is present;
   - the copy grep.
 - `useRowFocus` keeps the focus on a row still listed and hands it to the first row when its row drops out. These are `LinkList`'s existing cases, moved.
@@ -3458,7 +4173,20 @@ The mutual exclusion is the page's job and is tested in e2e.
 ### Task 20.6: Page wiring and the focus rules
 
 **Files:**
-- Modify: `frontend/src/app/page.tsx`, `frontend/src/types/news.ts` (`RelationEntry`, like `LinkEntry` without the explanation), `frontend/src/components/SidePanel.tsx`, `frontend/src/components/RecentPlaces.tsx` (+ tests)
+- Modify: `frontend/src/app/page.tsx`, `frontend/src/types/news.ts` (`RelationEntry`, like `LinkEntry` without the explanation), `frontend/src/components/SidePanel.tsx`, `frontend/src/components/RecentPlaces.tsx` (+ tests), `frontend/src/lib/panelQuery.ts` (+ test)
+- Create: `frontend/src/lib/overlays.ts` (+ test)
+
+**Touch points** (Minor 8). Each one that today knows about places and links learns about relations:
+- **`recentToEvict(places, links)`** in `lib/panelQuery.ts` gains a third argument, the relation queue (`{ relationId, createdAt }`). The oldest of all three is evicted at `MAX_PANELS`; extend its test. Both call sites in `page.tsx` (around lines 455 and 838) pass `relationQueue`.
+- **`handleClosePanel`** (around line 881) closes a `relation-` id: it removes it from `relationQueue`, and clears `activeId` as for a link.
+- **`inspectCount`** (around line 1136) adds `relationQueue.length`.
+- **The "Pick one above, or click a dot on the globe." hint** (around line 1027) counts relation entries too, so it shows when only relations are open.
+- **Every `setLinksOn` call site** goes through the new `overlays` reducer, never `setLinksOn` directly, so turning Links on always turns Relations off:
+  - the LayerSwitcher's `onLinksChange` (around line 1206);
+  - LinksChip's `onOff` (around line 1218);
+  - the co-pilot's `showLinksFor`, whose `turnOn` (around line 942) is `() => setLinksOn(true)` today.
+
+  A grep for `setLinksOn(` in `page.tsx` should find only the reducer's dispatch.
 
 **Wiring:**
 - **State:** `relationsOn`, `relationKind`, `hoveredRelation`, `focusedRelation` (the focused list row), `relationQueue: RelationEntry[]`.
@@ -3466,7 +4194,11 @@ The mutual exclusion is the page's job and is tested in e2e.
   - `const unavailable = relationsUnavailable(timeWindow, replaying)`, then `const relationsShown = relationsOn && unavailable === null`;
   - `useRelations(relationKind, relationsShown)`.
   - Turning to a range or starting a replay hides the arcs and announces the note once. Going back to a live window shows them again without a click.
-- **Exclusive toggles:** `handleLinksChange(on)` sets Links and, when on, turns Relations off; `handleRelationsChange(on)` mirrors it. The co-pilot's "Show links" uses `handleLinksChange(true)`. The announcer says "Relations on. Links off." (or the reverse) when one turns the other off.
+- **Exclusive toggles:** `const [overlay, dispatch] = useReducer(overlays, { links: false, relations: false })`.
+  - **Actions:** `{ type: "links", on }` and `{ type: "relations", on }`. Turning one on turns the other off.
+  - **Callers:** `handleLinksChange(on)` and `handleRelationsChange(on)` dispatch; `linksOn` and `relationsOn` read `overlay`.
+  - **The announcer** says "Relations on. Links off." (or the reverse) when one turns the other off.
+  - **Every touch point above** routes through it.
 - **`handleRelationOpen(rel)`:** copies `handleLinkOpen`:
   - reset the spread replay;
   - deselect the thread and stop tracking;
@@ -3482,7 +4214,9 @@ The mutual exclusion is the page's job and is tested in e2e.
   - `ArcLabels` gets `strongestRelations(relations)` with the same yield rules.
 
 **Tests:**
-- unit tests where the logic is pure (the exclusive toggles as a small reducer `overlays(state, action)` in `lib/overlays.ts`, + test);
+- unit tests where the logic is pure:
+  - `overlays`: links on turns relations off and the reverse, and off touches only its own;
+  - `recentToEvict` across places, links and relations;
 - the rest in e2e (Task 20.8).
 
 **Commands:**
@@ -3501,10 +4235,13 @@ The mutual exclusion is the page's job and is tested in e2e.
 
 **Files:**
 - Modify: `frontend/e2e/fixtures.ts`:
-  - add `MOCK_RELATIONS` (3 relations: IR–US conflict, FR–US cooperation, NG–FR cooperation) and `MOCK_RELATIONS_CONFLICT` (IR–US only);
-  - `mockRelations(url)` answers by `kind`;
-  - `MOCK_RELATION_DETAIL` includes a `javascript:` sample;
-  - add `isRelationsList`, `mockRelationRoutes`, and `mockRelationRoutes` inside `mockAllApiRoutes`.
+  - **The mocks come from the committed contract** (plan review I6.9): `import contract from "./relations.contract.json";`. This works because Playwright compiles to CommonJS and `tsconfig.json` has `resolveJsonModule`; if the import misbehaves, use `JSON.parse(readFileSync(...))`.
+  - `MOCK_RELATIONS = contract.list` (3 relations: IR–US conflict, FR–US cooperation, FR–NG cooperation) and `MOCK_RELATIONS_CONFLICT = contract.list_conflict` (IR–US only).
+  - `mockRelations(url)` answers by `kind`.
+  - `MOCK_RELATION_DETAIL` is `contract.detail` with one sample's `url` overridden to `javascript:alert(1)`. The real API never sends one; the override tests the UI's own `isWebUrl` guard.
+  - A detail request for any other pair answers 404 with `contract.not_found`.
+  - Add `isRelationsList`, `mockRelationRoutes`, and `mockRelationRoutes` inside `mockAllApiRoutes`.
+  - Never hand-edit the shapes in `fixtures.ts`: change the contract file, and 19c's `test_relations_contract.py` checks it against the models.
 - Create: `frontend/e2e/relations.spec.ts`
 - Modify: `frontend/e2e/layout.spec.ts` (the `relation-kind` and `relations-legend` boxes against the timeline, bottom row and side panel at 1440, 1280 and 1180)
 
@@ -3531,7 +4268,7 @@ The mutual exclusion is the page's job and is tested in e2e.
      - the `javascript:` sample isn't a link (`getByRole("link", { name: … })` count 0).
 5. **Another focus mutes the arcs.**
    - Relations on, then `seedBoard` and the Board button → Enter.
-   - `data-relation-muted="true"`, `data-relation-highlight=""` and `data-relation-labels="0"`.
+   - `data-relation-muted="true"`, `data-relation-highlight=""` and `data-relation-labels="0"`. Muted labels aren't rendered at all, and the attribute counts what's in the DOM (I6.8).
 6. **Phone, 390 wide** (decision 13).
    - The layer switcher is hidden at ≤ 760 px, as it is for Links. So start at 1180 wide, turn Relations on, then resize to 390.
    - The "Relations ✕" chip shows, and Enter on it turns Relations off (`data-relation-arcs="0"`).
@@ -3598,13 +4335,23 @@ The mutual exclusion is the page's job and is tested in e2e.
 
 ## Risks to watch
 
-- **Machine-coding noise.** CAMEO coding is error-prone, and one article can yield many events. The mitigations are the thresholds (events, reports, outlets), copy that says "reported" and "not verified", and calibration on production (19b+).
+- **Machine-coding noise.** CAMEO coding is error-prone, and one article can yield many events.
+  - **Mitigations:** root events only, the thresholds (events and distinct outlets), copy that says "reported" and "not verified", and calibration on production (19b+).
+  - **No report count:** distinct URLs per row summed across rows counted one article coded three ways as three reports (plan review I1), so the stored count and `MIN_REPORTS` are gone.
 - **Affiliation is not location.** Actor countries are affiliations ("French minister in Moscow" is France). The UI never says where an event happened.
 - **Double counting.** Rollups are sums. The claim on `event_files` under an advisory lock prevents it, including during a deploy overlap. Watch for `another process added` lines.
-- **Lost counts.** A missed slot's events are gone. The catch-up covers 2 hours; the 19b+ query checks about 4 files an hour.
+- **A file that wedges the step** (plan review I2):
+  - a bad zip, an oversized member or a parse error is recorded `unreadable` and never retried;
+  - a file merges its rollups only once it has parsed whole, so a half-parsed file adds nothing.
+- **A step that hangs** (plan review I3): `EVENTS_STEP_TIMEOUT_S` (60 s) bounds it. On a timeout nothing is claimed and the files are retried next cycle; catch-up files get one retry and 10 s.
+- **Lost counts.** A missed slot's events are gone. The catch-up covers 2 hours; each cycle logs the slots that left the window unadded ("N slots lost"), and the 19b+ query checks about 4 files an hour.
 - **Disk.** The step runs before the embeddings, writes a few hundred narrow rows as HOT updates, and reads a table that stays in `shared_buffers`. Watch the existing IOPS and bandwidth alerts after 19b.
-- **#108.** 19c depends on its `wk:` helpers (decision 10). If #108 changes shape, 19c follows it; if it doesn't land, 19c uses the `db:*` fallback.
-- **The lens lags.** Answers can be about an hour old (`wk:*`), and the lens moves at UTC midnight. The legend says "last 7 days" and names the dates, so neither misleads.
+- **#108** (merged): 19c uses its `wk:` helpers and narrows its cycle-start cancellation to `wk:globe:` and `wk:links:` (Minor 4). A relations read in flight then finishes rather than erroring.
+- **The lens lags, and ramps.**
+  - Answers can be about an hour old (`wk:*`), and the lens moves at UTC midnight.
+  - During the first week, `since` makes the legend say "since {date}" (plan review I4).
+  - A listed pair can be a 404 just after midnight; the inspector says so as text.
+- **Contract drift between 19c and PR 20,** which run in parallel. One committed fixture, `relations.contract.json`, is validated against the Pydantic models on the backend and imported by the frontend's mocks (plan review I6).
 - **GDELT format changes.** The 61-field check and the malformed counter make a change visible in the log and the repro rather than silent.
 - **The hand-written CAMEO table.**
   - **A typo:** it maps wrongly, or misses a code. The CI check (the "CAMEO country table" workflow) compares it with the CAMEO list and GeoNames on every PR that touches it, and fails with a line per missing, extra or wrong code.
