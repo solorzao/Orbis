@@ -16,6 +16,7 @@ from app.routers.board import router as board_router
 from app.routers.entities import router as entities_router
 from app.routers.links import router as links_router
 from app.routers.news import router as news_router
+from app.routers.relations import router as relations_router
 from app.routers.search import router as search_router
 from app.routers.threads import router as threads_router
 from app.services.cache import close_redis, get_redis
@@ -59,6 +60,7 @@ app.add_middleware(SecurityMiddleware)
 # Register routers.
 app.include_router(news_router)
 app.include_router(links_router)
+app.include_router(relations_router)
 app.include_router(threads_router)
 app.include_router(agent_router)
 app.include_router(search_router)
@@ -94,8 +96,9 @@ async def shutdown() -> None:
     """Stop scheduler and release connections on shutdown."""
     logger.info("Shutting down Orbis API …")
     await stop_scheduler()
-    # A cache warm still running would reopen Redis or the pool once closed.
-    await stop_background_tasks()
+    # A cache warm or a week read still running would reopen Redis or the pool once
+    # closed: every one stops here.
+    await stop_background_tasks(shutdown=True)
     await close_redis()
     await close_pool()
 

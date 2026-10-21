@@ -1,0 +1,222 @@
+{
+  "list": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "relations": [
+      {
+        "a": { "iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29 },
+        "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+        "n": 312,
+        "outlets": 23,
+        "mentions": 2100,
+        "quad": {
+          "verbal_cooperation": 40,
+          "material_cooperation": 12,
+          "verbal_conflict": 210,
+          "material_conflict": 50
+        },
+        "kind": "conflict",
+        "goldstein": -3.1,
+        "tone": -4.2,
+        "from": "US"
+      },
+      {
+        "a": { "iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34 },
+        "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+        "n": 120,
+        "outlets": 12,
+        "mentions": 800,
+        "quad": {
+          "verbal_cooperation": 70,
+          "material_cooperation": 30,
+          "verbal_conflict": 15,
+          "material_conflict": 5
+        },
+        "kind": "cooperation",
+        "goldstein": 2.4,
+        "tone": 1.1,
+        "from": "US"
+      },
+      {
+        "a": { "iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34 },
+        "b": { "iso": "NG", "name": "Nigeria", "lat": 9.55, "lng": 8.0 },
+        "n": 40,
+        "outlets": 6,
+        "mentions": 300,
+        "quad": {
+          "verbal_cooperation": 25,
+          "material_cooperation": 8,
+          "verbal_conflict": 5,
+          "material_conflict": 2
+        },
+        "kind": "cooperation",
+        "goldstein": 2.9,
+        "tone": 0.8,
+        "from": "FR"
+      }
+    ]
+  },
+  "list_conflict": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "relations": [
+      {
+        "a": { "iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29 },
+        "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+        "n": 260,
+        "outlets": 20,
+        "mentions": 1800,
+        "quad": {
+          "verbal_cooperation": 0,
+          "material_cooperation": 0,
+          "verbal_conflict": 210,
+          "material_conflict": 50
+        },
+        "kind": "conflict",
+        "goldstein": -4.4,
+        "tone": -5.0,
+        "from": "US"
+      }
+    ]
+  },
+  "list_cooperation": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "relations": [
+      {
+        "a": { "iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34 },
+        "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+        "n": 100,
+        "outlets": 11,
+        "mentions": 690,
+        "quad": {
+          "verbal_cooperation": 70,
+          "material_cooperation": 30,
+          "verbal_conflict": 0,
+          "material_conflict": 0
+        },
+        "kind": "cooperation",
+        "goldstein": 3.1,
+        "tone": 1.6,
+        "from": "US"
+      },
+      {
+        "a": { "iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29 },
+        "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+        "n": 52,
+        "outlets": 9,
+        "mentions": 300,
+        "quad": {
+          "verbal_cooperation": 40,
+          "material_cooperation": 12,
+          "verbal_conflict": 0,
+          "material_conflict": 0
+        },
+        "kind": "cooperation",
+        "goldstein": 2.2,
+        "tone": -0.5,
+        "from": "US"
+      },
+      {
+        "a": { "iso": "FR", "name": "France", "lat": 46.61, "lng": 2.34 },
+        "b": { "iso": "NG", "name": "Nigeria", "lat": 9.55, "lng": 8.0 },
+        "n": 33,
+        "outlets": 5,
+        "mentions": 250,
+        "quad": {
+          "verbal_cooperation": 25,
+          "material_cooperation": 8,
+          "verbal_conflict": 0,
+          "material_conflict": 0
+        },
+        "kind": "cooperation",
+        "goldstein": 3.0,
+        "tone": 0.9,
+        "from": "FR"
+      }
+    ]
+  },
+  "detail": {
+    "first_day": "2026-10-15",
+    "last_day": "2026-10-21",
+    "since": "2026-10-15",
+    "a": { "iso": "IR", "name": "Iran", "lat": 32.52, "lng": 54.29 },
+    "b": { "iso": "US", "name": "United States", "lat": 39.5, "lng": -99.06 },
+    "n": 312,
+    "outlets": 23,
+    "mentions": 2100,
+    "quad": {
+      "verbal_cooperation": 40,
+      "material_cooperation": 12,
+      "verbal_conflict": 210,
+      "material_conflict": 50
+    },
+    "kind": "conflict",
+    "goldstein": -3.1,
+    "tone": -4.2,
+    "from": "US",
+    "directions": [
+      {
+        "from": "IR",
+        "to": "US",
+        "n": 112,
+        "quad": {
+          "verbal_cooperation": 15,
+          "material_cooperation": 2,
+          "verbal_conflict": 80,
+          "material_conflict": 15
+        }
+      },
+      {
+        "from": "US",
+        "to": "IR",
+        "n": 200,
+        "quad": {
+          "verbal_cooperation": 25,
+          "material_cooperation": 10,
+          "verbal_conflict": 130,
+          "material_conflict": 35
+        }
+      }
+    ],
+    "daily": [
+      { "day": "2026-10-15", "cooperation": 6, "conflict": 30 },
+      { "day": "2026-10-16", "cooperation": 8, "conflict": 35 },
+      { "day": "2026-10-17", "cooperation": 7, "conflict": 40 },
+      { "day": "2026-10-18", "cooperation": 9, "conflict": 38 },
+      { "day": "2026-10-19", "cooperation": 7, "conflict": 42 },
+      { "day": "2026-10-20", "cooperation": 8, "conflict": 35 },
+      { "day": "2026-10-21", "cooperation": 7, "conflict": 40 }
+    ],
+    "samples": [
+      {
+        "url": "https://news.example/2026/10/21/gulf-shipping",
+        "outlet": "news.example",
+        "title": "Gulf shipping warnings traded",
+        "day": "2026-10-21",
+        "quad_class": 3,
+        "from": "US"
+      },
+      {
+        "url": "https://wire.example/2026/10/20/talks",
+        "outlet": "wire.example",
+        "title": null,
+        "day": "2026-10-20",
+        "quad_class": 1,
+        "from": "IR"
+      },
+      {
+        "url": "https://daily.example/2026/10/19/sanctions",
+        "outlet": "daily.example",
+        "title": null,
+        "day": "2026-10-19",
+        "quad_class": 4,
+        "from": "US"
+      }
+    ]
+  },
+  "not_found": { "detail": "No reported events between them in the last 7 days." }
+}

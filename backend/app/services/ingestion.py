@@ -259,21 +259,30 @@ def _start_thread_synopses() -> None:
     _track(_write_thread_synopses())
 
 
-async def stop_background_tasks() -> None:
-    """Cancel the cycle's background tasks (a cache warm, thread synopses), and any
-    read of the week's stories for the wk:* caches (the warm's, or one a request's
-    miss started), and wait until they stop.
+async def stop_background_tasks(*, shutdown: bool = False) -> None:
+    """Cancel the cycle's background tasks (a cache warm, thread synopses), and the
+    week reads for the wk:* caches (the warm's, or one a request's miss
+    started), and wait until they stop.
 
-    At shutdown, before Redis and the pool close, so a warm cannot reopen
-    them; and as a cycle starts, so a warm cannot write answers back after
-    the cycle has invalidated them, nor a week read run on into its writes.
-    A request waiting on a week read gets a 503 then. Waits at most
+    As a cycle starts, so a warm cannot write answers back after the cycle has
+    invalidated them, nor a read of the week's stories (wk:globe:, wk:links:)
+    run on into its writes. A wk:relations: read is rollups only, so then it
+    is left to finish and answer its request.
+
+    At *shutdown*, before Redis and the pool close, every wk:* read stops too,
+    relations' included, so none can reopen Redis or reach the pool once
+    closed. A request waiting on a stopped read gets a 503. Waits at most
     _STOP_TIMEOUT seconds, then logs what is still stopping and goes on.
     """
     tasks = list(_background_tasks)
     for task in tasks:
         task.cancel()
-    tasks += cancel_flights("wk:")
+    if shutdown:
+        tasks += cancel_flights("wk:")
+    else:
+        # The week reads that are expensive (a week of articles): a relations read
+        # is rollups only, so one in flight finishes and answers its request.
+        tasks += cancel_flights("wk:globe:") + cancel_flights("wk:links:")
     if not tasks:
         return
     done, pending = await asyncio.wait(tasks, timeout=_STOP_TIMEOUT)

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import statistics
 import sys
@@ -26,18 +27,31 @@ from datetime import datetime, timezone
 
 import asyncpg
 
-from app.services import events
+from app.services import events, relations
 from app.services.gdelt import download_capped, fetch_lastupdate
 
 # One vCore and little memory, as on the B1ms (production numbers otherwise look better).
 B1MS = ("SET max_parallel_workers_per_gather = 0", "SET jit = off", "SET work_mem = '4MB'")
 MIN_FIELDS_61 = 0.999
 MAX_FILES = 96  # a day of 15-minute files: the workflow checks its input against this too
+# The relations list over the week, on CI's disk (faster than the P4): checked by
+# hand, reported, never a failure (only the format gates fail the run).
+MAX_LIST_MS = 300
 
 
 async def _b1ms(conn) -> None:
     for statement in B1MS:
         await conn.execute(statement)
+
+
+async def _explain(conn, sql: str, *args) -> tuple[float, int]:
+    """*sql*'s execution time (ms) and shared buffers (hit + read), as run."""
+    raw = await conn.fetchval("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql, *args)
+    top = (json.loads(raw) if isinstance(raw, str) else raw)[0]
+    plan = top["Plan"]
+    return top["Execution Time"], plan.get("Shared Hit Blocks", 0) + plan.get(
+        "Shared Read Blocks", 0
+    )
 
 
 def _median(values) -> float:
@@ -138,6 +152,29 @@ async def main(n_files: int) -> int:
             " pg_size_pretty(pg_relation_size('idx_event_pairs_day')) AS day_index"
             " FROM event_pairs_daily"
         )
+        # The relations reads (19c) over the week just built: the lens's 7 days.
+        first, last = relations.lens_days(now)
+        list_ms, list_buffers = await _explain(
+            conn,
+            relations.LIST_SQL,
+            first,
+            last,
+            relations.QUADS["all"],
+            relations.MIN_EVENTS,
+            relations.MIN_OUTLETS,
+        )
+        busiest = await conn.fetchrow(
+            "SELECT least(a_iso, b_iso) AS a, greatest(a_iso, b_iso) AS b"
+            " FROM event_pairs_daily WHERE day BETWEEN $1 AND $2"
+            " GROUP BY 1, 2 ORDER BY sum(mentions) DESC, 1, 2 LIMIT 1",
+            first,
+            last,
+        )
+        detail_ms, detail_buffers = (
+            await _explain(conn, relations.DETAIL_SQL, busiest["a"], busiest["b"], first, last)
+            if busiest
+            else (0.0, 0)
+        )
     await pool.close()
 
     rows = max(totals.rows, 1)
@@ -185,7 +222,17 @@ async def main(n_files: int) -> int:
         f"| HOT updates during the day | {hot} of {upd} ({100 * hot / max(upd, 1):.0f}%) |",
         f"| Week (8 days): rows, total, heap, pkey, day index | {week['rows']}, {week['total']},"
         f" {week['heap']}, {week['pkey']}, {week['day_index']} |",
+        f"| Relations list over the lens ({first} to {last}): ms, buffers"
+        f" | {list_ms:.0f}, {list_buffers} |",
+        f"| Relations detail, busiest pair"
+        f" ({busiest['a'] + '-' + busiest['b'] if busiest else 'none'}): ms, buffers"
+        f" | {detail_ms:.1f}, {detail_buffers} |",
     ]
+    if list_ms > MAX_LIST_MS:
+        report.append(
+            f"\n**Read gate:** the relations list took {list_ms:.0f} ms, over {MAX_LIST_MS} ms:"
+            " stop and report before 19c merges."
+        )
     _emit("\n".join(report))
     if not per_file:
         _emit("\nNo file could be read (network or GDELT): no format gate checked.")
