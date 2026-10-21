@@ -234,6 +234,10 @@ async def test_at_production_scale_a_cycle_updates_rows_in_place(week):
     assert hot / upd >= 0.9, (hot, upd)
 
 
+# Pages the steady-state purge may read: a descent of the day index that finds nothing.
+_PURGE_PAGES = 10
+
+
 @pytest.mark.asyncio
 async def test_at_production_scale_the_steady_state_purge_is_an_index_range(week):
     """Nothing is older than retention, as on every cycle but the first after
@@ -242,18 +246,22 @@ async def test_at_production_scale_the_steady_state_purge_is_an_index_range(week
     plan = await db_plans.custom_plan(week, events.PURGE_PAIRS_SQL, TODAY, 7)
     assert "event_pairs_daily" not in plan["seq_scans"], plan
     assert "idx_event_pairs_day" in plan["indexes"], plan
+    pages = await db_plans.pages(week, events.PURGE_PAIRS_SQL, (TODAY, 7), "custom")
+    assert pages <= _PURGE_PAGES, pages
 
 
 @pytest.mark.asyncio
-async def test_the_purge_plan_check_fails_without_the_day_index(week):
-    """The mutation twin: without idx_event_pairs_day the same check sees a Seq
-    Scan, so the check above can't pass vacuously."""
+async def test_the_purge_checks_fail_without_the_day_index(week):
+    """The mutation twin: without idx_event_pairs_day the purge reads the whole table
+    or, as the planner prefers, the whole primary key (it holds day too, and is
+    narrower than the heap) every cycle, so the checks above can't pass vacuously."""
     await fill_week(week, TODAY)
     with pytest.raises(_Undo):
         async with week.transaction():  # a savepoint
             await week.execute("DROP INDEX idx_event_pairs_day")
             plan = await db_plans.custom_plan(week, events.PURGE_PAIRS_SQL, TODAY, 7)
-            assert "event_pairs_daily" in plan["seq_scans"], plan
             assert "idx_event_pairs_day" not in plan["indexes"], plan
+            pages = await db_plans.pages(week, events.PURGE_PAIRS_SQL, (TODAY, 7), "custom")
+            assert pages > _PURGE_PAGES, (pages, plan)
             raise _Undo
     assert await week.fetchval("SELECT to_regclass('idx_event_pairs_day') IS NOT NULL")
