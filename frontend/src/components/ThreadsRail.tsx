@@ -2,6 +2,9 @@
 
 import { useId } from "react";
 import EntityPills from "@/components/EntityPills";
+import PinButton from "@/components/PinButton";
+import { threadItem } from "@/lib/board";
+import { threadSnapshot } from "@/lib/boardSnapshots";
 import {
   THREADS_SHOWN,
   stopLit,
@@ -129,13 +132,14 @@ function ThreadDetailPanel({
           <EntityPills entities={detail.entities} onTrack={onTrack} />
         </div>
       )}
-      {detail && onShowStories && (
-        <div>
+      <div className="chips">
+        {detail && onShowStories && (
           <button type="button" className="pill" onClick={() => onShowStories(detail)}>
             All {plural(detail.stories, "story", "stories")}
           </button>
-        </div>
-      )}
+        )}
+        <PinButton item={threadItem(t.id)} snapshot={() => threadSnapshot(t)} />
+      </div>
     </div>
   );
 }

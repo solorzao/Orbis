@@ -7,6 +7,9 @@ import { fetchSelectionSummary } from "@/lib/api";
 import { isWebUrl } from "@/hooks/useAgent";
 import { partOfLabel } from "@/lib/threads";
 import { timeAgo } from "@/lib/timeAgo";
+import { articleItem, placeItem } from "@/lib/board";
+import { articleSnapshot, placeSnapshot } from "@/lib/boardSnapshots";
+import PinButton from "@/components/PinButton";
 
 interface NewsPanelProps {
   point: GlobePoint | null;
@@ -203,6 +206,7 @@ export default function NewsPanel({
           <p className="insp-count">{count}</p>
         </div>
         <div className="end">
+          <PinButton item={placeItem(point.lat, point.lng)} snapshot={() => placeSnapshot(point)} />
           {onMinimize && (
             <button
               type="button"
@@ -364,6 +368,12 @@ export default function NewsPanel({
                 <span className="sr-only">Tone </span>
                 {formatScore(article.sentimentScore)}
               </span>
+              <PinButton
+                compact
+                item={articleItem(article.id)}
+                snapshot={() => articleSnapshot(article, point.locationName)}
+                label={article.title}
+              />
             </div>
             {article.thread && onThread && (
               <div className="art-thread">

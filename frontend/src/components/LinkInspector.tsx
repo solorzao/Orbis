@@ -6,6 +6,9 @@ import { formatAgo } from "@/lib/hoverCard";
 import { linkEnds, linkTopic } from "@/lib/links";
 import { queryWindowWords } from "@/lib/panelQuery";
 import { isWebUrl } from "@/hooks/useAgent";
+import { linkItem } from "@/lib/board";
+import { linkSnapshot } from "@/lib/boardSnapshots";
+import PinButton from "@/components/PinButton";
 import type { LinkEntry, NewsArticle, Topic } from "@/types/news";
 
 interface LinkInspectorProps {
@@ -116,6 +119,10 @@ export default function LinkInspector({
             </h2>
           </div>
           <div className="end">
+            <PinButton
+              item={linkItem(link.a.iso, link.b.iso)}
+              snapshot={() => linkSnapshot(link)}
+            />
             <button
               type="button"
               className="iconbtn"

@@ -164,7 +164,7 @@ export function mockGlobeNews(url: string) {
 
 export const MOCK_ARTICLES = [
   {
-    id: "art-001",
+    id: "4f6c2a7e-1d2b-4c3d-9e8f-0a1b2c3d4e5f",
     title: "France announces new climate policy",
     summary: "France unveils ambitious targets for carbon reduction.",
     source_url: "https://example.com/france-climate",
@@ -181,7 +181,7 @@ export const MOCK_ARTICLES = [
     entities: {},
   },
   {
-    id: "art-002",
+    id: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
     title: "EU leaders meet in Paris for summit",
     summary: "European leaders gather to discuss trade and security.",
     source_url: "https://example.com/eu-summit",
@@ -198,7 +198,7 @@ export const MOCK_ARTICLES = [
     entities: {},
   },
   {
-    id: "art-003",
+    id: "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5",
     title: "Paris tech startup raises $50M",
     summary: "A French AI startup secures major funding round.",
     source_url: "https://example.com/paris-tech",
@@ -930,6 +930,20 @@ export function buildAgentSSE(options: {
 
   return lines.join("\n");
 }
+
+// ── The investigation board ─────────────────────────────────────────
+
+/** localStorage, as useBoard keeps it. */
+export const BOARD_KEY = "orbis-board-v1";
+
+/** A board of five pins: a story, a thread, a place, a person and a link (board order). */
+export const BOARD_PINS = {
+  story: `article:${MOCK_ARTICLES[0].id}`,
+  thread: "thread:7",
+  place: "place:51:-1",
+  person: "entity:person:Emmanuel Macron",
+  link: "link:FR-GB",
+} as const;
 
 // ── Route interceptors ──────────────────────────────────────────────
 

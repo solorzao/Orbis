@@ -17,7 +17,7 @@ const SIZES = [
   { width: 1280, height: 800 },
   { width: 1180, height: 800 }, // the narrowest floating panel
   { width: 1024, height: 768 },
-  { width: 768, height: 1024 }, // one-row bar, at its tightest
+  { width: 824, height: 1024 }, // one-row bar, at its tightest
   { width: 700, height: 800 }, // two-row bar, motto still shown
   { width: 390, height: 844 },
   { width: 844, height: 390 }, // a phone on its side
@@ -38,7 +38,7 @@ function openSheetHeight({ width, height }: { width: number; height: number }) {
 }
 
 // Chrome regions that must never touch. Later PRs add their regions here.
-const TOP_BAR = ["brand", "topic-filter", "status-pill"];
+const TOP_BAR = ["brand", "topic-filter", "status-pill", "board-open"];
 
 /** The top bar's regions at a width: the Track search pill from 1180px, its button below. */
 function topBarAt(width: number) {

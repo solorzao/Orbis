@@ -23,6 +23,12 @@ interface TopBarProps {
   /** The sheet's search is open. */
   searchOpen?: boolean;
   searchButtonRef?: Ref<HTMLButtonElement>;
+  /** The investigation board's pins: the Board button and its badge (mockup #open-board). */
+  boardCount?: number;
+  /** The board is open (the split view, or the sheet's list). */
+  boardOpen?: boolean;
+  onBoard?: () => void;
+  boardButtonRef?: Ref<HTMLButtonElement>;
 }
 
 /**
@@ -43,6 +49,10 @@ export default function TopBar({
   onSearchOpen,
   searchOpen = false,
   searchButtonRef,
+  boardCount = 0,
+  boardOpen = false,
+  onBoard,
+  boardButtonRef,
 }: TopBarProps) {
   return (
     <header className="topbar">
@@ -111,6 +121,35 @@ export default function TopBar({
           isOffline={isOffline}
           isReplay={isReplay}
         />
+        {onBoard && (
+          <button
+            ref={boardButtonRef}
+            type="button"
+            className="pillbar pill lg board-btn"
+            data-testid="board-open"
+            aria-expanded={boardOpen}
+            title="Investigation board"
+            onClick={onBoard}
+          >
+            {/* Below 1180px the icon stands for the word (soft-orbit.css .board-btn). */}
+            <svg
+              className="board-icon"
+              width="15"
+              height="15"
+              viewBox="0 0 14 14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="1.5" y="2.5" width="11" height="9" rx="1.6" />
+              <path d="M4 6h3M4 8.5h5" strokeLinecap="round" />
+            </svg>
+            <span className="board-word">Board</span> <span className="board-n">{boardCount}</span>{" "}
+            <span className="sr-only">{boardCount === 1 ? "pin" : "pins"}</span>
+          </button>
+        )}
         <Link href="/about" title="About Orbis" className="pillbar pill lg">
           About
         </Link>
