@@ -10,6 +10,7 @@ import time
 import unicodedata
 from collections import defaultdict
 from typing import Callable
+from urllib.parse import unquote
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -169,6 +170,45 @@ def sanitise_text(text: str, max_length: int = 200) -> str:
     return cleaned[:max_length].strip()
 
 
+# ---------------------------------------------------------------------------
+# Request paths in logs: never what a visitor typed
+# ---------------------------------------------------------------------------
+# An entity dossier's path ends in the name asked for, as typed.
+_ENTITY_PATH = re.compile(r"/api/entities/([^/]*)(/.*)?", re.DOTALL)
+_ENTITY_TYPES = frozenset({"person", "org"})
+
+
+def loggable_path(path: str) -> str:
+    """A request path fit for a log line. No query string (``/api/search?q=``), and
+    an entity dossier's path cut after its type (``/api/entities/person/…``),
+    matched as routing reads it, percent-decoded. Any other path is as sent."""
+    raw = path.split("?", 1)[0]
+    match = _ENTITY_PATH.fullmatch(unquote(raw))
+    if match is None:
+        return raw
+    kind = match.group(1) if match.group(1) in _ENTITY_TYPES else "…"
+    return f"/api/entities/{kind}" + ("/…" if match.group(2) is not None else "")
+
+
+def path_head(path: str) -> str:
+    """A request path's first two segments (``/api/entities``), for lines that need no more."""
+    return "/".join(path.split("?", 1)[0].split("/")[:3]) or "/"
+
+
+class AccessLogPathFilter(logging.Filter):
+    """For uvicorn's access logger: each request line's path through loggable_path.
+
+    Uvicorn logs a request as ``(client, method, path with query, HTTP version,
+    status)``; any other record passes unchanged.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[2], str):
+            record.args = (args[0], args[1], loggable_path(args[2]), args[3], args[4])
+        return True
+
+
 def has_injection_pattern(text: str) -> bool:
     """Return True if *text* contains a likely prompt-injection phrase.
 
@@ -202,24 +242,28 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS:
             return await call_next(request)
 
+        # Logged by its group and first two segments only: the rest of a path can be
+        # what a visitor typed (an entity's name).
+        group = _get_rate_group(path)
+
         # --- API key check ---
         if not _check_api_key(request):
             logger.warning(
-                "Rejected request to %s — bad API key from %s",
-                path,
+                "Rejected request to %s (%s group): bad API key from %s",
+                path_head(path),
+                group,
                 _client_ip(request),
             )
             return JSONResponse({"detail": "Invalid or missing API key."}, status_code=403)
 
         # --- Rate limiting ---
-        group = _get_rate_group(path)
         if group:
             window, limit = _RATE_LIMITS[group]
             ip = _rate_limit_ip(request)
             bucket_key = f"{group}:{ip}"
             bucket = _rate_buckets[group][bucket_key]
             if not bucket.allow(time.time(), window, limit):
-                logger.warning("Rate-limited %s on %s (%s group)", ip, path, group)
+                logger.warning("Rate-limited %s on %s (%s group)", ip, path_head(path), group)
                 return JSONResponse(
                     {"detail": "Too many requests. Please try again later."},
                     status_code=429,

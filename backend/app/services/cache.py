@@ -19,6 +19,13 @@ _redis_client: aioredis.Redis | None = None
 _WARM_ALLOWANCE = 600
 
 
+def loggable_key(key: str) -> str:
+    """A cache key for a log line: its first three parts (``db:search:v1:…``). Later
+    parts can hold what a visitor typed: a search query, an entity's name."""
+    parts = key.split(":")
+    return key if len(parts) <= 3 else ":".join(parts[:3]) + ":…"
+
+
 def cycle_ttl(ttl: int) -> int:
     """A TTL for a db:* key the cache warm refills: at least until the next cycle ends.
 
@@ -76,7 +83,7 @@ async def get_cached(key: str) -> Any | None:
             return None
         return json.loads(raw)
     except Exception:
-        logger.warning("Redis GET failed for key=%s", key, exc_info=True)
+        logger.warning("Redis GET failed for key=%s", loggable_key(key), exc_info=True)
         return None
 
 
@@ -88,7 +95,7 @@ async def set_cached(key: str, data: Any, ttl: int) -> None:
     try:
         await r.set(key, json.dumps(data, default=str), ex=ttl)
     except Exception:
-        logger.warning("Redis SET failed for key=%s", key, exc_info=True)
+        logger.warning("Redis SET failed for key=%s", loggable_key(key), exc_info=True)
 
 
 async def invalidate(pattern: str) -> None:
@@ -105,4 +112,6 @@ async def invalidate(pattern: str) -> None:
             if cursor == 0:
                 break
     except Exception:
-        logger.warning("Redis INVALIDATE failed for pattern=%s", pattern, exc_info=True)
+        logger.warning(
+            "Redis INVALIDATE failed for pattern=%s", loggable_key(pattern), exc_info=True
+        )

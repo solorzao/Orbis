@@ -112,7 +112,8 @@ def _validate_request(body: AskRequest) -> str:
         raise HTTPException(status_code=422, detail="Question is empty after sanitization.")
 
     if has_injection_pattern(question):
-        logger.warning("Blocked prompt injection attempt: %s", question[:80])
+        # Its length only: the question is what a visitor typed.
+        logger.warning("Blocked prompt injection attempt (%d characters).", len(question))
         raise HTTPException(status_code=400, detail="Your question could not be processed.")
 
     return question

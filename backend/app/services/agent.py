@@ -697,7 +697,9 @@ async def _plan(
         # Before response_text: refusals are billed too.
         await llm_budget.record(response.usage, response.model)
         text = response_text(response).strip()
-        logger.info("Planner raw response: %s", text[:500])
+        # Its length only: the plan's search terms come from the visitor's question
+        # (the tools it chose are logged by plan_retrieval, without them).
+        logger.info("Planner replied (%d characters).", len(text))
         # Strip markdown code fences the model sometimes wraps around JSON
         if text.startswith("```"):
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()

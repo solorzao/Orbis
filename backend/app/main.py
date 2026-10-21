@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import settings
-from app.middleware.security import SecurityMiddleware
+from app.middleware.security import AccessLogPathFilter, SecurityMiddleware, loggable_path
 from app.routers.agent import router as agent_router
 from app.routers.board import router as board_router
 from app.routers.entities import router as entities_router
@@ -31,6 +31,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
 )
 logger = logging.getLogger("orbis")
+# Uvicorn's access log, where a launch keeps it on (the container turns it off;
+# log_requests below logs each request): no query string, no entity name.
+logging.getLogger("uvicorn.access").addFilter(AccessLogPathFilter())
 
 # ---------------------------------------------------------------------------
 # App
@@ -102,14 +105,15 @@ async def shutdown() -> None:
 # ---------------------------------------------------------------------------
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log method, path, and response time for every request."""
+    """Log method, path, and response time for every request. The path never holds
+    what a visitor typed: no query string, no entity name (loggable_path)."""
     start = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info(
         "%s %s -> %d (%.1f ms)",
         request.method,
-        request.url.path,
+        loggable_path(request.url.path),
         response.status_code,
         elapsed_ms,
     )
