@@ -172,7 +172,9 @@ class TestCachedModel:
 
         assert parsed is None
         [record] = caplog.records
-        assert record.getMessage().startswith("Cached db:search:v1:abbas no longer fits its model")
+        # The key's first parts only: the rest is what a visitor typed (loggable_key).
+        assert record.getMessage().startswith("Cached db:search:v1:… no longer fits its model")
+        assert "abbas" not in record.getMessage()
         assert record.exc_info is None  # one line, no traceback
 
     def test_the_log_names_the_first_errors_place_and_type_never_its_value(self, caplog):
@@ -306,6 +308,19 @@ class TestWeekFresh:
     async def test_without_redis_nothing_is_fresh(self):
         with patch("app.services.cache.get_redis", AsyncMock(return_value=None)):
             assert not await cache.week_fresh("wk:x")
+
+    @pytest.mark.asyncio
+    async def test_a_failed_ttl_read_is_not_fresh_and_logs_the_loggable_key(self, caplog):
+        broken = AsyncMock()
+        broken.ttl.side_effect = ConnectionError("down")
+        with (
+            patch("app.services.cache.get_redis", AsyncMock(return_value=broken)),
+            caplog.at_level(logging.WARNING, logger="app.services.cache"),
+        ):
+            assert not await cache.week_fresh("wk:links:v5:live:168::lift:40")
+
+        [record] = caplog.records
+        assert record.getMessage() == "Redis TTL failed for key=wk:links:v5:…"
 
     def test_an_hourly_refresh_lands_before_the_entry_expires(self):
         """Refreshed at the first warm once 55 minutes old, an entry has 25 minutes left:

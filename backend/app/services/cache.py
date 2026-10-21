@@ -65,7 +65,7 @@ async def week_fresh(key: str) -> bool:
     try:
         left = await r.ttl(key)
     except Exception:
-        logger.warning("Redis TTL failed for key=%s", key, exc_info=True)
+        logger.warning("Redis TTL failed for key=%s", loggable_key(key), exc_info=True)
         return False
     return left > WEEK_TTL - WEEK_REFRESH_AGE
 
@@ -76,8 +76,9 @@ def cached_model(key: str, cached: Any, parse: Callable[[Any], T]) -> T | None:
 
     An entry cached before its model gained a required field (as #91's
     ``capped`` was) would otherwise fail every request until it expired: the
-    caller recomputes it instead, and one line is logged, naming the first
-    error's place and type (never the cached value). Other errors raise.
+    caller recomputes it instead, and one line is logged: the key's first
+    parts (loggable_key) and the first error's place and type, never the
+    cached value. Other errors raise.
     """
     try:
         return parse(cached)
@@ -86,7 +87,7 @@ def cached_model(key: str, cached: Any, parse: Callable[[Any], T]) -> T | None:
         place = ".".join(str(part) for part in first["loc"]) or "the entry"
         logger.warning(
             "Cached %s no longer fits its model (%d errors, first at %s (%s)); recomputing.",
-            key,
+            loggable_key(key),
             exc.error_count(),
             place,
             first["type"],
