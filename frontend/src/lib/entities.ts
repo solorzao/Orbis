@@ -293,6 +293,28 @@ export function pivotType(m: CoMention, current: EntityType): EntityType | null 
   return m.types[0] ?? null;
 }
 
+/**
+ * What the page's announcer says of the tracking: what is tracked once its
+ * dossier lands, an unknown name, or a dossier that couldn't load; nothing
+ * before the answer.
+ */
+export function trackAnnouncement({
+  tracked,
+  dossier,
+  notFound,
+  error,
+}: {
+  tracked: EntityRef | null;
+  dossier: Pick<EntityDossier, "name"> | null;
+  notFound: boolean;
+  error: boolean;
+}): string {
+  if (!tracked) return "";
+  if (notFound) return `No coverage found for ${tracked.name}`;
+  if (error) return `Couldn't load ${tracked.name}`;
+  return dossier ? `Tracking ${dossier.name}` : "";
+}
+
 const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** What a screen reader hears when the results settle: "2 places and 1 person", or "No matches". */

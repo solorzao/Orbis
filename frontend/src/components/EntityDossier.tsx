@@ -17,6 +17,7 @@ import {
 } from "@/lib/entities";
 import { formatAgo, sparkPaths } from "@/lib/hoverCard";
 import { isWebUrl } from "@/hooks/useAgent";
+import { useMinuteNow } from "@/hooks/useMinuteNow";
 
 interface EntityDossierProps {
   /** What is tracked, as asked (a dossier may spell it otherwise). */
@@ -26,8 +27,6 @@ interface EntityDossierProps {
   /** No person or organisation has the name (a 404). */
   notFound: boolean;
   error: boolean;
-  /** Now (Date.now()), for the ramp and the headlines' ages. */
-  now: number;
   /** Track a name in the same coverage instead. */
   onPivot: (entity: { name: string; type: EntityType }) => void;
   /** A top place: fly there and open it. */
@@ -185,7 +184,6 @@ export default function EntityDossier({
   loading,
   notFound,
   error,
-  now,
   onPivot,
   onPlace,
   onStop,
@@ -201,7 +199,9 @@ export default function EntityDossier({
   }, []);
 
   const name = dossier?.name ?? entity.name;
-  const since = dossier ? rampSince(dossier.since, now) : null;
+  // Now, to the minute: the headlines' ages stay current while it is open.
+  const now = useMinuteNow();
+  const since = dossier && now !== null ? rampSince(dossier.since, now) : null;
   const weekLabel = since ? `since ${shortDate(since)}` : "7 days";
   const maxN = Math.max(1, ...(dossier?.places.map((p) => p.n) ?? []));
 
@@ -351,7 +351,7 @@ export default function EntityDossier({
                     <div className="m">
                       <span>{h.sourceName}</span>
                       {h.place && <span>{h.place}</span>}
-                      <span>{formatAgo(h.publishedAt, now)}</span>
+                      {now !== null && <span>{formatAgo(h.publishedAt, now)}</span>}
                     </div>
                   </li>
                 ))}

@@ -132,6 +132,19 @@ test.describe("Track search and the entity dossier", () => {
     await expect(globe(page)).not.toHaveAttribute("data-focus-entity");
   });
 
+  test("Escape on the page hides a hover card first, then stops tracking", async ({ page }) => {
+    await gotoStillGlobe(page);
+    await trackMacron(page);
+    // The page has the focus, and a card shows over a dot.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    const card = await hoverPlace(page, PARIS);
+    await page.keyboard.press("Escape");
+    await expect(card).toHaveCount(0);
+    await expect(globe(page)).toHaveAttribute("data-focus-entity", "Emmanuel Macron");
+    await page.keyboard.press("Escape");
+    await expect(globe(page)).not.toHaveAttribute("data-focus-entity");
+  });
+
   test("a hover card's name starts tracking", async ({ page }) => {
     await gotoStillGlobe(page);
     const card = await hoverPlace(page, PARIS);

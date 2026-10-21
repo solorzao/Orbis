@@ -6,12 +6,12 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type CSSProperties,
   type PointerEvent,
   type Ref,
 } from "react";
 import { fetchVolume, type ApiHourlyVolume } from "@/lib/api";
+import { useMinuteNow } from "@/hooks/useMinuteNow";
 import { useReplay } from "@/hooks/useReplay";
 import {
   HOUR_MS,
@@ -52,17 +52,6 @@ const LABEL_Y = 59;
 const DEFAULT_WIDTH = 400;
 /** Hours either side averaged into each point, so the area reads as a smooth flow. */
 const SMOOTH_HOURS = 3;
-
-const MINUTE_MS = 60_000;
-
-// "Now" to the minute, so the chart moves on as time passes. The server
-// can't know the visitor's clock: the chart's contents wait for the client.
-function subscribeMinute(onTick: () => void) {
-  const id = setInterval(onTick, 15_000);
-  return () => clearInterval(id);
-}
-const minuteNow = () => Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS;
-const noNowOnServer = () => null;
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const plural = (n: number, one: string, many: string) =>
@@ -119,7 +108,9 @@ export default function TimelineCapsule({
   spread = null,
 }: TimelineCapsuleProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
-  const now = useSyncExternalStore(subscribeMinute, minuteNow, noNowOnServer);
+  // "Now" to the minute, so the chart moves on as time passes. The server
+  // can't know the visitor's clock: the chart's contents wait for the client.
+  const now = useMinuteNow();
 
   // Story volume: once on mount, then at the ingestion cadence.
   const [volume, setVolume] = useState<ApiHourlyVolume[]>([]);

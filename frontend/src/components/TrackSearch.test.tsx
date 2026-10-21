@@ -80,6 +80,44 @@ describe("TrackSearch", () => {
     expect(box).toHaveAttribute("aria-controls", listbox().id);
     expect(box).toHaveAttribute("placeholder", "Track a place, person, organisation or thread");
     expect(screen.getByText("/")).toBeInTheDocument(); // the kbd hint
+    expect(box).toHaveAttribute("aria-keyshortcuts", "/");
+  });
+
+  it("stays open under the mouse: a press in the list keeps the focus in the box", () => {
+    answered(RESULTS);
+    const { box } = setup();
+    box.focus();
+    type(box, "paris");
+    const popup = listbox().parentElement!;
+    // A press on a group's label, the padding or the scrollbar would move the focus.
+    const label = within(listbox()).getByText("Organisations");
+    expect(fireEvent.mouseDown(label)).toBe(false); // default prevented
+    expect(fireEvent.mouseDown(popup)).toBe(false);
+    // And should the scroller take the focus anyway, the list stays and the box gets it back.
+    fireEvent.blur(box, { relatedTarget: popup });
+    expect(box).toHaveAttribute("aria-expanded", "true");
+    expect(box).toHaveFocus();
+    // Focus leaving for anywhere else closes it.
+    fireEvent.blur(box, { relatedTarget: document.body });
+    expect(box).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("in the top bar, the last Escape gives the focus back to where it was before", () => {
+    render(<button type="button">Before</button>);
+    const before = screen.getByRole("button", { name: "Before" });
+    const { box } = setup({ onDismiss: undefined });
+    before.focus();
+    fireEvent.focus(box, { relatedTarget: before });
+    box.focus();
+    key(box, "Escape");
+    expect(before).toHaveFocus();
+  });
+
+  it("in the top bar, the last Escape leaves the box when the focus came from nowhere", () => {
+    const { box } = setup({ onDismiss: undefined });
+    box.focus();
+    key(box, "Escape");
+    expect(box).not.toHaveFocus();
   });
 
   it("lists the loaded places at once, before the server answers", () => {

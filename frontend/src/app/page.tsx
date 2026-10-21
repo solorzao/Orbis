@@ -18,7 +18,7 @@ import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/panelQuery";
 import { cardLabel } from "@/lib/hoverCard";
 import { cellKey, dotInCell, pointAt } from "@/lib/cells";
-import { focusCentre, type EntityPlace, type EntityRef } from "@/lib/entities";
+import { focusCentre, trackAnnouncement, type EntityPlace, type EntityRef } from "@/lib/entities";
 import { DEFAULT_WINDOW, sameWindow, type TimeWindow } from "@/lib/timeWindow";
 import { breakingDot, type BreakingStory } from "@/lib/breaking";
 import {
@@ -182,8 +182,6 @@ export default function Home() {
   // The entity tracker: the person or organisation tracked (one at a time),
   // its dossier, and the globe's focus mode on its places once that lands.
   const [tracked, setTracked] = useState<EntityRef | null>(null);
-  // When tracking began: the dossier's ages and ramp are told from it.
-  const [trackedAt, setTrackedAt] = useState(0);
   const entity = useEntity(tracked);
   const { dossier } = entity;
   const globeFocus = useMemo<GlobeFocus | null>(
@@ -194,13 +192,7 @@ export default function Home() {
     [dossier],
   );
   // What the page's announcer says of it, and of the Track search's results.
-  const trackNote = !tracked
-    ? ""
-    : entity.notFound
-      ? `No coverage found for ${tracked.name}`
-      : dossier
-        ? `Tracking ${dossier.name}`
-        : "";
+  const trackNote = trackAnnouncement({ tracked, ...entity });
   const [searchNote, setSearchNote] = useState("");
   // Below 1180px the top bar's search button opens the Track search in the sheet.
   const [sheetSearch, setSheetSearch] = useState(false);
@@ -552,7 +544,6 @@ export default function Home() {
       setSelectedThread(null);
       // The same name again keeps its dossier: no new request.
       setTracked((prev) => (prev?.name === next.name && prev.type === next.type ? prev : next));
-      setTrackedAt(Date.now());
       setActiveId(ENTITY_ID);
       showInspect();
       dismissHoverCard();
@@ -882,7 +873,6 @@ export default function Home() {
           loading={entity.loading}
           notFound={entity.notFound}
           error={entity.error}
-          now={trackedAt}
           onPivot={handleTrack}
           onPlace={handleEntityPlace}
           onStop={handleStopTracking}

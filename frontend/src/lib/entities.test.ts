@@ -16,6 +16,7 @@ import {
   pivotType,
   rampSince,
   searchAnnouncement,
+  trackAnnouncement,
   searchPlaces,
   searchQuery,
   shortDate,
@@ -285,6 +286,30 @@ describe("pivotType", () => {
     expect(pivotType(m(["person", "org"]), "org")).toBe("org");
     expect(pivotType(m(["person", "org"]), "person")).toBe("person");
     expect(pivotType(m([]), "person")).toBeNull();
+  });
+});
+
+describe("trackAnnouncement", () => {
+  const base = { dossier: null, notFound: false, error: false };
+  it("says what is tracked once its dossier lands, and nothing before", () => {
+    expect(trackAnnouncement({ ...base, tracked: null })).toBe("");
+    expect(trackAnnouncement({ ...base, tracked: { name: "macron" } })).toBe("");
+    expect(
+      trackAnnouncement({
+        ...base,
+        tracked: { name: "macron", type: "person" },
+        dossier: { name: "Emmanuel Macron" },
+      }),
+    ).toBe("Tracking Emmanuel Macron");
+  });
+
+  it("says when the name is unknown, or its dossier couldn't load", () => {
+    expect(trackAnnouncement({ ...base, tracked: { name: "Nobody" }, notFound: true })).toBe(
+      "No coverage found for Nobody",
+    );
+    expect(trackAnnouncement({ ...base, tracked: { name: "IAEA" }, error: true })).toBe(
+      "Couldn't load IAEA",
+    );
   });
 });
 

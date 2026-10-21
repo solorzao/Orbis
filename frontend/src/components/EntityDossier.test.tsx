@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import EntityDossier from "./EntityDossier";
 import type { EntityDossier as Dossier, EntityRef } from "@/lib/entities";
 
@@ -51,6 +51,15 @@ function dossier(over: Partial<Dossier> = {}): Dossier {
 
 const ENTITY: EntityRef = { name: "Emmanuel Macron", type: "person" };
 
+// The dossier tells ages and the ramp from the time now (the page's minute clock).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 function setup(over: Partial<Parameters<typeof EntityDossier>[0]> = {}) {
   const props = {
     entity: ENTITY,
@@ -58,7 +67,6 @@ function setup(over: Partial<Parameters<typeof EntityDossier>[0]> = {}) {
     loading: false,
     notFound: false,
     error: false,
-    now: NOW,
     onPivot: vi.fn(),
     onPlace: vi.fn(),
     onStop: vi.fn(),
@@ -139,6 +147,17 @@ describe("EntityDossier", () => {
     expect(within(list).queryByRole("link", { name: "A story with no usable link" })).toBeNull();
     expect(within(list).getByText("A story with no usable link")).toBeInTheDocument();
     expect(within(list).getByText("30 min ago")).toBeInTheDocument();
+  });
+
+  it("keeps the headlines' ages current as time passes", () => {
+    setup();
+    const list = screen.getByRole("list", { name: "Latest headlines" });
+    expect(within(list).getByText("30 min ago")).toBeInTheDocument();
+    act(() => {
+      vi.setSystemTime(NOW + 5 * 60_000);
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(within(list).getByText("35 min ago")).toBeInTheDocument();
   });
 
   it("stops tracking by its button or Escape", () => {

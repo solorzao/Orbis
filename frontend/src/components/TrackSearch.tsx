@@ -1,6 +1,16 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState, type KeyboardEvent, type Ref } from "react";
+import {
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type Ref,
+} from "react";
 import { useTrackSearch } from "@/hooks/useTrackSearch";
 import { cellKey } from "@/lib/cells";
 import {
@@ -173,6 +183,41 @@ export default function TrackSearch({
     setActiveKey(options[next].key);
   };
 
+  // The box's element, also handed to the page (inputRef: "/" focuses it).
+  const boxRef = useRef<HTMLInputElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  useImperativeHandle(inputRef, () => boxRef.current as HTMLInputElement, []);
+  // Where the focus was before the box took it ("/" from a control): the last
+  // Escape gives it back there, or leaves the box for the page.
+  const cameFrom = useRef<HTMLElement | null>(null);
+  const leave = () => {
+    const back = cameFrom.current;
+    cameFrom.current = null;
+    if (back?.isConnected) back.focus();
+    // Nowhere to go back to (or it can't take the focus): the box lets go.
+    if (document.activeElement === boxRef.current) boxRef.current?.blur();
+  };
+
+  const onFocus = (e: FocusEvent<HTMLInputElement>) => {
+    const from = e.relatedTarget;
+    if (from instanceof HTMLElement && from !== document.body) {
+      if (!popupRef.current?.contains(from)) cameFrom.current = from;
+    } else {
+      cameFrom.current = null;
+    }
+    setOpen(true);
+  };
+  const onBlur = (e: FocusEvent<HTMLInputElement>) => {
+    // A press in the list that took the focus anyway (Chrome focuses a scroller):
+    // the list stays, and the box takes the focus back.
+    if (e.relatedTarget instanceof Node && popupRef.current?.contains(e.relatedTarget)) {
+      boxRef.current?.focus();
+      return;
+    }
+    setOpen(false);
+    setActiveKey(null);
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     switch (e.key) {
       case "ArrowDown":
@@ -204,8 +249,10 @@ export default function TrackSearch({
           setActiveKey(null);
         } else if (query) {
           setQuery("");
+        } else if (onDismiss) {
+          onDismiss();
         } else {
-          onDismiss?.();
+          leave();
         }
         return;
     }
@@ -237,10 +284,11 @@ export default function TrackSearch({
           <path d="M9.3 9.3 13 13" strokeLinecap="round" />
         </svg>
         <input
-          ref={inputRef}
+          ref={boxRef}
           type="text"
           role="combobox"
           aria-label={TRACK_PLACEHOLDER}
+          aria-keyshortcuts="/"
           placeholder={TRACK_PLACEHOLDER}
           aria-expanded={shown}
           aria-controls={listId}
@@ -257,11 +305,8 @@ export default function TrackSearch({
             setOpen(true);
             setActiveKey(null);
           }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => {
-            setOpen(false);
-            setActiveKey(null);
-          }}
+          onFocus={onFocus}
+          onBlur={onBlur}
           onKeyDown={onKeyDown}
         />
         {variant === "bar" && <kbd aria-hidden="true">/</kbd>}
@@ -283,8 +328,15 @@ export default function TrackSearch({
           </svg>
         </button>
       )}
-      {/* Over the page from the top bar (glass); in the sheet, in its flow. */}
-      <div className={variant === "bar" ? "glass track-pop" : "track-pop"} hidden={!shown}>
+      {/* Over the page from the top bar (glass); in the sheet, in its flow. A
+          press anywhere in it (an option, a group's label, the padding, the
+          scrollbar) keeps the focus in the box, so the list stays open. */}
+      <div
+        ref={popupRef}
+        className={variant === "bar" ? "glass track-pop" : "track-pop"}
+        hidden={!shown}
+        onMouseDown={(e) => e.preventDefault()}
+      >
         <div id={listId} role="listbox" aria-label="Track results">
           {grouped.map((g) => (
             <div key={g.kind} role="group" aria-labelledby={`${uid}-${g.kind}`}>
@@ -300,8 +352,6 @@ export default function TrackSearch({
                   aria-label={option.label}
                   className="track-opt"
                   data-kind={option.kind}
-                  // Keep the focus in the box: a click must not blur it first.
-                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => choose(option)}
                 >
                   <span className="t">{option.name}</span>
