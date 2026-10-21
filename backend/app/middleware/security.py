@@ -10,10 +10,12 @@ import time
 import unicodedata
 from collections import defaultdict
 from typing import Callable
+from urllib.parse import unquote
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 
 from app.config import settings
 
@@ -74,15 +76,20 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     # A page asks once per visit; each since is its own cache entry, and a
     # miss can read a week of stories. Its own bucket, so it never spends AI calls.
     "delta": (60, 10),
+    # The board's resolve and links: each names up to 20 pins, and a miss looks
+    # each up (a place, twice). Opening a board asks for both, and links again
+    # as pins change. Its analysis is an AI call.
+    "board": (60, 20),
 }
 
-# Path prefix → group
+# Path prefix → group, first match wins: the board's analysis before its reads.
 _PATH_GROUPS: dict[str, str] = {
     "/api/news/summary": "ai",
     "/api/news/summarize-selection": "ai",
     "/api/agent/ask": "ai",
     "/api/links/explain": "ai",
     "/api/board/analyze": "ai",
+    "/api/board/": "board",
     "/api/news/delta": "delta",
 }
 
@@ -169,6 +176,65 @@ def sanitise_text(text: str, max_length: int = 200) -> str:
     return cleaned[:max_length].strip()
 
 
+# ---------------------------------------------------------------------------
+# Request paths in logs: never what a visitor typed
+# ---------------------------------------------------------------------------
+# An entity dossier's path ends in the name asked for, as typed.
+_ENTITY_PATH = re.compile(r"/api/entities/([^/]*)(/.*)?", re.DOTALL)
+_ENTITY_TYPES = frozenset({"person", "org"})
+
+
+def loggable_path(path: str) -> str:
+    """A request target fit for uvicorn's access log (AccessLogPathFilter), which has
+    only the target as sent, still percent-encoded (a ``%0A`` stays three
+    characters): no query string (``/api/search?q=``), and an entity dossier's
+    path cut after its type (``/api/entities/person/…``), matched as routing reads
+    it, percent-decoded. Lines that have the request log its route_template."""
+    raw = path.split("?", 1)[0]
+    match = _ENTITY_PATH.fullmatch(unquote(raw))
+    if match is None:
+        return raw
+    kind = match.group(1) if match.group(1) in _ENTITY_TYPES else "…"
+    return f"/api/entities/{kind}" + ("/…" if match.group(2) is not None else "")
+
+
+def route_template(request: Request) -> str:
+    """The route a request matches, as declared (``/api/entities/{entity_type}/{name:path}``),
+    or ``unmatched``: never the path as sent, so never what a visitor typed nor a
+    newline they forged (``%0A``). Read from the scope once routing has run; before
+    it (the API-key gate, the rate limiter), matched as routing matches: the first
+    full match, else the first whose path matches but not its method."""
+    route = request.scope.get("route")
+    if route is None:
+        router = getattr(request.scope.get("app"), "router", None)
+        partial = None
+        for candidate in getattr(router, "routes", ()):
+            match, _ = candidate.matches(request.scope)
+            if match == Match.FULL:
+                route = candidate
+                break
+            if match == Match.PARTIAL and partial is None:
+                partial = candidate
+        else:
+            route = partial
+    template = getattr(route, "path", None)
+    return template if isinstance(template, str) else "unmatched"
+
+
+class AccessLogPathFilter(logging.Filter):
+    """For uvicorn's access logger: each request line's path through loggable_path.
+
+    Uvicorn logs a request as ``(client, method, path with query, HTTP version,
+    status)``; any other record passes unchanged.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[2], str):
+            record.args = (args[0], args[1], loggable_path(args[2]), args[3], args[4])
+        return True
+
+
 def has_injection_pattern(text: str) -> bool:
     """Return True if *text* contains a likely prompt-injection phrase.
 
@@ -202,24 +268,29 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS:
             return await call_next(request)
 
+        # Logged by its route and group only: a path can hold what a visitor typed
+        # (an entity's name) or a newline they forged.
+        group = _get_rate_group(path)
+
         # --- API key check ---
         if not _check_api_key(request):
             logger.warning(
-                "Rejected request to %s — bad API key from %s",
-                path,
+                "Rejected request to %s (%s group): bad API key from %s",
+                route_template(request),
+                group,
                 _client_ip(request),
             )
             return JSONResponse({"detail": "Invalid or missing API key."}, status_code=403)
 
         # --- Rate limiting ---
-        group = _get_rate_group(path)
         if group:
             window, limit = _RATE_LIMITS[group]
             ip = _rate_limit_ip(request)
             bucket_key = f"{group}:{ip}"
             bucket = _rate_buckets[group][bucket_key]
             if not bucket.allow(time.time(), window, limit):
-                logger.warning("Rate-limited %s on %s (%s group)", ip, path, group)
+                route = route_template(request)
+                logger.warning("Rate-limited %s on %s (%s group)", ip, route, group)
                 return JSONResponse(
                     {"detail": "Too many requests. Please try again later."},
                     status_code=429,

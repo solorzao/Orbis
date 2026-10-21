@@ -19,6 +19,13 @@ _redis_client: aioredis.Redis | None = None
 _WARM_ALLOWANCE = 600
 
 
+def loggable_key(key: str) -> str:
+    """A cache key for a log line: its first three parts (``db:search:v1:…``). Later
+    parts can hold what a visitor typed: a search query, an entity's name."""
+    parts = key.split(":")
+    return key if len(parts) <= 3 else ":".join(parts[:3]) + ":…"
+
+
 def cycle_ttl(ttl: int) -> int:
     """A TTL for a db:* key the cache warm refills: at least until the next cycle ends.
 
@@ -76,7 +83,7 @@ async def get_cached(key: str) -> Any | None:
             return None
         return json.loads(raw)
     except Exception:
-        logger.warning("Redis GET failed for key=%s", key, exc_info=True)
+        logger.warning("Redis GET failed for key=%s", loggable_key(key), exc_info=True)
         return None
 
 
@@ -88,7 +95,47 @@ async def set_cached(key: str, data: Any, ttl: int) -> None:
     try:
         await r.set(key, json.dumps(data, default=str), ex=ttl)
     except Exception:
-        logger.warning("Redis SET failed for key=%s", key, exc_info=True)
+        logger.warning("Redis SET failed for key=%s", loggable_key(key), exc_info=True)
+
+
+async def get_many(keys: list[str]) -> list[Any | None]:
+    """The JSON values of *keys*, in order, in one round trip (MGET): None for a miss,
+    a value that isn't JSON, or when Redis is unavailable. A cached JSON null reads
+    as None too, so wrap a value that may be null."""
+    if not keys:
+        return []
+    r = await get_redis()
+    if r is None:
+        return [None] * len(keys)
+    try:
+        raws = await r.mget(keys)
+    except Exception:
+        logger.warning("Redis MGET failed for %d keys.", len(keys), exc_info=True)
+        return [None] * len(keys)
+    values: list[Any | None] = []
+    for raw in raws:
+        try:
+            values.append(None if raw is None else json.loads(raw))
+        except ValueError:
+            values.append(None)
+    return values
+
+
+async def set_many(data: dict[str, Any], ttl: int) -> None:
+    """Store each JSON-serialisable value under its key with a TTL in seconds, in one
+    round trip (a pipeline, not a transaction). Never raises."""
+    if not data:
+        return
+    r = await get_redis()
+    if r is None:
+        return
+    try:
+        async with r.pipeline(transaction=False) as pipe:
+            for key, value in data.items():
+                pipe.set(key, json.dumps(value, default=str), ex=ttl)
+            await pipe.execute()
+    except Exception:
+        logger.warning("Redis SET of %d keys failed.", len(data), exc_info=True)
 
 
 async def invalidate(pattern: str) -> None:
@@ -105,4 +152,6 @@ async def invalidate(pattern: str) -> None:
             if cursor == 0:
                 break
     except Exception:
-        logger.warning("Redis INVALIDATE failed for pattern=%s", pattern, exc_info=True)
+        logger.warning(
+            "Redis INVALIDATE failed for pattern=%s", loggable_key(pattern), exc_info=True
+        )

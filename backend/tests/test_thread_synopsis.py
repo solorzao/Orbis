@@ -271,11 +271,31 @@ async def test_each_eligible_thread_gets_a_synopsis(env):
 
 @pytest.mark.asyncio
 async def test_the_thread_and_search_caches_are_invalidated_and_rewarmed_after_writing(env):
-    """Search's thread results show a thread's title too (cluster chips read it live)."""
+    """Search's thread results and board thread pins show a thread's title too
+    (cluster chips read it live)."""
     await thread_synopsis.summarise_threads(now=NOW)
 
-    assert [c.args for c in env.invalidate.await_args_list] == [("db:threads*",), ("db:search*",)]
+    assert [c.args for c in env.invalidate.await_args_list] == [
+        ("db:threads*",),
+        ("db:search*",),
+        ("db:board:item:v1:thread:*",),
+    ]
     env.warm.assert_awaited_once_with()
+
+
+def test_the_board_pattern_matches_board_thread_pins_and_nothing_else():
+    """The board imports this module, so the pattern is spelled out here: it must
+    match what board.item_key makes of a thread pin, and no other pin."""
+    from fnmatch import fnmatchcase
+
+    from app.services import board
+
+    pattern = thread_synopsis.BOARD_THREAD_ITEMS
+    assert fnmatchcase(board.item_key("thread:7"), pattern)
+    assert fnmatchcase(board.item_key("thread:9223372036854775807"), pattern)
+    for other in ("article:3f2a6c1e-8b4d-4f0a-9c2e-1d5b7a9e0f13", "place:6:3", "link:FR-US"):
+        assert not fnmatchcase(board.item_key(other), pattern)
+    assert not fnmatchcase(board.item_key("entity:org:thread:x"), pattern)
 
 
 @pytest.mark.asyncio

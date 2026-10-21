@@ -489,7 +489,10 @@ Branch: `claude/p4-board-api` (#97). This section records what shipped, includin
 
 ### Task 18a.1: `POST /api/board/resolve {items: [id, ...]}` (1–20)
 
-Returns `{items: [{item, snapshot}]}` in request order. A snapshot is `{title, place, lat, lng, time, url, resolved_as}`, with `null` for what a kind lacks; the snapshot itself is `null` for an unknown or expired item. Rate group `data`, not cached.
+Returns `{items: [{item, snapshot}]}` in request order. A snapshot is `{title, place, lat, lng, time, url, resolved_as}`, with `null` for what a kind lacks; the snapshot itself is `null` for an unknown or expired item. Rate group `board` (20 a minute per visitor; `/links` shares it).
+- **Caching:** each item's record is cached under `db:board:item:v1:{id}` until the next cycle ends. A record is its snapshot plus the facts its edges need: an article's cell, country, thread and names; a thread's winner and top names; a place's country; an entity's stored name.
+  - One MGET reads all the pins; only the misses are resolved, together, and written in one pipeline. An unknown item is cached too.
+  - `/links` and `/analyze` read the same records, so after a board opens, its edges read only the (name, thread) probes.
 - **article** (primary key): `display_title`, its place, coordinates, `published_at`, and `url` (http(s) only, else null).
 - **link:** `"France and United States"` (label-point names), no query; no place, coordinates or time.
 - **thread** (primary key):
@@ -503,7 +506,7 @@ Returns `{items: [{item, snapshot}]}` in request order. A snapshot is `{title, p
 
 ### Task 18a.2: `POST /api/board/links {items}` (1–20)
 
-Returns `{edges: [{a, b, kind, label}], co_coverage_checked}`. Each edge runs from the earlier pin in board order; edges sort by pins, then kind (`same_thread`, `shared_entity`, `same_place`, `co_covered`). One pair of pins can have an edge of each kind. A merged thread's pin connects as the thread it resolves to (its articles, top names and mention probes are the winner's), so two pins of what is now one thread get `same_thread`. Rate group `data`.
+Returns `{edges: [{a, b, kind, label}], co_coverage_checked}`. Each edge runs from the earlier pin in board order; edges sort by pins, then kind (`same_thread`, `shared_entity`, `same_place`, `co_covered`). One pair of pins can have an edge of each kind. A merged thread's pin connects as the thread it resolves to (its articles, top names and mention probes are the winner's), so two pins of what is now one thread get `same_thread`. Rate group `board`.
 - **`same_thread`** (`same thread`): two articles in one thread, or an article and its thread (`thread_members` by primary key).
 - **`shared_entity`** (`shared: A, B, C`, up to 3 names in the earlier pin's order), two cases:
   - **Articles and threads:** from the article's member `entities` and the thread's `top_entities`. Names thread assignment treats as generic (`threads.GENERIC_SQL`: in more than `GENERIC_ENTITY_SHARE` of active threads' top names) are left out. That set is read only when two articles or threads are pinned, cached under `db:board:generic:v1` until the cycle ends, and single-flighted.

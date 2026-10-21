@@ -63,6 +63,32 @@ def pool():
         yield fake
 
 
+class FakeItemCache:
+    """The board's per-item cache (cache.get_many and set_many), in memory. Values
+    go through JSON as Redis stores them; reads and writes are recorded."""
+
+    def __init__(self):
+        self.store: dict[str, object] = {}
+        self.reads: list[list[str]] = []
+        self.writes: list[tuple[dict, int]] = []
+
+    async def get_many(self, keys):
+        self.reads.append(list(keys))
+        return [self.store.get(k) for k in keys]
+
+    async def set_many(self, data, ttl):
+        self.writes.append((data, ttl))
+        self.store.update(json.loads(json.dumps(data, default=str)))
+
+
+@pytest.fixture(autouse=True)
+def item_cache(monkeypatch):
+    fake = FakeItemCache()
+    monkeypatch.setattr(board, "get_many", fake.get_many)
+    monkeypatch.setattr(board, "set_many", fake.set_many)
+    return fake
+
+
 def _items(*raws: str) -> list[board.BoardItem]:
     return [board.parse_item(raw) for raw in raws]
 
@@ -545,6 +571,91 @@ class TestResolveLinksAndOrder:
         ]
 
 
+class TestItemCache:
+    """Each item's resolution (its snapshot and what its edges need), cached under
+    db:board:item:v1:{id} until the next cycle ends: one read for all, then only
+    the misses resolved, together, and written in one round trip."""
+
+    @pytest.mark.asyncio
+    async def test_items_are_read_in_one_go_and_written_until_the_next_cycle(
+        self, pool, item_cache
+    ):
+        pool.answers[board.ARTICLES_SQL] = [_article_row()]
+        ids = [f"article:{ARTICLE_ID}", "thread:7", "link:FR-US"]
+
+        await board.resolve_items(_items(*ids), NOW)
+
+        assert board.item_key(ids[0]) == f"db:board:item:v1:article:{ARTICLE_ID}"
+        assert item_cache.reads == [[board.item_key(i) for i in ids]]
+        [(written, ttl)] = item_cache.writes
+        assert ttl == cycle_ttl(600)
+        assert set(written) == {board.item_key(i) for i in ids}
+        # An unknown item is cached too, so it isn't looked up again this cycle.
+        assert written[board.item_key("thread:7")]["snapshot"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_cached_item_is_served_as_it_resolved_without_a_read(self, pool, item_cache):
+        pool.answers[board.ARTICLES_SQL] = [_article_row()]
+        pool.answers[board.THREADS_SQL] = [_thread_row(7, 9)]  # merged: resolved_as
+        items = _items(f"article:{ARTICLE_ID}", "thread:7", "place:6:3")
+        first = await board.resolve_items(items, NOW)
+        pool.calls.clear()
+
+        again = await board.resolve_items(items, NOW)
+
+        assert again == first  # times come back as datetimes, resolved_as kept
+        assert isinstance(again[0]["time"], datetime)
+        assert again[1]["resolved_as"] == "thread:9"
+        assert pool.calls == []
+        assert len(item_cache.writes) == 1
+
+    @pytest.mark.asyncio
+    async def test_only_the_misses_are_resolved_and_written(self, pool, item_cache):
+        pool.answers[board.ARTICLES_SQL] = lambda ids: [_article_row(i) for i in ids]
+        await board.resolve_items(_items(f"article:{ARTICLE_ID}"), NOW)
+        pool.calls.clear()
+
+        snapshots = await board.resolve_items(
+            _items(f"article:{ARTICLE_ID}", f"article:{OTHER_ID}"), NOW
+        )
+
+        assert [s["title"] for s in snapshots] == ["Strikes spread across France"] * 2
+        assert pool.calls_to(board.ARTICLES_SQL) == [([OTHER_ID],)]
+        assert set(item_cache.writes[-1][0]) == {board.item_key(f"article:{OTHER_ID}")}
+
+    @pytest.mark.asyncio
+    async def test_a_place_is_looked_up_once_a_cycle_however_often_it_is_asked(
+        self, pool, item_cache
+    ):
+        """Up to 20 places, each up to two lookups: the costly part of a board."""
+        pool.answers[board.PLACE_SQL] = [_place_row()]
+
+        for _ in range(3):
+            await board.resolve_items(_items("place:6:3"), NOW)
+
+        assert len(pool.calls_to(board.PLACE_SQL)) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_memo_reads_its_pins_through_the_same_cache(
+        self, pool, item_cache, monkeypatch
+    ):
+        from app.services.ai_summary import SummaryUnavailable
+
+        pool.answers[board.ARTICLES_SQL] = [_article_row()]
+        items = _items(f"article:{ARTICLE_ID}", "link:FR-US")
+        await board.resolve_items(items, NOW)
+        pool.calls.clear()
+        monkeypatch.setattr(board, "get_cached", AsyncMock(return_value=None))
+        monkeypatch.setattr(board, "set_cached", AsyncMock())
+        claude = AsyncMock(side_effect=SummaryUnavailable("Summary generation failed."))
+        monkeypatch.setattr(board, "_call_claude", claude)
+
+        await board.analyze_board(items, [None, None], NOW)
+
+        assert pool.calls == []
+        assert "Strikes spread across France" in claude.await_args.args[0]
+
+
 # --- Edges ------------------------------------------------------------------------
 
 A1 = f"article:{ARTICLE_ID}"
@@ -870,10 +981,30 @@ class TestBoardEdges:
         assert pool.calls_to(board.MENTIONS_SQL) == [(["Ann Lee"], [9])]
 
     @pytest.mark.asyncio
-    async def test_without_the_listed_pairs_places_are_not_looked_up(self, pool, names):
-        await board.board_edges(_items("place:6:3", "place:9:7", A1), None, NOW)
+    async def test_edges_reuse_what_resolve_cached_and_read_none_of_it_again(self, pool, names):
+        pool.answers[board.MEMBERS_SQL] = [_member_row(ARTICLE_ID, 9, ["Bo Chan"])]
+        pool.answers[board.ARTICLES_SQL] = [_article_row(latitude=6.45, longitude=3.39)]
+        pool.answers[board.THREADS_SQL] = [_thread_row(8, 9, top_entities=["Bo Chan"])]
+        pool.answers[board.PLACE_SQL] = [_place_row()]
+        pool.answers[board.MENTIONS_SQL] = [{"name": "Ann Lee", "thread_id": 9}]
+        items = _items(A1, "thread:8", ANN, "place:6:3")
+        await board.resolve_items(items, NOW)  # as the board does when it opens
+        reads = len(pool.calls)
+        names.reset_mock()
 
-        assert pool.calls_to(board.PLACE_SQL) == []
+        edges = await board.board_edges(items, {frozenset({"FR", "NG"})}, NOW)
+
+        assert edges == [
+            _edge(A1, "thread:8", "same_thread", "same thread"),
+            _edge(A1, "thread:8", "shared_entity", "shared: Bo Chan"),
+            _edge(A1, "place:6:3", "same_place", "same place"),
+            _edge(A1, "place:6:3", "co_covered", "covered together: France and Nigeria"),
+            _edge("thread:8", ANN, "shared_entity", "shared: Ann Lee"),
+        ]
+        # Only the (name, thread) probes and the common names (their own cache is
+        # empty here) are read: no article, member, thread, place or name lookup.
+        assert [sql for sql, _ in pool.calls[reads:]] == [board.MENTIONS_SQL, threads.GENERIC_SQL]
+        names.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_mentions_are_read_only_with_names_and_threads_to_match(self, pool, names):
