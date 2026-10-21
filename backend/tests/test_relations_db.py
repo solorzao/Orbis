@@ -206,6 +206,11 @@ async def test_the_detail_takes_titles_from_our_articles(conn):
 
 # --- Plans and pages at production scale -------------------------------------
 
+# Pages each read may touch, custom or generic (the plan's table, 19c.3).
+_SINCE_PAGES = 10  # the day index's first entry in the lens
+_DETAIL_PAGES = 60  # 14 heap pages at most (7 days x 2 directions), plus the index's
+_TITLES_PAGES = 60  # 10 lookups by source_url
+
 
 async def _relation_pages(conn, *names: str) -> int:
     return sum(
@@ -301,18 +306,22 @@ async def test_at_production_scale_since_reads_the_day_index(big):
         assert "idx_event_pairs_day" in plan["indexes"], plan
     for mode in ("custom", "generic"):
         pages = await db_plans.pages(big, relations.SINCE_SQL, (FIRST, LAST), mode)
-        assert pages <= 10, (mode, pages)
+        assert pages <= _SINCE_PAGES, (mode, pages)
 
 
 @pytest.mark.asyncio
-async def test_since_seq_scans_without_the_day_index(big):
-    """The mutation twin of the check above (19b's twin covers the purge)."""
+async def test_the_since_checks_fail_without_the_day_index(big):
+    """The mutation twin of the checks above (19b's twin covers the purge): without
+    the day index, since reads the whole table or the whole primary key (it holds
+    day too; 19b's CI showed the planner prefers it), past the page bound."""
     await fill_week(big, TODAY)
     with pytest.raises(_Undo):
         async with big.transaction():  # a savepoint
             await big.execute("DROP INDEX idx_event_pairs_day")
             plan = await db_plans.custom_plan(big, relations.SINCE_SQL, FIRST, LAST)
-            assert "event_pairs_daily" in plan["seq_scans"], plan
+            assert "idx_event_pairs_day" not in plan["indexes"], plan
+            pages = await db_plans.pages(big, relations.SINCE_SQL, (FIRST, LAST), "custom")
+            assert pages > _SINCE_PAGES, (pages, plan)
             raise _Undo
 
 
@@ -339,12 +348,14 @@ async def test_at_production_scale_the_detail_reads_the_primary_key(big):
         assert "event_pairs_daily_pkey" in plan["indexes"], plan
     for mode in ("custom", "generic"):
         pages = await db_plans.pages(big, relations.DETAIL_SQL, args, mode)
-        assert pages <= 60, (mode, pages)
+        assert pages <= _DETAIL_PAGES, (mode, pages)
 
 
 @pytest.mark.asyncio
 async def test_the_detail_check_fails_without_the_primary_key(big):
-    """The mutation twin: without the primary key the detail can't read by pair."""
+    """The mutation twin: without the primary key the detail can't read by pair, so
+    it reads the lens's days whole (a seq scan, or the day index's 7 of 8 days),
+    past the page bound."""
     await fill_week(big, TODAY)
     a, b = _busy_pair()
     with pytest.raises(_Undo):
@@ -354,7 +365,8 @@ async def test_the_detail_check_fails_without_the_primary_key(big):
             )
             plan = await db_plans.custom_plan(big, relations.DETAIL_SQL, a, b, FIRST, LAST)
             assert "event_pairs_daily_pkey" not in plan["indexes"], plan
-            assert "event_pairs_daily" in plan["seq_scans"], plan
+            pages = await db_plans.pages(big, relations.DETAIL_SQL, (a, b, FIRST, LAST), "custom")
+            assert pages > _DETAIL_PAGES, (pages, plan)
             raise _Undo
 
 
@@ -383,7 +395,7 @@ async def test_at_production_scale_titles_are_read_by_source_url(big):
         assert "articles_source_url_key" in plan["indexes"], plan
     for mode in ("custom", "generic"):
         pages = await db_plans.pages(big, relations.TITLES_SQL, (urls,), mode)
-        assert pages <= 60, (mode, pages)
+        assert pages <= _TITLES_PAGES, (mode, pages)
 
 
 class _Undo(Exception):
