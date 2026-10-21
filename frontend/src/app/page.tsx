@@ -32,6 +32,7 @@ import {
   actionCountries,
   linkKey,
   linkedCountries,
+  linkPill,
   linksStatus,
   toLinkDetail,
   type LinkRank,
@@ -1088,7 +1089,7 @@ export default function Home() {
       />
 
       {/* The hovered arc's pill, over the globe and under the chrome */}
-      <ArcPill link={pillLink} project={projectPoint} touch={touch} />
+      <ArcPill label={pillLink && linkPill(pillLink)} project={projectPoint} touch={touch} />
 
       {/* Top bar: brand, topics, status and About in one grid */}
       <TopBar

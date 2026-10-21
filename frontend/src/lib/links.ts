@@ -197,6 +197,20 @@ export function arcPillText(link: CountryLink): { n: number; text: string } {
   return { n: link.n, text: `${verb} ${from.name} and ${to.name}${topic}` };
 }
 
+/** What the arc pill names: an arc's ends (from its origin), its number and its words. */
+export interface ArcPillLabel {
+  start: LinkCountry;
+  end: LinkCountry;
+  n: number;
+  text: string;
+}
+
+/** A link's arc pill: "41 stories link United States and Iran, mostly politics". */
+export function linkPill(link: CountryLink): ArcPillLabel {
+  const [start, end] = linkEnds(link);
+  return { start, end, ...arcPillText(link) };
+}
+
 /** A link's names from its origin: "US ↔ IR" for its pill, "United States and Iran" in full. */
 export function linkPairLabel(link: CountryLink): { short: string; long: string } {
   const [from, to] = linkEnds(link);

@@ -9,7 +9,9 @@ import {
   relationDays,
   relationDaysWords,
   relationKey,
+  labelledRelations,
   relationLensLabel,
+  relationPill,
   relationPillText,
   relationTag,
   relationWords,
@@ -181,6 +183,31 @@ describe("persistent labels (decision 6)", () => {
   });
   it("puts the class in words, from the acting country", () => {
     expect(relationTag(rel())).toBe("US–IR · 100 · conflict");
+  });
+
+  const many = Array.from({ length: 7 }, (_, i) =>
+    rel({ a: { ...IR, iso: `X${i}` }, mentions: 100 * (i + 1) }),
+  );
+  it("labels the strongest unless another focus mutes the arcs", () => {
+    expect(labelledRelations(many, { muted: false, yieldTo: null })).toHaveLength(5);
+    expect(labelledRelations(many, { muted: true, yieldTo: null })).toEqual([]);
+  });
+  it("yields the label of the arc whose pill shows (hovered, focused or inspected)", () => {
+    const keys = labelledRelations(many, { muted: false, yieldTo: "US-X6" }).map((r) =>
+      relationKey(r.a.iso, r.b.iso),
+    );
+    expect(keys).toEqual(["US-X5", "US-X4", "US-X3", "US-X2"]);
+  });
+});
+
+describe("relationPill", () => {
+  it("is the arc pill's label: from the acting country, with its words", () => {
+    expect(relationPill(rel())).toEqual({
+      start: US,
+      end: IR,
+      n: 100,
+      text: "reported events between United States and Iran, mostly verbal conflict",
+    });
   });
 });
 

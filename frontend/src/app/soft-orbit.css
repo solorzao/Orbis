@@ -90,7 +90,8 @@ kbd {
 }
 .low-power .glass,
 .low-power .pillbar,
-.low-power .arc-pill {
+.low-power .arc-pill,
+.low-power .arc-tag {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   background: #1a182c;
@@ -1972,6 +1973,36 @@ button.cite:hover {
 .arc-pill:not([data-placed]) {
   visibility: hidden;
 }
+/*
+ * The strongest relation arcs' persistent labels (ArcLabels places them):
+ * smaller and quieter than the pill, which renders after them and so sits
+ * above. Edged in their class's arc colour; the class is in their words too.
+ */
+.arc-tag {
+  position: fixed;
+  z-index: var(--z-reticle);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(var(--surface-glass), var(--surface-glass)), var(--bg-page);
+  border: 1px solid var(--border-subtle);
+  font: var(--type-data-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.arc-tag.cooperation {
+  border-color: color-mix(in srgb, var(--arc-relation-cooperation) 45%, transparent);
+}
+.arc-tag.conflict {
+  border-color: color-mix(in srgb, var(--arc-relation-conflict) 45%, transparent);
+}
+.arc-tag:not([data-placed]) {
+  visibility: hidden;
+}
 /* A touch screen can't hover an arc (as the hover card, useTouchOnly): no pill. */
 @media (hover: none) {
   .arc-pill {
@@ -2464,6 +2495,10 @@ button.cite:hover {
   .bottombar .links-chip {
     display: inline-flex;
   }
+  /* No room for the relation arcs' labels on a phone: the list in Inspect names them. */
+  .arc-tags {
+    display: none;
+  }
   .timeline {
     height: 64px;
   }
@@ -2700,6 +2735,7 @@ button.cite:hover {
 .board-open .recon,
 .board-open .topbar-center,
 .board-open .arc-pill,
+.board-open .arc-tags,
 .board-open .hud {
   opacity: 0;
   visibility: hidden;

@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import ArcPill from "./ArcPill";
-import { arcApex } from "@/lib/links";
+import { arcApex, linkPill } from "@/lib/links";
+import { relationPill, toRelation } from "@/lib/relations";
+import type { ApiRelation } from "@/lib/api";
+import contract from "../../e2e/relations.contract.json";
 import type { CountryLink } from "@/types/news";
 
 const US = { iso: "US", name: "United States", lat: 39.8, lng: -98.6 };
@@ -43,14 +46,14 @@ function runFrame() {
 
 describe("ArcPill", () => {
   it("renders nothing, and runs no frame loop, without a link", () => {
-    const { container } = render(<ArcPill link={null} project={() => ({ x: 1, y: 2 })} />);
+    const { container } = render(<ArcPill label={null} project={() => ({ x: 1, y: 2 })} />);
     expect(container).toBeEmptyDOMElement();
     expect(frames.size).toBe(0);
   });
 
   it("names the link at its arc's apex, following the globe each frame", () => {
     const project = vi.fn(() => ({ x: 640, y: 300 }));
-    render(<ArcPill link={LINK} project={project} />);
+    render(<ArcPill label={linkPill(LINK)} project={project} />);
     const pill = screen.getByTestId("arc-pill");
     expect(pill).toHaveTextContent("41 stories link United States and Iran, mostly politics");
     expect(pill.querySelector(".num")).toHaveTextContent("41");
@@ -71,7 +74,7 @@ describe("ArcPill", () => {
 
   it("hides while the apex is on the globe's far side", () => {
     const project = vi.fn<() => { x: number; y: number } | null>(() => ({ x: 640, y: 300 }));
-    render(<ArcPill link={LINK} project={project} />);
+    render(<ArcPill label={linkPill(LINK)} project={project} />);
     runFrame();
     project.mockReturnValue(null);
     runFrame();
@@ -79,18 +82,32 @@ describe("ArcPill", () => {
   });
 
   it("stops its frame loop when the link goes", () => {
-    const { rerender } = render(<ArcPill link={LINK} project={() => ({ x: 1, y: 2 })} />);
+    const { rerender } = render(
+      <ArcPill label={linkPill(LINK)} project={() => ({ x: 1, y: 2 })} />,
+    );
     expect(frames.size).toBe(1);
-    rerender(<ArcPill link={null} project={() => ({ x: 1, y: 2 })} />);
+    rerender(<ArcPill label={null} project={() => ({ x: 1, y: 2 })} />);
     expect(frames.size).toBe(0);
     expect(screen.queryByTestId("arc-pill")).toBeNull();
   });
 
   it("runs no frame loop on a touch screen, where CSS hides it anyway", () => {
     const project = vi.fn(() => ({ x: 1, y: 2 }));
-    const { container } = render(<ArcPill link={LINK} project={project} touch />);
+    const { container } = render(<ArcPill label={linkPill(LINK)} project={project} touch />);
     expect(container).toBeEmptyDOMElement();
     expect(frames.size).toBe(0);
     expect(project).not.toHaveBeenCalled();
+  });
+
+  it("names a relation by its reported events, from the acting country's end", () => {
+    const relation = toRelation(contract.list.relations[0] as ApiRelation); // IR–US, from US
+    const project = vi.fn(() => ({ x: 640, y: 300 }));
+    render(<ArcPill label={relationPill(relation)} project={project} />);
+    expect(screen.getByTestId("arc-pill")).toHaveTextContent(
+      "312 reported events between United States and Iran, mostly verbal conflict",
+    );
+    runFrame();
+    const apex = arcApex(relation.b, relation.a);
+    expect(project).toHaveBeenCalledWith(apex.lat, apex.lng, apex.altitude);
   });
 });

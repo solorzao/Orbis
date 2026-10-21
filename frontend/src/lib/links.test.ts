@@ -11,6 +11,7 @@ import {
   actionCountries,
   linkKey,
   linkPairLabel,
+  linkPill,
   linkedCountries,
   linksStatus,
   linkTopic,
@@ -179,6 +180,17 @@ describe("arcPillText", () => {
     expect(arcPillText(link({ n: 1, topic: "sports", from: "IR" }))).toEqual({
       n: 1,
       text: "story links Iran and United States",
+    });
+  });
+});
+
+describe("linkPill", () => {
+  it("is the arc pill's label: the arc's ends from the origin, and its words", () => {
+    expect(linkPill(link())).toEqual({
+      start: US,
+      end: IR,
+      n: 41,
+      text: "stories link United States and Iran, mostly politics",
     });
   });
 });

@@ -6,7 +6,7 @@
  * meaning alone.
  */
 import type { ApiQuadCounts, ApiRelation, ApiRelationDetail, ApiRelations } from "@/lib/api";
-import { arcStroke, linkKey, type GlobeArc } from "@/lib/links";
+import { arcStroke, linkKey, type ArcPillLabel, type GlobeArc } from "@/lib/links";
 import type { TimeWindow } from "@/lib/timeWindow";
 import type { LinkCountry } from "@/types/news";
 
@@ -195,6 +195,12 @@ export function relationPillText(rel: Relation): { n: number; text: string } {
   return { n: rel.n, text: `${noun} between ${from.name} and ${to.name}, ${relationWords(rel)}` };
 }
 
+/** A relation's arc pill: "312 reported events between United States and Iran, mostly verbal conflict". */
+export function relationPill(rel: Relation): ArcPillLabel {
+  const [start, end] = relationEnds(rel);
+  return { start, end, ...relationPillText(rel) };
+}
+
 /** The relation arc tokens, read from CSS (a canvas can't use variables). */
 export interface RelationColors {
   /** --arc-relation-cooperation */
@@ -302,6 +308,19 @@ export const LABELLED_ARCS = 5;
 /** The strongest relations, by mentions then events: those labelled on the globe. */
 export function strongestRelations(relations: readonly Relation[], n = LABELLED_ARCS): Relation[] {
   return [...relations].sort((x, y) => y.mentions - x.mentions || y.n - x.n).slice(0, n);
+}
+
+/**
+ * The relations whose arcs carry a persistent label now: the strongest, but
+ * none while another focus mutes the arcs (an entity, the board), and not the
+ * one whose pill shows (hovered, focused or inspected: its pill says more).
+ */
+export function labelledRelations(
+  relations: readonly Relation[],
+  { muted, yieldTo }: { muted: boolean; yieldTo: string | null },
+): Relation[] {
+  if (muted) return [];
+  return strongestRelations(relations).filter((r) => relationKey(r.a.iso, r.b.iso) !== yieldTo);
 }
 
 /** A persistent label: "US–IR · 312 · conflict", from the acting country, the class in words. */
