@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import Response
+from fastapi import HTTPException, Response
 
 # Vercel's edge serves a public read for a minute, then for up to five more
 # while it refetches in the background. Every visitor gets the same answer for
@@ -19,3 +19,19 @@ def edge_cached(response: Response) -> None:
     without it, so it is never cached.
     """
     response.headers["Cache-Control"] = EDGE_CACHE_CONTROL
+
+
+# Seconds a client waits before asking again after a 503: a week read stopped at
+# a cycle's boundary is soon recomputed, or warmed.
+RETRY_AFTER_SECONDS = 15
+
+
+def retry_shortly(reason: Exception) -> HTTPException:
+    """A 503 to raise for a computation stopped under a request (cache.FlightCancelled):
+    the client retries after Retry-After. An HTTPException, so no traceback is
+    logged and the edge never keeps it."""
+    return HTTPException(
+        status_code=503,
+        detail=f"{reason}; retry shortly.",
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+    )

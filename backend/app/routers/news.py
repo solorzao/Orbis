@@ -27,7 +27,7 @@ from app.models.news import (
     SelectionSummaryResponse,
     TopicCount,
 )
-from app.routers.http_cache import edge_cached
+from app.routers.http_cache import edge_cached, retry_shortly
 from app.services.ai_summary import (
     _window_key,
     cached_summary,
@@ -37,6 +37,7 @@ from app.services.ai_summary import (
 from app.services.breaking import get_breaking
 from app.services.cache import (
     WEEK_TTL,
+    FlightCancelled,
     cached_model,
     cycle_ttl,
     get_cached,
@@ -210,9 +211,12 @@ async def cached_globe(
     load = functools.partial(_load_globe, cache_k, hours, start_time, end_time, limit, tag)
     if not _is_week(hours, start_time, end_time):
         return await load()
-    if limit == _FIRST_VISIT_GLOBE_LIMIT:
-        return (await single_flight(_GLOBE_WEEK_FLIGHT, _refresh_globe_week))[tag]
-    return await single_flight(cache_k, load)
+    try:
+        if limit == _FIRST_VISIT_GLOBE_LIMIT:
+            return (await single_flight(_GLOBE_WEEK_FLIGHT, _refresh_globe_week))[tag]
+        return await single_flight(cache_k, load)
+    except FlightCancelled as stopped:  # at a cycle's boundary: a 503 to retry
+        raise retry_shortly(stopped) from None
 
 
 def _is_week(hours: int, start_time: str | None, end_time: str | None) -> bool:
@@ -256,12 +260,16 @@ async def _load_globe(
 
 async def _cache_globe(cache_k: str, rows: list[dict], *, week: bool) -> list[GlobeDataPoint]:
     """Cache a globe's points: a week's for WEEK_TTL, others until the next cycle
-    ends; an empty globe only briefly, so new stories show soon."""
+    ends. An empty globe only briefly, so new stories show soon; but an empty
+    week other than All's (the warm's gate, which must not read as fresh) for
+    WEEK_TTL, or each request for it would read the week again."""
     points = [GlobeDataPoint(**r) for r in rows]
-    if not points:
-        ttl = _EMPTY_GLOBE_TTL
-    else:
+    if points:
         ttl = WEEK_TTL if week else cycle_ttl(settings.db_cache_ttl)
+    elif week and cache_k != _GLOBE_WEEK_GATE:
+        ttl = WEEK_TTL
+    else:
+        ttl = _EMPTY_GLOBE_TTL
     await set_cached(cache_k, [p.model_dump(mode="json") for p in points], ttl)
     return points
 
@@ -282,6 +290,9 @@ _WEEK_HOURS = 168
 # The one pass that refreshes the 7-day globe's seven entries (single_flight).
 _GLOBE_WEEK_FLIGHT = "wk:globe:v2:168::500:*"
 
+# All's 7-day entry: its age gates warm_globe_week (cache.week_fresh).
+_GLOBE_WEEK_GATE = _globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, None)
+
 
 async def warm_globe_week() -> None:
     """Refresh the 7-day globe for All and each topic pill about hourly (app.warm).
@@ -291,7 +302,7 @@ async def warm_globe_week() -> None:
     Joins a refresh that a request's miss has started; the warm's timeout, or a
     stop (stop_background_tasks), cancels it.
     """
-    if await week_fresh(_globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, None)):
+    if await week_fresh(_GLOBE_WEEK_GATE):
         return
     await single_flight(_GLOBE_WEEK_FLIGHT, _refresh_globe_week, cancel_with_caller=True)
 
@@ -300,16 +311,18 @@ async def _refresh_globe_week() -> dict[str | None, list[GlobeDataPoint]]:
     """Compute the 7-day globe for All and each topic from one pass over the week
     (get_globe_points_by_topic), and cache each for WEEK_TTL under the key, and as
     the bytes, its request would cache. Each was its own query, 20-73 s cold on
-    production, and a topic click kept the last topic's dots up meanwhile."""
+    production, and a topic click kept the last topic's dots up meanwhile.
+
+    All's entry is written last: it gates the warm, so a refresh cancelled
+    partway never leaves it fresh over stale topics."""
     globes = await get_globe_points_by_topic(
         timespan_hours=_WEEK_HOURS, cell_size=1.0, limit=_FIRST_VISIT_GLOBE_LIMIT
     )
-    return {
-        tag: await _cache_globe(
-            _globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, tag), rows, week=True
-        )
-        for tag, rows in globes.items()
-    }
+    points: dict[str | None, list[GlobeDataPoint]] = {}
+    for tag in sorted(globes, key=lambda t: t is None):  # the topics, then All
+        key = _globe_key(_WEEK_HOURS, None, None, _FIRST_VISIT_GLOBE_LIMIT, tag)
+        points[tag] = await _cache_globe(key, globes[tag], week=True)
+    return points
 
 
 # Grid cell size must match get_globe_points() call in get_globe_data().

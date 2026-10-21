@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.routers.http_cache import EDGE_CACHE_CONTROL
 from app.services.cache import WEEK_TTL, invalidate
@@ -29,8 +31,6 @@ PILLS = [
     ("Health", "health"),
 ]
 WEEK_GLOBE_KEYS = [f"wk:globe:v2:168::500:{tag or ''}" for _, tag in PILLS]
-# Health's week is empty in these tests: cached a minute only.
-FULL_WEEK_KEYS = [key for key in WEEK_GLOBE_KEYS if not key.endswith(":health")]
 WEEK_LINKS_KEY = "wk:links:v5:live:168::lift:40"
 CYCLE = 15 * 60
 
@@ -133,7 +133,7 @@ class TestHourlyWarm:
         for _ in range(96):  # a day of 15-minute cycles, each ending in an invalidation
             await invalidate("db:*")
             await _warm_week()
-            assert all(key in redis.values for key in [*FULL_WEEK_KEYS, WEEK_LINKS_KEY])
+            assert all(key in redis.values for key in [*WEEK_GLOBE_KEYS, WEEK_LINKS_KEY])
             redis.elapse(CYCLE)
 
         # Refreshed once 55 minutes old: every fourth cycle (at 0, 60, 120 ... minutes).
@@ -181,9 +181,22 @@ class TestHourlyWarm:
         assert week.links.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_an_empty_week_for_another_request_is_kept_the_weeks_ttl(
+        self, monkeypatch, redis, week
+    ):
+        """Only the warmers' gate keys (All's globe, the default links) are kept a minute
+        when empty: any other empty week would otherwise read the week per request."""
+        week.links.return_value = []
+        async with _client(monkeypatch) as client:
+            resp = await client.get("/api/links", params={"timespan": "168h", "topic": "Health"})
+
+        assert resp.json() == []
+        assert redis.ttls["wk:links:v5:live:168:health:lift:40"] == WEEK_TTL
+
+    @pytest.mark.asyncio
     async def test_each_globe_variant_is_stored_as_its_request_reads_it(self, redis, week):
-        """Under the request's key, as the request's bytes, for the week's TTL; an empty
-        topic only a minute, as any empty globe."""
+        """Under the request's key, as the request's bytes, for the week's TTL: an empty
+        topic too, or each request for it would rerun the seven-topic pass."""
         from app.models.news import GlobeDataPoint
         from app.routers.news import warm_globe_week
 
@@ -196,7 +209,29 @@ class TestHourlyWarm:
             assert json.loads(redis.values[key]) == dumped, key
         assert redis.ttls[WEEK_GLOBE_KEYS[0]] == WEEK_TTL
         assert json.loads(redis.values["wk:globe:v2:168::500:health"]) == []
-        assert redis.ttls["wk:globe:v2:168::500:health"] == 60
+        assert redis.ttls["wk:globe:v2:168::500:health"] == WEEK_TTL
+
+    @pytest.mark.asyncio
+    async def test_an_empty_all_globe_is_kept_a_minute_so_the_next_warm_retries(self, redis, week):
+        """All's entry gates the warm (week_fresh): empty, it must not read as fresh."""
+        from app.routers.news import warm_globe_week
+
+        week.globes.return_value = {**_variants(), None: []}
+        await warm_globe_week()
+        assert redis.ttls[WEEK_GLOBE_KEYS[0]] == 60
+        await warm_globe_week()
+        assert week.globes.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_all_is_written_last(self, redis, week):
+        """A refresh cancelled partway never leaves All, the gate, fresh over stale topics."""
+        from app.routers.news import warm_globe_week
+
+        await warm_globe_week()
+
+        globe_writes = [key for key in redis.writes if key.startswith("wk:globe:")]
+        assert sorted(globe_writes) == sorted(WEEK_GLOBE_KEYS)
+        assert globe_writes[-1] == WEEK_GLOBE_KEYS[0]
 
 
 def _blocking(mock: AsyncMock) -> tuple[asyncio.Event, asyncio.Event]:
@@ -237,7 +272,7 @@ class TestStopping:
     @pytest.mark.asyncio
     async def test_a_stopped_week_refresh_is_cancelled_and_one_a_request_started(self, redis, week):
         """At a cycle's start or at shutdown (stop_background_tasks): the warm's week read,
-        and a request's cold miss of the other (that request gets an error)."""
+        and a request's cold miss of the other (that request gets a 503 to retry)."""
         from app.routers.links import warm_links_7d
         from app.routers.news import cached_globe
         from app.services import cache, ingestion
@@ -253,11 +288,37 @@ class TestStopping:
             await ingestion.stop_background_tasks()
 
         assert links_cancelled.is_set() and globe_cancelled.is_set()
-        with pytest.raises(RuntimeError, match="cancelled"):
+        with pytest.raises(HTTPException) as refused:
             await request
+        assert refused.value.status_code == 503
         await asyncio.sleep(0)
         assert not cache._in_flight
         assert not ingestion._background_tasks
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("path", "mock"), [("/api/news", "globes"), ("/api/links", "links")])
+    async def test_a_request_whose_week_read_is_cancelled_gets_a_503_to_retry(
+        self, monkeypatch, redis, week, caplog, path, mock
+    ):
+        """Not a 500 with a traceback: the read was stopped at a cycle's boundary, and a
+        retry in a moment finds the next one (or the warm's answer)."""
+        from app.services import cache
+
+        started, _ = _blocking(getattr(week, mock))
+        async with _client(monkeypatch) as client:
+            request = asyncio.create_task(
+                client.get(path, params={"timespan": "168h", "topic": "Politics"})
+            )
+            await asyncio.wait_for(started.wait(), 1)
+            with caplog.at_level(logging.INFO):
+                await asyncio.gather(*cache.cancel_flights("wk:"), return_exceptions=True)
+                resp = await request
+
+        assert resp.status_code == 503
+        assert resp.headers["retry-after"] == "15"
+        assert "cache-control" not in resp.headers  # never kept at the edge
+        assert resp.json()["detail"] == "The computation for wk:* was cancelled; retry shortly."
+        assert not [r for r in caplog.records if r.exc_info]
 
 
 class TestReads:

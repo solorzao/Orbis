@@ -10,11 +10,12 @@ from typing import Annotated, Literal, NamedTuple
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.models.links import Link, LinkDetail, LinkExplainRequest, LinkExplanation
-from app.routers.http_cache import edge_cached
+from app.routers.http_cache import edge_cached, retry_shortly
 from app.routers.news import _deduplicate_articles, _globe_topic_tag, _parse_iso, _row_to_article
 from app.services.ai_summary import _window_key
 from app.services.cache import (
     WEEK_TTL,
+    FlightCancelled,
     cached_model,
     cycle_ttl,
     get_cached,
@@ -139,8 +140,16 @@ _WEEK_WINDOW = "live:168"
 def _links_key(window: Window, tag: str | None, rank: str, limit: int) -> str:
     """The 7-day window's under wk:, which no cycle invalidates (see
     cache.WEEK_TTL), the others under db:."""
-    prefix = "wk" if window.key == _WEEK_WINDOW else "db"
-    return f"{prefix}:links:v5:{window.key}:{tag or ''}:{rank}:{limit}"
+    return _key_for(window.key, tag, rank, limit)
+
+
+def _key_for(window_key: str, tag: str | None, rank: str, limit: int) -> str:
+    prefix = "wk" if window_key == _WEEK_WINDOW else "db"
+    return f"{prefix}:links:v5:{window_key}:{tag or ''}:{rank}:{limit}"
+
+
+# The default 7-day answer's key: its age gates warm_links_7d (cache.week_fresh).
+_LINKS_WEEK_GATE = _key_for(_WEEK_WINDOW, None, DEFAULT_RANK, DEFAULT_LIMIT)
 
 
 def _parse_links(cached: list) -> list[Link]:
@@ -164,23 +173,31 @@ async def cached_links(window: Window, tag: str | None, rank: str, limit: int) -
             return links
 
     load = functools.partial(_load_links, cache_k, window, tag, rank, limit)
-    if window.key == _WEEK_WINDOW:
+    if window.key != _WEEK_WINDOW:
+        return await load()
+    try:
         return await single_flight(cache_k, load)
-    return await load()
+    except FlightCancelled as stopped:  # at a cycle's boundary: a 503 to retry
+        raise retry_shortly(stopped) from None
 
 
 async def _load_links(
     cache_k: str, window: Window, tag: str | None, rank: str, limit: int
 ) -> list[Link]:
     """Compute the window's links and cache them: a week's for WEEK_TTL, others
-    until the next cycle ends; an empty answer briefly, so new stories show soon."""
+    until the next cycle ends. An empty answer briefly, so new stories show soon;
+    but an empty week other than the default's (the warm's gate, which must not
+    read as fresh) for WEEK_TTL, or each request for it would read the week."""
     rows = await get_link_pairs(window.start, window.end, tag)
     links = [Link.model_validate(link) for link in rank_links(rows, rank, limit, tag)]
 
-    if not links:
-        ttl = _EMPTY_LINKS_TTL
+    week = window.key == _WEEK_WINDOW
+    if links:
+        ttl = WEEK_TTL if week else cycle_ttl(_LINKS_TTL)
+    elif week and cache_k != _LINKS_WEEK_GATE:
+        ttl = WEEK_TTL
     else:
-        ttl = WEEK_TTL if window.key == _WEEK_WINDOW else cycle_ttl(_LINKS_TTL)
+        ttl = _EMPTY_LINKS_TTL
     await set_cached(cache_k, [link.model_dump(by_alias=True) for link in links], ttl)
     return links
 
