@@ -97,13 +97,20 @@ async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(
     starting "Su" or "Ha". Now a word of the name must resemble q (<%), in a table
     of people and organisations only, a few MB that stay cached.
     """
-    # Hold off autovacuum. A vacuum or autoanalyze that ran now wouldn't count the
-    # fixture's uncommitted rows, and would write near-zero row counts to pg_class
-    # (in place, so this transaction's plans see them at once): the planner would
-    # then scan a "nearly empty" table rather than use its indexes. Autovacuum
-    # skips a table it can't lock (SKIP_LOCKED), and this mode conflicts with
-    # VACUUM and ANALYZE but not with this transaction's own writes or ANALYZE.
-    # These are every table the fixture fills and the plans below read.
+    # The plans below must be made from the same statistics every run.
+    #
+    # Statistics from every row, not a sample: ANALYZE reads 300 x the statistics
+    # target rows, so at the default 100 it took a different 30K of the fixture's
+    # 57K names, 100K members and 150K nodes each run, and the resolution plan
+    # tipped with the sample. At 1000 it reads them all. SET LOCAL: it ends with
+    # this transaction (no column sets its own target).
+    await conn.execute("SET LOCAL default_statistics_target = 1000")
+    # And no autovacuum while the fixture is uncommitted: a vacuum or autoanalyze
+    # wouldn't count its rows, and would write near-zero row counts to pg_class
+    # (in place, so this transaction's plans would see them at once). Autovacuum
+    # skips a table it can't lock (SKIP_LOCKED); this mode conflicts with VACUUM
+    # and ANALYZE but not with this transaction's own writes or ANALYZE. These
+    # are every table the fixture fills and the plans below read.
     await conn.execute(
         "LOCK TABLE kg_entity_names, thread_members, kg_nodes IN SHARE UPDATE EXCLUSIVE MODE"
     )
