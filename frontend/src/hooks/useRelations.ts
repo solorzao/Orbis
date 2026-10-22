@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchRelations, retryOnce503 } from "@/lib/api";
 import {
   RELATIONS_LIMIT,
+  patchRelations,
   toRelations,
   type Relation,
+  type RelationDetail,
   type RelationKind,
   type RelationLens,
 } from "@/lib/relations";
 import { FETCH_DEBOUNCE_MS } from "@/hooks/useGlobePoints";
 
-/** How often an open layer asks again: the API's lens refreshes hourly (wk:*). */
+/**
+ * How often an open layer asks again. The API's relations caches refresh each
+ * ingestion cycle (db:*), so meanwhile an opened pair's detail is fresher (`patch`).
+ */
 export const REFRESH_MS = 30 * 60_000;
 
 const NO_RELATIONS: Relation[] = [];
@@ -32,12 +37,19 @@ interface Result {
  * (`kind`) refetches; while on, it asks again every 30 minutes. It follows
  * useLinks: a new class cancels the last request and ignores its answer if
  * it comes anyway, the last arcs stay up while the next load, a 503 is asked
- * once more, and off forgets the answer.
+ * once more, and off forgets the answer. `patch` puts a pair's detail into
+ * the answer up, when it is every class's over the same days (patchRelations).
  */
 export function useRelations(
   kind: RelationKind,
   enabled: boolean,
-): { relations: Relation[]; lens: RelationLens | null; loading: boolean; error: boolean } {
+): {
+  relations: Relation[];
+  lens: RelationLens | null;
+  loading: boolean;
+  error: boolean;
+  patch: (detail: RelationDetail) => void;
+} {
   const [result, setResult] = useState<Result | null>(null);
   const [tick, setTick] = useState(0);
 
@@ -71,15 +83,26 @@ export function useRelations(
     };
   }, [enabled, kind, tick]);
 
+  // Checked against the answer up (its class and days), not the switch: the
+  // last arcs stay drawn while another class loads.
+  const patch = useCallback((detail: RelationDetail) => {
+    setResult((r) => {
+      if (r === null) return r;
+      const relations = patchRelations(r.relations, detail, r);
+      return relations === r.relations ? r : { ...r, relations };
+    });
+  }, []);
+
   // Off forgets the last answer: turned on again, an old error must not be
   // shown (and announced) before the new request answers.
   if (!enabled && result !== null) setResult(null);
-  if (!enabled) return { relations: NO_RELATIONS, lens: null, loading: false, error: false };
+  if (!enabled) return { relations: NO_RELATIONS, lens: null, loading: false, error: false, patch };
   const current = result !== null && result.kind === kind && result.tick === tick;
   return {
     relations: result?.relations ?? NO_RELATIONS,
     lens: result?.lens ?? null,
     error: result?.error ?? false,
     loading: !current,
+    patch,
   };
 }

@@ -4,9 +4,11 @@ import {
   MOCK_RELATIONS,
   MOCK_RELATIONS_CONFLICT,
   MOCK_RELATIONS_COOPERATION,
+  MOCK_RELATION_DETAIL,
   NEW_YORK,
   PARIS,
   gotoStillGlobe,
+  isRelationDetail,
   isRelationsList,
   mockAgentRoute,
   mockRelations,
@@ -167,6 +169,31 @@ test.describe("Relations layer", () => {
     await expect(
       inspector.getByRole("link", { name: "Gulf shipping warnings traded" }),
     ).toHaveCount(0);
+  });
+
+  test("an opened pair's arc and row take its detail's fresher numbers", async ({ page }) => {
+    // The list answered before the last cycle (59); the detail is fetched fresh (65).
+    const stale = {
+      ...MOCK_RELATIONS,
+      relations: MOCK_RELATIONS.relations.map((r, i) => (i === 0 ? { ...r, n: 59 } : r)),
+    };
+    await gotoStillGlobe(page, async (p) => {
+      await p.route(isRelationsList, (route) => route.fulfill({ json: stale }));
+      await p.route(isRelationDetail, (route) =>
+        route.fulfill({ json: { ...MOCK_RELATION_DETAIL, n: 65 } }),
+      );
+    });
+    await relationsOn(page);
+    await page.getByTestId("side-tab-inspect").press("Enter");
+    const row = page.locator('[data-relation="IR-US"]');
+    await expect(row).toHaveAccessibleName(/: 59 reported events/);
+
+    await row.press("Enter");
+    const inspector = page.getByTestId("relation-inspector");
+    await expect(inspector.getByRole("group", { name: "Events" })).toHaveText(/65/);
+    await expect(page.getByTestId("arc-pill")).toContainText("65 reported events");
+    await inspector.getByRole("button", { name: "Minimize panel" }).press("Enter");
+    await expect(row).toHaveAccessibleName(/: 65 reported events/);
   });
 
   test("another focus mutes the arcs and their labels", async ({ page }) => {

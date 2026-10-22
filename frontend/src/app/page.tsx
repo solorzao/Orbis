@@ -191,6 +191,7 @@ export default function Home() {
   const relationsNotHere = relationsUnavailable(timeWindow, replaying);
   const relationsShown = relationsOn && relationsNotHere === null;
   const relationsResult = useRelations(relationKind, relationsShown);
+  const { patch: patchRelationsList } = relationsResult;
   const relationsDrawn = relationsShown ? relationsResult.relations : NO_RELATIONS;
   // Said when Relations draws nothing: an empty lens, or relations that failed to load.
   const relationsNote = relationsShown
@@ -940,13 +941,19 @@ export default function Home() {
           () => fetchRelationDetail({ a: relation.a.iso, b: relation.b.iso }),
           new AbortController().signal,
         );
-        if (api === null) updateRelation(relationId, { detailLoading: false, notFound: true });
-        else updateRelation(relationId, { detail: toRelationDetail(api), detailLoading: false });
+        if (api === null) {
+          updateRelation(relationId, { detailLoading: false, notFound: true });
+          return;
+        }
+        const detail = toRelationDetail(api);
+        updateRelation(relationId, { detail, detailLoading: false });
+        // Fresher than the arcs' list: its arc, label and row say the same.
+        patchRelationsList(detail);
       } catch {
         updateRelation(relationId, { detailLoading: false, detailError: true });
       }
     },
-    [updateRelation],
+    [updateRelation, patchRelationsList],
   );
 
   // An arc's click (or a list row) opens its relation in the Inspect tab, as a
