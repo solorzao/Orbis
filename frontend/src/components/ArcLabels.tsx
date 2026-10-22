@@ -36,7 +36,8 @@ interface ArcLabelsProps {
  * label whose top is on the far side is hidden (still rendered). They let
  * the pointer through, and are hidden from screen readers: the keyboard list
  * and the inspector say the same to everyone. On phones it renders none (CSS
- * hides them there too), as ArcPill does on touch screens.
+ * hides them there too), as ArcPill does on touch screens. Wherever the
+ * legend and its caveat give way, so do they (soft-orbit.css).
  */
 export default function ArcLabels({
   relations,

@@ -2634,8 +2634,9 @@ button.cite:hover {
   .bottombar .links-chip {
     display: inline-flex;
   }
-  /* No room for the relation arcs' labels on a phone: the list in Inspect names them.
-     (ArcLabels renders none here once it knows the width, and runs no frame loop.) */
+  /* The legend gives way with the layers, so the figure labels go with it: the list
+     in Inspect names the arcs, and its caveat sits above its rows. (ArcLabels renders
+     none here once it knows the width, and runs no frame loop.) */
   .arc-tags {
     display: none;
   }
@@ -2759,8 +2760,10 @@ button.cite:hover {
     display: none;
   }
   /* With the sheet open there is no room above the layers (not even for the caveat
-     alone): the list in Inspect names the lens and says what the events are. */
-  .side[data-open="true"] ~ .bottombar .relations-float {
+     alone), so the legend gives way. Where the legend gives way, the figure labels
+     go with it (as on phones): the list in Inspect names the lens, and its caveat
+     sits above its rows. One rule for both, so they can't drift apart. */
+  main:has(.side[data-open="true"]) :is(.relations-float, .arc-tags) {
     display: none;
   }
 }
