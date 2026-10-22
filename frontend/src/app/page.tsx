@@ -73,6 +73,7 @@ import { useFlyToThread, type ThreadView } from "@/hooks/useFlyToThread";
 import { useKeepFocus } from "@/hooks/useKeepFocus";
 import { useEntity } from "@/hooks/useEntity";
 import { useHoverCard, useTouchOnly } from "@/hooks/useHoverCard";
+import { useNarrowScreen } from "@/hooks/useNarrowScreen";
 import { rememberBrief, useHoverPreview } from "@/hooks/useHoverPreview";
 import type { Citation, GlobeAction } from "@/hooks/useAgent";
 import BottomBar from "@/components/BottomBar";
@@ -195,6 +196,8 @@ export default function Home() {
   const [focusedRelation, setFocusedRelation] = useState<Relation | null>(null);
   // How many arc labels ArcLabels has in the DOM (the globe's data-relation-labels).
   const [relationLabels, setRelationLabels] = useState(0);
+  // A phone's width: no arc labels (the list in Inspect names the arcs).
+  const narrow = useNarrowScreen();
   // What is breaking now, for the topic: only for a live window (a range or a
   // replay looks back), polled every 5 minutes. The ticker and the rings show it.
   const breaking = useBreaking(activeTopic, timeWindow.kind === "live" && !replaying);
@@ -1270,6 +1273,7 @@ export default function Home() {
         muted={relationsMuted}
         yieldTo={labelYield}
         project={projectPoint}
+        narrow={narrow}
         onCount={setRelationLabels}
       />
       <ArcPill label={arcPill} project={projectPoint} touch={touch} />

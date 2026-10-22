@@ -1301,6 +1301,23 @@ kbd {
 .insp-list-lbl {
   padding: 10px 12px 2px;
 }
+/*
+ * The relation list's caveat, under its lens: the legend's words (.rl-note).
+ * It sticks to the top of the Inspect scroller while the rows scroll under
+ * it, so a row's figures never show without it: at its very top, over the
+ * scroller's 8px top padding (.side-body), so no row peeks out above it.
+ * Opaque (the list's scrim over the glass tint over the page colour), so the
+ * rows can't show through.
+ */
+.insp-list-note {
+  position: sticky;
+  top: -8px;
+  z-index: 1;
+  padding: 6px 12px;
+  background:
+    linear-gradient(var(--surface-scrim), var(--surface-scrim)),
+    linear-gradient(var(--glass-panel-background), var(--glass-panel-background)), var(--bg-page);
+}
 /* The links on the globe, in the empty Inspect tab: each row opens one. */
 .link-list {
   margin: 0 8px;
@@ -2630,7 +2647,9 @@ button.cite:hover {
   .bottombar .links-chip {
     display: inline-flex;
   }
-  /* No room for the relation arcs' labels on a phone: the list in Inspect names them. */
+  /* The legend gives way with the layers, so the figure labels go with it: the list
+     in Inspect names the arcs, and its caveat sits above its rows. (ArcLabels renders
+     none here once it knows the width, and runs no frame loop.) */
   .arc-tags {
     display: none;
   }
@@ -2753,8 +2772,11 @@ button.cite:hover {
   .relations-legend .rl-topics {
     display: none;
   }
-  /* With the sheet open there is no room above the layers: the list in Inspect names the lens. */
-  .side[data-open="true"] ~ .bottombar .relations-float {
+  /* With the sheet open there is no room above the layers (not even for the caveat
+     alone), so the legend gives way. Where the legend gives way, the figure labels
+     go with it (as on phones): the list in Inspect names the lens, and its caveat
+     sits above its rows. One rule for both, so they can't drift apart. */
+  main:has(.side[data-open="true"]) :is(.relations-float, .arc-tags) {
     display: none;
   }
 }

@@ -334,8 +334,10 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
 // legend floats above it (centred above the layers below 1180px): regions of
 // their own that must not move the capsule or touch the timeline, the bottom
 // row, the top bar or the side panel. On a short screen with the sheet open the
-// legend gives way (there is no room above the layers); the list in Inspect
-// names the lens there.
+// legend gives way (there is no room above the layers), and the arcs' figure
+// labels with it; the list in Inspect names the lens there, and says what the
+// events are.
+const CAVEAT = "Reported events from news, machine-coded by GDELT. Not verified.";
 for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
   test(`the Relations switch and legend keep ${GAP}px apart at ${size.width}x${size.height}`, async ({
     page,
@@ -359,16 +361,37 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
       expect(size.width - (b[id].x + b[id].w), `${id}: right margin`).toBeGreaterThanOrEqual(GAP);
     }
     if (size.width < SHEET_BELOW) {
+      const short = size.height <= 560;
+      // A figure label on the globe's near side: it shows beside the legend.
+      const label = page.locator("[data-relation-tag][data-placed]").first();
+      if (short) await expect(label).toBeVisible();
       await page.getByTestId("side-collapse").press("Enter");
       await expect(page.getByTestId("side-panel")).toHaveAttribute("data-open", "true");
-      const short = size.height <= 560;
       const open = [
         ...regionsAt(size.width),
         "relation-kind",
         ...(short ? [] : ["relations-legend"]),
       ];
       await expectApart(page, size.width, "Relations on, sheet open", open);
-      if (short) expect(await boxes(page, ["relations-legend"]), "legend gives way").toEqual([]);
+      if (short) {
+        expect(await boxes(page, ["relations-legend"]), "legend gives way").toEqual([]);
+        await expect(page.getByTestId("arc-labels"), "the figure labels go with it").toHaveCSS(
+          "display",
+          "none",
+        );
+        await expect(label).toBeHidden();
+        // The list in Inspect says what the events are instead (constraint 7), and
+        // keeps saying it above its rows however far they scroll.
+        await page.getByTestId("side-tab-inspect").press("Enter");
+        await page.locator("[data-relation]").last().scrollIntoViewIfNeeded();
+        await expect(page.getByTestId("relation-list").getByText(CAVEAT)).toBeInViewport({
+          ratio: 1,
+        });
+        // Folded, the legend and the labels come back.
+        await page.getByTestId("side-collapse").press("Enter");
+        await expect(page.getByTestId("relations-legend")).toBeVisible();
+        await expect(label).toBeVisible();
+      }
     }
   });
 }

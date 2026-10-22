@@ -108,6 +108,25 @@ describe("ArcLabels (decision 6: the 5 strongest arcs labelled)", () => {
     expect(frames.size).toBe(0);
   });
 
+  it("renders none on a phone, where CSS hides them anyway, and runs no frame loop", () => {
+    const onCount = vi.fn();
+    const project = vi.fn(() => ({ x: 1, y: 2 }));
+    const { container } = render(
+      <ArcLabels
+        relations={SEVEN}
+        muted={false}
+        yieldTo={null}
+        project={project}
+        narrow
+        onCount={onCount}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(onCount).toHaveBeenLastCalledWith(0);
+    expect(frames.size).toBe(0);
+    expect(project).not.toHaveBeenCalled();
+  });
+
   it("yields the inspected arc's label to its pill", () => {
     render(
       <ArcLabels

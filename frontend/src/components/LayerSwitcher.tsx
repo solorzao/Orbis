@@ -2,7 +2,12 @@
 
 import { useId } from "react";
 import type { LinkRank } from "@/lib/links";
-import { relationLensLabel, type RelationKind, type RelationLens } from "@/lib/relations";
+import {
+  RELATIONS_CAVEAT,
+  relationLensLabel,
+  type RelationKind,
+  type RelationLens,
+} from "@/lib/relations";
 
 export type GlobeLayer = "dots" | "intensity";
 
@@ -234,9 +239,7 @@ export default function LayerSwitcher({
               <span className="sw sw-conf" aria-hidden="true" />
               <span>Conflict</span>
             </span>
-            <span className="rl-note">
-              Reported events from news, machine-coded by GDELT. Not verified.
-            </span>
+            <span className="rl-note">{RELATIONS_CAVEAT}</span>
             <span className="rl-note rl-topics">Topic filters don&apos;t apply to relations.</span>
           </p>
         </div>

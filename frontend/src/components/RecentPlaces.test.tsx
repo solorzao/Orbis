@@ -34,7 +34,9 @@ describe("RecentPlaces with relations", () => {
       />,
     );
     const pick = screen.getByRole("button", { pressed: true });
-    expect(pick).toHaveTextContent("US ↔ IR · events312");
+    // No bare figure: the pill outlives the legend and the list, and their caveat.
+    expect(pick).toHaveTextContent(/^US ↔ IR · events$/);
+    expect(pick.querySelector(".num")).toBeNull();
     expect(pick).toHaveAccessibleName(
       "US ↔ IR · events: United States and Iran, 312 reported events",
     );

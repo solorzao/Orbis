@@ -2,6 +2,7 @@
 
 import { useId, type CSSProperties } from "react";
 import {
+  RELATIONS_CAVEAT,
   relationKey,
   relationLensLabel,
   relationPairLabel,
@@ -30,9 +31,12 @@ const sideColor = (rel: Relation) =>
 /**
  * The relations on the globe as a list, in the Inspect tab while nothing is
  * open there and Relations is on: every arc named in words (decision 6), and
- * the way to open one without pointing at its arc. A row with the focus
- * labels its arc on the globe, as hovering does. Its focus keeps its place
- * while the relations change (useRowFocus), as the link list's does.
+ * the way to open one without pointing at its arc. Under its lens it says
+ * what the events are, as the legend does: the list shows at every width, and
+ * the legend gives way on phones and on short screens with the sheet open. A
+ * row with the focus labels its arc on the globe, as hovering does. Its focus
+ * keeps its place while the relations change (useRowFocus), as the link
+ * list's does.
  */
 export default function RelationList({
   relations,
@@ -42,6 +46,7 @@ export default function RelationList({
   onFocusRelation,
 }: RelationListProps) {
   const labelId = useId();
+  const noteId = useId();
   const { boxRef, onFocus, onBlur } = useRowFocus(
     relations.map((r) => relationKey(r.a.iso, r.b.iso)),
     "data-relation",
@@ -54,12 +59,16 @@ export default function RelationList({
       data-testid="relation-list"
       role="group"
       aria-labelledby={labelId}
+      aria-describedby={noteId}
       tabIndex={-1}
       onFocus={onFocus}
       onBlur={onBlur}
     >
       <p className="lbl insp-list-lbl">
         <span id={labelId}>{lens ? relationLensLabel(lens) : "Relations · last 7 days"}</span>
+      </p>
+      <p id={noteId} className="lbl insp-list-note">
+        {RELATIONS_CAVEAT}
       </p>
       {relations.length === 0 ? (
         <p className="insp-status">{status ?? "Loading relations…"}</p>
