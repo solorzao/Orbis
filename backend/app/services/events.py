@@ -270,6 +270,8 @@ def read_export(body: bytes) -> str | None:
             if members[0].file_size > MAX_CSV_BYTES:
                 return None
             with zf.open(members[0]) as fh:
+                # More than its declared size, so the read reaches the member's end,
+                # where zipfile checks its CRC32 (BadZipFile on a mismatch).
                 data = fh.read(MAX_CSV_BYTES + 1)
     except Exception:
         return None
@@ -620,6 +622,9 @@ async def _add_file(
     if got.status != "ok":
         logger.warning("Events: %s download %s; retried next cycle.", name, got.status)
         return None
+    # lastupdate.txt gives only the newest file's MD5, so a file that fails it is
+    # retried as a catch-up slot, without one: there the zip's CRC32 (read_export)
+    # still catches a damaged file, and the pinned HTTPS host a tampered one.
     if (
         entry is not None
         and _MD5.fullmatch(entry.md5)

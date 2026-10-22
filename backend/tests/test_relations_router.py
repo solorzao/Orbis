@@ -81,15 +81,18 @@ class FakePool:
         self.detail_gate: asyncio.Event | None = None  # when set, the detail waits for it
 
     async def fetch(self, sql: str, *args):
+        """Each statement's rows as it starts: its snapshot, as in Postgres."""
         self.calls.append((sql, args))
         if sql == relations.LIST_SQL:
+            rows = self.pairs
             if self.gate is not None:
                 await self.gate.wait()
-            return self.pairs
+            return rows
         if sql == relations.DETAIL_SQL:
+            rows = self.detail
             if self.detail_gate is not None:
                 await self.detail_gate.wait()
-            return self.detail
+            return rows
         if sql == relations.TITLES_SQL:
             return self.titles
         raise AssertionError(f"unexpected statement: {sql}")
@@ -405,6 +408,54 @@ async def test_a_cycles_invalidations_refresh_the_list_and_detail_together(
 
     await invalidate("db:*")  # as the cycle ends
     assert redis.values == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "params", "gate", "key"),
+    [
+        ("/api/relations", {}, "gate", LIST_KEY),
+        ("/api/relations/detail", {"a": "IR", "b": "US"}, "detail_gate", DETAIL_KEY),
+    ],
+)
+async def test_a_read_in_flight_as_the_events_land_stores_nothing(
+    monkeypatch, redis, pool, path, params, gate, key
+):
+    """A read that began before the events step's commit counts the old events. Left
+    to finish, it could store them just after the relations invalidation, to stay
+    until the cycle's end (10-15 minutes on). The events step stops it first: it
+    stores nothing, its request gets a 503 to retry, and the next read counts the
+    new events."""
+    from app.services import ingestion
+
+    pool.pairs = [_pair(n=5, q=(1, 0, 4, 0), from_a=1)]  # the detail's 5 events, listed
+
+    async def land():  # the events step commits 6 more: the US's verbal conflict on 19 Oct
+        pool.pairs = [_pair(n=11, q=(1, 0, 10, 0), from_a=1)]
+        pool.detail = [*pool.detail, _rollup("US", "IR", date(2026, 10, 19), 3, 6)]
+
+    setattr(pool, gate, asyncio.Event())
+    async with _client(monkeypatch) as client:
+        request = asyncio.create_task(client.get(path, params=params))
+        while not pool.calls:  # the read has the old events, and waits
+            await asyncio.sleep(0.01)
+        with (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion.purge_events", new_callable=AsyncMock),
+            patch("app.services.ingestion.ingest_events", AsyncMock(side_effect=land)),
+        ):
+            await ingestion._add_events()
+        getattr(pool, gate).set()  # left running, the read would store the old events now
+        stopped = await asyncio.wait_for(request, 2)
+        assert redis.values == {}
+
+        setattr(pool, gate, None)
+        again = await client.get(path, params=params)
+
+    assert stopped.status_code == 503 and stopped.headers["retry-after"] == "15"
+    body = again.json()
+    assert (body["relations"][0] if "relations" in body else body)["n"] == 11
+    assert list(redis.values) == [key]
 
 
 class TestWarm:

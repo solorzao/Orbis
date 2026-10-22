@@ -181,9 +181,9 @@ def test_windows_line_endings_parse():
     assert ("US", "IR", TODAY, 3) in rollups
 
 
-def _zip(members: dict[str, bytes]) -> bytes:
+def _zip(members: dict[str, bytes], method: int = zipfile.ZIP_DEFLATED) -> bytes:
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(buf, "w", method) as zf:
         for name, data in members.items():
             zf.writestr(name, data)
     return buf.getvalue()
@@ -214,6 +214,13 @@ class TestReadExport:
         compression method NotImplementedError. Every error is None, never a raise."""
         body = bytearray(_zip({"20261021123000.export.CSV": bytes(range(256)) * 40}))
         body[60:120] = b"\xff" * 60  # inside the compressed data
+        assert read_export(bytes(body)) is None
+
+    def test_a_member_failing_its_crc32_is_none(self):
+        """A catch-up file has no MD5 to check (lastupdate.txt gives only the newest's):
+        the member's CRC32 still catches a damaged one."""
+        body = bytearray(_zip({"20261021123000.export.CSV": b"a\tb\n"}, zipfile.ZIP_STORED))
+        body[body.index(b"a\tb\n")] ^= 1  # stored, so the zip still reads: only the CRC differs
         assert read_export(bytes(body)) is None
 
 

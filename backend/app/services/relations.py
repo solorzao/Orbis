@@ -31,7 +31,7 @@ LENS_DAYS = 7  # the lens: today and the 6 UTC days before
 
 # Where the router caches the lens's answers: under db:*, which each cycle
 # invalidates as it ends, and which ingestion also clears as soon as the
-# cycle's events land (and stops in flight at shutdown).
+# cycle's events land (stopping its reads in flight then, and at shutdown).
 CACHE_PREFIX = "db:relations:"
 
 QUADS = {"all": [1, 2, 3, 4], "cooperation": [1, 2], "conflict": [3, 4]}
