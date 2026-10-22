@@ -55,9 +55,15 @@ const entry = (relationId: string, pair: ApiRelation): RelationEntry => ({
   createdAt: 0,
 });
 
+interface Props {
+  shownId: string | null;
+  /** The layer on (the default) or off. */
+  on?: boolean;
+}
+
 /** The page's wiring: the layer's list, the open relations, and the one shown. */
-function useLayer({ shownId }: { shownId: string | null }) {
-  const layer = useRelations("all", true);
+function useLayer({ shownId, on = true }: Props) {
+  const layer = useRelations("all", on);
   const [queue, setQueue] = useState(() => [entry("ir", IR_US), entry("fr", FR_US)]);
   const shown = queue.find((r) => r.relationId === shownId) ?? null;
   useRelationDetail(shown, layer.answer, { setRelations: setQueue, patch: layer.patch });
@@ -65,9 +71,7 @@ function useLayer({ shownId }: { shownId: string | null }) {
 }
 
 const render = () =>
-  renderHook(({ shownId }: { shownId: string | null }) => useLayer({ shownId }), {
-    initialProps: { shownId: null as string | null },
-  });
+  renderHook((props: Props) => useLayer(props), { initialProps: { shownId: null } as Props });
 
 type View = ReturnType<typeof render>["result"]["current"];
 /** A pair's events on its arc, and in its entry's detail. */
@@ -128,6 +132,41 @@ describe("useRelationDetail", () => {
       detailError: true,
     });
     expect(arcN(result.current, "IR-US")).toBe(312);
+  });
+
+  it("loads again, rather than say the old failure, when one that failed is shown again", async () => {
+    const { result, rerender } = render();
+    await settle();
+    mockDetail.mockRejectedValueOnce(new Error("API 500"));
+    rerender({ shownId: "ir" });
+    await act(async () => {});
+    expect(entryOf(result.current, "ir")).toMatchObject({ detailError: true });
+
+    rerender({ shownId: null });
+    const next = deferred();
+    mockDetail.mockReturnValueOnce(next.promise);
+    rerender({ shownId: "ir" });
+    expect(entryOf(result.current, "ir")).toMatchObject({
+      detail: null,
+      detailLoading: true,
+      detailError: false,
+      notFound: false,
+    });
+    await act(async () => next.resolve(answer(IR_US, 318)));
+    expect(entryOf(result.current, "ir")).toMatchObject({ detailLoading: false });
+    expect(entryOf(result.current, "ir").detail?.relation.n).toBe(318);
+  });
+
+  it("asks the shown relation again once the layer is back on, not when it goes off", async () => {
+    const { rerender } = await shownWith("ir", 318);
+    rerender({ shownId: "ir", on: false }); // no list: nothing to agree with
+    await settle();
+    expect(mockDetail).toHaveBeenCalledTimes(1);
+
+    mockDetail.mockResolvedValueOnce(answer(IR_US, 330));
+    rerender({ shownId: "ir", on: true });
+    await settle();
+    expect(mockDetail).toHaveBeenCalledTimes(2);
   });
 
   it("asks again when an open relation is shown again, keeping its detail until the new one lands", async () => {

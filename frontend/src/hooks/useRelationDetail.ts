@@ -35,6 +35,17 @@ export function useRelationDetail(
     async (relationId: string, relation: Relation) => {
       const request = ++requests.current;
       latest.current.set(relationId, request);
+      // Asked again with no detail to keep (its last load failed or found
+      // nothing): it loads, rather than say the old outcome meanwhile.
+      const retry = (r: RelationEntry) =>
+        r.relationId === relationId && r.detail === null && !r.detailLoading;
+      setRelations((prev) =>
+        prev.some(retry)
+          ? prev.map((r) =>
+              retry(r) ? { ...r, detailLoading: true, detailError: false, notFound: false } : r,
+            )
+          : prev,
+      );
       const settle = (update: (r: RelationEntry) => RelationEntry) => {
         if (latest.current.get(relationId) !== request) return false;
         latest.current.delete(relationId);
