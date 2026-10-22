@@ -4359,3 +4359,85 @@ The mutual exclusion is the page's job and is tested in e2e.
   - **References can move:** GeoNames or GDELT may edit their files, so a later PR touching the table can fail on a change it didn't make. Fix the table, not the check.
   - **Permissions:** the workflow is read-only (`contents: read`). It never writes or pushes, so it needs no change to the repository's Actions permissions.
 - **Sensitive pairs** (IL–PS, RU–UA). Copy stays neutral: class words from QuadClass only, and no verbs of blame.
+
+---
+
+## Phase 5 shipped (done 2026-10-22, through #125)
+
+All five plan steps shipped: 19a, 19b, 19b+ (measured), 19c and 20. A final whole-phase review found no Critical issues and one Important one, the GDELT disclosure gap; it and the review's minors were fixed before close (#122, #123, #125).
+
+### Events ingestion (19a, 19b: #114, #115)
+- **Rollups:** GDELT 2.0 Event exports become daily country-pair rollups, `event_pairs_daily` (migration 021, `fillfactor` 70), keyed by pair, day and QuadClass.
+  - Root events only; domestic events are dropped.
+  - Actor codes map to countries through the hand-written CAMEO→ISO table, verified on CI.
+  - Each cycle adds the newest file and catches up to 4 missed ones within 2 h, claimed under an advisory lock so nothing counts twice.
+- **Downloads:** pinned to GDELT's https host, with no redirects and size and time caps.
+- **On prod:**
+  - under 1 s a cycle (download 0.08–0.48 s, store 0.04–0.41 s);
+  - 4 files an hour, 0 missing or unreadable, and 0 slots lost since launch;
+  - about 2.3K rows a day (the CI repro predicted 2.6K); HOT share 0.94; 1.25 MB after 25 h, so about 10 MB at 8 days (gate: 40 MB). The busiest pairs are plausible (RU–UA, RU–US, GB–US, IR–US, IL–PS), and a spot-check of an odd one, CA–TR, found real coverage: Carney's visit to Ankara, all verbal cooperation.
+
+### Relations API (19c: #117, #120)
+- `/api/relations?kind=&limit=` and `/api/relations/detail?a=&b=`: a 7-day lens over the rollups, one arc per pair in its dominant class.
+  - Thresholds: `MIN_EVENTS` 5 and `MIN_OUTLETS` 2 (a distinct union).
+  - At most 6 arcs per country.
+- **Caching:** both caches sit under `db:relations:*`. They are cleared as soon as a cycle's events land and again at the cycle's end, and `warm_relations` refills the default list (0.19 s).
+- **Speed:** the list takes 0.95 s cold and 0.1 s warm through the proxy; the detail takes 0.6 s cold.
+
+### Relations layer (20: #116, #121, #123)
+- **Layer:** arcs coloured by class, with persistent labels on the top 5 arcs, a list and an inspector (by class, by direction, by day, sample reports).
+  - Relations and Links are mutually exclusive.
+  - The layer is unavailable under a range or replay, ignores topics, and can't be pinned.
+- **Opened pairs:** an opened pair's arc and list row take its detail's figures, and the shown pair is refetched when the list refreshes (#121).
+- **Disclosure:** "Reported events from news, machine-coded by GDELT. Not verified." appears in the legend and, sticky, at the top of the list (#123).
+  - Wherever the legend gives way, the figure labels go with it.
+  - Relation recent pills show no count.
+
+### Hardening along the way
+- **#118:** CI path filters. Backend-only PRs skip E2E (21–32 min); docs-only PRs run nothing; filter errors fail closed; superseded runs are cancelled; paths-filter is pinned to a SHA (#123).
+- **#122:**
+  - the events step runs even when the GKG step fails (lost slots are permanent after 2 h);
+  - relations reads in flight are stopped before the mid-cycle invalidation;
+  - the kill switch leaves relations reads alone.
+- **#119, #125:** the real-names search plan test is deterministic. The cause was ANALYZE's 30K-row sample; `SET LOCAL default_statistics_target = 1000` reads every row. Fifteen CI runs gave identical costs: the trigram plan at 2423 against 8711 for a forced seq scan.
+
+## Deviations from this plan (as shipped)
+
+- **Caching (erratum to 19c).** The plan cached relations under `wk:relations:*`, refreshed about hourly, with no warmer. On production that let the list and the inspector disagree (an arc read 59 events while its inspector read 65). #120 moved both to `db:relations:*`, invalidated right after `ingest_events()` and at the cycle's end, and added `warm_relations`.
+  - So the 19c caching table, "No warmer", Minor 4's rationale and the risk line "answers can be about an hour old" no longer hold. Answers are at most one cycle old.
+  - The edge cache can still keep the list and detail URLs about 6 min apart right after a cycle. #121's patch makes an opened arc agree with its inspector regardless.
+- **19b:**
+  - the newest file downloads with 2 tries of 15 s, not 3 of 30 s;
+  - lost slots are counted from `max(done)` after a restart;
+  - IMY and SSD were added to the CAMEO table.
+- **19c and 20:**
+  - `list_cooperation` was added to the contract;
+  - `useRelations` returns `lens`, `answer` and `patch`, and `RelationEntry` gains `filter`, `lens` and `notFound`;
+  - the new `useRelationDetail` hook does the fetching.
+- **Tests:** mutation twins check page bounds rather than a Seq Scan shape.
+- **Short screens:** the legend gives way when the sheet is open (#116). The disclosure lives in the list instead (#123).
+- **Accepted residual (#123):** with a mouse, the hover or inspected-relation pill can show "N reported events between …" without a visible caveat, at ≤760 px or on a short screen with the sheet on another tab.
+- **Plan 20.9's screenshots** were never attached to #116. Waived: the layer was verified live on orbisapp.co (2026-10-21 and 2026-10-22), and #123's review measured the caveat at 4 sizes.
+- **Thresholds (19b+, measured 2026-10-22 22:15 UTC over 25 h): `MIN_EVENTS` 5 and `MIN_OUTLETS` 2 are kept.** The list was simulated from production's rollups with its own ranking, the per-country cap of 6 and the limit of 40:
+  - **"all" and cooperation:** the thresholds never bind. Each list fills its 40 arcs, and the weakest pair drawn has 16 events from 5 outlets ("all") or 19 from 3 (cooperation). 344 and 280 pairs pass 5/2.
+  - **Conflict:** the only list the floor shapes. At 5/2, 99 pairs pass and the list fills to 40, its weakest at 5 events from 2 outlets. At 8 it falls short (37 drawn), and at 10 to 29.
+  - **`MIN_EVENTS` guards against one story counted as many mentions:** Algeria–Denmark had 2 events but 340 mentions, and would rank high by mentions without the floor.
+  - **`MIN_OUTLETS` 2 drops the single-outlet tail:** 95 pairs with at least 5 events but only one outlet.
+  - Re-check once the lens holds 7 full days.
+
+## After Phase 5 (prioritised)
+
+### P1
+1. **Phase 6: AI voice and agent rework** (scoped in the parent plan, PRs 21–23). The owner asked for it: copy that never refers to "the reader" and exposes no internals or metadata.
+2. **The GKG cadence (owner decision, unchanged).** Full ingestion needs a P10 disk (about +$13/month all in). The recommendation is still to stay at half until a disk upgrade.
+3. **Re-check the thresholds** once the lens holds 7 full days (from 2026-10-28).
+
+### P2
+4. **A11y:** keyboard focus moving up the relation list can land a row partly under the sticky caveat (passes WCAG 2.4.11 AA, not 2.4.12 AAA). Fix: `.side-body:has(.relation-list) { scroll-padding-top: 48px }`.
+5. **One matchMedia store helper** for `useNarrowScreen`, `useTouchOnly` and the reduced-motion query.
+6. **The deploy filter** rebuilds the backend image for `backend/tests`-only changes. Exclude `backend/tests/**`.
+7. **A stale API host** (`bluecliff-965c1c6a`) remains in a repo file; the live host is `lemonbeach-e11ec2b2`.
+
+### P3
+8. **The GitHub "Detect Changes" check-run** occasionally stays "in progress" after its jobs ran (#125). Cosmetic: the run's conclusion is right.
+9. **Stale dependabot PRs** #14–#31 (owner's call).
