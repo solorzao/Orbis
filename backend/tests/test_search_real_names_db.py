@@ -86,8 +86,45 @@ async def _assert_planned_for_the_fixture(conn, *tables: str) -> None:
         )
 
 
+async def _resolve_costs(conn, *args) -> str:
+    """TEMPORARY (DO NOT MERGE): the resolution plan's cost, natural and forced."""
+    out = []
+    for label, settings in (
+        ("natural", []),
+        ("seq", ["SET LOCAL enable_bitmapscan = off", "SET LOCAL enable_indexscan = off"]),
+        ("trgm", ["SET LOCAL enable_seqscan = off"]),
+    ):
+        tx = conn.transaction()
+        await tx.start()
+        try:
+            for setting in settings:
+                await conn.execute(setting)
+            raw = await conn.fetchval("EXPLAIN (FORMAT JSON) " + entities._RESOLVE_SQL, *args)
+        finally:
+            await tx.rollback()
+        top = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Plan"]
+        names = [
+            n
+            for n in _walk(top)
+            if n.get("Relation Name") == "kg_entity_names"
+            or n.get("Index Name") == "idx_kg_entity_names_trgm"
+        ]
+        access = ",".join(f"{n['Node Type']}:{n['Total Cost']}:{n['Plan Rows']}" for n in names)
+        out.append(f"{label} total={top['Total Cost']} names=[{access}]")
+    await conn.execute("CREATE EXTENSION IF NOT EXISTS pageinspect")
+    gin = await conn.fetchrow(
+        "SELECT n_total_pages, n_entry_pages, n_data_pages, n_entries"
+        " FROM gin_metapage_info(get_raw_page('idx_kg_entity_names_trgm', 0))"
+    )
+    out.append(f"gin={dict(gin)}")
+    return " | ".join(out)
+
+
 @pytest.mark.asyncio
-async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(conn):
+@pytest.mark.parametrize("attempt", range(15))  # TEMPORARY (DO NOT MERGE)
+async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(
+    conn, capsys, attempt
+):
     """Production's shape: ~56K real-looking people and organisations among 150K
     headlines in kg_nodes, and 100K thread members. No enable_seqscan here: these are
     the planner's own choices.
@@ -155,5 +192,8 @@ async def test_on_real_names_search_reads_a_few_pages_of_the_narrow_names_table(
     resolve = await _explain(
         conn, entities._RESOLVE_SQL, "PERSON", "benjamin netanyahu", week_ago, 100
     )
+    costs = await _resolve_costs(conn, "PERSON", "benjamin netanyahu", week_ago, 100)
+    with capsys.disabled():
+        print(f"\nSTATS-REPRO attempt={attempt} indexes={sorted(resolve['indexes'])} {costs}")
     assert "kg_nodes" not in resolve["relations"], resolve
     assert "idx_kg_entity_names_trgm" in resolve["indexes"], resolve
