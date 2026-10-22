@@ -10,6 +10,7 @@ import {
   relationDaysWords,
   relationKey,
   labelledRelations,
+  patchRelations,
   relationLensLabel,
   relationPill,
   relationPillText,
@@ -282,6 +283,61 @@ describe("a detail's days and samples", () => {
 
   it("names no class for a QuadClass outside 1 to 4 (untrusted input)", () => {
     for (const bad of [0, 5, 2.5, -1, Number.NaN]) expect(sampleQuad(bad)).toBeNull();
+  });
+});
+
+describe("patchRelations (an opened pair's detail, fresher than the list)", () => {
+  const { relations: LIST, ...LENS } = toRelations(contract.list as ApiRelations);
+  const DETAIL = toRelationDetail(contract.detail as ApiRelationDetail);
+  const ALL = { kind: "all" as const, lens: LENS };
+  // IR–US six events on: 59 listed, 65 in its detail.
+  const listed = LIST.map((r, i) => (i === 0 ? { ...r, n: 59 } : r));
+  const fresh = (over: Partial<Relation> = {}) => ({
+    ...DETAIL,
+    relation: { ...DETAIL.relation, n: 65, mentions: 2200, ...over },
+  });
+  const keys = (rs: Relation[]) => rs.map((r) => relationKey(r.a.iso, r.b.iso));
+
+  it("patches the listed pair's figures in place, keeping the order", () => {
+    const patched = patchRelations(listed, fresh(), ALL);
+    expect(keys(patched)).toEqual(["IR-US", "FR-US", "FR-NG"]);
+    expect(patched[0]).toMatchObject({ n: 65, mentions: 2200 });
+    // Not re-ranked, and the other pairs as they were.
+    expect(patched.slice(1)).toEqual(listed.slice(1));
+    expect(listed[0].n).toBe(59);
+  });
+
+  it("matches the pair whichever way its codes come", () => {
+    const swapped = fresh();
+    swapped.relation = { ...swapped.relation, a: swapped.relation.b, b: swapped.relation.a };
+    expect(patchRelations(listed, swapped, ALL)[0].n).toBe(65);
+  });
+
+  it("keeps the list's ends and acting country, as the inspector names the pair", () => {
+    const patched = patchRelations(listed, fresh({ from: "IR" }), ALL);
+    expect(patched[0].from).toBe("US");
+    expect(patched[0].a).toBe(listed[0].a);
+  });
+
+  it("adds no pair the list doesn't have (its thresholds stand)", () => {
+    const other = fresh({ a: { ...US, iso: "CN", name: "China" } });
+    expect(patchRelations(listed, other, ALL)).toBe(listed);
+  });
+
+  it("changes nothing under a class switch: the list's figures are that class's alone", () => {
+    const { relations: conflict, ...lens } = toRelations(contract.list_conflict as ApiRelations);
+    expect(patchRelations(conflict, fresh(), { kind: "conflict", lens })).toBe(conflict);
+    expect(patchRelations(listed, fresh(), { kind: "cooperation", lens })).toBe(listed);
+  });
+
+  it("changes nothing over other days, or without a lens", () => {
+    const later = { ...LENS, firstDay: "2026-10-16", lastDay: "2026-10-22" };
+    expect(patchRelations(listed, fresh(), { kind: "all", lens: later })).toBe(listed);
+    expect(patchRelations(listed, fresh(), { kind: "all", lens: null })).toBe(listed);
+  });
+
+  it("is the same array when the figures already agree", () => {
+    expect(patchRelations(LIST, DETAIL, ALL)).toBe(LIST);
   });
 });
 

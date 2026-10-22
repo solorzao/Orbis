@@ -146,6 +146,46 @@ export function toRelationDetail(api: ApiRelationDetail): RelationDetail {
   };
 }
 
+const sameFigures = (x: Relation, y: Relation) =>
+  x.n === y.n &&
+  x.outlets === y.outlets &&
+  x.mentions === y.mentions &&
+  x.kind === y.kind &&
+  x.goldstein === y.goldstein &&
+  x.tone === y.tone &&
+  QUAD_KEYS.every((k) => x.quad[k] === y.quad[k]);
+
+/**
+ * The list with an opened pair's figures from its detail (the list is asked
+ * every 30 minutes, the detail each time the pair is shown), so its arc,
+ * label and row say what its inspector does. Only a pair the list has (its
+ * thresholds stand; the detail has none), in its place, and only when the
+ * figures mean the same: every class (under a class switch the list's are
+ * that class's alone) over the same days. Its ends and acting country stay
+ * the list's, as the open inspector is named from them: with `from` not
+ * patched, the arc's direction can differ from a fresh list's. The same
+ * array when nothing changes.
+ */
+export function patchRelations(
+  relations: Relation[],
+  detail: RelationDetail,
+  list: { kind: RelationKind; lens: RelationLens | null },
+): Relation[] {
+  const { lens } = list;
+  if (list.kind !== "all" || lens === null) return relations;
+  if (lens.firstDay !== detail.lens.firstDay || lens.lastDay !== detail.lens.lastDay) {
+    return relations;
+  }
+  const fresh = detail.relation;
+  const key = relationKey(fresh.a.iso, fresh.b.iso);
+  const i = relations.findIndex((r) => relationKey(r.a.iso, r.b.iso) === key);
+  if (i === -1 || sameFigures(relations[i], fresh)) return relations;
+  const { n, outlets, mentions, quad, kind, goldstein, tone } = fresh;
+  return relations.map((r, j) =>
+    j === i ? { ...r, n, outlets, mentions, quad, kind, goldstein, tone } : r,
+  );
+}
+
 /** The relation's ends, starting at the acting country. */
 export function relationEnds(rel: Relation): [LinkCountry, LinkCountry] {
   return rel.from === rel.b.iso ? [rel.b, rel.a] : [rel.a, rel.b];

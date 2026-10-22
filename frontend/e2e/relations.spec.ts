@@ -4,9 +4,11 @@ import {
   MOCK_RELATIONS,
   MOCK_RELATIONS_CONFLICT,
   MOCK_RELATIONS_COOPERATION,
+  MOCK_RELATION_DETAIL,
   NEW_YORK,
   PARIS,
   gotoStillGlobe,
+  isRelationDetail,
   isRelationsList,
   mockAgentRoute,
   mockRelations,
@@ -167,6 +169,46 @@ test.describe("Relations layer", () => {
     await expect(
       inspector.getByRole("link", { name: "Gulf shipping warnings traded" }),
     ).toHaveCount(0);
+  });
+
+  test("an opened pair's arc and row agree with its detail, asked again when shown again", async ({
+    page,
+  }) => {
+    // The list (59) and the pair's detail (65) answered at different times.
+    const listed = {
+      ...MOCK_RELATIONS,
+      relations: MOCK_RELATIONS.relations.map((r, i) => (i === 0 ? { ...r, n: 59 } : r)),
+    };
+    let n = 65;
+    let asked = 0;
+    await gotoStillGlobe(page, async (p) => {
+      await p.route(isRelationsList, (route) => route.fulfill({ json: listed }));
+      await p.route(isRelationDetail, (route) => {
+        asked += 1;
+        return route.fulfill({ json: { ...MOCK_RELATION_DETAIL, n } });
+      });
+    });
+    await relationsOn(page);
+    await page.getByTestId("side-tab-inspect").press("Enter");
+    const row = page.locator('[data-relation="IR-US"]');
+    await expect(row).toHaveAccessibleName(/: 59 reported events/);
+
+    await row.press("Enter");
+    const inspector = page.getByTestId("relation-inspector");
+    await expect(inspector.getByRole("group", { name: "Events" })).toHaveText(/65/);
+    await expect(page.getByTestId("arc-pill")).toContainText("65 reported events");
+    await inspector.getByRole("button", { name: "Minimize panel" }).press("Enter");
+    await expect(row).toHaveAccessibleName(/: 65 reported events/);
+
+    // Shown again from its pill: asked again, the inspector and the arc move on together.
+    n = 71;
+    await page
+      .getByTestId("recent-places")
+      .getByRole("button", { name: /^US ↔ IR · events/ })
+      .press("Enter");
+    await expect(inspector.getByRole("group", { name: "Events" })).toHaveText(/71/);
+    await expect(page.getByTestId("arc-pill")).toContainText("71 reported events");
+    expect(asked).toBe(2);
   });
 
   test("another focus mutes the arcs and their labels", async ({ page }) => {
