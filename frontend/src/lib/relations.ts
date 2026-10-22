@@ -14,6 +14,8 @@ import type { LinkCountry } from "@/types/news";
 export type RelationKind = "all" | "cooperation" | "conflict";
 /** Most arcs on the globe, as for links. */
 export const RELATIONS_LIMIT = 40;
+/** What the events are, in the legend and under the list in Inspect: the same words in both. */
+export const RELATIONS_CAVEAT = "Reported events from news, machine-coded by GDELT. Not verified.";
 
 export const QUAD_LABELS = {
   verbal_cooperation: "Verbal cooperation",

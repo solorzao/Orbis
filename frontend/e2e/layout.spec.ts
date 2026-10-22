@@ -335,7 +335,8 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
 // their own that must not move the capsule or touch the timeline, the bottom
 // row, the top bar or the side panel. On a short screen with the sheet open the
 // legend gives way (there is no room above the layers); the list in Inspect
-// names the lens there.
+// names the lens there, and says what the events are.
+const CAVEAT = "Reported events from news, machine-coded by GDELT. Not verified.";
 for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
   test(`the Relations switch and legend keep ${GAP}px apart at ${size.width}x${size.height}`, async ({
     page,
@@ -368,7 +369,12 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
         ...(short ? [] : ["relations-legend"]),
       ];
       await expectApart(page, size.width, "Relations on, sheet open", open);
-      if (short) expect(await boxes(page, ["relations-legend"]), "legend gives way").toEqual([]);
+      if (short) {
+        expect(await boxes(page, ["relations-legend"]), "legend gives way").toEqual([]);
+        // The list in Inspect says what the events are instead (constraint 7).
+        await page.getByTestId("side-tab-inspect").press("Enter");
+        await expect(page.getByTestId("relation-list").getByText(CAVEAT)).toBeVisible();
+      }
     }
   });
 }

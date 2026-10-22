@@ -20,6 +20,8 @@ interface ArcLabelsProps {
   yieldTo: string | null;
   /** Where a point above the globe is on screen, or null on its far side. */
   project: (lat: number, lng: number, altitude?: number) => ScreenPoint | null;
+  /** A phone's width (760px and below): CSS hides the labels, so it runs no frame loop either. */
+  narrow?: boolean;
   /**
    * How many labels it has rendered in the DOM (placed or not), each time that
    * changes: the globe shows it as data-relation-labels for the e2e tests.
@@ -33,13 +35,21 @@ interface ArcLabelsProps {
  * requestAnimationFrame loop places them all, as ArcPill places its pill; a
  * label whose top is on the far side is hidden (still rendered). They let
  * the pointer through, and are hidden from screen readers: the keyboard list
- * and the inspector say the same to everyone. CSS hides them on phones.
+ * and the inspector say the same to everyone. On phones it renders none (CSS
+ * hides them there too), as ArcPill does on touch screens.
  */
-export default function ArcLabels({ relations, muted, yieldTo, project, onCount }: ArcLabelsProps) {
+export default function ArcLabels({
+  relations,
+  muted,
+  yieldTo,
+  project,
+  narrow = false,
+  onCount,
+}: ArcLabelsProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const shown = useMemo(
-    () => labelledRelations(relations, { muted, yieldTo }),
-    [relations, muted, yieldTo],
+    () => (narrow ? [] : labelledRelations(relations, { muted, yieldTo })),
+    [relations, muted, yieldTo, narrow],
   );
 
   // The labels in the DOM now, counted there rather than recomputed elsewhere.

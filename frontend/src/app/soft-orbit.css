@@ -1301,6 +1301,10 @@ kbd {
 .insp-list-lbl {
   padding: 10px 12px 2px;
 }
+/* The relation list's caveat, under its lens: the legend's words (.rl-note). */
+.insp-list-note {
+  padding: 0 12px 4px;
+}
 /* The links on the globe, in the empty Inspect tab: each row opens one. */
 .link-list {
   margin: 0 8px;
@@ -2630,7 +2634,8 @@ button.cite:hover {
   .bottombar .links-chip {
     display: inline-flex;
   }
-  /* No room for the relation arcs' labels on a phone: the list in Inspect names them. */
+  /* No room for the relation arcs' labels on a phone: the list in Inspect names them.
+     (ArcLabels renders none here once it knows the width, and runs no frame loop.) */
   .arc-tags {
     display: none;
   }
@@ -2753,7 +2758,8 @@ button.cite:hover {
   .relations-legend .rl-topics {
     display: none;
   }
-  /* With the sheet open there is no room above the layers: the list in Inspect names the lens. */
+  /* With the sheet open there is no room above the layers (not even for the caveat
+     alone): the list in Inspect names the lens and says what the events are. */
   .side[data-open="true"] ~ .bottombar .relations-float {
     display: none;
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import RelationList from "./RelationList";
 import { toRelations } from "@/lib/relations";
 import type { ApiRelations } from "@/lib/api";
@@ -36,6 +36,19 @@ describe("RelationList", () => {
     expect(rows.map((r) => r.dataset.relation)).toEqual(["IR-US", "FR-US", "FR-NG"]);
     // The visible words start as the name does (WCAG 2.5.3).
     expect(rows[0]).toHaveTextContent(/^United States and Iran/);
+  });
+
+  it("says what the events are under the lens, as the legend does (constraint 7)", () => {
+    renderList();
+    const list = screen.getByTestId("relation-list");
+    const note = "Reported events from news, machine-coded by GDELT. Not verified.";
+    // Shown at every width (the legend gives way on phones and short screens), and read out with the group.
+    expect(within(list).getByText(note)).toBeInTheDocument();
+    expect(list).toHaveAccessibleDescription(note);
+    // While they load too.
+    cleanup();
+    renderList({ relations: [], lens: null });
+    expect(screen.getByTestId("relation-list")).toHaveTextContent(note);
   });
 
   it("opens the relation picked", () => {
