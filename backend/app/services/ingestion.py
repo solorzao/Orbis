@@ -266,11 +266,12 @@ async def stop_background_tasks(*, shutdown: bool = False) -> None:
 
     As a cycle starts, so a warm cannot write answers back after the cycle has
     invalidated them, nor a read of the week's stories (wk:globe:, wk:links:)
-    run on into its writes. A wk:relations: read is rollups only, so then it
-    is left to finish and answer its request.
+    run on into its writes. A relations read (db:relations:) is rollups only,
+    so then it is left to finish and answer its request: it lands long before
+    the cycle's end invalidates it.
 
     At *shutdown*, before Redis and the pool close, every wk:* read stops too,
-    relations' included, so none can reopen Redis or reach the pool once
+    and every relations read, so none can reopen Redis or reach the pool once
     closed. A request waiting on a stopped read gets a 503. Waits at most
     _STOP_TIMEOUT seconds, then logs what is still stopping and goes on.
     """
@@ -278,7 +279,7 @@ async def stop_background_tasks(*, shutdown: bool = False) -> None:
     for task in tasks:
         task.cancel()
     if shutdown:
-        tasks += cancel_flights("wk:")
+        tasks += cancel_flights("wk:") + cancel_flights("db:relations:")
     else:
         # The week reads that are expensive (a week of articles): a relations read
         # is rollups only, so one in flight finishes and answers its request.

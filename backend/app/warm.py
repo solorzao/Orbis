@@ -8,8 +8,8 @@ way the frontend's first visit does (the same code path and cache key; the
 7-day globe's seven topics come from one pass, under their requests' keys),
 one at a time to spare the database, each within WARM_TIMEOUT seconds or its
 own WARMER_TIMEOUTS. A warmer that fails or times out is logged and skipped.
-The 7-day window's answers are kept under ``wk:*`` instead, which no cycle
-invalidates, and their warmers refresh them about hourly.
+The 7-day window's globe and links are kept under ``wk:*`` instead, which no
+cycle invalidates, and their warmers refresh them about hourly.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Mapping
 
 from app.routers.links import warm_links_7d, warm_links_24h
 from app.routers.news import warm_breaking, warm_globe, warm_globe_week, warm_volume
+from app.routers.relations import warm_relations
 from app.routers.threads import warm_threads
 from app.services.cache import get_redis
 
@@ -31,19 +32,22 @@ Warmer = Callable[[], Awaitable[object]]
 # Run in order: the first visit's globe and timeline (24 hours, all topics),
 # then the links layer's 24-hour window, then breaking stories (one list for
 # every topic: the ticker's, and the delta's count), then the threads rail's
-# default list (24 hours, all topics, 20). Another endpoint's warmer joins
-# there. Last, the two week reads: the 7-day links list and the 7-day globe for
-# every topic pill. They refresh their wk:* entries (which no cycle
-# invalidates) only once those are 55 minutes old (cache.week_fresh), so one
-# cycle an hour runs them and the others skip them; run last, they never hold
-# up the cycle's own warmers (links-7d's 26.5 s ran breaking past its 30 s on
-# production, 2026-10-21).
+# default list (24 hours, all topics, 20), then the Relations layer's (every
+# class, 40: its 7-day lens reads only the daily rollups, so it is under db:*
+# and refilled each cycle, as the events step adds to them). Another
+# endpoint's warmer joins there. Last, the two week reads: the 7-day links
+# list and the 7-day globe for every topic pill. They refresh their wk:*
+# entries (which no cycle invalidates) only once those are 55 minutes old
+# (cache.week_fresh), so one cycle an hour runs them and the others skip them;
+# run last, they never hold up the cycle's own warmers (links-7d's 26.5 s ran
+# breaking past its 30 s on production, 2026-10-21).
 WARMERS: tuple[Warmer, ...] = (
     warm_globe,
     warm_volume,
     warm_links_24h,
     warm_breaking,
     warm_threads,
+    warm_relations,
     warm_links_7d,
     warm_globe_week,
 )

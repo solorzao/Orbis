@@ -2,9 +2,11 @@
 
 Every answer is the 7-day lens (the last 7 UTC days), whatever window the
 timeline shows: there are no window parameters, and any sent are ignored. The
-answers read only the daily rollups, and live under wk:* (cache.WEEK_TTL),
-outside the db:* each cycle invalidates: up to about an hour old. The days in
-the keys move them at UTC midnight.
+answers read only the daily rollups, which each cycle's events step adds to,
+so they live under db:*, which the cycle invalidates as it ends: the list and
+every pair's detail refresh together, and app.warm refills the default list.
+Their TTL (cache.WEEK_TTL) is only a backstop. The days in the keys move them
+at UTC midnight.
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ from app.services.relations import (
 
 router = APIRouter(prefix="/api", tags=["relations"])
 
+# The layer's first request (frontend useRelations: every class, RELATIONS_LIMIT),
+# the one warm_relations caches.
 DEFAULT_KIND = "all"
 DEFAULT_LIMIT = 40
 # An empty list briefly, as #108's links do (_EMPTY_LINKS_TTL), so new rollups show soon.
@@ -64,11 +68,21 @@ async def get_relations(
     """Pairs of countries in GDELT's reported events over the last 7 UTC days.
 
     Machine-coded from news reports (not verified): who did what to whom, as
-    reported. A week read, so it lives under wk: (cache.WEEK_TTL), refreshed
-    about hourly; the days in the key move it at UTC midnight.
+    reported.
+    """
+    return await cached_relations(kind, limit)
+
+
+async def cached_relations(kind: str, limit: int) -> Relations:
+    """/api/relations' answer: cached, else computed once for concurrent callers
+    and cached.
+
+    The request and warm_relations both come here, so a warmed entry has the
+    key and the bytes a request would have stored. An entry that no longer
+    fits Relations is a miss.
     """
     first, last = lens_days(_now())
-    key = f"wk:relations:v1:{_days(first, last)}:{kind}:{limit}"
+    key = f"db:relations:v1:{_days(first, last)}:{kind}:{limit}"
     cached = await get_cached(key)
     if cached is not None:
         found = cached_model(key, cached, Relations.model_validate)
@@ -93,6 +107,12 @@ async def get_relations(
         raise retry_shortly(stopped) from None
 
 
+async def warm_relations() -> None:
+    """Cache the Relations layer's first request: every class, 40 (app.warm, after
+    each ingestion cycle)."""
+    await cached_relations(DEFAULT_KIND, DEFAULT_LIMIT)
+
+
 @router.get("/relations/detail", response_model=RelationDetail, dependencies=[Depends(edge_cached)])
 async def get_relation(a: Country, b: Country) -> RelationDetail:
     """One pair's reported events over the last 7 UTC days, for the inspector.
@@ -105,7 +125,7 @@ async def get_relation(a: Country, b: Country) -> RelationDetail:
     """
     a, b = sorted(_pair(a, b))
     first, last = lens_days(_now())
-    key = f"wk:relations:detail:v1:{a}:{b}:{_days(first, last)}"
+    key = f"db:relations:detail:v1:{a}:{b}:{_days(first, last)}"
     cached = await get_cached(key)
     if cached is not None:
         found = cached_model(key, cached, RelationDetail.model_validate)

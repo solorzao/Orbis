@@ -1,7 +1,8 @@
 """Tests for the /api/relations endpoints (the pool and Redis faked).
 
 Every answer is the 7-day lens (the last 7 UTC days), whatever window a request
-sends, cached under wk:* (hourly), never db:*.
+sends, cached under db:*, so each cycle's invalidation, just after its events
+land, refreshes the list and every detail together.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.config import settings
 from app.routers.http_cache import EDGE_CACHE_CONTROL
 from app.services import relations
 from app.services.cache import WEEK_TTL, invalidate
@@ -21,8 +23,8 @@ from tests.fake_redis import FakeRedis
 
 NOW = datetime(2026, 10, 21, 0, 30, tzinfo=timezone.utc)
 FIRST, LAST = date(2026, 10, 15), date(2026, 10, 21)
-LIST_KEY = "wk:relations:v1:20261015-20261021:all:40"
-DETAIL_KEY = "wk:relations:detail:v1:IR:US:20261015-20261021"
+LIST_KEY = "db:relations:v1:20261015-20261021:all:40"
+DETAIL_KEY = "db:relations:detail:v1:IR:US:20261015-20261021"
 NOT_FOUND = {"detail": "No reported events between them in the last 7 days."}
 QUAD_KEYS = {"verbal_cooperation", "material_cooperation", "verbal_conflict", "material_conflict"}
 
@@ -187,7 +189,7 @@ class TestList:
             assert set(rel["quad"]) == QUAD_KEYS
             assert rel["quad"]["verbal_cooperation"] == rel["quad"]["material_cooperation"] == 0
         assert pool.statements(relations.LIST_SQL)[0][2] == [3, 4]
-        assert list(redis.values) == ["wk:relations:v1:20261015-20261021:conflict:40"]
+        assert list(redis.values) == ["db:relations:v1:20261015-20261021:conflict:40"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -210,11 +212,13 @@ class TestList:
         assert pool.calls == []
 
     @pytest.mark.asyncio
-    async def test_cached_for_the_weeks_ttl(self, monkeypatch, redis, pool):
+    async def test_cached_for_a_backstop_ttl_the_cycles_invalidation_beats(
+        self, monkeypatch, redis, pool
+    ):
         async with _client(monkeypatch) as client:
             await client.get("/api/relations")
 
-        assert redis.ttls[LIST_KEY] == WEEK_TTL
+        assert redis.ttls[LIST_KEY] == WEEK_TTL > settings.ingestion_interval_seconds
 
     @pytest.mark.asyncio
     async def test_an_empty_list_is_cached_a_minute_so_new_rollups_show_soon(
@@ -237,7 +241,7 @@ class TestList:
         async with _client(monkeypatch) as client:
             await client.get("/api/relations")
 
-        assert list(redis.values) == ["wk:relations:v1:20261016-20261022:all:40"]
+        assert list(redis.values) == ["db:relations:v1:20261016-20261022:all:40"]
         assert pool.statements(relations.LIST_SQL)[0][:2] == (
             date(2026, 10, 16),
             date(2026, 10, 22),
@@ -265,7 +269,7 @@ class TestList:
         assert resp.status_code == 200 and resp.json()["relations"]
         assert len(pool.statements(relations.LIST_SQL)) == 1
         [line] = [r.getMessage() for r in caplog.records if "no longer fits" in r.getMessage()]
-        assert line.startswith("Cached wk:relations:v1:… no longer fits its model")
+        assert line.startswith("Cached db:relations:v1:… no longer fits its model")
 
     @pytest.mark.asyncio
     async def test_concurrent_misses_run_the_query_once(self, monkeypatch, redis, pool):
@@ -372,14 +376,80 @@ async def test_both_routes_are_edge_cached(monkeypatch, redis, pool):
 
 
 @pytest.mark.asyncio
-async def test_no_key_is_under_db_so_a_cycles_invalidation_leaves_them(monkeypatch, redis, pool):
+async def test_both_keys_are_under_db_so_a_cycles_invalidation_refreshes_them_together(
+    monkeypatch, redis, pool
+):
+    """Under wk:*, outside the cycle's invalidation, the list and a pair's detail were
+    cached at different times: the arc said 59 events and the inspector 65 (Russia and
+    Ukraine, production, 2026-10-21). Under db:*, the invalidation just after a cycle's
+    events land clears both, and the next reads count the new events."""
     async with _client(monkeypatch) as client:
         await client.get("/api/relations")
         await client.get("/api/relations/detail", params={"a": "IR", "b": "US"})
+        assert sorted(redis.values) == [DETAIL_KEY, LIST_KEY]
 
-    assert sorted(redis.values) == [DETAIL_KEY, LIST_KEY]
-    await invalidate("db:*")
-    assert sorted(redis.values) == [DETAIL_KEY, LIST_KEY]
+        await invalidate("db:*")  # as run_ingestion_cycle ends, after ingest_events
+        assert redis.values == {}
+
+        # The cycle's events: 6 more, the US's verbal conflict on 19 Oct.
+        pool.pairs = [_pair(n=26, q=(2, 1, 18, 5))]
+        pool.detail = [*pool.detail, _rollup("US", "IR", date(2026, 10, 19), 3, 6)]
+        listed = await client.get("/api/relations")
+        detail = await client.get("/api/relations/detail", params={"a": "IR", "b": "US"})
+
+    assert listed.json()["relations"][0]["n"] == 26
+    assert detail.json()["n"] == 5 + 6
+    assert len(pool.statements(relations.LIST_SQL)) == 2  # once each side of the cycle
+    assert len(pool.statements(relations.DETAIL_SQL)) == 2
+
+
+class TestWarm:
+    @pytest.mark.asyncio
+    async def test_the_warm_caches_what_the_layers_first_request_reads(
+        self, monkeypatch, redis, pool
+    ):
+        """warm_relations (app.warm, after each cycle's invalidation) stores the key,
+        bytes and TTL the frontend's first request (every class, RELATIONS_LIMIT 40)
+        would: that request is then a hit."""
+        from app.routers import relations as router
+
+        async with _client(monkeypatch) as client:
+            await client.get("/api/relations", params={"kind": "all", "limit": 40})
+        requested = (redis.values[LIST_KEY], redis.ttls[LIST_KEY])
+        await invalidate("db:*")
+
+        await router.warm_relations()
+
+        assert list(redis.values) == [LIST_KEY]
+        assert (redis.values[LIST_KEY], redis.ttls[LIST_KEY]) == requested
+        pool.calls.clear()
+        async with _client(monkeypatch) as client:
+            hit = await client.get("/api/relations", params={"kind": "all", "limit": 40})
+        assert hit.status_code == 200 and hit.json()["relations"]
+        assert pool.calls == []
+
+    @pytest.mark.asyncio
+    async def test_the_warm_joins_a_read_a_requests_miss_has_started(
+        self, monkeypatch, redis, pool
+    ):
+        """Right after a cycle, a visitor may miss before the warm gets there: the
+        two share one read."""
+        from app.routers import relations as router
+
+        pool.gate = asyncio.Event()
+        async with _client(monkeypatch) as client:
+            request = asyncio.create_task(client.get("/api/relations"))
+            while not pool.statements(relations.LIST_SQL):
+                await asyncio.sleep(0.01)
+            warm = asyncio.create_task(router.warm_relations())
+            await asyncio.sleep(0.05)  # the warm is waiting on the request's read
+            pool.gate.set()
+            resp = await request
+            await warm
+
+        assert resp.status_code == 200
+        assert len(pool.statements(relations.LIST_SQL)) == 1
+        assert list(redis.values) == [LIST_KEY]
 
 
 @pytest.mark.asyncio
@@ -405,7 +475,7 @@ async def test_a_read_cancelled_under_a_request_is_a_503_to_retry(
     monkeypatch, redis, pool, caplog, path, params, gate
 ):
     """As links' and the globe's week reads: if a cancel scope ever reaches
-    wk:relations: (shutdown does), a waiting request gets a 503 with Retry-After,
+    db:relations: (shutdown does), a waiting request gets a 503 with Retry-After,
     not a bare 500 with a traceback."""
     from app.services import cache
 
@@ -415,13 +485,13 @@ async def test_a_read_cancelled_under_a_request_is_a_503_to_retry(
             request = asyncio.create_task(client.get(path, params=params))
             while not pool.calls:
                 await asyncio.sleep(0.01)
-            await asyncio.gather(*cache.cancel_flights("wk:relations"), return_exceptions=True)
+            await asyncio.gather(*cache.cancel_flights("db:relations:"), return_exceptions=True)
             resp = await request
 
     assert resp.status_code == 503
     assert resp.headers["retry-after"] == "15"
     assert "cache-control" not in resp.headers  # never kept at the edge
-    assert resp.json()["detail"] == "The computation for wk:* was cancelled; retry shortly."
+    assert resp.json()["detail"] == "The computation for db:* was cancelled; retry shortly."
     assert not [r for r in caplog.records if r.exc_info]
     assert redis.values == {}
 
