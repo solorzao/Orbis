@@ -205,21 +205,25 @@ async def _add_events() -> None:
 
     The cycle runs it even when the GKG step fails: a catch-up reaches back only
     events.CATCHUP_HOURS, so a longer run of failed cycles would lose event files
-    for good. The rollups age out here, whatever EVENTS_INGESTION_ENABLED says.
+    for good. The rollups age out here, whatever EVENTS_INGESTION_ENABLED says;
+    switched off, nothing lands, so the relations reads and caches are left to
+    the cycle's end.
     """
     try:
         await purge_events(await get_pool(), settings.retention_days)
     except Exception:
         logger.warning("Events purge failed; continuing.", exc_info=True)
     await ingest_events()  # never raises; seconds, before the embeddings' IOPS peak
+    if not settings.events_ingestion_enabled:
+        return  # no events, so no 503s for relations reads in flight
     # Relations read only these rollups. Left to the end, the warmed list
     # would miss the new events while a pair's detail read cold during the
     # embeddings (minutes) counted them; a cold read now is rollups only,
     # cheap even at the embeddings' IOPS peak. A relations read that began
     # before the events' commit could store the old figures just after the
-    # invalidation, to stay until the cycle's end: it is stopped first, so it
-    # stores nothing (cancelled at its pending await, it never reaches
-    # set_cached), and its request gets a 503 to retry.
+    # invalidation, to stay until the cycle's end, so it is stopped first (its
+    # request gets a 503 to retry): cancelled, it sends no SET, and a SET it
+    # had already sent went before the invalidation's SCAN/DEL, which clears it.
     try:
         cancel_flights(RELATIONS_CACHE)
         await invalidate(f"{RELATIONS_CACHE}*")
@@ -331,10 +335,12 @@ async def run_ingestion_cycle() -> int:
 
     Downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
-    Then purges articles outside the retention window, adds GDELT's Event
-    exports to the daily country-pair rollups (time-bounded, never raises, and
-    run even when the steps before it failed), embeds the new rows and assigns
-    them to story threads (a failure there is only a warning).
+    Then purges articles outside the retention window. The events step
+    (_add_events) runs even when those steps failed, and never raises: it
+    purges old rollups and adds GDELT's Event exports to them (the adding, not
+    the purge, is time-bounded). Last, unless the GKG step or the article purge
+    failed, the cycle embeds the new rows and assigns them to story threads (a
+    failed assignment is only a warning; a failed embedding fails the cycle).
     The API caches (db:*) are invalidated once, at the end, even if a
     step failed: until then visitors get the last cycle's answers rather than
     a cold query while the embeddings keep the database busy, and breaking

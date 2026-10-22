@@ -593,6 +593,40 @@ class TestRunIngestionCycle:
         assert warm == [False]
 
     @pytest.mark.asyncio
+    async def test_a_failed_embedding_fails_the_cycle_not_the_scheduler(
+        self, warm, assign, _no_events, _no_events_purge, caplog
+    ):
+        """The scheduler's loop doesn't catch: a raise here would end ingestion until a
+        restart, and skip this cycle's db:* invalidation and warm."""
+        from app.services import ingestion
+
+        patches, events = self._cycle_events(5)
+        _no_events_purge.side_effect = lambda *_args: events.append("events purge")
+        _no_events.side_effect = lambda: events.append("events")
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3] as embed,
+            patches[4],
+            patches[5],
+            caplog.at_level(logging.ERROR, logger="orbis.ingestion"),
+        ):
+            embed.side_effect = RuntimeError("the embeddings API is down")
+            assert await ingestion.run_ingestion_cycle() == 0
+
+        assert events == [
+            "ingest",
+            "events purge",
+            "events",
+            RELATIONS_INVALIDATED,
+            "invalidate db:* locked=True",
+        ]
+        assert [r.getMessage() for r in caplog.records] == ["Ingestion cycle failed."]
+        assign.assert_not_awaited()
+        assert warm == [False]
+
+    @pytest.mark.asyncio
     async def test_warms_caches_once_the_lock_is_released(self, warm):
         from app.services.ingestion import run_ingestion_cycle
 
@@ -895,25 +929,30 @@ class TestAddEvents:
         assert record.levelno == logging.WARNING
 
     @pytest.mark.asyncio
-    async def test_the_kill_switch_leaves_the_events_purge_running(
+    async def test_the_kill_switch_purges_and_leaves_the_relations_reads_alone(
         self, monkeypatch, _no_events_purge
     ):
-        """Switched off, the events step adds nothing, and the rows still age out."""
+        """Switched off, the events step adds nothing, and the rows still age out. With
+        no events, no relations read is stopped (a needless 503 every cycle) nor its
+        cache cleared: the cycle's end clears db:* as ever."""
         from app.services.events import ingest_events
         from app.services.ingestion import _add_events
 
         monkeypatch.setattr(settings, "events_ingestion_enabled", False)
-        pool = object()
+        steps: list[str] = []
+        p = self._recorded(steps)
         with (
-            patch("app.services.ingestion.get_pool", AsyncMock(return_value=pool)),
+            p[0] as get_pool,
+            p[1],
+            p[2],
             patch("app.services.ingestion.ingest_events", ingest_events),  # the real step
             patch("app.services.events.fetch_lastupdate", new_callable=AsyncMock) as fetch,
-            patch("app.services.ingestion.invalidate", new_callable=AsyncMock),
         ):
             await _add_events()
 
-        _no_events_purge.assert_awaited_once_with(pool, settings.retention_days)
+        _no_events_purge.assert_awaited_once_with(get_pool.return_value, settings.retention_days)
         fetch.assert_not_awaited()
+        assert steps == []
 
 
 async def _drain_background_tasks():
