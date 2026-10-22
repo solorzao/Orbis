@@ -18,12 +18,13 @@ const CONFLICT = contract.list_conflict as ApiRelations;
 const DETAIL = toRelationDetail(contract.detail as ApiRelationDetail);
 /** IR–US's detail, six events on from the list's (312). */
 const FRESH: RelationDetail = { ...DETAIL, relation: { ...DETAIL.relation, n: 318 } };
-/** Nothing drawn or loading; `patch` is there whatever the state. */
+/** Nothing drawn or loading, so no answer; `patch` is there whatever the state. */
 const IDLE = {
   relations: [],
   lens: null,
   loading: false,
   error: false,
+  answer: 0,
   patch: expect.any(Function),
 };
 
@@ -174,7 +175,8 @@ describe("useRelations", () => {
     mockFetch.mockResolvedValue(LIST);
     const { result } = render({ kind: "all", on: true });
     await settle();
-    const { patch: patchFn } = result.current;
+    const { patch: patchFn, answer } = result.current;
+    expect(answer).toBeGreaterThan(0);
 
     act(() => result.current.patch(FRESH));
     expect(result.current.relations.map((r) => [r.a.iso + r.b.iso, r.n])).toEqual([
@@ -182,15 +184,17 @@ describe("useRelations", () => {
       ["FRUS", 120],
       ["FRNG", 40],
     ]);
-    expect(result.current).toMatchObject({ loading: false, error: false });
-    expect(result.current.patch).toBe(patchFn); // stable: page.tsx's callbacks depend on it
+    // A patch is no new answer (a shown relation isn't asked again for it).
+    expect(result.current).toMatchObject({ loading: false, error: false, answer });
+    expect(result.current.patch).toBe(patchFn); // stable: useRelationDetail's load depends on it
 
-    // The next refresh's answer stands as it comes.
+    // The next refresh's answer stands as it comes, and is a new one.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(REFRESH_MS);
     });
     await settle();
     expect(result.current.relations[0].n).toBe(312);
+    expect(result.current.answer).toBeGreaterThan(answer);
   });
 
   it("doesn't patch a class's answer, even while the next class loads", async () => {

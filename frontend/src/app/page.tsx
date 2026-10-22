@@ -13,13 +13,7 @@ import type {
   RelationEntry,
   Topic,
 } from "@/types/news";
-import {
-  fetchClusterArticles,
-  fetchClusterSummary,
-  fetchLinkDetail,
-  fetchRelationDetail,
-  retryOnce503,
-} from "@/lib/api";
+import { fetchClusterArticles, fetchClusterSummary, fetchLinkDetail } from "@/lib/api";
 import { apiArticlesToNewsArticles } from "@/lib/clustering";
 import { applyPage, FIRST_PAGE_LIMIT, nextPage } from "@/lib/loadMore";
 import { panelQuery, queryWindow, recentToEvict, samePanelQuery } from "@/lib/panelQuery";
@@ -49,7 +43,6 @@ import {
   relationPill,
   relationsStatus,
   relationsUnavailable,
-  toRelationDetail,
   type Relation,
   type RelationKind,
 } from "@/lib/relations";
@@ -67,6 +60,7 @@ import { isWebUrl, useAgent } from "@/hooks/useAgent";
 import { useGlobePoints } from "@/hooks/useGlobePoints";
 import { useLinks } from "@/hooks/useLinks";
 import { useRelations } from "@/hooks/useRelations";
+import { useRelationDetail } from "@/hooks/useRelationDetail";
 import { useLinkExplain } from "@/hooks/useLinkExplain";
 import { useBreaking } from "@/hooks/useBreaking";
 import { useLastVisit } from "@/hooks/useLastVisit";
@@ -191,7 +185,6 @@ export default function Home() {
   const relationsNotHere = relationsUnavailable(timeWindow, replaying);
   const relationsShown = relationsOn && relationsNotHere === null;
   const relationsResult = useRelations(relationKind, relationsShown);
-  const { patch: patchRelationsList } = relationsResult;
   const relationsDrawn = relationsShown ? relationsResult.relations : NO_RELATIONS;
   // Said when Relations draws nothing: an empty lens, or relations that failed to load.
   const relationsNote = relationsShown
@@ -925,39 +918,9 @@ export default function Home() {
   // Explain this link: one request per link at a time (useLinkExplain).
   const handleExplain = useLinkExplain(updateLink);
 
-  const updateRelation = useCallback((relationId: string, updates: Partial<RelationEntry>) => {
-    setRelationQueue((prev) =>
-      prev.map((r) => (r.relationId === relationId ? { ...r, ...updates } : r)),
-    );
-  }, []);
-
-  // A relation's detail: every class, over the same lens. A 404 (the pair's
-  // last day left the lens around UTC midnight) is said as text, not an error.
-  const fetchRelationData = useCallback(
-    async (relationId: string, relation: Relation) => {
-      try {
-        // A 503 (a read stopped at a cycle's boundary) is asked once more, as the arcs are.
-        const api = await retryOnce503(
-          () => fetchRelationDetail({ a: relation.a.iso, b: relation.b.iso }),
-          new AbortController().signal,
-        );
-        if (api === null) {
-          updateRelation(relationId, { detailLoading: false, notFound: true });
-          return;
-        }
-        const detail = toRelationDetail(api);
-        updateRelation(relationId, { detail, detailLoading: false });
-        // Fresher than the arcs' list: its arc, label and row say the same.
-        patchRelationsList(detail);
-      } catch {
-        updateRelation(relationId, { detailLoading: false, detailError: true });
-      }
-    },
-    [updateRelation, patchRelationsList],
-  );
-
   // An arc's click (or a list row) opens its relation in the Inspect tab, as a
   // link opens (or the one already open for the pair: the lens is one window).
+  // Shown, its detail is asked (useRelationDetail), again if it was open already.
   const handleRelationOpen = useCallback(
     (relation: Relation) => {
       // Its highlight, not a thread's arcs or a tracked entity's focus.
@@ -993,7 +956,6 @@ export default function Home() {
         setLinkQueue((prev) => prev.filter((l) => l.linkId !== evict));
       }
       setActiveId(relationId);
-      fetchRelationData(relationId, relation);
     },
     [
       panelQueue,
@@ -1001,7 +963,6 @@ export default function Home() {
       relationQueue,
       relationKind,
       relationsResult.lens,
-      fetchRelationData,
       showInspect,
       resetSpreadReplay,
     ],
@@ -1077,6 +1038,12 @@ export default function Home() {
   const expandedPanel = panelQueue.find((p) => p.panelId === activeId) ?? null;
   const activeLink = linkQueue.find((l) => l.linkId === activeId) ?? null;
   const activeRelation = relationQueue.find((r) => r.relationId === activeId) ?? null;
+  // Its detail, asked each time it is shown and for each new list answer: its
+  // arc, label and row agree with its inspector.
+  useRelationDetail(activeRelation, relationsResult.answer, {
+    setRelations: setRelationQueue,
+    patch: relationsResult.patch,
+  });
   // The inspected link's highlight, unless a thread's arcs are drawn (one or the other).
   const inspectedLink =
     activeLink && !selectedThread ? linkKey(activeLink.link.a.iso, activeLink.link.b.iso) : null;

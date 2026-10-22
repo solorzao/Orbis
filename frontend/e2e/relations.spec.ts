@@ -171,17 +171,22 @@ test.describe("Relations layer", () => {
     ).toHaveCount(0);
   });
 
-  test("an opened pair's arc and row take its detail's fresher numbers", async ({ page }) => {
-    // The list answered before the last cycle (59); the detail is fetched fresh (65).
-    const stale = {
+  test("an opened pair's arc and row agree with its detail, asked again when shown again", async ({
+    page,
+  }) => {
+    // The list (59) and the pair's detail (65) answered at different times.
+    const listed = {
       ...MOCK_RELATIONS,
       relations: MOCK_RELATIONS.relations.map((r, i) => (i === 0 ? { ...r, n: 59 } : r)),
     };
+    let n = 65;
+    let asked = 0;
     await gotoStillGlobe(page, async (p) => {
-      await p.route(isRelationsList, (route) => route.fulfill({ json: stale }));
-      await p.route(isRelationDetail, (route) =>
-        route.fulfill({ json: { ...MOCK_RELATION_DETAIL, n: 65 } }),
-      );
+      await p.route(isRelationsList, (route) => route.fulfill({ json: listed }));
+      await p.route(isRelationDetail, (route) => {
+        asked += 1;
+        return route.fulfill({ json: { ...MOCK_RELATION_DETAIL, n } });
+      });
     });
     await relationsOn(page);
     await page.getByTestId("side-tab-inspect").press("Enter");
@@ -194,6 +199,16 @@ test.describe("Relations layer", () => {
     await expect(page.getByTestId("arc-pill")).toContainText("65 reported events");
     await inspector.getByRole("button", { name: "Minimize panel" }).press("Enter");
     await expect(row).toHaveAccessibleName(/: 65 reported events/);
+
+    // Shown again from its pill: asked again, the inspector and the arc move on together.
+    n = 71;
+    await page
+      .getByTestId("recent-places")
+      .getByRole("button", { name: /^US ↔ IR · events/ })
+      .press("Enter");
+    await expect(inspector.getByRole("group", { name: "Events" })).toHaveText(/71/);
+    await expect(page.getByTestId("arc-pill")).toContainText("71 reported events");
+    expect(asked).toBe(2);
   });
 
   test("another focus mutes the arcs and their labels", async ({ page }) => {

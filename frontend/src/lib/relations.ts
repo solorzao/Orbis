@@ -156,13 +156,15 @@ const sameFigures = (x: Relation, y: Relation) =>
   QUAD_KEYS.every((k) => x.quad[k] === y.quad[k]);
 
 /**
- * The list with an opened pair's figures from its detail, which is fetched
- * fresh while the list can be up to 30 minutes old: its arc, label and row
- * then say what the inspector does. Only a pair the list has (its thresholds
- * stand; the detail has none), in its place, and only when the figures mean
- * the same: every class (under a class switch the list's are that class's
- * alone) over the same days. Its ends and acting country stay the list's, as
- * the open inspector is named from them. The same array when nothing changes.
+ * The list with an opened pair's figures from its detail (the list is asked
+ * every 30 minutes, the detail each time the pair is shown), so its arc,
+ * label and row say what its inspector does. Only a pair the list has (its
+ * thresholds stand; the detail has none), in its place, and only when the
+ * figures mean the same: every class (under a class switch the list's are
+ * that class's alone) over the same days. Its ends and acting country stay
+ * the list's, as the open inspector is named from them: with `from` not
+ * patched, the arc's direction can differ from a fresh list's. The same
+ * array when nothing changes.
  */
 export function patchRelations(
   relations: Relation[],
