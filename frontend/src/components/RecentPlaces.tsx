@@ -41,7 +41,7 @@ interface Pill {
   /** What the × says it does. */
   closeLabel: string;
   content: ReactNode;
-  /** Its stories, or none (the tracked entity). */
+  /** Its stories, or none (the tracked entity, a relation). */
   count: number | null;
 }
 
@@ -82,7 +82,11 @@ function linkPill(entry: LinkEntry): Pill {
   };
 }
 
-/** A relation's pill: "US ↔ IR · events", from the acting country, with its event count. */
+/**
+ * A relation's pill: "US ↔ IR · events", from the acting country. No count on
+ * it: the pill outlives the legend and the list, and their caveat with them
+ * (the inspector it opens says it). Its name says how many reported events.
+ */
 function relationPill(entry: RelationEntry): Pill {
   const { short, long } = relationPairLabel(entry.relation);
   const n = entry.detail?.relation.n ?? entry.relation.n;
@@ -93,7 +97,7 @@ function relationPill(entry: RelationEntry): Pill {
     title: `${long}: reported events, last 7 days`,
     label: `${shown}: ${long}, ${reportedEvents(n)}`, // the visible words first (label in name)
     closeLabel: `Close ${long} reported events`,
-    count: n,
+    count: null,
     content: <span className="place-name">{shown}</span>,
   };
 }

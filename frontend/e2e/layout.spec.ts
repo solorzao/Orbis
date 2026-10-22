@@ -375,10 +375,18 @@ for (const size of SIZES.filter((s) => s.width > NARROW_MAX)) {
       await expectApart(page, size.width, "Relations on, sheet open", open);
       if (short) {
         expect(await boxes(page, ["relations-legend"]), "legend gives way").toEqual([]);
-        await expect(label, "the figure labels go with it").toBeHidden();
-        // The list in Inspect says what the events are instead (constraint 7).
+        await expect(page.getByTestId("arc-labels"), "the figure labels go with it").toHaveCSS(
+          "display",
+          "none",
+        );
+        await expect(label).toBeHidden();
+        // The list in Inspect says what the events are instead (constraint 7), and
+        // keeps saying it above its rows however far they scroll.
         await page.getByTestId("side-tab-inspect").press("Enter");
-        await expect(page.getByTestId("relation-list").getByText(CAVEAT)).toBeVisible();
+        await page.locator("[data-relation]").last().scrollIntoViewIfNeeded();
+        await expect(page.getByTestId("relation-list").getByText(CAVEAT)).toBeInViewport({
+          ratio: 1,
+        });
         // Folded, the legend and the labels come back.
         await page.getByTestId("side-collapse").press("Enter");
         await expect(page.getByTestId("relations-legend")).toBeVisible();
