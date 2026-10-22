@@ -12,6 +12,7 @@ from app import warm
 from app.config import settings
 from app.routers.links import warm_links_7d, warm_links_24h
 from app.routers.news import warm_breaking, warm_globe, warm_globe_week, warm_volume
+from app.routers.relations import warm_relations
 from app.routers.threads import warm_threads
 from app.services.cache import cycle_ttl
 
@@ -26,15 +27,17 @@ def redis_up():
 def test_the_first_visit_is_warmed_globe_first_then_the_links_layer_then_breaking():
     """The globe is on the first visit's critical path; links only once the layer is on;
     breaking stories (one list for every topic) for the ticker and the delta; then the
-    threads rail's default list (24 hours, all topics, 20). Last the two week reads,
-    which most cycles skip: run before breaking, links-7d's 26.5 s left breaking to
-    time out on production (2026-10-21)."""
+    threads rail's default list (24 hours, all topics, 20) and the Relations layer's
+    (every class, 40), under db:* like the rest. Last the two week reads, which most
+    cycles skip: run before breaking, links-7d's 26.5 s left breaking to time out on
+    production (2026-10-21)."""
     assert warm.WARMERS == (
         warm_globe,
         warm_volume,
         warm_links_24h,
         warm_breaking,
         warm_threads,
+        warm_relations,
         warm_links_7d,
         warm_globe_week,
     )

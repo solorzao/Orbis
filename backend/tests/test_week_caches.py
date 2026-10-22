@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from app.routers.http_cache import EDGE_CACHE_CONTROL
 from app.services.cache import WEEK_TTL, invalidate
 from app.services.links import TOPIC_TAGS
+from app.services.relations import CACHE_PREFIX as RELATIONS_CACHE
 from tests.fake_redis import FakeRedis
 
 # The topic pills as the frontend sends them (All: no topic), and their article tags.
@@ -32,6 +33,8 @@ PILLS = [
 ]
 WEEK_GLOBE_KEYS = [f"wk:globe:v2:168::500:{tag or ''}" for _, tag in PILLS]
 WEEK_LINKS_KEY = "wk:links:v5:live:168::lift:40"
+# The relations lens reads only rollups: under db:*, but its reads are single flights too.
+RELATIONS_KEY = f"{RELATIONS_CACHE}v1:20261015-20261021:all:40"
 CYCLE = 15 * 60
 
 
@@ -318,9 +321,7 @@ class TestStopping:
                 links_cancelled.set()
                 raise
 
-        relations_request = asyncio.create_task(
-            cache.single_flight("wk:relations:v1:20261015-20261021:all:40", relations_read)
-        )
+        relations_request = asyncio.create_task(cache.single_flight(RELATIONS_KEY, relations_read))
         links_request = asyncio.create_task(cache.single_flight(WEEK_LINKS_KEY, links_read))
         await asyncio.wait_for(relations_started.wait(), 1)
         await asyncio.wait_for(links_started.wait(), 1)
@@ -352,9 +353,7 @@ class TestStopping:
                 relations_cancelled.set()
                 raise
 
-        relations_request = asyncio.create_task(
-            cache.single_flight("wk:relations:v1:20261015-20261021:all:40", relations_read)
-        )
+        relations_request = asyncio.create_task(cache.single_flight(RELATIONS_KEY, relations_read))
         await asyncio.wait_for(relations_started.wait(), 1)
 
         await ingestion.stop_background_tasks(shutdown=True)
