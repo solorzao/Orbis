@@ -22,6 +22,7 @@ from app.services.events import ingest_events, purge_events
 from app.services.gdelt import fetch_raw_gkg, scrape_titles
 from app.services.knowledge_graph import populate_graph, purge_orphaned_nodes
 from app.services.ml_models import analyze_sentiment_ml, classify_topics_ml
+from app.services.relations import CACHE_PREFIX as RELATIONS_CACHE
 from app.services.thread_synopsis import summarise_threads
 from app.services.threads import assign_threads, purge_threads
 from app.services.titles import dedup_key
@@ -266,9 +267,9 @@ async def stop_background_tasks(*, shutdown: bool = False) -> None:
 
     As a cycle starts, so a warm cannot write answers back after the cycle has
     invalidated them, nor a read of the week's stories (wk:globe:, wk:links:)
-    run on into its writes. A relations read (db:relations:) is rollups only,
-    so then it is left to finish and answer its request: it lands long before
-    the cycle's end invalidates it.
+    run on into its writes. A relations read (relations.CACHE_PREFIX) is
+    rollups only, so then it is left to finish and answer its request: what it
+    stores is cleared once the cycle's events land.
 
     At *shutdown*, before Redis and the pool close, every wk:* read stops too,
     and every relations read, so none can reopen Redis or reach the pool once
@@ -279,7 +280,7 @@ async def stop_background_tasks(*, shutdown: bool = False) -> None:
     for task in tasks:
         task.cancel()
     if shutdown:
-        tasks += cancel_flights("wk:") + cancel_flights("db:relations:")
+        tasks += cancel_flights("wk:") + cancel_flights(RELATIONS_CACHE)
     else:
         # The week reads that are expensive (a week of articles): a relations read
         # is rollups only, so one in flight finishes and answers its request.
@@ -318,7 +319,9 @@ async def run_ingestion_cycle() -> int:
     until its TTL; the warm joins that in-flight query rather than redoing
     it.) Once the cycle has released its lock, those caches are
     refilled in the background, so neither the next cycle nor a visitor
-    waits on that.
+    waits on that. The relations lens's (relations.CACHE_PREFIX) are also
+    invalidated as soon as the events land, so during the embeddings the list
+    and a pair's detail count the same events.
 
     Cycles never overlap: if one is already running (the startup run and the
     scheduler can coincide), this returns 0 without doing anything.
@@ -336,6 +339,11 @@ async def run_ingestion_cycle() -> int:
             count = await _ingest_from_raw_gkg()
             await _purge_old_articles()
             await ingest_events()  # never raises; seconds, before the embeddings' IOPS peak
+            # Relations read only these rollups. Left to the end, the warmed list
+            # would miss the new events while a pair's detail read cold during the
+            # embeddings (minutes) counted them; a cold read now is rollups only,
+            # cheap even at the embeddings' IOPS peak.
+            await invalidate(f"{RELATIONS_CACHE}*")
             embedded = await generate_embeddings()
             await _assign_threads(embedded)
             logger.info("Ingestion cycle complete: %d articles.", count)

@@ -10,6 +10,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.config import settings
+from app.services.relations import CACHE_PREFIX as RELATIONS_CACHE
+
+# What a cycle's recorder (TestRunIngestionCycle._cycle_events) notes when the
+# events step's invalidation of the relations lens's caches runs.
+RELATIONS_INVALIDATED = f"invalidate {RELATIONS_CACHE}* locked=True"
 
 
 @pytest.fixture(autouse=True)
@@ -488,15 +493,47 @@ class TestRunIngestionCycle:
         """Not halfway through: while the new rows are embedded (minutes), visitors
         get the last cycle's cached answers, not a cold query on a busy database.
         Breaking stories count embedded rows only, so nothing is cached without
-        the newest batch."""
+        the newest batch. Only the relations lens's go earlier (the next test)."""
         from app.services import ingestion
 
         patches, events = self._cycle_events(5)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             assert await ingestion.run_ingestion_cycle() == 5
 
-        assert events == ["ingest", "embed", "threads", "invalidate db:* locked=True"]
+        assert events == [
+            "ingest",
+            RELATIONS_INVALIDATED,
+            "embed",
+            "threads",
+            "invalidate db:* locked=True",
+        ]
         assert warm == [False]  # the warm starts after, once the lock is released
+
+    @pytest.mark.asyncio
+    async def test_the_relations_caches_are_invalidated_as_soon_as_the_events_land(
+        self, warm, _no_events
+    ):
+        """Relations read only the events' rollups. Left to the cycle's end, the warmed
+        list predated the new events while a pair's detail, read cold during the
+        embeddings (minutes), counted them: 5 events on the arc, 11 in the inspector.
+        A cold relations read is rollups only, cheap even at the embeddings' IOPS peak;
+        the cycle's end still clears db:*, theirs included, for the warm to refill."""
+        from app.services import ingestion
+
+        patches, events = self._cycle_events(5)
+        _no_events.side_effect = lambda: events.append("events")
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            assert await ingestion.run_ingestion_cycle() == 5
+
+        assert events == [
+            "ingest",
+            "events",
+            RELATIONS_INVALIDATED,
+            "embed",
+            "threads",
+            "invalidate db:* locked=True",
+        ]
+        assert RELATIONS_CACHE.startswith("db:")  # so the end's invalidation clears it too
 
     @pytest.mark.asyncio
     async def test_a_failed_cycle_still_invalidates(self, warm):
@@ -675,7 +712,7 @@ class TestRunIngestionCycle:
             assert await ingestion.run_ingestion_cycle() == 5
 
         assign.assert_awaited_once()
-        assert events == ["ingest", "embed", "invalidate db:* locked=True"]
+        assert events == ["ingest", RELATIONS_INVALIDATED, "embed", "invalidate db:* locked=True"]
         [record] = [r for r in caplog.records if "Thread assignment failed" in r.getMessage()]
         assert record.levelno == logging.WARNING
         assert "Ingestion cycle failed" not in caplog.text

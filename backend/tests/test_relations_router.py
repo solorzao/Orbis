@@ -1,8 +1,9 @@
 """Tests for the /api/relations endpoints (the pool and Redis faked).
 
 Every answer is the 7-day lens (the last 7 UTC days), whatever window a request
-sends, cached under db:*, so each cycle's invalidation, just after its events
-land, refreshes the list and every detail together.
+sends, cached under db:* (relations.CACHE_PREFIX), which ingestion clears as soon
+as a cycle's events land and again as the cycle ends, so the list and every detail
+refresh together.
 """
 
 from __future__ import annotations
@@ -15,10 +16,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.config import settings
 from app.routers.http_cache import EDGE_CACHE_CONTROL
 from app.services import relations
-from app.services.cache import WEEK_TTL, invalidate
+from app.services.cache import WEEK_TTL, cycle_ttl, invalidate
 from tests.fake_redis import FakeRedis
 
 NOW = datetime(2026, 10, 21, 0, 30, tzinfo=timezone.utc)
@@ -218,7 +218,7 @@ class TestList:
         async with _client(monkeypatch) as client:
             await client.get("/api/relations")
 
-        assert redis.ttls[LIST_KEY] == WEEK_TTL > settings.ingestion_interval_seconds
+        assert redis.ttls[LIST_KEY] == WEEK_TTL >= cycle_ttl(0)
 
     @pytest.mark.asyncio
     async def test_an_empty_list_is_cached_a_minute_so_new_rollups_show_soon(
@@ -376,31 +376,35 @@ async def test_both_routes_are_edge_cached(monkeypatch, redis, pool):
 
 
 @pytest.mark.asyncio
-async def test_both_keys_are_under_db_so_a_cycles_invalidation_refreshes_them_together(
+async def test_a_cycles_invalidations_refresh_the_list_and_detail_together(
     monkeypatch, redis, pool
 ):
     """Under wk:*, outside the cycle's invalidation, the list and a pair's detail were
     cached at different times: the arc said 59 events and the inspector 65 (Russia and
-    Ukraine, production, 2026-10-21). Under db:*, the invalidation just after a cycle's
-    events land clears both, and the next reads count the new events."""
+    Ukraine, production, 2026-10-21). In a cycle's order: the events land, ingestion
+    clears CACHE_PREFIX at once, so reads during the embeddings count the new events in
+    both; then the cycle's end clears db:*, these with the rest, for the warm to refill."""
+    pool.pairs = [_pair(n=5, q=(1, 0, 4, 0), from_a=1)]  # the detail's 5 events, listed
     async with _client(monkeypatch) as client:
         await client.get("/api/relations")
         await client.get("/api/relations/detail", params={"a": "IR", "b": "US"})
         assert sorted(redis.values) == [DETAIL_KEY, LIST_KEY]
 
-        await invalidate("db:*")  # as run_ingestion_cycle ends, after ingest_events
+        # The events step lands 6 more: the US's verbal conflict on 19 Oct.
+        pool.pairs = [_pair(n=11, q=(1, 0, 10, 0), from_a=1)]
+        pool.detail = [*pool.detail, _rollup("US", "IR", date(2026, 10, 19), 3, 6)]
+        await invalidate(f"{relations.CACHE_PREFIX}*")  # just after ingest_events
         assert redis.values == {}
 
-        # The cycle's events: 6 more, the US's verbal conflict on 19 Oct.
-        pool.pairs = [_pair(n=26, q=(2, 1, 18, 5))]
-        pool.detail = [*pool.detail, _rollup("US", "IR", date(2026, 10, 19), 3, 6)]
+        # During the embeddings: the list and a pair's detail, read cold, agree.
         listed = await client.get("/api/relations")
         detail = await client.get("/api/relations/detail", params={"a": "IR", "b": "US"})
+        assert listed.json()["relations"][0]["n"] == detail.json()["n"] == 11
+        assert len(pool.statements(relations.LIST_SQL)) == 2  # once each side of the events
+        assert len(pool.statements(relations.DETAIL_SQL)) == 2
 
-    assert listed.json()["relations"][0]["n"] == 26
-    assert detail.json()["n"] == 5 + 6
-    assert len(pool.statements(relations.LIST_SQL)) == 2  # once each side of the cycle
-    assert len(pool.statements(relations.DETAIL_SQL)) == 2
+    await invalidate("db:*")  # as the cycle ends
+    assert redis.values == {}
 
 
 class TestWarm:
@@ -475,8 +479,8 @@ async def test_a_read_cancelled_under_a_request_is_a_503_to_retry(
     monkeypatch, redis, pool, caplog, path, params, gate
 ):
     """As links' and the globe's week reads: if a cancel scope ever reaches
-    db:relations: (shutdown does), a waiting request gets a 503 with Retry-After,
-    not a bare 500 with a traceback."""
+    relations.CACHE_PREFIX (shutdown does), a waiting request gets a 503 with
+    Retry-After, not a bare 500 with a traceback."""
     from app.services import cache
 
     setattr(pool, gate, asyncio.Event())
@@ -485,8 +489,9 @@ async def test_a_read_cancelled_under_a_request_is_a_503_to_retry(
             request = asyncio.create_task(client.get(path, params=params))
             while not pool.calls:
                 await asyncio.sleep(0.01)
-            await asyncio.gather(*cache.cancel_flights("db:relations:"), return_exceptions=True)
-            resp = await request
+            stopped = cache.cancel_flights(relations.CACHE_PREFIX)
+            await asyncio.gather(*stopped, return_exceptions=True)
+            resp = await asyncio.wait_for(request, 2)  # fails, not hangs, if none matched
 
     assert resp.status_code == 503
     assert resp.headers["retry-after"] == "15"

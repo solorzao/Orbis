@@ -3,10 +3,11 @@
 Every answer is the 7-day lens (the last 7 UTC days), whatever window the
 timeline shows: there are no window parameters, and any sent are ignored. The
 answers read only the daily rollups, which each cycle's events step adds to,
-so they live under db:*, which the cycle invalidates as it ends: the list and
-every pair's detail refresh together, and app.warm refills the default list.
-Their TTL (cache.WEEK_TTL) is only a backstop. The days in the keys move them
-at UTC midnight.
+so they live under db:* (relations.CACHE_PREFIX), which ingestion clears as
+soon as a cycle's events land and again as the cycle ends: the list and every
+pair's detail refresh together, and app.warm refills the default list. Their
+TTL (cache.WEEK_TTL) is only a backstop. The days in the keys move them at UTC
+midnight.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from app.services.cache import (
     single_flight,
 )
 from app.services.relations import (
+    CACHE_PREFIX,
     get_relation_detail,
     get_relation_pairs,
     get_since,
@@ -73,7 +75,7 @@ async def get_relations(
     return await cached_relations(kind, limit)
 
 
-async def cached_relations(kind: str, limit: int) -> Relations:
+async def cached_relations(kind: Kind, limit: int) -> Relations:
     """/api/relations' answer: cached, else computed once for concurrent callers
     and cached.
 
@@ -82,7 +84,7 @@ async def cached_relations(kind: str, limit: int) -> Relations:
     fits Relations is a miss.
     """
     first, last = lens_days(_now())
-    key = f"db:relations:v1:{_days(first, last)}:{kind}:{limit}"
+    key = f"{CACHE_PREFIX}v1:{_days(first, last)}:{kind}:{limit}"
     cached = await get_cached(key)
     if cached is not None:
         found = cached_model(key, cached, Relations.model_validate)
@@ -125,7 +127,7 @@ async def get_relation(a: Country, b: Country) -> RelationDetail:
     """
     a, b = sorted(_pair(a, b))
     first, last = lens_days(_now())
-    key = f"db:relations:detail:v1:{a}:{b}:{_days(first, last)}"
+    key = f"{CACHE_PREFIX}detail:v1:{a}:{b}:{_days(first, last)}"
     cached = await get_cached(key)
     if cached is not None:
         found = cached_model(key, cached, RelationDetail.model_validate)
