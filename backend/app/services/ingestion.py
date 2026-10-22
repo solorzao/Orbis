@@ -5,7 +5,7 @@ Periodically downloads the latest GDELT GKG data file (published every
 titles from GDELT (scraping the page only when GDELT has none), and
 upserts them with their GKG fields into the database. Each cycle also adds
 GDELT's Event exports to daily country-pair rollups (app/services/events.py),
-before the embeddings.
+before the embeddings, even when the GKG step fails.
 """
 
 from __future__ import annotations
@@ -181,17 +181,13 @@ async def _purge_old_articles() -> None:
 
     Nothing references articles, so this is the only path that removes thread
     members (by their own published_at) and threads last seen before it. The
-    event rollups age out here too, whether or not the events step is on.
+    event rollups age out in _add_events.
     """
     pool = await get_pool()
     try:
         await purge_threads(pool, settings.retention_days)
     except Exception:
         logger.warning("Thread purge failed; continuing.", exc_info=True)
-    try:
-        await purge_events(pool, settings.retention_days)
-    except Exception:
-        logger.warning("Events purge failed; continuing.", exc_info=True)
     status = await pool.execute(
         "DELETE FROM articles WHERE published_at < NOW() - make_interval(days => $1)",
         settings.retention_days,
@@ -201,6 +197,34 @@ async def _purge_old_articles() -> None:
     if count:
         logger.info("Purged %d articles older than %d days.", count, settings.retention_days)
     await purge_orphaned_nodes()
+
+
+async def _add_events() -> None:
+    """Add GDELT's Event exports to the daily rollups, then clear the relations
+    lens's caches. Never raises.
+
+    The cycle runs it even when the GKG step fails: a catch-up reaches back only
+    events.CATCHUP_HOURS, so a longer run of failed cycles would lose event files
+    for good. The rollups age out here, whatever EVENTS_INGESTION_ENABLED says.
+    """
+    try:
+        await purge_events(await get_pool(), settings.retention_days)
+    except Exception:
+        logger.warning("Events purge failed; continuing.", exc_info=True)
+    await ingest_events()  # never raises; seconds, before the embeddings' IOPS peak
+    # Relations read only these rollups. Left to the end, the warmed list
+    # would miss the new events while a pair's detail read cold during the
+    # embeddings (minutes) counted them; a cold read now is rollups only,
+    # cheap even at the embeddings' IOPS peak. A relations read that began
+    # before the events' commit could store the old figures just after the
+    # invalidation, to stay until the cycle's end: it is stopped first, so it
+    # stores nothing (cancelled at its pending await, it never reaches
+    # set_cached), and its request gets a 503 to retry.
+    try:
+        cancel_flights(RELATIONS_CACHE)
+        await invalidate(f"{RELATIONS_CACHE}*")
+    except Exception:
+        logger.warning("Relations cache invalidation failed; continuing.", exc_info=True)
 
 
 async def _assign_threads(article_ids: list) -> None:
@@ -269,7 +293,8 @@ async def stop_background_tasks(*, shutdown: bool = False) -> None:
     invalidated them, nor a read of the week's stories (wk:globe:, wk:links:)
     run on into its writes. A relations read (relations.CACHE_PREFIX) is
     rollups only, so then it is left to finish and answer its request: what it
-    stores is cleared once the cycle's events land.
+    stores is cleared once the cycle's events land, and one still running then
+    is stopped (_add_events).
 
     At *shutdown*, before Redis and the pool close, every wk:* read stops too,
     and every relations read, so none can reopen Redis or reach the pool once
@@ -307,9 +332,9 @@ async def run_ingestion_cycle() -> int:
     Downloads the latest GDELT GKG raw data file, extracts articles with
     city-level locations, scrapes titles, and upserts to PostgreSQL.
     Then purges articles outside the retention window, adds GDELT's Event
-    exports to the daily country-pair rollups (time-bounded, never raises),
-    embeds the new rows and assigns them to story threads (a failure there is
-    only a warning).
+    exports to the daily country-pair rollups (time-bounded, never raises, and
+    run even when the steps before it failed), embeds the new rows and assigns
+    them to story threads (a failure there is only a warning).
     The API caches (db:*) are invalidated once, at the end, even if a
     step failed: until then visitors get the last cycle's answers rather than
     a cold query while the embeddings keep the database busy, and breaking
@@ -320,8 +345,9 @@ async def run_ingestion_cycle() -> int:
     it.) Once the cycle has released its lock, those caches are
     refilled in the background, so neither the next cycle nor a visitor
     waits on that. The relations lens's (relations.CACHE_PREFIX) are also
-    invalidated as soon as the events land, so during the embeddings the list
-    and a pair's detail count the same events.
+    invalidated as soon as the events land, their reads then in flight stopped
+    first, so during the embeddings the list and a pair's detail count the
+    same events.
 
     Cycles never overlap: if one is already running (the startup run and the
     scheduler can coincide), this returns 0 without doing anything.
@@ -334,22 +360,23 @@ async def run_ingestion_cycle() -> int:
     async with _ingestion_lock:
         _cycle_started_at = time.monotonic()
         await stop_background_tasks()  # the last cycle's warm, if still running
+        logger.info("Ingestion cycle starting …")
         try:
-            logger.info("Ingestion cycle starting …")
             count = await _ingest_from_raw_gkg()
             await _purge_old_articles()
-            await ingest_events()  # never raises; seconds, before the embeddings' IOPS peak
-            # Relations read only these rollups. Left to the end, the warmed list
-            # would miss the new events while a pair's detail read cold during the
-            # embeddings (minutes) counted them; a cold read now is rollups only,
-            # cheap even at the embeddings' IOPS peak.
-            await invalidate(f"{RELATIONS_CACHE}*")
-            embedded = await generate_embeddings()
-            await _assign_threads(embedded)
-            logger.info("Ingestion cycle complete: %d articles.", count)
+            failed = False
         except Exception:
             logger.error("Ingestion cycle failed.", exc_info=True)
-            count = 0
+            count, failed = 0, True
+        await _add_events()  # never raises; seconds, before the embeddings' IOPS peak
+        if not failed:
+            try:
+                embedded = await generate_embeddings()
+                await _assign_threads(embedded)
+                logger.info("Ingestion cycle complete: %d articles.", count)
+            except Exception:
+                logger.error("Ingestion cycle failed.", exc_info=True)
+                count = 0
         await invalidate("db:*")  # logs and carries on if Redis fails
     _start_cache_warm()
     return count

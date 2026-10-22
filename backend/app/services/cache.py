@@ -101,8 +101,9 @@ _in_flight: dict[str, asyncio.Task[Any]] = {}
 
 class FlightCancelled(RuntimeError):
     """A single_flight computation was cancelled under a caller still waiting on it
-    (a week read stopped at a cycle's boundary, or any read at shutdown). Its
-    message names only the key's prefix (``wk:*``, ``db:*``)."""
+    (a week read stopped at a cycle's boundary, a relations read as a cycle's
+    events land, or any read at shutdown). Its message names only the key's
+    prefix (``wk:*``, ``db:*``)."""
 
 
 async def single_flight(

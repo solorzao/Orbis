@@ -25,6 +25,13 @@ def _no_events():
         yield ingest
 
 
+@pytest.fixture(autouse=True)
+def _no_events_purge():
+    """The events step's purge, stubbed too (test_events*.py test it)."""
+    with patch("app.services.ingestion.purge_events", new_callable=AsyncMock) as purge:
+        yield purge
+
+
 def _make_gkg_article(url="https://example.com/story", title="Test Headline"):
     """Build a dict as fetch_raw_gkg would return; *title* is GDELT's page title."""
     return {
@@ -511,7 +518,7 @@ class TestRunIngestionCycle:
 
     @pytest.mark.asyncio
     async def test_the_relations_caches_are_invalidated_as_soon_as_the_events_land(
-        self, warm, _no_events
+        self, warm, _no_events, _no_events_purge
     ):
         """Relations read only the events' rollups. Left to the cycle's end, the warmed
         list predated the new events while a pair's detail, read cold during the
@@ -521,12 +528,14 @@ class TestRunIngestionCycle:
         from app.services import ingestion
 
         patches, events = self._cycle_events(5)
+        _no_events_purge.side_effect = lambda *_args: events.append("events purge")
         _no_events.side_effect = lambda: events.append("events")
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             assert await ingestion.run_ingestion_cycle() == 5
 
         assert events == [
             "ingest",
+            "events purge",
             "events",
             RELATIONS_INVALIDATED,
             "embed",
@@ -544,7 +553,43 @@ class TestRunIngestionCycle:
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             assert await ingestion.run_ingestion_cycle() == 0
 
-        assert events == ["ingest", "invalidate db:* locked=True"]
+        assert events == ["ingest", RELATIONS_INVALIDATED, "invalidate db:* locked=True"]
+        assert warm == [False]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failing", ["gkg", "purge"])
+    async def test_a_failed_gkg_step_still_adds_the_events(
+        self, warm, _no_events, _no_events_purge, caplog, failing
+    ):
+        """A catch-up reaches back only events.CATCHUP_HOURS: behind the GKG step, the
+        events step lost files for good once GKG (or the database under it) had failed
+        for longer. The embeddings are still skipped, and db:* still cleared."""
+        from app.services import ingestion
+
+        patches, events = self._cycle_events(Exception("boom") if failing == "gkg" else 5)
+        _no_events_purge.side_effect = lambda *_args: events.append("events purge")
+        _no_events.side_effect = lambda: events.append("events")
+        with (
+            patches[0],
+            patches[1],
+            patches[2] as purge,
+            patches[3],
+            patches[4],
+            patches[5],
+            caplog.at_level(logging.ERROR, logger="orbis.ingestion"),
+        ):
+            if failing == "purge":
+                purge.side_effect = RuntimeError("the database is down")
+            assert await ingestion.run_ingestion_cycle() == 0
+
+        assert events == [
+            "ingest",
+            "events purge",
+            "events",
+            RELATIONS_INVALIDATED,
+            "invalidate db:* locked=True",
+        ]
+        assert [r.getMessage() for r in caplog.records] == ["Ingestion cycle failed."]
         assert warm == [False]
 
     @pytest.mark.asyncio
@@ -682,6 +727,7 @@ class TestRunIngestionCycle:
                 "app.services.ingestion._purge_old_articles",
                 side_effect=_record("purge"),
             ),
+            patch("app.services.ingestion.purge_events", side_effect=_record("events purge")),
             patch("app.services.ingestion.ingest_events", side_effect=_record("events")),
             patch(
                 "app.services.ingestion.generate_embeddings",
@@ -693,7 +739,14 @@ class TestRunIngestionCycle:
 
         # The events step runs before the embeddings' IOPS peak. The ids embedded
         # this cycle go to thread assignment, inside the lock.
-        assert calls == ["ingest", "purge", "events", "embed", ("threads", pool, embedded)]
+        assert calls == [
+            "ingest",
+            "purge",
+            ("events purge", pool, settings.retention_days),
+            "events",
+            "embed",
+            ("threads", pool, embedded),
+        ]
 
     @pytest.mark.asyncio
     async def test_a_failed_thread_assignment_is_a_warning_not_a_failed_cycle(self, assign, caplog):
@@ -729,8 +782,9 @@ class TestPurgeOldArticles:
         return Pool()
 
     @pytest.mark.asyncio
-    async def test_thread_rows_are_purged_before_the_articles(self):
-        """Nothing references articles, so this is the only path that removes members."""
+    async def test_thread_rows_are_purged_before_the_articles(self, _no_events_purge):
+        """Nothing references articles, so this is the only path that removes members.
+        The event rollups age out in the events step (TestAddEvents), not here."""
         from app.services.ingestion import _purge_old_articles
 
         calls: list = []
@@ -741,19 +795,15 @@ class TestPurgeOldArticles:
                 "app.services.ingestion.purge_threads",
                 AsyncMock(side_effect=lambda *args: calls.append(("threads", args))),
             ),
-            patch(
-                "app.services.ingestion.purge_events",
-                AsyncMock(side_effect=lambda *args: calls.append(("events", args))),
-            ),
             patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
         ):
             await _purge_old_articles()
 
         assert calls == [
             ("threads", (pool, settings.retention_days)),
-            ("events", (pool, settings.retention_days)),
             ("articles", (settings.retention_days,)),
         ]
+        _no_events_purge.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_failed_thread_purge_still_purges_the_articles(self, caplog):
@@ -766,7 +816,6 @@ class TestPurgeOldArticles:
                 "app.services.ingestion.purge_threads",
                 AsyncMock(side_effect=RuntimeError("boom")),
             ),
-            patch("app.services.ingestion.purge_events", new_callable=AsyncMock),
             patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
             caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
         ):
@@ -775,43 +824,96 @@ class TestPurgeOldArticles:
         assert calls == [("articles", (settings.retention_days,))]
         assert "Thread purge failed" in caplog.text
 
-    @pytest.mark.asyncio
-    async def test_a_failed_events_purge_still_purges_the_articles(self, caplog):
-        from app.services.ingestion import _purge_old_articles
 
-        calls: list = []
-        with (
-            patch("app.services.ingestion.get_pool", AsyncMock(return_value=self._pool(calls))),
-            patch("app.services.ingestion.purge_threads", new_callable=AsyncMock),
+class TestAddEvents:
+    """The events step: the purge, ingest_events, then the relations caches cleared.
+    It never raises, so a failure in it can't stop the rest of the cycle."""
+
+    @staticmethod
+    def _recorded(steps: list[str]):
+        """Patches recording the step's cache calls into *steps*."""
+        return (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
             patch(
-                "app.services.ingestion.purge_events",
-                AsyncMock(side_effect=RuntimeError("boom")),
+                "app.services.ingestion.cancel_flights",
+                side_effect=lambda prefix: steps.append(f"cancel {prefix}") or [],
             ),
-            patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
-            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
-        ):
-            await _purge_old_articles()
+            patch(
+                "app.services.ingestion.invalidate",
+                AsyncMock(side_effect=lambda pattern: steps.append(f"invalidate {pattern}")),
+            ),
+        )
 
-        assert calls == [("articles", (settings.retention_days,))]
+    @pytest.mark.asyncio
+    async def test_reads_in_flight_are_stopped_just_before_the_invalidation(
+        self, _no_events, _no_events_purge
+    ):
+        """A relations read that began before the events' commit, left to finish, could
+        store the old figures just after the invalidation (test_relations_router)."""
+        from app.services.ingestion import _add_events
+
+        steps: list[str] = []
+        _no_events_purge.side_effect = lambda *_args: steps.append("purge")
+        _no_events.side_effect = lambda: steps.append("events")
+        p = self._recorded(steps)
+        with p[0], p[1], p[2]:
+            await _add_events()
+
+        assert steps == [
+            "purge",
+            "events",
+            f"cancel {RELATIONS_CACHE}",
+            f"invalidate {RELATIONS_CACHE}*",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_purge_still_adds_the_events(self, _no_events, _no_events_purge, caplog):
+        from app.services.ingestion import _add_events
+
+        steps: list[str] = []
+        _no_events_purge.side_effect = RuntimeError("boom")
+        _no_events.side_effect = lambda: steps.append("events")
+        p = self._recorded(steps)
+        with p[0], p[1], p[2], caplog.at_level(logging.WARNING, logger="orbis.ingestion"):
+            await _add_events()
+
+        assert steps == ["events", f"cancel {RELATIONS_CACHE}", f"invalidate {RELATIONS_CACHE}*"]
         assert "Events purge failed" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_the_kill_switch_leaves_the_events_purge_running(self, monkeypatch):
+    async def test_a_failed_invalidation_is_a_warning(self, caplog):
+        from app.services.ingestion import _add_events
+
+        with (
+            patch("app.services.ingestion.get_pool", new_callable=AsyncMock),
+            patch("app.services.ingestion.invalidate", AsyncMock(side_effect=RuntimeError("boom"))),
+            caplog.at_level(logging.WARNING, logger="orbis.ingestion"),
+        ):
+            await _add_events()
+
+        [record] = [r for r in caplog.records if "invalidation failed" in r.getMessage()]
+        assert record.levelno == logging.WARNING
+
+    @pytest.mark.asyncio
+    async def test_the_kill_switch_leaves_the_events_purge_running(
+        self, monkeypatch, _no_events_purge
+    ):
         """Switched off, the events step adds nothing, and the rows still age out."""
-        from app.services.ingestion import _purge_old_articles
+        from app.services.events import ingest_events
+        from app.services.ingestion import _add_events
 
         monkeypatch.setattr(settings, "events_ingestion_enabled", False)
-        pool = self._pool([])
-        purge = AsyncMock()
+        pool = object()
         with (
             patch("app.services.ingestion.get_pool", AsyncMock(return_value=pool)),
-            patch("app.services.ingestion.purge_threads", new_callable=AsyncMock),
-            patch("app.services.ingestion.purge_events", purge),
-            patch("app.services.ingestion.purge_orphaned_nodes", new_callable=AsyncMock),
+            patch("app.services.ingestion.ingest_events", ingest_events),  # the real step
+            patch("app.services.events.fetch_lastupdate", new_callable=AsyncMock) as fetch,
+            patch("app.services.ingestion.invalidate", new_callable=AsyncMock),
         ):
-            await _purge_old_articles()
+            await _add_events()
 
-        purge.assert_awaited_once_with(pool, settings.retention_days)
+        _no_events_purge.assert_awaited_once_with(pool, settings.retention_days)
+        fetch.assert_not_awaited()
 
 
 async def _drain_background_tasks():

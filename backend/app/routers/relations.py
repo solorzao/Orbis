@@ -4,10 +4,10 @@ Every answer is the 7-day lens (the last 7 UTC days), whatever window the
 timeline shows: there are no window parameters, and any sent are ignored. The
 answers read only the daily rollups, which each cycle's events step adds to,
 so they live under db:* (relations.CACHE_PREFIX), which ingestion clears as
-soon as a cycle's events land and again as the cycle ends: the list and every
-pair's detail refresh together, and app.warm refills the default list. Their
-TTL (cache.WEEK_TTL) is only a backstop. The days in the keys move them at UTC
-midnight.
+soon as a cycle's events land (stopping the reads then in flight) and again as
+the cycle ends: the list and every pair's detail refresh together, and app.warm
+refills the default list. Their TTL (cache.WEEK_TTL) is only a backstop. The
+days in the keys move them at UTC midnight.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ async def cached_relations(kind: Kind, limit: int) -> Relations:
 
     try:
         return await single_flight(key, load)
-    except FlightCancelled as stopped:  # at shutdown: a 503 to retry
+    except FlightCancelled as stopped:  # as events land, or at shutdown: a 503 to retry
         raise retry_shortly(stopped) from None
 
 
@@ -144,5 +144,5 @@ async def get_relation(a: Country, b: Country) -> RelationDetail:
 
     try:
         return await single_flight(key, load)
-    except FlightCancelled as stopped:  # at shutdown: a 503 to retry
+    except FlightCancelled as stopped:  # as events land, or at shutdown: a 503 to retry
         raise retry_shortly(stopped) from None
