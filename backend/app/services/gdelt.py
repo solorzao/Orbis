@@ -17,6 +17,7 @@ import httpx
 
 from app.config import settings
 from app.services.country_codes import fips_to_iso2
+from app.services.scraper import fetch_public
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ _GKG_LASTUPDATE_URL = "https://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 
 # Max concurrent title-scrape connections
 _SCRAPE_CONCURRENCY = 30
-_SCRAPE_TIMEOUT = 5.0  # seconds per request
+_SCRAPE_TIMEOUT = 10.0  # seconds per page, redirects included
 _SCRAPE_MAX_BYTES = 15_000  # only read enough for <title>
 
 
@@ -804,19 +805,16 @@ async def scrape_titles(articles: list[dict]) -> list[dict]:
         url = article["url"]
         async with semaphore:
             try:
-                async with httpx.AsyncClient(
-                    timeout=_SCRAPE_TIMEOUT,
-                    follow_redirects=True,
-                    max_redirects=3,
-                ) as client:
-                    resp = await client.get(url)
-                    # Only read enough bytes for <title>
-                    text = resp.content[:_SCRAPE_MAX_BYTES].decode("utf-8", errors="replace")
-                    match = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
-                    if match:
-                        title = _clean_title(match.group(1))
-                        if title:
-                            article["title"] = title
+                # Public addresses only, each redirect checked: the URL is GDELT's
+                page = await fetch_public(url, max_bytes=_SCRAPE_MAX_BYTES, timeout=_SCRAPE_TIMEOUT)
+                if page is None:
+                    return  # refused (and logged): no title, so the article is dropped
+                text = page.body.decode("utf-8", errors="replace")
+                match = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    title = _clean_title(match.group(1))
+                    if title:
+                        article["title"] = title
             except Exception:
                 pass  # title stays empty → article will be dropped
 
