@@ -33,7 +33,7 @@ Warmer = Callable[[], Awaitable[object]]
 # then the links layer's 24-hour window, then breaking stories (one list for
 # every topic: the ticker's, and the delta's count; a miss before this refill
 # gets the last good list, and the globe has no such fallback, so it stays
-# first and breaking's 11-14 s query never holds it up), then the threads rail's
+# first and breaking's slow query never holds it up), then the threads rail's
 # default list (24 hours, all topics, 20), then the Relations layer's (every
 # class, 40: its 7-day lens reads only the daily rollups, so it is under db:*
 # and refilled each cycle, as the events step adds to them). Another
@@ -62,7 +62,13 @@ WARM_TIMEOUT = 30
 # 7-day links warm 12-27 s, once past 30 s (2026-10-21). One cut off is
 # cancelled, read and all; its entry, stored for 80 minutes and refreshed at
 # 55, serves on for up to 25 more, and the next cycle's warm retries it.
-WARMER_TIMEOUTS: dict[Warmer, float] = {warm_globe_week: 90, warm_links_7d: 90}
+# Breaking waits out its query's own 45 s limit, past the 15 s a request waits:
+# the warm is what fills the cache, so it never gives up first.
+WARMER_TIMEOUTS: dict[Warmer, float] = {
+    warm_breaking: 60,
+    warm_globe_week: 90,
+    warm_links_7d: 90,
+}
 
 
 async def warm_caches(
@@ -94,7 +100,7 @@ async def warm_caches(
             if timer.expired():
                 logger.warning("Cache warm %s timed out after %s s; continuing.", name, limit)
             else:
-                # The warmer's own timeout (breaking's 15 s query), not this limit.
+                # The warmer's own timeout (breaking's query limit), not this one.
                 logger.warning(
                     "Cache warm %s failed after %.2f s (TimeoutError); continuing.",
                     name,
