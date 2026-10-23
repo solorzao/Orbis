@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import type { Topic } from "@/types/news";
 
 export interface Citation {
@@ -123,8 +123,11 @@ export function useAgent({ onGlobeAction }: UseAgentOptions = {}) {
   const [activeTools, setActiveTools] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef(crypto.randomUUID());
+  // The latest callback, without making ask depend on it.
   const onGlobeActionRef = useRef(onGlobeAction);
-  onGlobeActionRef.current = onGlobeAction;
+  useEffect(() => {
+    onGlobeActionRef.current = onGlobeAction;
+  });
 
   const ask = useCallback(
     async (question: string, context?: AskContext) => {

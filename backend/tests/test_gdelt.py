@@ -6,12 +6,12 @@ import threading
 import time
 import zipfile
 from datetime import date, datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from app.services import gdelt
+from app.services import gdelt, scraper
 from app.services.gdelt import (
     _HTML_COMMENT_RE,
     Download,
@@ -1050,84 +1050,99 @@ class TestStaleRecrawlsSkipped:
 # ---------------------------------------------------------------------------
 
 
+def _pages(monkeypatch, handler, dns=None):
+    """scrape_titles' fetches answered by *handler*: every name is at a public
+    address unless *dns* ({host: [address]}) says otherwise. Each body is left
+    to read, as the network's are: fetch_public reads the raw stream, and httpx
+    reads a body given as bytes at once."""
+
+    def unread(request):
+        resp = handler(request)
+        stream = httpx.ByteStream(resp.content)
+        return httpx.Response(resp.status_code, headers=resp.headers, stream=stream)
+
+    _client_with(monkeypatch, unread)
+
+    async def resolve(host, port):
+        return (dns or {}).get(host, ["93.184.216.34"])
+
+    monkeypatch.setattr(scraper, "_resolve", resolve)
+
+
 class TestScrapeTitles:
     @pytest.mark.asyncio
-    async def test_scrapes_title_from_html(self):
+    async def test_scrapes_title_from_html(self, monkeypatch):
         articles = [{"url": "https://example.com/story", "domain": "example.com"}]
+        html = b"<html><head><title>Breaking News Story</title></head></html>"
+        _pages(monkeypatch, lambda req: httpx.Response(200, content=html))
 
-        mock_resp = MagicMock()
-        mock_resp.content = b"<html><head><title>Breaking News Story</title></head></html>"
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_resp
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await scrape_titles(articles)
-            assert result[0]["title"] == "Breaking News Story"
+        result = await scrape_titles(articles)
+        assert result[0]["title"] == "Breaking News Story"
 
     @pytest.mark.asyncio
-    async def test_leaves_title_empty_on_failure(self):
+    async def test_leaves_title_empty_on_failure(self, monkeypatch):
         articles = [{"url": "https://example.com/big-news-story", "domain": "example.com"}]
 
-        mock_client = AsyncMock()
-        mock_client.get.side_effect = Exception("Connection refused")
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        def refuse(req):
+            raise httpx.ConnectError("Connection refused")
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await scrape_titles(articles)
-            assert not result[0].get("title")
+        _pages(monkeypatch, refuse)
+
+        result = await scrape_titles(articles)
+        assert not result[0].get("title")
 
     @pytest.mark.asyncio
-    async def test_skips_cloudflare_titles(self):
+    async def test_skips_cloudflare_titles(self, monkeypatch):
         articles = [{"url": "https://example.com/real-article-here", "domain": "example.com"}]
+        html = b"<html><title>Attention Required! | Cloudflare</title></html>"
+        _pages(monkeypatch, lambda req: httpx.Response(200, content=html))
 
-        mock_resp = MagicMock()
-        mock_resp.content = b"<html><title>Attention Required! | Cloudflare</title></html>"
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_resp
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await scrape_titles(articles)
-            # Should have no title (article will be dropped by ingestion)
-            assert not result[0].get("title")
+        result = await scrape_titles(articles)
+        # Should have no title (article will be dropped by ingestion)
+        assert not result[0].get("title")
 
     @pytest.mark.asyncio
-    async def test_cleans_scraped_titles_like_gdelt_titles(self):
+    async def test_cleans_scraped_titles_like_gdelt_titles(self, monkeypatch):
         articles = [{"url": "https://www.zerohedge.com/markets/amex", "domain": "zerohedge.com"}]
+        html = f"<html><title>\n  {ZEROHEDGE_RAW}\n</title></html>".encode()
+        _pages(monkeypatch, lambda req: httpx.Response(200, content=html))
 
-        mock_resp = MagicMock()
-        mock_resp.content = f"<html><title>\n  {ZEROHEDGE_RAW}\n</title></html>".encode()
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_resp
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await scrape_titles(articles)
+        result = await scrape_titles(articles)
         assert result[0]["title"] == ZEROHEDGE_CLEAN
 
     @pytest.mark.asyncio
-    async def test_strips_nul_from_scraped_titles(self):
+    async def test_strips_nul_from_scraped_titles(self, monkeypatch):
         articles = [{"url": "https://example.com/storm", "domain": "example.com"}]
+        html = b"<html><title>Storm\x00 hits the coast</title></html>"
+        _pages(monkeypatch, lambda req: httpx.Response(200, content=html))
 
-        mock_resp = MagicMock()
-        mock_resp.content = b"<html><title>Storm\x00 hits the coast</title></html>"
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_resp
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await scrape_titles(articles)
+        result = await scrape_titles(articles)
         assert result[0]["title"] == "Storm hits the coast"
+
+    @pytest.mark.asyncio
+    async def test_never_follows_a_page_inward(self, monkeypatch):
+        """GDELT's URLs are untrusted: a redirect to the metadata endpoint, or a
+        name resolving to a private address, is a failed scrape, not an error
+        for the cycle. The story beside them is still titled."""
+        articles = [
+            {"url": "https://example.com/moved", "domain": "example.com"},
+            {"url": "http://intranet.example/", "domain": "intranet.example"},
+            {"url": "https://example.com/story", "domain": "example.com"},
+        ]
+        requested = []
+
+        def handler(req):
+            requested.append(req.headers["host"] + req.url.path)
+            if req.url.path == "/moved":
+                return httpx.Response(302, headers={"location": "http://169.254.169.254/"})
+            return httpx.Response(200, content=b"<title>Storm hits the coast</title>")
+
+        _pages(monkeypatch, handler, dns={"intranet.example": ["10.0.0.4"]})
+
+        result = await scrape_titles(articles)
+
+        assert [a.get("title") for a in result] == [None, None, "Storm hits the coast"]
+        assert sorted(requested) == ["example.com/moved", "example.com/story"]
 
 
 # ---------------------------------------------------------------------------

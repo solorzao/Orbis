@@ -326,6 +326,27 @@ class TestAgent:
         _no_secret(caplog.text)
 
 
+# --- Outbound requests --------------------------------------------------------------------
+
+
+class TestOutboundRequests:
+    @pytest.mark.asyncio
+    async def test_an_outbound_requests_url_never_reaches_the_info_log(self, caplog):
+        """httpx logs each request's URL whole at INFO, and the scraper's URLs can
+        come from a visitor's question (read_article): the app keeps httpx quiet."""
+        import httpx
+
+        from app.main import app  # noqa: F401  (importing the app sets httpx's level)
+
+        transport = httpx.MockTransport(lambda request: httpx.Response(200))
+        with caplog.at_level(logging.INFO):
+            async with httpx.AsyncClient(transport=transport) as client:
+                await client.get(f"https://news.example/story?q={ENCODED}")
+
+        assert "news.example" not in caplog.text
+        _no_secret(caplog.text)
+
+
 # --- The cache ----------------------------------------------------------------------------
 
 

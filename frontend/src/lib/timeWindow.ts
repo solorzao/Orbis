@@ -7,8 +7,7 @@
 export type LiveHours = 1 | 6 | 24 | 168;
 
 export type TimeWindow =
-  | { kind: "live"; hours: LiveHours }
-  | { kind: "range"; startTime: string; endTime: string };
+  { kind: "live"; hours: LiveHours } | { kind: "range"; startTime: string; endTime: string };
 
 export const DEFAULT_WINDOW: TimeWindow = { kind: "live", hours: 24 };
 

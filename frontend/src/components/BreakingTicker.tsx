@@ -66,7 +66,6 @@ export default function BreakingTicker({ stories, reduced, onOpen }: BreakingTic
   useLayoutEffect(() => {
     const el = sectionRef.current;
     // Focus fires no event when its element unmounts: the DOM is the only source.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFocused(el !== null && el.contains(document.activeElement));
   }, [n, wide]);
 

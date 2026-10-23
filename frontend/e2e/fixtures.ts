@@ -1279,7 +1279,7 @@ export function homeViewScreenPoint(
 }
 
 /** Load the app with the API mocked and the globe holding still at its home view. */
-export async function gotoStillGlobe(page: Page, setup?: (page: Page) => Promise<void>) {
+export async function gotoStillGlobe(page: Page, setup?: (page: Page) => Promise<unknown>) {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAllApiRoutes(page);
   await setup?.(page); // routes added later win over the defaults

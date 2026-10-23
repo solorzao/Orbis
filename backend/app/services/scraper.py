@@ -1,5 +1,9 @@
 """Article text extraction with multi-strategy cascade and Redis caching.
 
+Pages are fetched with fetch_public (ingestion's title scrape uses it too). The
+URLs are untrusted (GDELT's, passed on by the co-pilot's planner), so only
+http(s), only public addresses, and each redirect checked the same way.
+
 Extraction order:
 1. trafilatura (best quality, handles boilerplate removal)
 2. BeautifulSoup <article>/<p> tag extraction
@@ -10,27 +14,292 @@ Results are cached in Redis with a 24-hour TTL keyed by URL hash.
 
 from __future__ import annotations
 
+import asyncio
+import codecs
 import hashlib
+import ipaddress
 import logging
 import re
-from typing import Any
+import socket
+import zlib
+from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.services.cache import get_cached, set_cached
+from app.services.urls import web_url
 
 logger = logging.getLogger("orbis.scraper")
 
 _CACHE_TTL = 86400  # 24 hours
-_FETCH_TIMEOUT = 5.0  # seconds per request
+_FETCH_TIMEOUT = 10.0  # seconds for a whole fetch, redirects included
+_MAX_PAGE_BYTES = 3 * 1024 * 1024  # an article's HTML is cut off past this
 _MAX_TEXT_WORDS = 500
 _USER_AGENT = "Mozilla/5.0 (compatible; OrbisBot/1.0; +https://orbisapp.co)"
 
 
+# ---------------------------------------------------------------------------
+# Fetching untrusted URLs
+# ---------------------------------------------------------------------------
+
+_MAX_REDIRECTS = 3
+# Azure's platform address (its DNS, health probes and WireServer): public by
+# its number, internal by its use.
+_AZURE_PLATFORM_IP = ipaddress.ip_address("168.63.129.16")
+_LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
+# The encodings asked for, and the only ones read: _read_capped inflates them no
+# further than its cap. (httpx would ask for zstd too, and inflate whole chunks.)
+_ACCEPT_ENCODING = "gzip, deflate"
+_ZLIB_WBITS = {
+    "gzip": 16 + zlib.MAX_WBITS,
+    "x-gzip": 16 + zlib.MAX_WBITS,
+    "deflate": zlib.MAX_WBITS,
+}
+
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+class Refused(Exception):
+    """A URL fetch_public won't fetch. The message says why and never holds the URL."""
+
+
+class Page(NamedTuple):
+    """A page fetch_public got: its status, at most max_bytes of its body, and the
+    charset its Content-Type names (None if it names none)."""
+
+    status: int
+    body: bytes
+    charset: str | None = None
+
+    def text(self) -> str:
+        """The body decoded as httpx's Response.text would: by its charset, else UTF-8."""
+        encoding = self.charset or "utf-8"
+        try:
+            codecs.lookup(encoding)
+        except LookupError:
+            encoding = "utf-8"
+        return self.body.decode(encoding, errors="replace")
+
+
+def _unmapped(ip: IPAddress) -> IPAddress:
+    """*ip*, or the IPv4 address an IPv4-mapped IPv6 address (::ffff:a.b.c.d) holds."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
+
+
+def is_public_ip(ip: IPAddress) -> bool:
+    """True for an address on the public internet. False for loopback, private
+    (RFC 1918, ULA), link-local (the cloud metadata services), IPv6 site-local,
+    CGNAT, multicast, reserved and unspecified addresses, Azure's platform
+    address, and any of these in IPv4-mapped IPv6 form."""
+    ip = _unmapped(ip)
+    if ip == _AZURE_PLATFORM_IP:
+        return False
+    return ip.is_global and not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        or (isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local)  # fec0::/10
+    )
+
+
+async def _resolve(host: str, port: int) -> list[str]:
+    """Every address DNS gives for *host* (tests stand in for it)."""
+    infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return [info[4][0] for info in infos]
+
+
+async def _public_addresses(host: str, port: int) -> list[IPAddress]:
+    """The addresses to try, in order, for *host* (a name or an IP literal).
+
+    Refused unless every address it has is public: a name that also resolves
+    inward is never fetched. IPv4 comes first, as the container may have no
+    IPv6 route.
+    """
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        addresses = [ipaddress.ip_address(a) for a in await _resolve(host, port)]
+    if not addresses:
+        raise Refused(f"{host} has no address")
+    for ip in addresses:
+        if not is_public_ip(ip):
+            name = "" if str(ip) == host else f" ({host})"
+            raise Refused(f"non-public address {ip}{name}")
+    unique = list(dict.fromkeys(_unmapped(ip) for ip in addresses))
+    return sorted(unique, key=lambda ip: ip.version)  # stable: DNS order within each
+
+
+async def _pin(url: str) -> tuple[list[httpx.URL], dict[str, str], dict[str, str]]:
+    """*url* re-addressed to each public IP its host resolves to, with the headers
+    and extensions that keep it the host's: the Host header, and the TLS server
+    name (SNI, which the certificate is checked against).
+
+    The addresses checked are the addresses connected to, so a name can't pass
+    the check at one address and connect at another (DNS rebinding). Refused
+    for anything but an http(s) URL on a public host. Any port is allowed: it's
+    the address check that keeps internal services out of reach.
+    """
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL:
+        raise Refused("not a valid URL") from None
+    if web_url(str(parsed)) is None:
+        raise Refused("not an http(s) URL")
+    host = parsed.raw_host.decode("ascii")  # IDNA-encoded, as DNS and TLS want it
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    ips = await _public_addresses(host, port)
+    return (
+        [parsed.copy_with(host=str(ip)) for ip in ips],
+        {"Host": parsed.netloc.decode("ascii")},
+        {"sni_hostname": host},
+    )
+
+
+async def _send(
+    client: httpx.AsyncClient,
+    targets: list[httpx.URL],
+    headers: dict[str, str],
+    extensions: dict[str, str],
+    deadline: float,
+) -> httpx.Response:
+    """A streamed GET from the first of *targets* (one host's addresses) that
+    takes a connection. Each has an equal share of the time left to connect in,
+    so one dead address leaves time for the next."""
+    loop = asyncio.get_running_loop()
+
+    def request(target: httpx.URL, left: int) -> httpx.Request:
+        connect = max(deadline - loop.time(), 0.0) / left
+        timeout = httpx.Timeout(client.timeout.read, connect=connect)
+        return client.build_request(
+            "GET", target, headers=headers, extensions=extensions, timeout=timeout
+        )
+
+    *others, last = targets
+    for n, target in enumerate(others):
+        try:
+            return await client.send(request(target, len(targets) - n), stream=True)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            pass  # the next address
+    return await client.send(request(last, 1), stream=True)
+
+
+def _next_hop(url: str, location: str) -> str:
+    """Where a redirect from *url* to *location* leads (absolute)."""
+    try:
+        return str(httpx.URL(url).join(location))
+    except httpx.InvalidURL:
+        raise Refused("redirect to an invalid URL") from None
+
+
+async def _read_capped(resp: httpx.Response, max_bytes: int) -> bytes:
+    """At most *max_bytes* of *resp*'s body, decoded: the rest is never read.
+
+    The raw body is inflated here, never past the cap: a few kilobytes of gzip
+    can inflate to gigabytes, and httpx's own decoding inflates each chunk
+    whole. Refused for an encoding fetch_public didn't ask for. A deflate body
+    without its zlib header (as some servers send it) is read as raw deflate.
+    """
+    encoding = resp.headers.get("content-encoding", "").strip().lower()
+    if encoding not in ("", "identity", *_ZLIB_WBITS):
+        raise Refused(f"content-encoding {encoding[:20]!r}")
+    if max_bytes <= 0:
+        return b""  # and never decompress(raw, 0): a max_length of 0 is no limit
+    inflate = zlib.decompressobj(_ZLIB_WBITS[encoding]) if encoding in _ZLIB_WBITS else None
+    body = bytearray()
+    first = True
+    async for raw in resp.aiter_raw():
+        if inflate is None:
+            body += raw
+        else:
+            try:
+                body += inflate.decompress(raw, max_bytes - len(body))
+            except zlib.error:
+                if not (first and encoding == "deflate"):
+                    raise
+                inflate = zlib.decompressobj(-zlib.MAX_WBITS)
+                body += inflate.decompress(raw, max_bytes - len(body))
+            if inflate.eof:
+                break  # anything after the compressed stream is ignored, unread
+        first = False
+        if len(body) >= max_bytes:
+            break
+    return bytes(body[:max_bytes])
+
+
+def _loggable_url(url: str) -> str:
+    """*url* for a log line: scheme, host and path, without the query string,
+    fragment or credentials, and no control characters."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+    except ValueError:
+        return "(invalid URL)"
+    return _LOG_UNSAFE.sub("?", f"{parts.scheme}://{host}{parts.path}"[:300])
+
+
+async def fetch_public(
+    url: str,
+    *,
+    max_bytes: int,
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> Page | None:
+    """GET an untrusted *url*: http(s) only, public addresses only, at most
+    _MAX_REDIRECTS redirects, each checked as the first URL is, and each hop
+    connected to an address its check resolved (_pin). A redirect from https
+    to http is followed: the address check applies to it all the same.
+
+    None when a URL on the way is refused, logged without its query string.
+    Decodes at most *max_bytes* of the final response's body (_read_capped),
+    so a compressed body can't inflate past it either. The fetch has *timeout*
+    seconds in all, redirects included (TimeoutError past it), so a host
+    dripping bytes can't hold it; httpx's own errors are raised as well.
+    """
+    hop = url
+    try:
+        async with asyncio.timeout(timeout) as deadline:
+            # trust_env=False: no proxy from the environment, so the address
+            # checked is the address connected to.
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                headers={**(headers or {}), "Accept-Encoding": _ACCEPT_ENCODING},
+                trust_env=False,
+            ) as client:
+                for _ in range(_MAX_REDIRECTS + 1):
+                    targets, host_header, extensions = await _pin(hop)
+                    resp = await _send(client, targets, host_header, extensions, deadline.when())
+                    try:
+                        if resp.has_redirect_location:
+                            hop = _next_hop(hop, resp.headers["location"])
+                            continue
+                        body = await _read_capped(resp, max_bytes)
+                        return Page(resp.status_code, body, resp.charset_encoding)
+                    finally:
+                        await resp.aclose()
+                raise Refused(f"more than {_MAX_REDIRECTS} redirects")
+    except Refused as exc:
+        logger.warning("Refused to fetch %s: %s", _loggable_url(url), exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Extraction
+# ---------------------------------------------------------------------------
+
+
 def _cache_key(url: str) -> str:
-    """Deterministic cache key for a URL."""
+    """Deterministic cache key for a URL.
+
+    v2: results cached before redirects were checked are never served.
+    """
     h = hashlib.sha256(url.encode()).hexdigest()[:16]
-    return f"scrape:{h}"
+    return f"scrape:v2:{h}"
 
 
 def _smart_truncate(
@@ -140,23 +409,27 @@ async def extract_article_text(
     # Check cache first
     cached = await get_cached(_cache_key(url))
     if cached is not None:
-        logger.info("Cache hit for %s", url)
+        logger.info("Cache hit for %s", _loggable_url(url))
         return cached
 
     result: dict[str, Any] = {"url": url, "title": "", "text": "", "quality": "failed"}
 
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
+        page = await fetch_public(
+            url,
+            max_bytes=_MAX_PAGE_BYTES,
             timeout=_FETCH_TIMEOUT,
             headers={"User-Agent": _USER_AGENT},
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            html = resp.text
+        )
     except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", url, exc)
+        logger.warning("Failed to fetch %s: %r", _loggable_url(url), exc)
         return result
+    if page is None:  # refused, and logged
+        return result
+    if not 200 <= page.status < 300:
+        logger.warning("Failed to fetch %s: HTTP %d", _loggable_url(url), page.status)
+        return result
+    html = page.text()
 
     # Extract title
     title_match = re.search(r"<title>([^<]+)</title>", html, re.IGNORECASE)
@@ -189,7 +462,7 @@ async def extract_article_text(
     logger.info(
         "Extracted %s quality from %s (%d chars)",
         result["quality"],
-        url,
+        _loggable_url(url),
         len(result.get("text", "")),
     )
     return result

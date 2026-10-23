@@ -107,7 +107,10 @@ test.describe("Links layer", () => {
       "data-arcs",
       String(MOCK_LINKS_LIFT.length),
     );
-    const { pill } = await hoverArc(page, MOCK_LINKS_LIFT.find((l) => l.a.iso === "RU")!);
+    const { pill } = await hoverArc(
+      page,
+      MOCK_LINKS_LIFT.find((l) => l.a.iso === "RU")!,
+    );
     const background = await pill.evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(background).toMatch(/^rgb\(/); // no alpha: opaque
   });
@@ -272,7 +275,10 @@ test.describe("Arc pill below 1180px", () => {
       "data-arcs",
       String(MOCK_LINKS_LIFT.length),
     );
-    const { pill } = await hoverArc(page, MOCK_LINKS_LIFT.find((l) => l.a.iso === "RU")!);
+    const { pill } = await hoverArc(
+      page,
+      MOCK_LINKS_LIFT.find((l) => l.a.iso === "RU")!,
+    );
     await expect(pill).toBeVisible();
   });
 });
@@ -338,7 +344,7 @@ test.describe("Links on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
   /** The co-pilot answers with places in France and the US, so it offers Show links. */
-  async function showLinks(page: Page, setup?: (page: Page) => Promise<void>) {
+  async function showLinks(page: Page, setup?: (page: Page) => Promise<unknown>) {
     await gotoStillGlobe(page, async (p) => {
       await mockAgentRoute(p, {
         answer: "Markets in Paris and New York reacted to the talks.",
