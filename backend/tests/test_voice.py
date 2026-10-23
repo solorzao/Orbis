@@ -36,6 +36,14 @@ def test_house_style_states_what_the_guard_enforces_and_what_to_say_instead():
     assert "Tuesday" not in voice.HOUSE_STYLE  # no weekdays: the model has no calendar
 
 
+def test_house_style_never_says_material():
+    # Both surfaces' prompts carry it, and memos echoed "the material" back (21c evals).
+    assert "material" not in voice.HOUSE_STYLE.lower()
+    # No longer than 21d's (675 characters, 115 words): every call pays for it.
+    assert len(voice.HOUSE_STYLE) <= 675
+    assert len(voice.HOUSE_STYLE.split()) <= 115
+
+
 @pytest.mark.parametrize(
     ("when", "now", "said"),
     [
@@ -134,6 +142,26 @@ LEAKS = [
     ("Its details could be checked in the original articles.", "audience"),
     # A single-quoted phrase doesn't hide the sentence after it.
     ("The fans' chant 'we are the champions.' rang out. I can't confirm the score.", "gap"),
+    # The prompt's words echoed (polish eval): the kind of question, and "the lead
+    # story" as a label.
+    (
+        "Broad question about what matters now, so here are the three stories with the "
+        "widest coverage.",
+        "internals",
+    ),
+    ("Broad question, so here are the three stories with the widest coverage.", "internals"),
+    (
+        "This is a broad question about what matters now, so here are the three stories "
+        "with the widest coverage.",
+        "internals",
+    ),
+    ("That is a general question, so here is an overview [1].", "internals"),
+    ("As a follow-up question, so the earlier reports still apply [2].", "internals"),
+    ("The lead story is covered widely across national and regional UK outlets.", "internals"),
+    (
+        "Storms hit Cornwall [2]. The lead story is Putin agreeing to resume Ukraine talks [1].",
+        "internals",
+    ),
 ]
 
 
@@ -259,6 +287,22 @@ NEWS = [
     "The tariffs kicked in [2] on Monday.",
     "The airline went under [1].",
     "The army moved in [1] at dawn.",
+    # Beside the polish eval's narration and label: questions and lead stories in the
+    # news.
+    "A broad question of jurisdiction remains [1].",
+    "The court left a broad question open.",
+    "Broad questions remain about the deal's terms [2].",
+    "The senator asked a specific question about funding [1].",
+    "The Times' lead story on Sunday reported the leak [2].",
+    "The newspaper's lead story accused the minister [1].",
+    "The lead story in Sunday's Observer named the donor [3].",
+    "The strike was the lead story on the BBC website [1].",
+    "The strike was the lead story everywhere that week [1].",
+    "Its lead story said talks would resume [2].",
+    # A coverage answer's lead stories (#152 re-review).
+    "The lead story about the strike ran on page one [2].",
+    "The lead story by Reuters said talks would resume [1].",
+    "The lead story, in The Times, said the talks had stalled [3].",
 ]
 
 
@@ -292,6 +336,11 @@ BOARD_WORDS_IN_THE_NEWS = [
     "Thieves took the three items in under eight minutes [2].",
     "The items appear in a 1923 catalogue [1].",
     "The items describe a 17th-century voyage [3].",
+    # Counted entries read as counted items do, and a pin's kind before "profile" as
+    # memos name a pin (held-out runs, #152 review: accepted).
+    "The three entries in the contest drew record votes [1].",
+    "Both entries are favourites to win the contest [2].",
+    "The paper ran a person profile of the suspect [1].",
 ]
 
 
@@ -366,6 +415,41 @@ MEMO_21C_LEAKS = [
     ("The three items place the events in Jordan.", "handle"),
     ("This item [2] is about the floods.", "handle"),
     ("The floods are the subject of that item [3].", "handle"),
+    # From the held-out runs' memos (21c-3, 21c-5): uncertain from the material, counted
+    # entries, a pin's kind before "item" or "profile", and what the material names.
+    (
+        "It is uncertain from the material whether Al-Momani had a role at the church or "
+        "at the funeral.",
+        "gap",
+    ),
+    (
+        "The three entries place the church and the attack in Karak, while the person is "
+        "listed from Amman.",
+        "handle",
+    ),
+    ("The three entries describe an outlet, a person and a developing story.", "handle"),
+    ("Both entries place the closure in Hebron [1] [3].", "handle"),
+    ("Two of the entries are developing stories [1] [2].", "handle"),
+    ("The storms appear across the three entries.", "handle"),
+    (
+        "The closure story and the Tel Aviv place item share the same city of first "
+        "reporting [1] [3].",
+        "handle",
+    ),
+    ("The person item names Netanyahu as the central figure [2].", "handle"),
+    (
+        "The storm story and the person profile sit in different places and do not make "
+        "conflicting claims.",
+        "handle",
+    ),
+    ("The place and organisation profiles do not conflict [2] [4].", "handle"),
+    (
+        "They appear in the same news coverage of that day but do not share people, "
+        "places or causes that the material names.",
+        "gap",
+    ),
+    ("Neither story adds to the dates that the material gives [1] [2].", "gap"),
+    ("No other place appears beyond those that the material shows, so both fit.", "gap"),
 ]
 
 
@@ -462,6 +546,21 @@ MEMO_21C_NEWS = [
     "Both items went missing in 2019 [3].",
     "The three items are expected at auction in May [2].",
     "Witnesses disagree on the facts given in court [2].",
+    # Beside the held-out runs' patterns: uncertainty, entries, profiles and material in
+    # the news.
+    "Pentagon officials were uncertain from the start [2].",
+    "It is uncertain from the evidence whether the ship sank [1].",
+    "Italy has three entries in the competition [1].",
+    "Both entries were disqualified from the contest [2].",
+    "The two entries, a song and a dance, were shortlisted [1].",
+    "Two of the entries were withdrawn before the final [3].",
+    "The actor sat for a Hollywood profile in Vanity Fair [2].",
+    "In a People profile, the actor said she would return [1].",
+    "The scandal raised the story's profile abroad [2].",
+    "Shoppers must place items in clear bags at the stadium [2].",
+    "The material damage was large, officials said [1].",
+    "Prosecutors said that the material shows the minister knew of the plan [1].",
+    "Investigators confirmed that the material names three officials [2].",
 ]
 
 
