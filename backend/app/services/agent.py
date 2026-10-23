@@ -23,6 +23,7 @@ from app.middleware.security import has_injection_pattern, sanitise_text, strip_
 from app.services import llm_budget, retrieval, voice
 from app.services.ai_summary import _clean_place
 from app.services.llm import response_text
+from app.services.urls import outlet as host_of
 from app.services.urls import web_url
 
 logger = logging.getLogger("orbis.agent")
@@ -428,6 +429,10 @@ _RELATION_WORDS = {
 }
 
 
+# A scraped page's label when it has neither a usable title nor a host.
+_UNTITLED_PAGE = "A page"
+
+
 def _normalised(text: str) -> str:
     """Entities unescaped and compatibility forms folded, in board._clean's order, so a
     fullwidth "＜/news＞" or an escaped "&lt;/news&gt;" is "</news>" when the <news>
@@ -505,9 +510,9 @@ def _build_context(
             return
 
         idx = len(entries) + 1
+        # No link: the model writes none (cite() maps [N] to its report), and a link
+        # is text the cleaning doesn't read. article_index keeps it, server-side.
         parts = [f"[{idx}] {title}"]
-        if url:
-            parts.append(f"  URL: {url}")
         outlet = _prompt_text(item.get("source_name"), 100)
         if outlet:
             parts.append(f"  Source: {outlet}")
@@ -590,8 +595,13 @@ def _build_context(
         if url not in seen_urls and len(entries) < max_articles:
             seen_urls.add(url)
             idx = len(entries) + 1
-            title = _prompt_text(sc.get("title"), 300) or url
-            parts_list = [f"[{idx}] {title}", f"  URL: {url}"]
+            # Without a usable title, its outlet (the host), checked like any name.
+            title = (
+                _prompt_text(sc.get("title"), 300)
+                or _prompt_text(host_of(url), 100)
+                or _UNTITLED_PAGE
+            )
+            parts_list = [f"[{idx}] {title}"]
             text = _page_text(sc["text"])
             if text:
                 parts_list.append(f"  Text:\n    {text}")
@@ -933,12 +943,26 @@ def _normalize_globe_actions(raw: object) -> list[dict]:
 
 
 _APOLOGY = "I'm sorry, I couldn't generate an answer right now."
-# Shown when the voice guard leaves nothing of an answer: never a second call (Phase 6).
+# Shown when the voice guard, or cite(), leaves no words of an answer: never a second
+# call (Phase 6).
 _NO_ANSWER = (
     "I couldn't put together an answer from recent coverage. "
     "Try asking about a place or a story on the globe."
 )
-_CITED = re.compile(r"\[(\d{1,3})\]")
+# Counted after each deploy (decision 26: revert if more than 1 ask in 20 falls back).
+_NO_ANSWER_LOG = "Co-pilot voice guard: nothing left; the fixed answer."
+# A citation marker, as the UI reads one (AgentMessage): not a Markdown link "[4](…)"
+# or reference "[4]: …".
+_CITED = re.compile(r"\[(\d{1,3})\](?![(:])")
+# A letter: list numbers, markers and punctuation alone aren't an answer ("1. .").
+_LETTER = re.compile(r"[^\W\d_]")
+
+
+def _no_answer() -> dict:
+    """The fixed answer, logged as a fallback (a fixed line: no text)."""
+    logger.info(_NO_ANSWER_LOG)
+    return {"answer": _NO_ANSWER, "citations": [], "globe_actions": []}
+
 
 # Structured outputs (as the memo and synopses use): the reply is this object.
 # Citations aren't in it: they are the [N] markers the answer keeps (cite()).
@@ -984,7 +1008,7 @@ def guard_answer(answer: str, globe_actions: object) -> dict:
             ", ".join(shown.kinds),
         )
     if not shown.text:
-        return {"answer": _NO_ANSWER, "citations": [], "globe_actions": []}
+        return _no_answer()
     actions = [
         {
             **action,
@@ -1005,7 +1029,8 @@ def guard_answer(answer: str, globe_actions: object) -> dict:
 def cite(result: dict, article_index: list[dict]) -> dict:
     """The answer as the visitor sees it: the reports it cites numbered 1..n in the
     order first cited, in the text and the Sources list alike, each one a report the
-    model was given. A marker no report has leaves the text."""
+    model was given. A marker no report has leaves the text. An answer left without
+    a letter ("", "1..") is _NO_ANSWER: never shown, nor saved for later turns."""
     answer = result["answer"]
     order: list[int] = []
     for match in _CITED.finditer(answer):
@@ -1026,6 +1051,8 @@ def cite(result: dict, article_index: list[dict]) -> dict:
     answer = _CITED.sub(renumber, answer)
     if removed:  # "a claim [99]." became "a claim ."
         answer = re.sub(r"[ \t]+([.,;:!?])", r"\1", re.sub(r"(?<=\S)[ \t]{2,}", " ", answer))
+    if not _LETTER.search(answer):
+        return {**result, **_no_answer()}
     citations = _enrich_citations([{"index": n} for n in order], article_index)
     for citation in citations:
         citation["index"] = new[citation["index"]]
