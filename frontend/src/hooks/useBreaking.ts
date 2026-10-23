@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchBreaking } from "@/lib/api";
+import { fetchBreaking, retryOnce503 } from "@/lib/api";
 import { toBreakingStories, type BreakingStory } from "@/lib/breaking";
 import type { Topic } from "@/types/news";
 
@@ -15,8 +15,9 @@ const NONE: BreakingStory[] = [];
  * not a range or a replay, which look back). Fetched at once, then every 5
  * minutes while the page shows (a hidden tab skips its refreshes and catches
  * up when it shows again); a new topic aborts the last request and ignores
- * its answer, showing none until its own arrive. A failed refresh keeps the
- * last stories; off, there are none.
+ * its answer, showing none until its own arrive. A 503 is asked once more,
+ * after its Retry-After; a failed refresh keeps the last stories; off, there
+ * are none.
  */
 export function useBreaking(topic: Topic, enabled: boolean): BreakingStory[] {
   const [result, setResult] = useState<{ topic: Topic; stories: BreakingStory[] } | null>(null);
@@ -26,7 +27,8 @@ export function useBreaking(topic: Topic, enabled: boolean): BreakingStory[] {
     const controller = new AbortController();
     const load = () => {
       if (document.hidden) return;
-      fetchBreaking({ topic, signal: controller.signal })
+      // A 503 (the query timed out, with no earlier list to serve) is asked once more.
+      retryOnce503(() => fetchBreaking({ topic, signal: controller.signal }), controller.signal)
         .then((api) => {
           if (!controller.signal.aborted) setResult({ topic, stories: toBreakingStories(api) });
         })

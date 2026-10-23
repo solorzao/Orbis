@@ -1,5 +1,8 @@
 """Tests for the news router endpoints (database-backed)."""
 
+import asyncio
+import json
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -8,7 +11,8 @@ import pytest
 
 from app.config import settings
 from app.routers.news import _row_to_article
-from app.services.cache import cycle_ttl
+from app.services.cache import cycle_ttl, invalidate, set_cached
+from tests.fake_redis import FakeRedis
 
 
 def _make_globe_row(lat: float = 40.0, lng: float = -74.0, count: int = 3, topic: str = "general"):
@@ -1487,14 +1491,17 @@ class TestGetBreaking:
         self, monkeypatch, breaking_db
     ):
         """Uncapped and for every topic: each request then filters and caps it. Kept a
-        cycle and more (the warm refills it after each ingestion), not 300 s."""
+        cycle and more (the warm refills it after each ingestion), not 300 s; and as the
+        last good list, outside db:*, for an hour."""
         breaking_db.return_value = [_story(i) for i in range(9)]
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
             await _get(monkeypatch, "/api/news/breaking", topic="Climate")
 
-        mock_set.assert_awaited_once_with(
-            "db:breaking:v1", [_json(_story(i)) for i in range(9)], cycle_ttl(300)
-        )
+        stored = [_json(_story(i)) for i in range(9)]
+        assert [c.args for c in mock_set.await_args_list] == [
+            ("db:breaking:v1", stored, cycle_ttl(300)),
+            ("last:breaking:v1", stored, 3600),
+        ]
 
     @pytest.mark.asyncio
     async def test_none_breaking_is_cached_too(self, monkeypatch, breaking_db):
@@ -1503,19 +1510,25 @@ class TestGetBreaking:
             resp = await _get(monkeypatch, "/api/news/breaking")
 
         assert resp.json() == []
-        mock_set.assert_awaited_once_with("db:breaking:v1", [], cycle_ttl(300))
+        assert [c.args for c in mock_set.await_args_list] == [
+            ("db:breaking:v1", [], cycle_ttl(300)),
+            ("last:breaking:v1", [], 3600),
+        ]
 
     @pytest.mark.asyncio
     async def test_the_warmer_caches_what_the_first_request_would(self, monkeypatch, breaking_db):
-        """app.warm refills it after each ingestion cycle, with the request's key and bytes."""
+        """app.warm refills it after each ingestion cycle, with the request's keys and bytes."""
         import app.routers.news as news
 
         with patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set:
             await _get(monkeypatch, "/api/news/breaking")
             await news.warm_breaking()
 
-        requested, warmed = [c.args for c in mock_set.await_args_list]
-        assert requested == warmed == ("db:breaking:v1", [STORY_JSON], cycle_ttl(300))
+        stored = [
+            ("db:breaking:v1", [STORY_JSON], cycle_ttl(300)),
+            ("last:breaking:v1", [STORY_JSON], 3600),
+        ]
+        assert [c.args for c in mock_set.await_args_list] == stored * 2  # request's, warm's
 
     @pytest.mark.asyncio
     async def test_cached_stories_are_served_without_the_database(self, monkeypatch, breaking_db):
@@ -1552,6 +1565,36 @@ class TestGetBreaking:
         assert "s-maxage" not in resp.headers.get("cache-control", "")
         mock_set.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_a_query_that_times_out_with_no_last_good_list_is_a_503_to_retry(
+        self, monkeypatch, breaking_db, caplog
+    ):
+        """Not a 500 and a traceback (110 in four days on production): the ticker asks
+        again after Retry-After. Never kept at the edge, and nothing is cached."""
+        import app.routers.news as news
+
+        monkeypatch.setattr(news, "_BREAKING_QUERY_TIMEOUT", 0.01)
+
+        async def hung(*_args):
+            await asyncio.Event().wait()  # never set
+
+        breaking_db.side_effect = hung
+        with (
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+            caplog.at_level(logging.INFO),
+        ):
+            resp = await _get(monkeypatch, "/api/news/breaking", topic="Conflict")
+
+        assert resp.status_code == 503
+        assert resp.headers["retry-after"] == "15"
+        assert "cache-control" not in resp.headers
+        assert resp.json()["detail"] == "The breaking query took over 0.01 s; retry shortly."
+        mock_set.assert_not_awaited()
+        assert not [r for r in caplog.records if r.exc_info]
+        assert "Breaking query failed (TimeoutError: The breaking query took over 0.01 s)" in (
+            caplog.text
+        )
+
 
 class TestBreakingSingleFlight:
     """Concurrent misses share one query (the delta asks too)."""
@@ -1578,7 +1621,7 @@ class TestBreakingSingleFlight:
 
         assert a == b
         assert breaking_db.await_count == 1
-        assert mock_set.await_count == 1
+        assert mock_set.await_count == 2  # once each: the cycle's key and the last good one
         assert news._breaking_in_flight == {}
 
     @pytest.mark.asyncio
@@ -1668,6 +1711,153 @@ class TestBreakingSingleFlight:
         breaking_db.return_value = [STORY]
         assert len(await news._cached_breaking()) == 1
         assert breaking_db.await_count == 2
+
+
+@pytest.fixture
+def redis():
+    """Redis faked, with a clock, in place of the router's no-cache stubs."""
+    from app.services import cache
+
+    fake = FakeRedis()
+    with (
+        patch("app.services.cache.get_redis", AsyncMock(return_value=fake)),
+        patch("app.routers.news.get_cached", cache.get_cached),
+        patch("app.routers.news.set_cached", cache.set_cached),
+    ):
+        yield fake
+
+
+def _held(mock: AsyncMock, answer: list[dict]) -> asyncio.Event:
+    """Make the breaking query wait until the event returned is set, then give *answer*."""
+    release = asyncio.Event()
+
+    async def held(*_args):
+        await release.wait()
+        return answer
+
+    mock.side_effect = held
+    return release
+
+
+class TestBreakingLastGood:
+    """The last good list (last:breaking:v1), outside the db:* each cycle invalidates: a
+    miss serves it at once while one query refills both keys, rather than wait 11-14 s
+    for that query or fail when it times out."""
+
+    @pytest.mark.asyncio
+    async def test_a_miss_serves_the_last_good_list_at_once_and_starts_one_query(
+        self, monkeypatch, redis, breaking_db
+    ):
+        import app.routers.news as news
+
+        await news.warm_breaking()  # a cycle's warm
+        await invalidate("db:*")  # the next cycle ends; visitors come before its warm
+        release = _held(breaking_db, [_story(1)])
+
+        async with _api_client(monkeypatch) as client:
+            answers = [
+                await asyncio.wait_for(client.get("/api/news/breaking", params=params), 1)
+                for params in ({}, {"topic": "Conflict"}, {"topic": "Health"})
+            ]
+
+        assert [a.status_code for a in answers] == [200, 200, 200]
+        assert [a.json() for a in answers] == [[STORY_JSON], [STORY_JSON], []]
+        assert all(a.headers["cache-control"] == EDGE for a in answers)  # a minute, as ever
+        assert breaking_db.await_count == 2  # the warm's, then one for the three misses
+        refill = news._breaking_in_flight["db:breaking:v1"]
+
+        release.set()
+        assert await refill == [news.BreakingStory(**_story(1))]
+        for key in ("db:breaking:v1", "last:breaking:v1"):
+            assert json.loads(redis.values[key]) == [_json(_story(1))], key
+        resp = await _get(monkeypatch, "/api/news/breaking")
+        assert resp.json() == [_json(_story(1))]
+        assert breaking_db.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_the_cycles_invalidation_leaves_the_last_good_list_for_an_hour(
+        self, redis, breaking_db
+    ):
+        """Four cycles: a list an hour old still names events that broke within three
+        hours (breaking is about the last two). Older, it is never served."""
+        import app.routers.news as news
+
+        await news.warm_breaking()
+        await invalidate("db:*")  # as each ingestion cycle ends
+
+        assert "db:breaking:v1" not in redis.values
+        assert json.loads(redis.values["last:breaking:v1"]) == [STORY_JSON]
+        assert redis.ttls["last:breaking:v1"] == news._BREAKING_LAST_TTL == 60 * 60
+        redis.elapse(60 * 60)
+        assert "last:breaking:v1" not in redis.values
+
+    @pytest.mark.asyncio
+    async def test_the_warm_refills_both_keys_and_never_settles_for_the_last_good_list(
+        self, redis, breaking_db
+    ):
+        import app.routers.news as news
+
+        await set_cached("last:breaking:v1", [_json(_story(7))], 3600)  # an older list
+
+        await news.warm_breaking()
+
+        breaking_db.assert_awaited_once_with(PREVIEW_NOW)
+        assert json.loads(redis.values["db:breaking:v1"]) == [STORY_JSON]
+        assert json.loads(redis.values["last:breaking:v1"]) == [STORY_JSON]
+        assert redis.ttls["db:breaking:v1"] == cycle_ttl(300)
+        assert redis.ttls["last:breaking:v1"] == 3600
+        assert news._breaking_in_flight == {}  # waited for, not left running
+
+        await news.warm_breaking()  # refilled already (by a miss, say): no second query
+        breaking_db.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_warm_joins_a_refill_a_miss_started(self, monkeypatch, redis, breaking_db):
+        import app.routers.news as news
+
+        await set_cached("last:breaking:v1", [_json(_story(7))], 3600)
+        release = _held(breaking_db, [STORY])
+        resp = await _get(monkeypatch, "/api/news/breaking")
+        assert resp.json() == [_json(_story(7))]
+
+        warm = asyncio.create_task(news.warm_breaking())
+        await asyncio.sleep(0)
+        assert not warm.done()  # waits for the refill, not the last good list
+        release.set()
+        await asyncio.wait_for(warm, 1)
+
+        breaking_db.assert_awaited_once()
+        assert json.loads(redis.values["db:breaking:v1"]) == [STORY_JSON]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_refill_is_one_log_line_and_the_last_good_list_is_kept(
+        self, monkeypatch, redis, breaking_db, caplog
+    ):
+        """No caller waits on it to raise to: the line is all that says it failed."""
+        import app.routers.news as news
+
+        await set_cached("last:breaking:v1", [STORY_JSON], 3600)
+        release = asyncio.Event()
+
+        async def failing(*_args):
+            await release.wait()
+            raise RuntimeError("connection reset")
+
+        breaking_db.side_effect = failing
+        with caplog.at_level(logging.WARNING, logger="app.routers.news"):
+            resp = await _get(monkeypatch, "/api/news/breaking")
+            refill = news._breaking_in_flight["db:breaking:v1"]
+            release.set()
+            await asyncio.gather(refill, return_exceptions=True)
+
+        assert resp.status_code == 200
+        assert resp.json() == [STORY_JSON]
+        assert [r.getMessage() for r in caplog.records] == [
+            "Breaking query failed (RuntimeError: connection reset); the next miss retries."
+        ]
+        assert json.loads(redis.values["last:breaking:v1"]) == [STORY_JSON]
+        assert "db:breaking:v1" not in redis.values
+        assert news._breaking_in_flight == {}
 
 
 # ── /api/news/delta: what changed since a visit ─────────────────────────
@@ -1862,3 +2052,49 @@ class TestGetDelta:
         assert resp.status_code == 500
         assert "s-maxage" not in resp.headers.get("cache-control", "")
         assert [c.args[0] for c in mock_set.await_args_list if "delta" in c.args[0]] == []
+
+    @pytest.mark.asyncio
+    async def test_a_breaking_query_that_times_out_is_a_503_not_a_500(
+        self, monkeypatch, delta_db, caplog
+    ):
+        """With no last good list to count: as the ticker's, a 503 the client may retry,
+        never kept at the edge nor cached (a count of 0 would be wrong for 5 minutes)."""
+        import app.routers.news as news
+
+        monkeypatch.setattr(news, "_BREAKING_QUERY_TIMEOUT", 0.01)
+
+        async def hung(*_args):
+            await asyncio.Event().wait()  # never set
+
+        delta_db.breaking.side_effect = hung
+        with (
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+            caplog.at_level(logging.INFO),
+        ):
+            resp = await _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z")
+
+        assert resp.status_code == 503
+        assert resp.headers["retry-after"] == "15"
+        assert "cache-control" not in resp.headers
+        assert resp.json()["detail"] == "The breaking query took over 0.01 s; retry shortly."
+        mock_set.assert_not_awaited()
+        assert not [r for r in caplog.records if r.exc_info]
+
+    @pytest.mark.asyncio
+    async def test_a_breaking_miss_counts_the_last_good_list_rather_than_wait(
+        self, monkeypatch, redis, delta_db
+    ):
+        import app.routers.news as news
+
+        await set_cached("last:breaking:v1", [STORY_JSON, _json(_story(1))], 3600)
+        release = _held(delta_db.breaking, [STORY])
+
+        resp = await asyncio.wait_for(
+            _get(monkeypatch, "/api/news/delta", since="2026-10-12T00:20:00Z"), 1
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["breaking"] == 2
+        release.set()
+        await news._breaking_in_flight["db:breaking:v1"]
+        assert json.loads(redis.values["db:breaking:v1"]) == [STORY_JSON]

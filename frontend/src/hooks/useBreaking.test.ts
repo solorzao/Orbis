@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { BREAKING_REFRESH_MS, useBreaking } from "./useBreaking";
-import { fetchBreaking, type ApiBreakingStory } from "@/lib/api";
+import { ApiError, fetchBreaking, type ApiBreakingStory } from "@/lib/api";
 import type { Topic } from "@/types/news";
 
-vi.mock("@/lib/api", () => ({ fetchBreaking: vi.fn() }));
+// The fetch mocked; ApiError and the 503 retry as they are.
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchBreaking: vi.fn(),
+}));
 const mockFetch = vi.mocked(fetchBreaking);
 
 function story(headline: string): ApiBreakingStory {
@@ -121,6 +125,21 @@ describe("useBreaking", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(BREAKING_REFRESH_MS);
     });
+    expect(headlines(result)).toEqual(["Riots in Paris"]);
+  });
+
+  it("asks once more after a 503, after its Retry-After", async () => {
+    mockFetch
+      .mockRejectedValueOnce(new ApiError(503, "Service Unavailable", 15_000))
+      .mockResolvedValueOnce([story("Riots in Paris")]);
+    const { result } = render({ topic: "All", on: true });
+    await act(async () => {});
+    expect(result.current).toEqual([]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(headlines(result)).toEqual(["Riots in Paris"]);
   });
 
