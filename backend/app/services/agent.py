@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, get_args
 
@@ -18,7 +18,7 @@ import anthropic
 
 from app.config import settings
 from app.middleware.security import strip_invisible
-from app.services import llm_budget, retrieval
+from app.services import llm_budget, retrieval, voice
 from app.services.ai_summary import _clean_place
 from app.services.llm import response_text
 
@@ -63,16 +63,27 @@ class ScreenScope:
     topic: str = ""  # one of SCREEN_TOPICS, or ""
     start_time: datetime | None = None  # both bounds or neither, UTC
     end_time: datetime | None = None
+    # When it was cleaned: "the last 24 hours" is said relative to it. Not part of
+    # equality: two scopes of the same screen are the same scope.
+    now: datetime | None = field(default=None, compare=False)
 
     @property
     def window(self) -> str:
+        """The window in exact UTC: for logs (_plan_summary), never a prompt."""
         if self.start_time is None or self.end_time is None:
             return ""
         return f"{_fmt_utc(self.start_time)} to {_fmt_utc(self.end_time)} UTC"
 
+    @property
+    def spoken_window(self) -> str:
+        """The window as people say it, for prompts: "the last 24 hours", "11 October"."""
+        if self.start_time is None or self.end_time is None:
+            return ""
+        return voice.human_window(self.start_time, self.end_time, self.now or self.end_time)
+
     def prompt_line(self) -> str:
-        """``Screen context: place=…; topic=…; window=… to … UTC``, the fields present only."""
-        fields = [("place", self.place), ("topic", self.topic), ("window", self.window)]
+        """``Screen context: place=…; topic=…; window=…``, the fields present only."""
+        fields = [("place", self.place), ("topic", self.topic), ("window", self.spoken_window)]
         present = "; ".join(f"{k}={v}" for k, v in fields if v)
         return f"Screen context: {present}" if present else ""
 
@@ -109,7 +120,9 @@ def clean_screen_context(
 
     if not (clean_place or clean_topic or start):
         return None
-    return ScreenScope(place=clean_place, topic=clean_topic, start_time=start, end_time=end)
+    return ScreenScope(
+        place=clean_place, topic=clean_topic, start_time=start, end_time=end, now=now
+    )
 
 
 def _with_screen_defaults(tool_calls: list[dict], scope: ScreenScope | None) -> list[dict]:
@@ -295,7 +308,7 @@ _PLANNING_SYSTEM = (
     "- Prefer combining semantic_search + keyword_search for best coverage.\n"
     "- For questions about RELATIONSHIPS between people, organizations, or "
     "countries (e.g. 'How is X connected to Y?', 'Who is involved with Z?', "
-    "'What organizations are linked to…'), use entity_lookup or graph_traverse "
+    "'Which organizations appear with…'), use entity_lookup or graph_traverse "
     "to explore the knowledge graph. Combine with semantic_search for context.\n"
     "- Use entity_lookup when the question names a specific person or "
     "organization and you want their connections.\n"

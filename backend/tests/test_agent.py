@@ -15,6 +15,7 @@ from app.services import llm_budget
 from app.services.agent import (
     _NEWS_TAG,
     _OFF_TOPIC_ANSWER,
+    _PLANNING_SYSTEM,
     _SYNTHESIS_SCREEN_GUIDE,
     _SYNTHESIS_SYSTEM,
     RETRIEVAL_TOOLS,
@@ -382,8 +383,7 @@ async def test_planner_gets_one_screen_context_line():
     assert messages[-1] == {
         "role": "user",
         "content": (
-            "Screen context: place=Madrid, Spain; topic=Politics; "
-            "window=2026-10-11 02:00 to 2026-10-11 14:00 UTC\n\n"
+            "Screen context: place=Madrid, Spain; topic=Politics; window=11 October\n\n"
             "What is happening here?"
         ),
     }
@@ -781,8 +781,7 @@ async def test_synthesis_gets_the_screen_context_line_before_the_question():
     assert kwargs["messages"][-1] == {
         "role": "user",
         "content": (
-            "Screen context: place=Madrid, Spain; topic=Politics; "
-            "window=2026-10-11 02:00 to 2026-10-11 14:00 UTC\n\n"
+            "Screen context: place=Madrid, Spain; topic=Politics; window=11 October\n\n"
             "Question: What is happening here?\n\n"
             "<news>\n[1] Protest in Madrid\n</news>"
         ),
@@ -1209,10 +1208,7 @@ async def test_the_answer_prompt_sent_to_claude(scoped):
     question = f"Question: Brief me on Gaza\n\n<news>\n{_REPORT_ENTRY}\n</news>"
     if scoped:
         assert synthesis["system"] == _SYNTHESIS_SYSTEM + _SYNTHESIS_SCREEN_GUIDE
-        line = (
-            "Screen context: place=Gaza, Palestine; topic=Conflict; "
-            "window=2026-10-11 02:00 to 2026-10-11 14:00 UTC"
-        )
+        line = "Screen context: place=Gaza, Palestine; topic=Conflict; window=11 October"
         assert synthesis["messages"] == [{"role": "user", "content": f"{line}\n\n{question}"}]
     else:
         assert synthesis["system"] == _SYNTHESIS_SYSTEM
@@ -1220,3 +1216,35 @@ async def test_the_answer_prompt_sent_to_claude(scoped):
     assert synthesis["model"] == "claude-haiku-5-5"
     assert result["answer"] == "Strikes hit Khan Younis [1]."
     assert result["citations"][0]["url"] == "https://example.com/a"
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 (21b): the co-pilot in the house voice
+# ---------------------------------------------------------------------------
+
+
+def test_screen_context_window_is_said_in_words():
+    now = datetime(2026, 10, 11, 14, tzinfo=timezone.utc)
+    scope = clean_screen_context(None, None, now - timedelta(hours=24), now, now=now)
+    assert scope.prompt_line() == "Screen context: window=the last 24 hours"
+
+
+def test_a_past_window_is_its_day():
+    now = datetime(2026, 10, 13, 9, tzinfo=timezone.utc)
+    start = datetime(2026, 10, 11, 2, tzinfo=timezone.utc)
+    end = start + timedelta(hours=12)
+    scope = clean_screen_context("Madrid, Spain", "Politics", start, end, now=now)
+    assert scope.prompt_line() == (
+        "Screen context: place=Madrid, Spain; topic=Politics; window=11 October"
+    )
+
+
+def test_two_scopes_of_the_same_screen_are_equal_whenever_they_were_cleaned():
+    a = clean_screen_context(None, "Health", _START, _END, now=_NOW)
+    b = clean_screen_context(None, "Health", _START, _END, now=_NOW + timedelta(minutes=1))
+    assert a == b
+
+
+def test_the_planner_never_says_linked_to():
+    assert "linked to" not in _PLANNING_SYSTEM
+    assert "Which organizations appear with" in _PLANNING_SYSTEM
