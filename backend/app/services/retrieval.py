@@ -1,8 +1,8 @@
 """Retrieval functions for the Orbis embedded agent.
 
 Provides semantic search, knowledge-graph traversal, keyword filtering,
-trending-topic aggregation, entity lookup, and article text extraction
-against the Orbis database.
+the top stories (Orbis's own cached rankings), entity lookup, and article
+text extraction against the Orbis database.
 """
 
 from __future__ import annotations
@@ -421,27 +421,6 @@ async def keyword_search(
         return [dict(r) for r in rows]
     except Exception:
         logger.error("Keyword search failed.", exc_info=True)
-        return []
-
-
-async def trending_topics(hours: int = 24) -> list[dict]:
-    """Return the top-20 trending topics over the last *hours* hours."""
-    try:
-        pool = await get_pool()
-        rows = await pool.fetch(
-            """
-            SELECT UNNEST(topic_tags) AS topic, COUNT(*) AS count
-            FROM articles
-            WHERE published_at > NOW() - make_interval(hours => $1)
-            GROUP BY topic
-            ORDER BY count DESC
-            LIMIT 20
-            """,
-            hours,
-        )
-        return [dict(r) for r in rows]
-    except Exception:
-        logger.error("Trending topics query failed.", exc_info=True)
         return []
 
 
