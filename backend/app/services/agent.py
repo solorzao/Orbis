@@ -7,9 +7,11 @@ synthesis (a cited news briefing with globe actions) at medium effort.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, get_args
@@ -17,7 +19,7 @@ from typing import Any, Literal, get_args
 import anthropic
 
 from app.config import settings
-from app.middleware.security import strip_invisible
+from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
 from app.services import llm_budget, retrieval, voice
 from app.services.ai_summary import _clean_place
 from app.services.llm import response_text
@@ -440,6 +442,39 @@ _SOURCES = re.compile(r"\n*\[Sources: [^\]]*\]\s*$")
 # spacing of the tag without having to find where it ends, and keeps the words.
 _NEWS_TAG = re.compile(r"<(?=\s*/?\s*news\b)", re.IGNORECASE)
 
+# Graph labels said in words: the model copies whatever it is shown.
+_ENTITY_WORDS = {"PERSON": "person", "ORG": "organization", "LOCATION": "place", "TOPIC": "topic"}
+_RELATION_WORDS = {
+    "CO_MENTIONED": "in the same coverage as",
+    "MENTIONED_IN": "stories",
+    "LOCATED_AT": "places",
+    "ABOUT_TOPIC": "topics",
+}
+
+
+def _normalised(text: str) -> str:
+    """Entities unescaped and compatibility forms folded, in board._clean's order, so a
+    fullwidth "＜/news＞" or an escaped "&lt;/news&gt;" is "</news>" when the <news>
+    defusal runs."""
+    return unicodedata.normalize("NFKC", html.unescape(text))
+
+
+def _prompt_text(text: object, max_length: int) -> str:
+    """Retrieved text for the prompt, as one clean line; "" when it holds an injection
+    phrase (checked after cleaning: a hidden character can't split one)."""
+    if not isinstance(text, str):
+        return ""
+    clean = " ".join(strip_invisible(sanitise_text(_normalised(text), max_length)).split())
+    return "" if has_injection_pattern(clean) else clean
+
+
+def _page_text(text: object) -> str:
+    """Scraped page text for the prompt, lines kept; "" when it holds an injection phrase."""
+    if not isinstance(text, str):
+        return ""
+    clean = strip_invisible(sanitise_text(_normalised(text), max_length=2000))
+    return "" if has_injection_pattern(clean) else clean
+
 
 def _history_for_model(history: list[dict] | None) -> list[dict]:
     """The last six turns of *history* as Claude is sent them: without stored links.
@@ -488,7 +523,8 @@ def _build_context(
         if url:
             seen_urls.add(url)
 
-        title = item.get("title") or item.get("name") or item.get("topic", "")
+        # Every retrieved text is untrusted: normalised, cleaned, then checked.
+        title = _prompt_text(item.get("title") or item.get("name") or item.get("topic", ""), 300)
         if not title:
             return
 
@@ -496,8 +532,9 @@ def _build_context(
         parts = [f"[{idx}] {title}"]
         if url:
             parts.append(f"  URL: {url}")
-        if item.get("source_name"):
-            parts.append(f"  Source: {item['source_name']}")
+        outlet = _prompt_text(item.get("source_name"), 100)
+        if outlet:
+            parts.append(f"  Source: {outlet}")
         # For globe_actions only. No sentiment score or count: Haiku narrated the
         # score as "the tone across these sources".
         if item.get("latitude") is not None and item.get("longitude") is not None:
@@ -505,8 +542,9 @@ def _build_context(
 
         # Attach scraped article text if available. Not its extraction quality:
         # that is how the page was read, not news.
-        if url and url in scraped_text:
-            parts.append(f"  Text:\n    {scraped_text[url]['text'][:2000]}")
+        text = _page_text(scraped_text[url]["text"]) if url and url in scraped_text else ""
+        if text:
+            parts.append(f"  Text:\n    {text}")
 
         entries.append("\n".join(parts))
         article_index.append(
@@ -542,24 +580,20 @@ def _build_context(
             connections = data.get("connections", [])
             articles = data.get("articles", [])
 
-            if entity:
-                entity_name = entity.get("name", "?")
-                entity_type = entity.get("type", "?")
-                lines = [f"=== Knowledge Graph: {entity_name} ({entity_type}) ==="]
-
-                # Group connections by relationship type
+            # Connections in words, without graph labels or weights: the model
+            # copied "CO_MENTIONED" and "[x4]" into answers.
+            name = _prompt_text(entity.get("name"), 100) if isinstance(entity, dict) else ""
+            if name:
+                kind = _ENTITY_WORDS.get(entity.get("type", ""))
+                lines = [f"Connections of {name} ({kind}):" if kind else f"Connections of {name}:"]
                 by_rel: dict[str, list[str]] = {}
                 for conn in connections:
-                    rel = conn.get("rel_type", "RELATED")
-                    label = f"{conn.get('name', '?')} ({conn.get('type', '?')})"
-                    weight = conn.get("weight")
-                    if weight and weight > 1:
-                        label += f" [x{weight}]"
-                    by_rel.setdefault(rel, []).append(label)
-
-                for rel, names in by_rel.items():
-                    lines.append(f"  {rel}: {', '.join(names[:10])}")
-
+                    other = _prompt_text(conn.get("name"), 100)
+                    if other:
+                        words = _RELATION_WORDS.get(conn.get("rel_type", ""), "related")
+                        by_rel.setdefault(words, []).append(other)
+                for words, names in by_rel.items():
+                    lines.append(f"  {words}: {', '.join(names[:10])}")
                 graph_sections.append("\n".join(lines))
 
             # Add linked articles as citable entries
@@ -580,8 +614,11 @@ def _build_context(
         if url not in seen_urls and len(entries) < max_articles:
             seen_urls.add(url)
             idx = len(entries) + 1
-            title = sc.get("title", "") or url
-            parts_list = [f"[{idx}] {title}", f"  URL: {url}", f"  Text:\n    {sc['text'][:2000]}"]
+            title = _prompt_text(sc.get("title"), 300) or url
+            parts_list = [f"[{idx}] {title}", f"  URL: {url}"]
+            text = _page_text(sc["text"])
+            if text:
+                parts_list.append(f"  Text:\n    {text}")
             entries.append("\n".join(parts_list))
             article_index.append(
                 {
