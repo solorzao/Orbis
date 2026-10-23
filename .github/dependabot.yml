@@ -1,14 +1,51 @@
 version: 2
+
+# Minor and patch updates arrive as one grouped PR per ecosystem; each major
+# stays its own PR so a breaking change is reviewed alone. The cooldown holds a
+# new release back for a week before Dependabot proposes it, so a compromised
+# or broken publish has time to be pulled first. Security updates ignore both
+# the cooldown and these groups.
 updates:
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: pip
     directory: /backend
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      pip-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    # github-actions supports only default-days, not the per-semver keys
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
