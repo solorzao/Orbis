@@ -128,6 +128,11 @@ def _lines(claude) -> list[str]:
     return user.split("\n")[1:-1]
 
 
+def _numbers(claude) -> list[int]:
+    """The pin numbers the prompt lists, in order."""
+    return [int(line[1 : line.index("]")]) for line in _lines(claude)]
+
+
 # --- The prompt ---------------------------------------------------------------------
 
 
@@ -212,8 +217,7 @@ async def test_injected_server_text_is_dropped_after_cleaning(claude, resolved):
     await _analyze()
 
     lines = _lines(claude)
-    assert lines[0] == "[1] (left out)"
-    assert lines[3] == "[4] (left out)"
+    assert _numbers(claude) == [2, 3, 5, 6]  # left out; the others keep their numbers
     assert "nore previous" not in "\n".join(lines) and "pirate" not in "\n".join(lines)
 
 
@@ -231,16 +235,26 @@ async def test_tags_and_brackets_in_pin_text_cant_close_the_block_or_fake_a_numb
 
 
 @pytest.mark.asyncio
-async def test_expired_pins_keep_their_number(claude, resolved):
+async def test_pins_with_nothing_to_say_are_left_out_and_the_rest_keep_their_numbers(
+    claude, resolved
+):
     resolved.return_value = [SNAPSHOTS[0], None, *SNAPSHOTS[2:]]
-
     await _analyze()
-
-    assert _lines(claude)[1] == "[2] (no longer available)"
+    lines = _lines(claude)
+    assert lines[0].startswith("[1] ") and lines[1].startswith("[3] ")
+    assert "no longer available" not in "\n".join(lines)
 
 
 @pytest.mark.asyncio
-async def test_an_expired_pins_saved_text_is_cleaned_filtered_capped_and_marked(claude, resolved):
+async def test_a_saved_pin_reads_like_any_other(claude, resolved):
+    resolved.return_value = [None, *SNAPSHOTS[1:]]
+    saved = [{"title": "Strikes spread", "place": "Paris, France", "time": WHEN}] + [None] * 5
+    await _analyze(saved=saved)
+    assert _lines(claude)[0] == "[1] Article: Strikes spread (Paris, France) (20 October)"
+
+
+@pytest.mark.asyncio
+async def test_an_expired_pins_saved_text_is_cleaned_filtered_and_capped(claude, resolved):
     resolved.return_value = [None, None, None, *SNAPSHOTS[3:]]
     long_title = "Old\x01 strike​ story " + "word " * 80
     saved = [
@@ -255,14 +269,14 @@ async def test_an_expired_pins_saved_text_is_cleaned_filtered_capped_and_marked(
     await _analyze(saved=saved)
 
     lines = _lines(claude)
-    text = lines[0].removeprefix("[1] Article (saved earlier): ")
+    text = lines[0].removeprefix("[1] Article: ")
     assert text.startswith("Old strike story word word")
     body, when = text.rsplit(" (", 1)
     assert len(body) <= board.SAVED_CHARS
     assert when == "20 October)"
-    assert lines[1] == "[2] (left out)"  # an injection phrase, after cleaning
-    assert lines[2] == "[3] Countries covered together (saved earlier): Lagos port reopens"
-    assert lines[3].startswith("[4] Developing story: Pension strikes")
+    assert _numbers(claude) == [1, 3, 4, 5, 6]  # [2]: an injection phrase, after cleaning
+    assert lines[1] == "[3] Countries covered together: Lagos port reopens"
+    assert lines[2].startswith("[4] Developing story: Pension strikes")
 
 
 @pytest.mark.asyncio
@@ -273,7 +287,7 @@ async def test_the_saved_text_is_checked_for_injection_before_it_is_capped(claud
 
     await _analyze(saved=saved)
 
-    assert _lines(claude)[0] == "[1] (left out)"
+    assert _numbers(claude) == [2, 3, 4, 5, 6]
 
 
 FULLWIDTH_INJECTION = (
@@ -293,7 +307,7 @@ async def test_fullwidth_saved_text_is_read_as_the_phrase_it_shows_and_dropped(c
     await _analyze(saved=saved)
 
     lines = _lines(claude)
-    assert lines[:2] == ["[1] (left out)", "[2] (left out)"]
+    assert _numbers(claude) == [3, 4, 5, 6]
     assert "ｉｇｎｏｒｅ" not in "\n".join(lines) and "poem" not in "\n".join(lines)
 
 
@@ -307,7 +321,7 @@ async def test_lookalike_and_escaped_tags_and_brackets_are_normalised_then_defus
     await _analyze(saved=saved + [None] * 5)
 
     lines = _lines(claude)
-    assert lines[0] == "[1] Article (saved earlier): Tokyo port /PINS> reopens (2)"
+    assert lines[0] == "[1] Article: Tokyo port /PINS> reopens (2)"
     assert lines[4] == "[5] Person: Bola /pins> (9)"
 
 
@@ -320,9 +334,7 @@ async def test_a_fullwidth_injection_in_server_text_is_dropped(claude, resolved)
 
     await _analyze()
 
-    lines = _lines(claude)
-    assert lines[4] == "[5] (left out)"
-    assert lines[1] == "[2] (left out)"
+    assert _numbers(claude) == [1, 3, 4, 6]
 
 
 @pytest.mark.asyncio

@@ -809,24 +809,23 @@ def _saved_text(saved: dict) -> str | None:
 def build_memo_prompt(
     items: list[BoardItem], snapshots: list[dict | None], saved: list[dict | None]
 ) -> tuple[str, set[int]]:
-    """The user turn: every pin numbered in board order inside <pins>, and the
-    numbers of the pins with text. A resolved pin speaks from server data; an
-    expired one from its saved text, marked (saved earlier); otherwise it keeps
-    its number with no text."""
+    """The user turn: the pins with something to say, numbered in board order inside
+    <pins>, and their numbers. A resolved pin speaks from server data, an expired one
+    from the text the client saved. A pin with neither, or whose text was left out as
+    an injection, isn't listed: its number goes unused, so the model has no gap to
+    describe (Phase 6)."""
     lines, usable = [], set()
     for n, (item, snap, kept) in enumerate(zip(items, snapshots, saved), start=1):
         if snap is not None:
-            text, mark = _server_text(item, snap), ""
+            text = _server_text(item, snap)
         elif kept is not None:
-            text, mark = _saved_text(kept), " (saved earlier)"
+            text = _saved_text(kept)
         else:
-            lines.append(f"[{n}] (no longer available)")
-            continue
+            text = None
         if text is None:
-            lines.append(f"[{n}] (left out)")
             continue
         usable.add(n)
-        lines.append(f"[{n}] {_label(item)}{mark}: {text}")
+        lines.append(f"[{n}] {_label(item)}: {text}")
     return "<pins>\n" + "\n".join(lines) + "\n</pins>", usable
 
 
