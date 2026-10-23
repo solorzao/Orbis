@@ -635,6 +635,17 @@ async def _breaking_entry(cache_k: str) -> list[BreakingStory] | None:
     return cached_model(cache_k, cached, lambda c: [BreakingStory.model_validate(s) for s in c])
 
 
+async def breaking_from_cache() -> tuple[list[BreakingStory], str]:
+    """Every breaking story from the cache alone, and where it came from: the fresh
+    entry ("fresh"), else the last good list ("last good"), else none ("none cached").
+    Never starts the breaking query, nor waits on one running."""
+    for cache_k, origin in ((_BREAKING_KEY, "fresh"), (_BREAKING_LAST_KEY, "last good")):
+        stories = await _breaking_entry(cache_k)
+        if stories is not None:
+            return stories, origin
+    return [], "none cached"
+
+
 def _breaking_query() -> asyncio.Task[list[BreakingStory]]:
     """The breaking query running, or a new one: one at a time."""
     task = _breaking_in_flight.get(_BREAKING_KEY)

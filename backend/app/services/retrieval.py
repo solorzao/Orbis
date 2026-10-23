@@ -484,30 +484,18 @@ def top_story_rows(threads: list[dict], breaking: list[dict], urls: dict[int, st
     return rows
 
 
-async def _cached_breaking() -> tuple[list[Any], str]:
-    """The breaking ticker's list from the cache only, and where it came from: its fresh
-    entry, else the last good one (up to an hour old), else none. Never the breaking
-    query, nor one a miss started: it can outlast its 15 s limit, and a broad answer
-    goes without breaking events rather than wait on it."""
-    # Here, not at the top: the routers import the services.
-    from app.routers.news import _BREAKING_KEY, _BREAKING_LAST_KEY, _breaking_entry
-
-    for key, origin in ((_BREAKING_KEY, "fresh"), (_BREAKING_LAST_KEY, "last good")):
-        stories = await _breaking_entry(key)
-        if stories is not None:
-            return stories, origin
-    return [], "none cached"
-
-
 async def top_stories(hours: int = 24, topic: str | None = None) -> list[dict]:
     """What Orbis ranks highest now, for broad questions: the threads the most outlets
     and countries cover in the window, then the breaking events. The threads come from
     the rail's list (its cache, or its own query on a miss), the breaking events from
     the ticker's cached lists only, plus the top threads' lead links by primary key;
     the answer is cached until the cycle ends. *hours* is a live window (1, 6, 24 or
-    168); *topic* a topic pill, or None."""
+    168); *topic* a topic pill, or None.
+
+    The breaking events never wait on the breaking query (news.breaking_from_cache):
+    a broad answer goes without them rather than wait."""
     # Here, not at the top: the routers import the services.
-    from app.routers.news import _globe_topic_tag
+    from app.routers.news import _globe_topic_tag, breaking_from_cache
     from app.routers.threads import DEFAULT_LIMIT, cached_threads
 
     tag = _globe_topic_tag(topic)
@@ -517,7 +505,7 @@ async def top_stories(hours: int = 24, topic: str | None = None) -> list[dict]:
         return cached
     listed = await cached_threads(hours, tag, DEFAULT_LIMIT)
     threads = by_breadth([t.model_dump(mode="json") for t in listed])[:TOP_THREADS]
-    stories, origin = await _cached_breaking()
+    stories, origin = await breaking_from_cache()
     events = [b.model_dump(mode="json") for b in stories if tag in (None, b.topic)]
     urls: dict[int, str] = {}
     if threads:

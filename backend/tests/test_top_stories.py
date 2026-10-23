@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -192,6 +193,47 @@ async def test_with_no_cached_breaking_list_it_never_starts_or_waits_on_the_quer
     rows = await retrieval.top_stories(24)
 
     assert [r["title"] for r in rows] == [f"Story {i}" for i in range(1, 6)]
+    breaking_query.assert_not_awaited()
+    assert news._breaking_in_flight == {}
+
+
+@pytest.mark.asyncio
+async def test_a_breaking_query_in_flight_is_never_waited_on(redis, listed, pool, breaking_query):
+    """A miss elsewhere started the breaking query, and it hangs: top_stories answers
+    from the threads at once."""
+    from app.routers import news
+
+    hung = asyncio.create_task(asyncio.Event().wait())
+    news._breaking_in_flight[news._BREAKING_KEY] = hung
+    try:
+        rows = await asyncio.wait_for(retrieval.top_stories(24), 1)
+    finally:
+        hung.cancel()
+    assert [r["title"] for r in rows] == [f"Story {i}" for i in range(1, 6)]
+    breaking_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cached", "origin", "n"),
+    [
+        ({"db:breaking:v1": [1, 2], "last:breaking:v1": [3]}, "fresh", 2),
+        ({"last:breaking:v1": [3]}, "last good", 1),
+        ({}, "none cached", 0),
+    ],
+)
+async def test_the_ticker_list_from_the_cache_only_says_where_it_came_from(
+    redis, breaking_query, cached, origin, n
+):
+    from app.routers import news
+
+    for key, ns in cached.items():
+        redis.values[key] = json.dumps([_breaking(k) for k in ns])
+
+    stories, said = await news.breaking_from_cache()
+
+    assert (len(stories), said) == (n, origin)
+    assert all(isinstance(s, news.BreakingStory) for s in stories)
     breaking_query.assert_not_awaited()
     assert news._breaking_in_flight == {}
 
