@@ -330,7 +330,7 @@ async def test_the_system_prompt_speaks_in_the_house_voice(claude, budget):
         "Only state what is reported",
         "uncertain",
         'never describe people, groups, places or events as "linked to"',
-        "150 to 250 words",
+        "at most 250 words",
         "never by number",
     ):
         assert kept in system, kept
@@ -355,17 +355,13 @@ async def test_the_system_prompt_is_about_stories_people_and_places_not_its_inpu
     # and named those words as ones to avoid. Now it names the news, and never them.
     await _analyze()
     system, _ = _prompt(claude)
-    assert system.startswith(
-        "Below, between <news> tags, are news stories, people and places, each numbered."
-    )
-    assert "Write about the events, people and places themselves" in system
+    assert system.startswith("Below, between <news> tags, is the latest news about some ")
     for part in (
-        "- possible_connections: how the stories, people or places relate",
         '- contradictions: where accounts of the same events disagree, or "None apparent."',
-        "- open_questions: questions about the events that the news hasn't answered yet",
+        "- open_questions: three to five questions about the events that the news hasn't "
+        "answered yet",
     ):
         assert part in system, part
-    assert 'such as "Who called the strike, and when will talks resume?"' in system
     for planted in (
         "pins",
         "items",
@@ -377,8 +373,45 @@ async def test_the_system_prompt_is_about_stories_people_and_places_not_its_inpu
         "short reason",
         "the person",
         "the place)",
+        # "Each numbered" invited a list noun: "Three items in this coverage centre on…"
+        "numbered",
+        # Asked for by name, it was in nearly every memo (redesign eval): "both appear in
+        # coverage dated 23 October", "appears in the same coverage set".
+        "same coverage",
+        "covered together",
+        # A floor of 150 words made unrelated stories pad Connections with the reporting.
+        "150",
     ):
         assert planted not in system, planted
+
+
+@pytest.mark.asyncio
+async def test_a_connection_is_something_shared_in_what_happened_or_none(claude):
+    # With no honest way to say nothing connects them, memos on unrelated stories wrote
+    # about the reporting (same day, same coverage, same dateline), and the guard
+    # emptied the section: all three of the redesign eval's failures.
+    await _analyze()
+    system, _ = _prompt(claude)
+    connections = next(line for line in system.split("\n") if "possible_connections" in line)
+    # Only what is shared: memos gave every unconnected pin its own sentence there ("Al-
+    # Momani [1] is reported from Amman, and no link to the other items is stated"). The
+    # best of four eval wordings (redesign-2): see PR #154.
+    assert connections.startswith(
+        "- possible_connections: only what two or more of them share: a person, group, "
+        "place or event in what happened"
+    )
+    assert "The rest is for open_questions." in connections
+    assert 'If they share nothing, "None apparent."' in connections
+
+
+@pytest.mark.asyncio
+async def test_every_open_question_cites_what_it_asks_about(claude):
+    # A memo whose other parts are "None apparent." cites only in its questions, and a
+    # memo with no citation fails (parse_memo).
+    await _analyze()
+    system, _ = _prompt(claude)
+    assert "each citing what it asks about" in system
+    assert 'such as "Who called the strike [1], and when will talks resume?"' in system
 
 
 @pytest.mark.asyncio
@@ -768,6 +801,55 @@ async def test_an_emptied_none_apparent_keeps_its_words(claude):
     reply = _reply(contradictions="None apparent: pin 2 and pin 3 describe separate events.")
     claude.messages.create.return_value = _response(reply)
     assert (await _analyze())["sections"][1]["text"] == "None apparent."
+
+
+@pytest.mark.asyncio
+async def test_connections_may_say_none_apparent(claude):
+    claude.messages.create.return_value = _response(_reply(possible_connections="None apparent."))
+    memo = await _analyze()
+    assert memo["message"] is None
+    assert memo["sections"][0] == {"heading": "Possible connections", "text": "None apparent."}
+
+
+@pytest.mark.asyncio
+async def test_an_emptied_none_apparent_in_connections_keeps_its_words(claude):
+    # What the redesign eval's failures wrote, after "None apparent." this time.
+    said = "None apparent: the two items appear in the same coverage on 23 October."
+    claude.messages.create.return_value = _response(_reply(possible_connections=said))
+    memo = await _analyze()
+    assert memo["message"] is None
+    assert memo["sections"][0]["text"] == "None apparent."
+
+
+# Three cited questions, and nothing else to say: about 45 words.
+QUESTIONS_ONLY = {
+    "possible_connections": "None apparent.",
+    "contradictions": "None apparent.",
+    "open_questions": "Who called the strikes in Paris [1], and when will the unions meet the"
+    " government again? How long will the port in Lagos [2] stay closed, and who ordered"
+    " the closure? What brought France and Nigeria [3] into the news together, and did"
+    " their leaders meet?",
+}
+
+
+@pytest.mark.asyncio
+async def test_a_memo_with_nothing_shared_and_three_questions_stands(claude):
+    # Connections and Contradictions may both be "None apparent." (two words each), so
+    # the floor leaves room for an honest memo of three cited questions.
+    words = sum(len(text.split()) for text in QUESTIONS_ONLY.values())
+    assert board.MIN_MEMO_WORDS <= words <= 50
+    claude.messages.create.return_value = _response(json.dumps(QUESTIONS_ONLY))
+    memo = await _analyze()
+    assert memo["message"] is None
+    assert [c["n"] for c in memo["citations"]] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_a_memo_with_nothing_shared_must_still_cite(claude, cache):
+    uncited = {**QUESTIONS_ONLY, "open_questions": "Who called the strikes? " * 15}
+    claude.messages.create.return_value = _response(json.dumps(uncited))
+    assert (await _analyze())["message"] == board.MEMO_FAILED
+    cache.set.assert_not_awaited()
 
 
 @pytest.mark.asyncio
