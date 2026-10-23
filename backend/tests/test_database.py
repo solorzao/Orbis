@@ -231,6 +231,37 @@ class TestPoolClosed:
         assert database._pool is None
 
     @pytest.mark.asyncio
+    async def test_a_pool_opening_across_a_restart_never_replaces_the_new_one(
+        self, pools, monkeypatch
+    ):
+        """Begun before close_pool, landing after the next open_pool (the app started
+        again in one process): open_pool had cleared the closed flag, so it replaced
+        the new pool, which nothing then closed. Now it is closed as it lands."""
+        opening, release = asyncio.Event(), asyncio.Event()
+        create_pool = database.asyncpg.create_pool  # the fixture's, at once
+
+        async def first_held(*args, **kwargs):
+            if not opening.is_set():
+                opening.set()
+                await release.wait()
+            return await create_pool(*args, **kwargs)
+
+        monkeypatch.setattr(database.asyncpg, "create_pool", first_held)
+        late = asyncio.create_task(database.get_pool())
+        await opening.wait()
+        await database.close_pool()
+        new = await database.open_pool()
+        release.set()
+
+        with pytest.raises(RuntimeError, match="pool is closed"):
+            await late
+        assert pools[0] is new
+        [_, stale] = pools
+        stale.close.assert_awaited_once()
+        new.close.assert_not_awaited()
+        assert await database.get_pool() is new
+
+    @pytest.mark.asyncio
     async def test_startup_opens_it_again_after_a_shutdown(self, pools):
         await database.get_pool()
         await database.close_pool()

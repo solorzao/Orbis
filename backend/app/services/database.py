@@ -54,6 +54,11 @@ _pool: asyncpg.Pool | None = None
 # error, rather than opening a second pool that nothing closes.
 _pool_closed = False
 
+# Counts close_pool's runs: a pool get_pool began opening before one is closed as
+# it lands, even once open_pool has cleared _pool_closed (the app started again in
+# one process, as tests do), so it never replaces the pool opened since.
+_pool_generation = 0
+
 _POOL_CLOSED = "The database pool is closed: the app is shutting down."
 
 
@@ -75,8 +80,9 @@ async def get_pool() -> asyncpg.Pool:
         dsn = settings.database_url
         if not dsn:
             raise RuntimeError("DATABASE_URL must be set in environment variables.")
+        generation = _pool_generation
         pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
-        if _pool_closed:  # close_pool ran while this one opened
+        if _pool_generation != generation:  # close_pool ran while this one opened
             await pool.close()
             raise RuntimeError(_POOL_CLOSED)
         _pool = pool
@@ -87,8 +93,9 @@ async def get_pool() -> asyncpg.Pool:
 async def close_pool() -> None:
     """Gracefully close the connection pool. get_pool raises from then on, until
     open_pool."""
-    global _pool, _pool_closed
+    global _pool, _pool_closed, _pool_generation
     _pool_closed = True
+    _pool_generation += 1
     pool, _pool = _pool, None  # no caller is handed it as it closes
     if pool is not None:
         await pool.close()
