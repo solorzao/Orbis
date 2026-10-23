@@ -1847,12 +1847,20 @@ def test_the_planner_reads_top_stories_arguments_in_its_description():
     assert "params: ['hours', 'topic']" in line
 
 
-def test_the_planner_is_not_offered_read_articles_ignored_urls():
-    """The server picks the pages read_article reads (21b): the planner's URLs are
-    ignored, so it isn't asked for them."""
+def test_the_planner_is_not_offered_read_articles_ignored_arguments():
+    """The server picks the pages read_article reads (21b) and passes the visitor's
+    question itself: the planner's URLs and question are ignored, so it isn't asked
+    for either."""
     line = next(x for x in _planning_system().splitlines() if x.startswith("- read_article:"))
     assert "urls" not in line.lower()
-    assert "params: ['question']" in line
+    assert "params: []" in line
+
+
+def test_the_guard_names_every_planner_tool_and_no_removed_one():
+    for name in (t["name"] for t in RETRIEVAL_TOOLS):
+        assert "internals" in voice.find_leaks(f"{name} found three stories.", surface="copilot")
+    # Removed in 21d (top_stories replaced it): the model is never shown it now.
+    assert "trending_topics" not in voice.LEAK_PATTERNS["internals"].pattern
 
 
 @pytest.mark.asyncio
@@ -2077,6 +2085,24 @@ def test_a_broad_answer_is_two_or_three_stories_then_stops():
     """Review I1: broad answers ran to 4-5 stories and about 250 words."""
     assert "at most two sentences each" in _SYNTHESIS_SYSTEM
     assert "then stop: no further stories" in _SYNTHESIS_SYSTEM
+
+
+def test_a_broad_answer_says_breadth_once_for_the_lead_story():
+    """The 21d evals' broad answers followed every story with "It is covered by 168
+    outlets in 17 countries [2]", and one called the lead "the most widely covered
+    item"."""
+    assert "Say how widely each is covered" not in _SYNTHESIS_SYSTEM
+    once = "Say how widely only the lead story is covered, once, in plain words"
+    assert once in _SYNTHESIS_SYSTEM
+    assert "never call a story an item" in _SYNTHESIS_SYSTEM
+
+
+def test_the_synthesis_prompt_is_no_longer_than_21ds():
+    # 2,969 characters and 503 words at da05360: the polish trims as much as it adds.
+    assert len(_SYNTHESIS_SYSTEM) <= 2969
+    assert len(_SYNTHESIS_SYSTEM.split()) <= 503
+    # The reports carry no links (21b) or tone scores, so the prompt names neither.
+    assert "tone scores" not in _SYNTHESIS_SYSTEM
 
 
 _FIRST = "Putin has agreed to resume talks on the war, according to the Kremlin."

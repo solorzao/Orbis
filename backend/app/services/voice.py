@@ -30,8 +30,8 @@ HOUSE_STYLE = (
     'no "the reader", "the user" or "you could check". Cite only with the bracketed '
     'numbers. Give dates as people say them, such as "21 October", never as '
     'timestamps. Don\'t write "linked to": say "connected to" or "tied to". Say what '
-    "is known plainly, and leave out what isn't instead of describing what your "
-    "material lacks or what you can't confirm. Keep it short."
+    "is known plainly, and leave out what isn't instead of describing what's missing "
+    "or what you can't confirm. Keep it short."
 )
 
 _MONTHS = (
@@ -118,7 +118,7 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
     # "[Sources: …]" block history stores (an answer that writes one could steer the
     # next turn's page reads).
     "internals": re.compile(
-        r"\b(?:semantic_search|keyword_search|graph_traverse|entity_lookup|trending_topics"
+        r"\b(?:semantic_search|keyword_search|graph_traverse|entity_lookup"
         r"|top_stories|read_article|source_url|source_name|published_at|sentiment_score"
         r"|topic_tags|country_code|globe_actions|possible_connections|open_questions"
         r"|co_mentioned|mentioned_in|located_at|about_topic|rel_type|time_range|entity_name"
@@ -183,6 +183,9 @@ _COUNTED_NEWS = (
     r"(?!\s*\[)(?!,)(?!\s+(?:of|\w+ed|were|was|stolen|taken|sold|worth|valued|went"
     r"|remain)\b)(?!\s+(?:are|is)\s+\w+ed\b)"
 )
+# A pin's kind, as the held-out runs' memos named one pin: "the Tel Aviv place item",
+# "the person profile". Lowercase only, so "a People profile" (the magazine) passes.
+_PIN_KINDS = r"(?:place|person|people|organi[sz]ation|org|thread|story|link|article)"
 # The board's words, read in a memo only (surface="memo"): pins, and the
 # memo's story threads, country pairs and story times. The co-pilot has no pins, so
 # to it these are ordinary English ("the two pins in his ankle", "neither pin was
@@ -231,13 +234,16 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         # stolen", "the items include a rifle", "these items are banned", "two items
         # were missing", "the two items stolen", "two of the items were recovered",
         # "both items went missing", "these items place the suspect at the scene".
+        # Entries are counted the same way (held-out runs: "the three entries place the
+        # church"); "three entries in the competition" and "both entries were
+        # disqualified" pass.
         r"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Aa]ll|[Bb]oth|[Ss]everal|[Tt]wo|[Tt]hree|[Ff]our"
         r"|[Ff]ive|[Ss]ix)\s+(?:(?:two|three|four|five|six|other|remaining)\s+)?items\s+"
         rf"{_SET_VERBS}"
         r"|\b(?:(?:[Tt]he|[Tt]hese|[Tt]hose|[Aa]ll)\s+(?:two|three|four|five|six)|[Bb]oth)"
-        rf"\s+items\b{_COUNTED_NEWS}"
+        rf"\s+(?:items|entries)\b{_COUNTED_NEWS}"
         r"|\b(?:[Oo]ne|[Tt]wo|[Tt]hree|[Bb]oth|[Aa]ll|[Ee]ach)\s+of\s+(?:the|these)\s+"
-        rf"(?:(?:two|three|four|five|six)\s+)?items\b{_COUNTED_NEWS}"
+        rf"(?:(?:two|three|four|five|six)\s+)?(?:items|entries)\b{_COUNTED_NEWS}"
         r"|\b[Tt]he\s+item\s+(?:does\s+not|doesn['’]t)\s+(?:confirm|say|show|state|give"
         r"|mention|name|establish)\b"
         # One pin called an item (21c-2 eval), after a name ("the Netanyahu item", "the
@@ -261,6 +267,11 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         r"|\b(?i:place|person|organi[sz]ation)\s+entr(?:y|ies)\b"
         r"|\b(?i:the|this|that|these|those|each|every|only|one|other|all|both)\s+"
         r"(?:only\s+)?(?i:dated|listed|given)\s+items?\b"
+        # One pin by its kind, as an item or a profile (held-out runs): "the Tel Aviv
+        # place item", "the storm story and the person profile". "Place items in clear
+        # bags" (a verb, plural), "a Hollywood profile", "a People profile" and "the
+        # story's profile" pass.
+        rf"|\b{_PIN_KINDS}\s+(?:item|profiles?)\b"
     ),
     # What it was given, as material or items, said to settle nothing: a narrated gap
     # (21c evals). "It is unclear from the material", "unclear from these items", and
@@ -272,9 +283,12 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
     # knew", "officials named in the material have denied", "it is clear from these
     # items that", "the material released by police", "unclear from the statement",
     # "settled on the facts given", "disagree on the facts given in court", "nothing
-    # in the report".
+    # in the report". From the held-out runs: "uncertain from the material", and a
+    # clause that ends on what the material names, gives or shows ("causes that the
+    # material names."); with an object after it, it's reported news ("said that the
+    # material shows the minister knew"), and so is "uncertain from the start".
     "gap": re.compile(
-        r"\b(?:unclear|unknown)\s+(?:from|in|by)\s+(?:the|this|these)\s+"
+        r"\b(?:unclear|unknown|uncertain)\s+(?:from|in|by)\s+(?:the|this|these)\s+"
         rf"(?:gathered\s+|given\s+)?(?:material|items|pins)\b{_NOT_RELEASED}"
         r"|\b(?:not|no|nothing|neither|none|never)\b[^.!?]*?\b(?:clear|known|settled"
         r"|established|confirmed)\s+(?:from|in|by)\s+(?:the|this|these)\s+"
@@ -291,7 +305,9 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         r"|doesn['’]t|didn['’]t)\s+(?:show|say|give|state|name|mention|include|offer"
         r"|provide|explain|confirm|establish|tie|connect)\b"
         r"|\b(?:the|this)\s+(?:gathered\s+|given\s+)?material\s+(?:gives|shows|says|offers"
-        r"|provides|names|lists|contains|includes)\s+(?:no|nothing|little)\b",
+        r"|provides|names|lists|contains|includes)\s+(?:no|nothing|little)\b"
+        r"|\bthat\s+the\s+material\s+(?:names|gives|shows)"
+        r"(?=\s*(?:[.,;:!?\[]|$)|\s+(?:and|or|but)\b)",
         _I,
     ),
     # The board's data model (21a baseline): "story threads", "a country pair", "the
