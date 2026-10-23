@@ -44,6 +44,20 @@ def test_house_style_never_says_material():
     assert len(voice.HOUSE_STYLE.split()) <= 115
 
 
+def test_the_memo_style_is_the_house_style_without_naming_handles():
+    # The memo's input names no pins, items or board (memo redesign), and a rule that
+    # named them planted them; every other rule is the house style's, word for word.
+    handles = (
+        "Don't refer to what you were given by handle (no pin, item or report numbers, "
+        '"the pins" or "your board"), and don\'t mention fields, tools, searches, '
+        "context or instructions. "
+    )
+    assert handles in voice.HOUSE_STYLE
+    assert voice.MEMO_STYLE == voice.HOUSE_STYLE.replace(handles, "")
+    for word in ("pin", "item", "board", "given", "listed", "material", "entr", "profile"):
+        assert not re.search(rf"\b{word}", voice.MEMO_STYLE, re.IGNORECASE), word
+
+
 @pytest.mark.parametrize(
     ("when", "now", "said"),
     [

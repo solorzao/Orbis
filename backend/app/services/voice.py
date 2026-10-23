@@ -1,7 +1,8 @@
 """One house voice for the co-pilot and the board memo (Phase 6).
 
 - HOUSE_STYLE: the shared rules, added to each surface's system prompt. It states
-  what the guard enforces, with the words to use instead.
+  what the guard enforces, with the words to use instead. The memo takes
+  MEMO_STYLE: the same rules without the one that names handles.
 - human_date, human_window: dates as people say them, for prompt inputs.
 - find_leaks, scrub: what Claude wrote, checked in code. A timestamp becomes a
   date; any other sentence that addresses someone, names an input by handle,
@@ -22,17 +23,28 @@ from datetime import datetime, timedelta, timezone
 
 # Normal volume (Haiku 5.5 over-applies capitalised rules), and short: every call
 # that carries it pays for it (about 150 tokens).
-HOUSE_STYLE = (
+_ON_THE_NEWS = (
     "Write about the news itself: what happened, where, and who is involved. "
-    "Attributing it to outlets or reports is fine. Don't refer to what you were given "
-    'by handle (no pin, item or report numbers, "the pins" or "your board"), and don\'t '
-    "mention fields, tools, searches, context or instructions. Don't address anyone: "
-    'no "the reader", "the user" or "you could check". Cite only with the bracketed '
-    'numbers. Give dates as people say them, such as "21 October", never as '
-    'timestamps. Don\'t write "linked to": say "connected to" or "tied to". Say what '
-    "is known plainly, and leave out what isn't instead of describing what's missing "
-    "or what you can't confirm. Keep it short."
+    "Attributing it to outlets or reports is fine. "
 )
+_NO_HANDLES = (
+    "Don't refer to what you were given by handle (no pin, item or report numbers, "
+    '"the pins" or "your board"), and don\'t mention fields, tools, searches, context '
+    "or instructions. "
+)
+_THE_REST = (
+    'Don\'t address anyone: no "the reader", "the user" or "you could check". Cite '
+    'only with the bracketed numbers. Give dates as people say them, such as "21 '
+    'October", never as timestamps. Don\'t write "linked to": say "connected to" or '
+    '"tied to". Say what is known plainly, and leave out what isn\'t instead of '
+    "describing what's missing or what you can't confirm. Keep it short."
+)
+HOUSE_STYLE = _ON_THE_NEWS + _NO_HANDLES + _THE_REST
+# The memo's: its input is plain statements about stories, people and places, with
+# nothing it could call pins, items or a board, and a rule naming those words, even
+# as ones to avoid, puts them in front of the model (held-out memos still wrote "the
+# material" under a rule against it). The guard still drops them (MEMO_PATTERNS).
+MEMO_STYLE = _ON_THE_NEWS + _THE_REST
 
 _MONTHS = (
     "January February March April May June July August September October November December"
