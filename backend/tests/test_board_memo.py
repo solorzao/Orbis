@@ -141,7 +141,7 @@ async def test_pins_are_numbered_in_board_order_from_server_snapshots(claude, re
         "[1] Article: Strikes spread across France (Paris, France; 20 October)\n"
         "[2] Place: Lagos, Nigeria (newest story 20 October)\n"
         "[3] Countries covered together: France and Nigeria\n"
-        "[4] Story thread: Pension strikes (first reported in Paris, France; "
+        "[4] Developing story: Pension strikes (first reported in Paris, France; "
         "latest story 20 October)\n"
         # The place is the top cell of a 100-member sample: where it is in the news.
         "[5] Person: Bola Tinubu (in the news from Abuja, Nigeria)\n"
@@ -165,6 +165,17 @@ async def test_an_entity_pin_says_where_it_is_in_the_news(claude):
     await _analyze()
     assert "[5] Person: Bola Tinubu (in the news from Abuja, Nigeria)" in _lines(claude)
     assert "this week" not in _prompt(claude)[1]
+
+
+@pytest.mark.asyncio
+async def test_a_thread_pin_is_a_developing_story_as_the_system_prompt_calls_it(claude):
+    # "Story thread" planted "the thread" and "thread [2]" in the 21a baseline memos.
+    await _analyze()
+    assert _lines(claude)[3] == (
+        "[4] Developing story: Pension strikes (first reported in Paris, France; "
+        "latest story 20 October)"
+    )
+    assert "thread" not in _prompt(claude)[1].lower()
 
 
 @pytest.mark.asyncio
@@ -251,7 +262,7 @@ async def test_an_expired_pins_saved_text_is_cleaned_filtered_capped_and_marked(
     assert when == "20 October)"
     assert lines[1] == "[2] (left out)"  # an injection phrase, after cleaning
     assert lines[2] == "[3] Countries covered together (saved earlier): Lagos port reopens"
-    assert lines[3].startswith("[4] Story thread: Pension strikes")
+    assert lines[3].startswith("[4] Developing story: Pension strikes")
 
 
 @pytest.mark.asyncio

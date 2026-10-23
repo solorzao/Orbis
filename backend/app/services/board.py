@@ -722,11 +722,14 @@ MEMO_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# Each pin's kind as people say it: "Story thread" is the app's word, and memos
+# echoed it ("the thread", "thread [2]"); MEMO_SYSTEM_PROMPT calls one "a developing
+# story".
 _LABELS = {
     "article": "Article",
     "place": "Place",
     "link": "Countries covered together",
-    "thread": "Story thread",
+    "thread": "Developing story",
     ("entity", "person"): "Person",
     ("entity", "org"): "Organisation",
 }
