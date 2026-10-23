@@ -132,7 +132,8 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
-      - run: pip install ruff pytest pytest-asyncio
+      # pytest and pytest-asyncio come pinned from requirements.txt
+      - run: pip install ruff==0.17.1
       - run: ruff check app/
       - run: ruff format --check app/
       - run: python -c "from app.main import app; print('Import check passed')"

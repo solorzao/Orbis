@@ -49,10 +49,13 @@ for _name in ("httpx", "httpcore"):
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Run startup as the server starts and shutdown as it stops (both below)."""
+    """Run startup as the server starts and shutdown as it stops (both below),
+    also when the server's lifespan task is cancelled instead."""
     await startup()
-    yield
-    await shutdown()
+    try:
+        yield
+    finally:
+        await shutdown()
 
 
 app = FastAPI(title="Orbis API", version="0.1.0", lifespan=lifespan)

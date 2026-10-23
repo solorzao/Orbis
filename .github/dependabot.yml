@@ -23,7 +23,11 @@ updates:
         update-types:
           - minor
           - patch
-  - package-ecosystem: pip
+  # uv, not pip: requirements.txt is compiled by uv pip compile, and this
+  # ecosystem recompiles it with the --universal and --python-version its
+  # header records (pip's would rerun pip-compile without them, dropping the
+  # platform markers).
+  - package-ecosystem: uv
     directory: /backend
     schedule:
       interval: weekly
@@ -31,7 +35,7 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      pip-minor-patch:
+      uv-minor-patch:
         patterns:
           - "*"
         update-types:
