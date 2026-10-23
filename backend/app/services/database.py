@@ -23,6 +23,7 @@ from app.services.titles import story_key
 
 __all__ = [
     "get_pool",
+    "open_pool",
     "close_pool",
     "get_articles",
     "get_nearby_articles",
@@ -48,25 +49,49 @@ logger = logging.getLogger("orbis.database")
 
 _pool: asyncpg.Pool | None = None
 
+# Set by close_pool at shutdown, cleared by open_pool at startup: a query that
+# lands after shutdown (a refill: breaking's, a warm's, a week read's) gets an
+# error, rather than opening a second pool that nothing closes.
+_pool_closed = False
+
+_POOL_CLOSED = "The database pool is closed: the app is shutting down."
+
+
+async def open_pool() -> asyncpg.Pool:
+    """get_pool, at startup: also after a shutdown's close_pool (the app started
+    again in one process, as tests do)."""
+    global _pool_closed
+    _pool_closed = False
+    return await get_pool()
+
 
 async def get_pool() -> asyncpg.Pool:
-    """Return a cached asyncpg connection pool."""
+    """Return a cached asyncpg connection pool. RuntimeError once close_pool has run
+    (the app is shutting down), until open_pool."""
     global _pool
     if _pool is None:
+        if _pool_closed:
+            raise RuntimeError(_POOL_CLOSED)
         dsn = settings.database_url
         if not dsn:
             raise RuntimeError("DATABASE_URL must be set in environment variables.")
-        _pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+        pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+        if _pool_closed:  # close_pool ran while this one opened
+            await pool.close()
+            raise RuntimeError(_POOL_CLOSED)
+        _pool = pool
         logger.info("Database connection pool created.")
     return _pool
 
 
 async def close_pool() -> None:
-    """Gracefully close the connection pool."""
-    global _pool
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
+    """Gracefully close the connection pool. get_pool raises from then on, until
+    open_pool."""
+    global _pool, _pool_closed
+    _pool_closed = True
+    pool, _pool = _pool, None  # no caller is handed it as it closes
+    if pool is not None:
+        await pool.close()
         logger.info("Database connection pool closed.")
 
 

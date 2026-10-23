@@ -20,6 +20,11 @@ T = TypeVar("T")
 
 _redis_client: aioredis.Redis | None = None
 
+# Set by close_redis at shutdown, cleared by open_redis at startup: a refill that
+# lands after shutdown (breaking's, a warm's, a week read's) finds no Redis, a
+# miss, rather than opening a second client that nothing closes.
+_redis_closed = False
+
 # Allowance for a cycle (minutes, mostly embeddings; it invalidates db:* as it
 # ends) and the cache warm after it (app.warm) to finish.
 _WARM_ALLOWANCE = 600
@@ -155,11 +160,22 @@ def _landed(key: str, task: asyncio.Task[Any]) -> None:
         del _in_flight[key]
 
 
+async def open_redis() -> aioredis.Redis | None:
+    """get_redis, at startup: also after a shutdown's close_redis (the app started
+    again in one process, as tests do)."""
+    global _redis_closed
+    _redis_closed = False
+    return await get_redis()
+
+
 async def get_redis() -> aioredis.Redis | None:
-    """Return the shared Redis connection, or None if unavailable."""
+    """Return the shared Redis connection, or None if unavailable, or closed
+    (close_redis: the app is shutting down)."""
     global _redis_client
     if _redis_client is not None:
         return _redis_client
+    if _redis_closed:
+        return None
     if not settings.redis_url:
         logger.warning("REDIS_URL not configured — caching disabled.")
         return None
@@ -183,11 +199,13 @@ async def get_redis() -> aioredis.Redis | None:
 
 
 async def close_redis() -> None:
-    """Close the Redis connection pool on shutdown."""
-    global _redis_client
-    if _redis_client is not None:
-        await _redis_client.aclose()
-        _redis_client = None
+    """Close the Redis connection pool on shutdown. From then on get_redis is None
+    (until open_redis), so the cache helpers miss and write nothing."""
+    global _redis_client, _redis_closed
+    _redis_closed = True
+    client, _redis_client = _redis_client, None  # no caller is handed it as it closes
+    if client is not None:
+        await client.aclose()
         logger.info("Redis connection closed.")
 
 

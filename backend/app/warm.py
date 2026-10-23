@@ -86,10 +86,20 @@ async def warm_caches(
         name = getattr(warmer, "__name__", repr(warmer))
         started = time.monotonic()
         limit = timeouts.get(warmer, timeout)
+        timer = asyncio.timeout(limit)
         try:
-            await asyncio.wait_for(warmer(), limit)
+            async with timer:
+                await warmer()
         except TimeoutError:
-            logger.warning("Cache warm %s timed out after %s s; continuing.", name, limit)
+            if timer.expired():
+                logger.warning("Cache warm %s timed out after %s s; continuing.", name, limit)
+            else:
+                # The warmer's own timeout (breaking's 15 s query), not this limit.
+                logger.warning(
+                    "Cache warm %s failed after %.2f s (TimeoutError); continuing.",
+                    name,
+                    time.monotonic() - started,
+                )
         except Exception:
             logger.warning(
                 "Cache warm %s failed after %.2f s; continuing.",

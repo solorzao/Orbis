@@ -8,6 +8,7 @@ and lengths.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -239,7 +240,8 @@ class TestRequestLine:
 class TestTimeoutBackstop:
     """A TimeoutError a route leaves unhandled is app.main's: a 503 to retry, not a 500
     and a traceback, answered inside the middleware. Its one line names the route as
-    declared, never the path or query as sent."""
+    declared, never the path or query as sent, and where the timeout came from: the
+    error's type, the module and the line, never its message."""
 
     def test_a_route_that_times_out_is_a_503_logged_by_its_route(self, monkeypatch, caplog):
         from fastapi.testclient import TestClient
@@ -267,11 +269,30 @@ class TestTimeoutBackstop:
         assert resp.headers["retry-after"] == "15"
         assert "cache-control" not in resp.headers  # never kept at the edge
         assert resp.json() == {"detail": "Timed out; retry shortly."}
+        # Where it came from: the dossier's asyncio.timeout block, by module and line.
+        source, first = inspect.getsourcelines(entities._load_dossier)
+        line = first + next(i for i, text in enumerate(source) if "asyncio.timeout(" in text)
         lines = [r.getMessage() for r in caplog.records if r.name == "orbis"]
-        assert lines[0] == f"GET {ENTITY_ROUTE} timed out; answered 503."
+        assert lines[0] == (
+            f"GET {ENTITY_ROUTE} timed out (TimeoutError at app.routers.entities:{line});"
+            " answered 503."
+        )
         assert lines[1].startswith(f"GET {ENTITY_ROUTE} -> 503 (")  # log_requests saw it
         assert not [r for r in caplog.records if r.exc_info]
         _no_secret("\n".join(lines))
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_outside_the_apps_code_is_placed_at_its_innermost_frame(self):
+        """The place is code, never data: a module and a line, never a path or message."""
+        from app.main import raised_at
+
+        with pytest.raises(TimeoutError) as caught:
+            await asyncio.wait_for(asyncio.Event().wait(), 0.01)  # asyncio's, from a test
+
+        module, _, line = raised_at(caught.value).rpartition(":")
+        assert module.startswith("asyncio.")  # not this test's frame, further out
+        assert line.isdigit()
+        assert raised_at(TimeoutError(SECRET)) == "unknown:0"  # never raised: no frames
 
     def test_a_cancellation_is_never_answered(self):
         """A cancelled request (a client gone, a shutdown) is no TimeoutError, nor any
@@ -384,16 +405,19 @@ class TestAgent:
 
 class TestOutboundRequests:
     @pytest.mark.asyncio
-    async def test_an_outbound_requests_url_never_reaches_the_info_log(self, caplog):
+    @pytest.mark.parametrize("package", ["httpx", "httpx2"])
+    async def test_an_outbound_requests_url_never_reaches_the_info_log(self, caplog, package):
         """httpx logs each request's URL whole at INFO, and the scraper's URLs can
-        come from a visitor's question (read_article): the app keeps httpx quiet."""
-        import httpx
+        come from a visitor's question (read_article): the app keeps httpx quiet. So
+        too httpx2, the anthropic and openai SDKs' client, which logs the same way."""
+        import importlib
 
-        from app.main import app  # noqa: F401  (importing the app sets httpx's level)
+        from app.main import app  # noqa: F401  (importing the app sets their levels)
 
-        transport = httpx.MockTransport(lambda request: httpx.Response(200))
+        http = importlib.import_module(package)
+        transport = http.MockTransport(lambda request: http.Response(200))
         with caplog.at_level(logging.INFO):
-            async with httpx.AsyncClient(transport=transport) as client:
+            async with http.AsyncClient(transport=transport) as client:
                 await client.get(f"https://news.example/story?q={ENCODED}")
 
         assert "news.example" not in caplog.text

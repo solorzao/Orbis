@@ -1,5 +1,6 @@
 """Tests for the SQL the database helpers send (the pool is mocked; no live database)."""
 
+import asyncio
 import json
 import re
 from contextlib import asynccontextmanager
@@ -171,6 +172,71 @@ async def test_upsert_writes_the_story_key_as_22():
         story_key("", "https://example.com/untitled"),
     ]
     assert rows[0][21] == rows[1][21] != rows[2][21]
+
+
+class TestPoolClosed:
+    """After shutdown's close_pool, a query that lands late (breaking's, a warm's, a
+    week read's) gets a clear error, never a second pool that nothing closes.
+    Startup's open_pool opens one again."""
+
+    @pytest.fixture(autouse=True)
+    def pools(self, monkeypatch):
+        """Every pool get_pool creates, faked; the module's state restored after."""
+        monkeypatch.setattr(database, "_pool", None)
+        monkeypatch.setattr(database, "_pool_closed", False)
+        monkeypatch.setattr(database.settings, "database_url", "postgresql://db.test/orbis")
+        created: list[MagicMock] = []
+
+        async def create_pool(*_args, **_kwargs):
+            pool = MagicMock()
+            pool.close = AsyncMock()
+            created.append(pool)
+            return pool
+
+        monkeypatch.setattr(database.asyncpg, "create_pool", create_pool)
+        return created
+
+    @pytest.mark.asyncio
+    async def test_after_close_pool_get_pool_raises_and_opens_none(self, pools):
+        first = await database.get_pool()
+        await database.close_pool()
+
+        with pytest.raises(RuntimeError, match="pool is closed"):
+            await database.get_pool()
+        assert pools == [first]
+        first.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_pool_still_opening_as_it_closes_is_closed_too(self, pools, monkeypatch):
+        opening, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_create_pool(*_args, **_kwargs):
+            opening.set()
+            await release.wait()
+            pool = MagicMock()
+            pool.close = AsyncMock()
+            pools.append(pool)
+            return pool
+
+        monkeypatch.setattr(database.asyncpg, "create_pool", slow_create_pool)
+        late = asyncio.create_task(database.get_pool())
+        await opening.wait()
+        await database.close_pool()
+        release.set()
+
+        with pytest.raises(RuntimeError, match="pool is closed"):
+            await late
+        [pool] = pools
+        pool.close.assert_awaited_once()
+        assert database._pool is None
+
+    @pytest.mark.asyncio
+    async def test_startup_opens_it_again_after_a_shutdown(self, pools):
+        await database.get_pool()
+        await database.close_pool()
+
+        assert await database.open_pool() is pools[1]
+        assert await database.get_pool() is pools[1]
 
 
 START = datetime(2026, 3, 7, 10, tzinfo=timezone.utc)

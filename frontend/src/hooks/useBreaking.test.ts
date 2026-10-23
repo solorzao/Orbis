@@ -137,7 +137,11 @@ describe("useBreaking", () => {
     expect(result.current).toEqual([]);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(14_999);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1); // not a moment before its Retry-After
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(headlines(result)).toEqual(["Riots in Paris"]);
