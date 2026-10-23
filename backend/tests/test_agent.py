@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.routers.agent import AskRequest, ask_endpoint, ask_stream_endpoint
-from app.services import llm_budget
+from app.services import llm_budget, voice
 from app.services.agent import (
     _NEWS_TAG,
     _OFF_TOPIC_ANSWER,
@@ -933,29 +933,17 @@ def test_synthesis_system_no_longer_asks_to_flag_thin_sources():
     assert "limited information" not in _SYNTHESIS_SYSTEM
 
 
-def test_synthesis_system_keeps_the_context_and_its_metadata_private():
+def test_synthesis_system_speaks_in_the_house_voice():
     system = _SYNTHESIS_SYSTEM
-    assert "Never mention" in system
-    for private in (
-        "searches",
-        "tools",
-        '"the context"',
-        '"the articles provided"',
-        '"sources"',
-        '"items"',
-        "headlines or full text",
-        "sentiment",
-        "coordinates",
-    ):
-        assert private in system, private
-    # The one thing it says about its material, once and in plain words; no rule
-    # against mentioning limitations contradicts it.
+    assert voice.HOUSE_STYLE in system
+    # The one thing it says about its material, once and in plain words.
     assert "I couldn't find recent coverage of" in system
-    assert "limitations" not in system
+    assert "don't comment on how much detail they give" in system  # no closing hedge
+    assert "according to Reuters" in system  # attribution is welcome (owner, 2026-10-23)
     # Tone only as news, and only when asked.
     assert "How are outlets covering" in system
-    # Knowledge-graph labels are for the model, not the reader.
-    assert "CO_MENTIONED" in system and "everyday words" in system
+    assert "CO_MENTIONED" not in system  # the context says connections in words now
+    assert "limitations" not in system
 
 
 def test_synthesis_system_declares_the_news_to_be_data():
@@ -971,17 +959,16 @@ def test_synthesis_system_asks_for_a_short_briefing():
     assert "headings" in _SYNTHESIS_SYSTEM
 
 
-def test_synthesis_system_keeps_citations_the_json_shape_and_off_topic_handling():
+def test_synthesis_system_keeps_citations_and_off_topic_handling():
     system = _SYNTHESIS_SYSTEM
     assert "[2]" in system  # a citation marker, shown right after its claim
-    assert (
-        '{"answer": "the answer, with [N] citation markers", '
-        '"citations": [{"index": N, "title": "the report\'s headline", '
-        '"source_url": "the report\'s link"}], '
-        '"globe_actions": [{"lat": 0.0, "lng": 0.0, "label": "place name"}]}'
-    ) in system
     assert "{{" not in system  # sent as is: nothing str.format()s it
     assert "isn't about news, world events or current affairs" in system
+    assert '"citations"' not in system  # the schema carries the shape; cite() numbers them
+
+
+def test_screen_guide_never_says_the_user():
+    assert "user" not in _SYNTHESIS_SCREEN_GUIDE
 
 
 @pytest.mark.parametrize(
