@@ -282,9 +282,10 @@ BOARD_WORDS_IN_THE_NEWS = [
     "Economists modelled trade for each country pair [3].",
     # The 21c eval's misses made these memo words too (memo only, accepted).
     "The country pairing in the final drew a record audience [1].",
-    "Both items were sold at auction [2].",
-    "One item was a rifle [2].",
+    # A name, then "entry" and a citation, is how memos name a pin ("the Netanyahu
+    # entry [3]"); "Sweden's NATO entry [1]" and "the UK's Eurovision entry [2]" pass.
     "The NATO entry [1] was approved in March.",
+    "The Indian Oscar entry [3] was withdrawn.",  # as "the Tel Aviv entry [3]" (21c-3)
 ]
 
 
@@ -318,7 +319,6 @@ MEMO_21C_LEAKS = [
     ("Storms hit the coast. Two pins name the same town [1] [2].", "handle"),
     ("The Canada and Switzerland pairing [3] is a country pairing with no detail.", "internals"),
     ("The tanker story [1] is set in Petersburg, a standalone news location [5].", "internals"),
-    ("Petersburg [5] is a standalone location.", "internals"),
     # From the 21c-2 eval's read: a pin called an item or an entry, and "the material".
     ("The story [1], the Netanyahu item [2] and the Tel Aviv item [3] agree.", "handle"),
     ("The Netanyahu item lists Washington as its location rather than Israel.", "handle"),
@@ -327,10 +327,29 @@ MEMO_21C_LEAKS = [
     ("Petersburg is the city in the Russia place entry [5].", "handle"),
     ("The place and organisation entries do not conflict with the stories.", "handle"),
     ("The Netanyahu entry [3] places him in Washington.", "handle"),
+    ("The Tel Aviv entry [3] is also in Israel, so the locations fit together.", "handle"),
     ("The given items share no person or place.", "handle"),
     ("The Post's link to that story is not stated in the material.", "gap"),
     ("No shared place or people are named in the material.", "gap"),
     ("The stories concern different subjects and do not conflict on the facts given.", "gap"),
+    # Forms the narrowed patterns (#147 review) still catch.
+    ("The two items describe different events in different countries.", "handle"),
+    ("The three items are separate and do not give conflicting accounts.", "handle"),
+    ("These items all share a Washington setting [1] [2].", "handle"),
+    ("The third item names Washington as its location.", "handle"),
+    ("Washington is named in the item [2].", "handle"),
+    ("The material shows no link between the closure and the storm.", "gap"),
+    # From the 21c-3 and 21c-3b memos, which the narrowing would otherwise let through.
+    ("Both items are developing stories with coverage dated 23 October.", "handle"),
+    ("He is the central figure, so the three items may be covered together.", "handle"),
+    ("The two items may share a source or setting.", "handle"),
+    ("The three items may therefore be covered together as one story.", "handle"),
+    ("The three items all frame Netanyahu as a figure whose return is in doubt.", "handle"),
+    ("The three items focus on the same election question from different angles.", "handle"),
+    ("The agency may be tied to the outbreak, though the item does not confirm this.", "handle"),
+    ("Two of the three items are developing stories from 23 October.", "handle"),
+    ("Two of the items are unrelated in subject.", "handle"),
+    ("The church and the attack are both in Karak, and nothing in them conflicts.", "gap"),
 ]
 
 
@@ -378,6 +397,47 @@ MEMO_21C_NEWS = [
     "Details were listed in the indictment [3].",
     "Aid trucks were denied entry [3].",
     "Sweden's NATO entry [1] was approved.",
+    # The #147 review's probes: governance, theft and spending news a memo may carry.
+    "His appointment was confirmed by the board on Monday [2].",
+    "The dispute was settled by the board in March [1].",
+    "The board does not expect to meet again until March [2].",
+    "Musk will remain on the board [1].",
+    "She is the only woman on the board [3].",
+    "A vacancy on the board was filled in June [2].",
+    "The proposal is now on the board's agenda [3].",
+    "Arsenal put two goals on the board before half-time [2].",
+    "The items were stolen from the museum in 2019 [2].",
+    "The items include a rifle and two pistols [3].",
+    "These items are banned under the new law [3].",
+    "Police said two items were missing [1].",
+    "All items were returned to the museum [2].",
+    "Both items were sold at auction [2].",
+    "The item was stolen in 2019 [2].",
+    "One item was a rifle [2].",
+    "The most valuable item was a Monet painting [2].",
+    "The biggest item is defence spending [3].",
+    "The UK's Eurovision entry [2] finished last.",
+    "The material shows the minister knew of the plan [1].",
+    "Three officials named in the material have denied wrongdoing [2].",
+    # Beside the forms won back from the 21c-3 memos.
+    "Two of the items were recovered by police [1].",
+    "The items may be sold at auction next year [3].",
+    "The item does not work without a charger, the company said [2].",
+    "These items place the suspect at the scene, prosecutors said [2].",
+    "The boxes had nothing in them when police arrived [1].",
+    # The #147 review's probe sentences for the other 21c patterns.
+    "Illegal people entry rose sharply [1].",
+    "The story entry was edited [2].",
+    "The judge said the case could not be settled on the facts given [1].",
+    "No names were given in the material released by police [2].",
+    "It is clear from these items that the shipment was illegal, officials said [2].",
+    "The cause is unknown in the material released [1].",
+    "His role was confirmed in the material released by the court [3].",
+    "Several pins were found in the bread [1].",
+    "Two pins were removed from his ankle [2].",
+    "Some pins carried the party logo [3].",
+    "Officials want a standalone location for the embassy [1].",
+    "The kiosk is a standalone location [2].",
 ]
 
 

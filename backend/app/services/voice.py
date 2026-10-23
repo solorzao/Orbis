@@ -164,6 +164,21 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
 # memo's story threads, country pairs and story times. The co-pilot has no pins, so
 # to it these are ordinary English ("the two pins in his ankle", "neither pin was
 # recovered", "a country pin on his lapel", "the story thread of the season").
+# What the 21c evals' memos had their inputs do as a set, after a count or a
+# determiner: "the three items share", "Three pins describe", "the two items do not
+# give", "both items are developing stories", "the items may be covered together".
+# Items and pins in the news do other things: "were stolen", "include a rifle", "are
+# banned", "were removed from his ankle", "may be sold" (#147 review).
+_SET_VERBS = (
+    r"(?:(?:all|both|also)\s+)?(?:share[sd]?|cover(?:s|ed)?|agree[sd]?|describe[sd]?"
+    r"|concern(?:s|ed)?|conflict(?:s|ed)?|sit|sat|appear(?:s|ed)?|give|gave|name[sd]?"
+    r"|frame[sd]?|focus(?:es|ed)?|(?:are|were)\s+(?:all\s+)?(?:separate|unrelated"
+    r"|developing)|do\s+not|don['’]t|did\s+not|didn['’]t|may\s+(?:also\s+|therefore\s+)?"
+    r"(?:share|be\s+(?:covered|connected|tied|related|part)))\b"
+)
+# Material that was released, seized or found is news ("the material released by
+# police"), not what a memo was given.
+_NOT_RELEASED = r"(?!\s+(?:released|published|seized|leaked|obtained|recovered|found)\b)"
 MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
     # A pin by number or word ("Pin 2", "Pin [2]", "pin two", "the second pin", "the
     # pins", "your board"), and from the 21a baseline by its kind ("the Tel Aviv place
@@ -187,68 +202,91 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         rf"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Bb]oth|[Aa]ll)\s+(?:other\s+)?(?:{_NUMBER_WORDS}"
         r"|other|remaining)\s+pins\b"
         r"|\b(?:[Nn]either|[Ee]ither|[Nn]o|[Ee]very|[Aa]nother)\s+pin\b"
-        # From the 21c eval: the pins as a set, counted where a sentence starts
-        # ("Three pins share a setting"); "two pins in his wrist" passes.
+        # From the 21c eval: the pins as a set, counted where a sentence starts and
+        # doing what a set does ("Three pins share a setting"); "two pins in his wrist"
+        # and "Two pins were removed from his ankle" pass.
         r"|(?:^|[.!?]\s+)\W*(?:Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Several|Many"
-        r"|Some)\s+pins\b"
-        # The board as a place or a source ("the newest coverage on the board", "the
-        # board does not show"). Its directors pass: "on the board of directors", "sits
-        # on the board", "the board voted", "a board meeting", "resigned from the
-        # board", "across the board".
-        r"|(?<!\bsit )(?<!\bsits )(?<!\bsat )(?<!\bsitting )(?<!\bseat )(?<!\bseats )"
-        r"(?<!\bserve )(?<!\bserves )(?<!\bserved )(?<!\bserving )(?<!\bplace )"
-        r"\b[Oo]n\s+(?:the|this|your)\s+board\b(?!\s+(?:of|at|for|since|until)\b)"
-        r"|\b[Tt]he\s+board\s+(?:does\s+not|doesn['’]t|shows|gives|lists)\b"
-        # The items as a set: "the three items share", "several items share", "these
-        # items". Items in the news pass: "several items of clothing", "40 stolen
-        # items", "several items [2]" (a citation), "the items seized in the raid",
-        # "the two items stolen", "the items listed in the indictment".
+        rf"|Some)\s+pins\s+{_SET_VERBS}"
+        # The board as where the news sits or what it shows (21c eval): "the newest
+        # coverage on the board", "these items on the board", "the board does not
+        # show". Governance passes (#147 review): "remain on the board", "the only
+        # woman on the board", "confirmed by the board", "the board does not expect to
+        # meet", "on the board's agenda", "two goals on the board".
+        r"|\b(?i:coverage|reporting|stor(?:y|ies)|items?|pins?|headlines?|news)\s+on\s+"
+        r"(?:the|this|your)\s+board\b"
+        r"|\b[Tt]he\s+board\s+(?:does\s+not|doesn['’]t)\s+(?:show|say|give|list|state"
+        r"|mention|name|include)\b"
+        # The items as a set (_SET_VERBS), and "two of the items are unrelated", "the
+        # item does not confirm". Items in the news pass (#147 review): "the items were
+        # stolen", "the items include a rifle", "these items are banned", "two items
+        # were missing", "the items may be sold", "two of the items were recovered",
+        # "these items place the suspect at the scene".
         r"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Aa]ll|[Bb]oth|[Ss]everal|[Tt]wo|[Tt]hree|[Ff]our"
-        r"|[Ff]ive|[Ss]ix)\s+(?:(?:two|three|four|five|six|other|remaining)\s+)?items\b"
-        r"(?!\s*\[)(?!\s+(?:of|\w+ed|stolen|taken|worth|valued|on\s+(?:sale|display))\b)"
-        # One pin called an item or an entry (21c-2 eval): "the Netanyahu item [2]",
-        # "the only item linking countries", "the only dated item", "the Netanyahu entry
-        # [3]", "the Russia place entry", "the place and organisation entries", "the
-        # given items". News passes: "the only item on the agenda", "the item in
-        # question", "the most expensive item sold", "the entry of aid convoys", "the
-        # US entry ban" and "Police listed items stolen"; an entry is a pin only before
-        # its number or after a pin's kind.
-        r"|\b(?:[Tt]he|[Tt]his|[Tt]hat|[Ee]ach|[Ee]very|[Oo]nly|[Oo]ne|[Oo]ther)\s+"
-        r"(?:[\w’'-]+\s+){0,2}item\b"
+        r"|[Ff]ive|[Ss]ix)\s+(?:(?:two|three|four|five|six|other|remaining)\s+)?items\s+"
+        rf"{_SET_VERBS}"
+        r"|\b(?:[Oo]ne|[Tt]wo|[Tt]hree|[Bb]oth|[Aa]ll|[Nn]one|[Ee]ach)\s+of\s+(?:the|these)\s+"
+        r"(?:(?:two|three|four|five|six)\s+)?items\s+(?:are|is|were|was)\s+(?:all\s+)?"
+        r"(?:separate|unrelated|developing)\b"
+        r"|\b[Tt]he\s+item\s+(?:does\s+not|doesn['’]t)\s+(?:confirm|say|show|state|give"
+        r"|mention|name|establish)\b"
+        # One pin called an item (21c-2 eval), after a name ("the Netanyahu item", "the
+        # Tel Aviv item [3]"), an ordinal ("the third item") or "only" ("the only
+        # dated item", "the only item linking countries"), or before its number ("the
+        # item [2]"). News passes: "the item was stolen", "the most valuable item",
+        # "the UK's Eurovision item" (a possessive), "the only item on the agenda",
+        # "the first item recovered".
+        r"|(?:\b[Tt]he\s+(?:[A-Z][\w-]*\s+){1,2}"
+        rf"|\b[Tt]he\s+{_ORDINALS}\s+"
+        r"|\b(?:[Tt]he\s+)?[Oo]nly\s+(?:[\w-]+\s+)?)item\b"
         r"(?!\s+(?:of|on|in|to|into|for|\w+ed|sold|stolen|taken|worth)\b)"
-        r"|\b(?:[Tt]he|[Tt]his|[Tt]hat|[Ee]ach|[Ee]very|[Oo]nly|[Oo]ne|[Oo]ther)\s+"
-        r"(?:[\w’'-]+\s+){0,2}entr(?:y|ies)\s*\[\s*\d"
-        r"|\b(?i:place|person|people|organi[sz]ation|org|thread|story|link|article)\s+"
-        r"entr(?:y|ies)\b"
+        r"|\b[Tt]he\s+item\s*\[\s*\d"
+        # One pin called an entry: after a name and before its number ("the Netanyahu
+        # entry [3]", "the Tel Aviv entry [3]"), or after a pin's kind ("the Russia
+        # place entry", "the place and organisation entries"). "The UK's Eurovision
+        # entry [2]" (a possessive), "Sweden's NATO entry [1]", "the entry of aid
+        # convoys", "the US entry ban" and "people entry" pass.
+        r"|\b[Tt]he\s+(?:[A-Z][\w-]*\s+){1,2}entr(?:y|ies)\s*\[\s*\d"
+        r"|\b(?i:place|person|organi[sz]ation)\s+entr(?:y|ies)\b"
         r"|\b(?i:the|this|that|these|those|each|every|only|one|other|all|both)\s+"
         r"(?:only\s+)?(?i:dated|listed|given)\s+items?\b"
     ),
-    # What it was given, as material or items, said to settle nothing (21c eval): "it is
-    # unclear from the material", "not settled from this material", "unclear from
-    # these items", "confirmed in the material", "nothing in the material", "the
-    # material gives no…". "Unclear from the statement", "the material was seized",
-    # "leaked material shows" and "nothing in the report" pass. From the 21c-2 eval:
-    # "not stated in the material", "named in the material", "on the facts given"
-    # ("the facts given in court" and "listed in the indictment" pass).
+    # What it was given, as material or items, said to settle nothing: a narrated gap
+    # (21c evals). "It is unclear from the material", "unclear from these items", and
+    # after a negation "not settled from this material", "neither … is confirmed in
+    # the material", "not stated in the material", "no place is named in the
+    # material"; "nothing in the material", "nothing in them conflicts", "the
+    # material gives no…", "the material does not show", "do not conflict on the
+    # facts given". News passes (#147 review): "the material shows the minister
+    # knew", "officials named in the material have denied", "it is clear from these
+    # items that", "the material released by police", "unclear from the statement",
+    # "settled on the facts given", "nothing in the report".
     "gap": re.compile(
-        r"\b(?:unclear|clear|unknown|settled|established|confirmed)\s+(?:from|in|by)\s+"
-        r"(?:the|this|these)\s+(?:gathered\s+|given\s+)?(?:material|items|pins|board)\b"
-        r"|\b(?:stated|named|given|mentioned|shown|listed)\s+in\s+(?:the|this)\s+"
-        r"(?:gathered\s+|given\s+)?material\b"
-        r"|\bon\s+the\s+facts\s+given\b"
+        r"\b(?:unclear|unknown)\s+(?:from|in|by)\s+(?:the|this|these)\s+"
+        rf"(?:gathered\s+|given\s+)?(?:material|items|pins)\b{_NOT_RELEASED}"
+        r"|\b(?:not|no|nothing|neither|none|never)\b[^.!?]*?\b(?:clear|known|settled"
+        r"|established|confirmed)\s+(?:from|in|by)\s+(?:the|this|these)\s+"
+        rf"(?:gathered\s+|given\s+)?(?:material|items|pins)\b{_NOT_RELEASED}"
+        r"|\b(?:not|no|nothing|neither|none|never)\b[^.!?]*?\b(?:stated|named|given"
+        r"|mentioned|shown|listed)\s+in\s+(?:the|this)\s+(?:gathered\s+|given\s+)?"
+        rf"material\b{_NOT_RELEASED}"
+        r"|\b(?:conflict|disagree|contradict|differ)\w*\s+on\s+the\s+facts\s+given\b"
         r"|\bnothing\s+in\s+(?:the|this|these)\s+(?:gathered\s+|given\s+)?"
         r"(?:material|items|pins)\b"
-        r"|\b(?:the|this)\s+(?:gathered\s+|given\s+)?material\s+(?:gives|shows|says|does"
-        r"|doesn['’]t|did|didn['’]t|offers|provides)\b",
+        r"|\bnothing\s+in\s+them\s+(?:conflicts|contradicts|disagrees)\b"
+        r"|\b(?:the|this)\s+(?:gathered\s+|given\s+)?material\s+(?:(?:does|did)\s+not"
+        r"|doesn['’]t|didn['’]t)\s+(?:show|say|give|state|name|mention|include|offer"
+        r"|provide|explain|confirm|establish|tie|connect)\b"
+        r"|\b(?:the|this)\s+(?:gathered\s+|given\s+)?material\s+(?:gives|shows|says|offers"
+        r"|provides|names|lists|contains|includes)\s+(?:no|nothing|little)\b",
         _I,
     ),
     # The board's data model (21a baseline): "story threads", "a country pair", "the
     # newest-story time window", "latest-story timestamp"; from the 21c eval, "a
-    # country pairing" and "a standalone news location". "A news thread" and "the
-    # latest story from the BBC" pass.
+    # country pairing" and "a standalone news location". "A news thread", "the latest
+    # story from the BBC" and "a standalone location for the embassy" pass.
     "internals": re.compile(
         r"\bstory\s+threads?\b|\bcountry\s+pair(?:ing)?s?\b"
-        r"|\bstandalone\s+(?:news\s+)?locations?\b"
+        r"|\bstandalone\s+news\s+locations?\b"
         r"|\b(?:newest|latest)[\s-]+story\s+(?:time(?:\s+window)?|timestamp|dated?)\b",
         _I,
     ),
