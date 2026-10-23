@@ -40,7 +40,7 @@ from app.services.database import _cell_box, get_pool
 from app.services.entities import newest_per_story, resolve_entity, top_places
 from app.services.places import display_place
 from app.services.thread_reads import merge_chain, shown_text
-from app.services.thread_synopsis import _acceptable, _clean_reply
+from app.services.thread_synopsis import _clean_reply  # _acceptable stays with synopses
 from app.services.threads import GENERIC_ENTITY_SHARE, GENERIC_SQL
 from app.services.titles import display_title
 from app.services.urls import web_url
@@ -687,6 +687,8 @@ MIN_PINS = 2
 NOT_ENOUGH_PINS = "Not enough on the board to analyse: pin at least two items."
 # Shown, not cached, when Claude's reply isn't a usable memo (as _call_claude's failures).
 MEMO_FAILED = "Summary generation failed."
+# A Contradictions section the guard emptied, that said there were none, says so.
+NONE_APPARENT = "None apparent."
 
 # Static: the pins (data) go in the user turn only. Written for someone following
 # the news; voice.HOUSE_STYLE carries the rules the guard enforces. The JSON shape
@@ -836,31 +838,52 @@ def _split_groups(text: str) -> str:
     )
 
 
-def parse_memo(reply: str, items: list[BoardItem], usable: set[int]) -> dict | None:
-    """The reply as a memo with its citations mapped to pins, or None when it isn't
-    exactly the expected JSON object or fails validation: a section empty, an
-    injection phrase or "linked to", a citation of a pin without text (or none at
-    all), or a length far from the 150-250 words asked for."""
+def parse_memo(reply: str, items: list[BoardItem], usable: set[int], now: datetime) -> dict | None:
+    """The reply as a memo with its citations mapped to pins, after the voice guard;
+    None when it isn't exactly the expected JSON object or fails validation: an
+    injection phrase anywhere, a length far from the 150-250 words asked for (as
+    written: sentences the guard drops don't count against it), a section the guard
+    empties, or a citation of a pin without text (or none at all). *now* decides
+    whether a date the guard rewrites keeps its year."""
     try:
         data = json.loads(reply)
     except ValueError:
         return None
     if not isinstance(data, dict) or set(data) != {key for key, _ in MEMO_SECTIONS}:
         return None
-    sections, cited, words = [], set(), 0
-    for key, heading in MEMO_SECTIONS:
+    written = {}
+    for key, _ in MEMO_SECTIONS:
         if not isinstance(data[key], str):
             return None
         text = _split_groups(_clean_reply(data[key]))
-        if not text or not _acceptable(text):
+        # An injection phrase means the reply was steered: none of it is used.
+        if not text or has_injection_pattern(text):
+            return None
+        written[key] = text
+    if not MIN_MEMO_WORDS <= sum(len(t.split()) for t in written.values()) <= MAX_MEMO_WORDS:
+        return None
+    sections, cited, dropped, kinds = [], set(), 0, set()
+    for key, heading in MEMO_SECTIONS:
+        shown = voice.scrub(written[key], now, surface="memo")
+        dropped += shown.dropped
+        kinds.update(shown.kinds)
+        text = shown.text
+        said_none = key == "contradictions" and written[key].lower().startswith("none apparent")
+        if not text and said_none:
+            text = NONE_APPARENT
+        if not text:
             return None
         numbers = {int(n) for n in _CITATION.findall(text)}
         if not numbers <= usable:
             return None
         cited |= numbers
-        words += len(text.split())
         sections.append({"heading": heading, "text": text})
-    if not cited or not MIN_MEMO_WORDS <= words <= MAX_MEMO_WORDS:
+    if kinds:
+        # Counts and kinds only: pins can carry a visitor's saved text (#107).
+        logger.info(
+            "Board memo voice guard: %d sentences dropped (%s).", dropped, ", ".join(sorted(kinds))
+        )
+    if not cited:
         return None
     citations = [{"n": n, "item": items[n - 1].id} for n in sorted(cited)]
     return {"sections": sections, "citations": citations, "message": None}
@@ -871,7 +894,8 @@ def memo_cache_key(items: list[BoardItem], saved: list[dict | None]) -> str:
     the text the client sent, so no client's text can reach another's memo."""
     sent = [[item.id, kept] for item, kept in zip(items, saved)]
     digest = hashlib.sha256(json.dumps(sent, sort_keys=True, default=str).encode()).hexdigest()
-    return f"board:analyze:v1:{digest}"
+    # v2: the Phase 6 prompt and guard; v1 memos aren't shown again.
+    return f"board:analyze:v2:{digest}"
 
 
 def _message(text: str) -> dict:
@@ -912,7 +936,7 @@ async def analyze_board(items: list[BoardItem], saved: list[dict | None], now: d
         )
     except SummaryUnavailable as exc:
         return _message(str(exc))
-    memo = parse_memo(reply, items, usable)
+    memo = parse_memo(reply, items, usable, now)
     if memo is None:
         logger.warning("Board memo: unusable reply for %d pins; not cached.", len(items))
         return _message(MEMO_FAILED)
