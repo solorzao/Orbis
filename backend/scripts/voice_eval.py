@@ -402,8 +402,8 @@ def score(
     misses are counted in the manual read."""
     usage = getattr(response, "usage", None)
     return {
-        "raw_kinds": voice.find_leaks(raw, surface),
-        "shown_kinds": voice.find_leaks(shown, surface),
+        "raw_kinds": voice.find_leaks(raw, surface=surface),
+        "shown_kinds": voice.find_leaks(shown, surface=surface),
         "outcome": outcome(shown),
         "guard_emptied": emptied_by_guard(surface, raw, sections),
         "refused": refused,

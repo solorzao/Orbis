@@ -7,9 +7,9 @@
   date; any other sentence that addresses someone, names an input by handle,
   names internals or coordinates, says "linked to" or narrates a gap in its
   material is dropped. Attribution ("the reports say", "according to Reuters")
-  is never a leak (owner decision, 2026-10-23). Each reads its surface: the memo
-  also checks the board's words (pins, story threads), which the co-pilot, having
-  no pins, reads as ordinary English.
+  is never a leak (owner decision, 2026-10-23). Each takes its surface, keyword
+  only and required: the memo also checks the board's words (pins, story
+  threads), which the co-pilot, having no pins, reads as ordinary English.
 
 Pure functions, no I/O: a leak never costs a second Claude call.
 """
@@ -121,15 +121,15 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\b(?:semantic_search|keyword_search|graph_traverse|entity_lookup|trending_topics"
         r"|top_stories|read_article|source_url|source_name|published_at|sentiment_score"
         r"|topic_tags|country_code|globe_actions|possible_connections|open_questions"
-        r"|co_mentioned|mentioned_in|located_at|about_topic|screen\s+context"
-        r"|system\s+prompt|knowledge\s+graph|these\s+instructions)\b"
+        r"|co_mentioned|mentioned_in|located_at|about_topic|rel_type|time_range|entity_name"
+        r"|off_topic|screen\s+context|system\s+prompt|knowledge\s+graph|these\s+instructions)\b"
         r"|<\s*/?\s*(?:news|pins|headlines)\s*>"
         r"|\[\s*sources\s*:"
         # A placeholder name (21a baseline: twelve "_json_placeholder" lines in one
-        # answer). Only with a leading underscore: "john_doe", "report_final",
-        # "COVID_19" and "passwords_2024.xlsx" are news, and so are "@gov_press" and
-        # "#breaking_news".
-        r"|(?-i:(?<![\w@#/.])_[a-z]+(?:_[a-z0-9]+)*\b)(?![@.]\w)",
+        # answer): a leading underscore and two parts at least. "john_doe",
+        # "report_final", "COVID_19" and "passwords_2024.xlsx" are news, and so are
+        # "@gov_press", "#breaking_news" and italics ("_in absentia_").
+        r"|(?-i:(?<![\w@#/.])_[a-z]+(?:_[a-z0-9]+)+\b)(?![@.]\w)",
         _I,
     ),
     # Coordinates copied from the inputs: "(38.96, 35.24)", "38.9637, 35.2433".
@@ -160,7 +160,7 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
         _I,
     ),
 }
-# The board's words, read in a memo only (find_leaks(text, "memo")): pins, and the
+# The board's words, read in a memo only (surface="memo"): pins, and the
 # memo's story threads, country pairs and story times. The co-pilot has no pins, so
 # to it these are ordinary English ("the two pins in his ankle", "neither pin was
 # recovered", "a country pin on his lapel", "the story thread of the season").
@@ -245,13 +245,14 @@ class Scrubbed:
     kinds: tuple[str, ...] = ()  # leak kinds found, sorted
 
 
-def find_leaks(text: str, surface: str = "copilot") -> list[str]:
+def find_leaks(text: str, *, surface: str) -> list[str]:
     """The kinds of leak in *text*, sorted; [] when it reads as news.
 
-    *surface* is who wrote it: "copilot" (the default) reads LEAK_PATTERNS, and
-    "memo" reads MEMO_PATTERNS too, the board's words (21b calls it with "copilot",
-    21c with "memo"). Links are never checked, and quoted speech (the speaker's
-    words) only for AS_WRITTEN's kinds.
+    *surface* is who wrote it, and every caller says so (no default: a memo read by
+    the co-pilot's rules would pass "Pin 2 is Lagos."). "copilot" reads
+    LEAK_PATTERNS, and "memo" reads MEMO_PATTERNS too, the board's words: 21b passes
+    surface="copilot", 21c surface="memo". Links are never checked, and quoted
+    speech (the speaker's words) only for AS_WRITTEN's kinds.
     """
     if surface not in SURFACES:
         raise ValueError(f"surface is one of {SURFACES}")
@@ -298,13 +299,14 @@ def _rewrite_timestamps(text: str, now: datetime) -> tuple[str, int]:
     return TIMESTAMP.sub(said, text), count
 
 
-def scrub(text: str, now: datetime | None = None, surface: str = "copilot") -> Scrubbed:
+def scrub(text: str, now: datetime | None = None, *, surface: str) -> Scrubbed:
     """*text* with timestamps said as dates and every leaking sentence dropped.
 
     Works line by line, so paragraphs and Markdown list items keep their shape; a
     list item whose every sentence leaks goes, mark and all. [N] markers stay with
     the sentence they follow. *now* decides when a date keeps its year, and
-    *surface* which patterns apply (find_leaks).
+    *surface* which patterns apply, with no default (find_leaks): 21b passes
+    surface="copilot", 21c surface="memo".
     """
     if surface not in SURFACES:
         raise ValueError(f"surface is one of {SURFACES}")
@@ -317,7 +319,7 @@ def scrub(text: str, now: datetime | None = None, surface: str = "copilot") -> S
         prefix = mark.group(1) if mark else ""
         kept = []
         for sentence in _sentences(line[len(prefix) :]):
-            found = find_leaks(sentence, surface)
+            found = find_leaks(sentence, surface=surface)
             if found:
                 kinds.update(found)
                 dropped += 1

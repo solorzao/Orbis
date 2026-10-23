@@ -92,7 +92,7 @@ OWNER_EXAMPLES = [
 
 @pytest.mark.parametrize(("surface", "sentence", "kind"), OWNER_EXAMPLES)
 def test_the_owners_examples_are_caught_where_they_were_seen(surface, sentence, kind):
-    assert kind in voice.find_leaks(sentence, surface)
+    assert kind in voice.find_leaks(sentence, surface=surface)
 
 
 # Leaks on both surfaces.
@@ -118,6 +118,11 @@ LEAKS = [
     ("No date is given for the vote.", "gap"),
     ("I searched for recent coverage of the strike.", "gap"),
     ("I don’t have access to the full articles.", "gap"),
+    # The planner's argument names.
+    ("Its rel_type was set.", "internals"),
+    ("The time_range covered a day.", "internals"),
+    ("The entity_name was blank.", "internals"),
+    ("The question was marked off_topic.", "internals"),
     # Found in the 21a baseline's manual read (2026-10-23).
     ("_json_placeholder", "internals"),
     ("Israel said it thwarted an attack, with no details in the coverage I found [2].", "gap"),
@@ -135,7 +140,7 @@ LEAKS = [
 @pytest.mark.parametrize("surface", voice.SURFACES)
 @pytest.mark.parametrize(("sentence", "kind"), LEAKS)
 def test_find_leaks_catches(surface, sentence, kind):
-    assert kind in voice.find_leaks(sentence, surface)
+    assert kind in voice.find_leaks(sentence, surface=surface)
 
 
 # The board's words: pins, and the memo's story threads, country pairs and story
@@ -167,8 +172,8 @@ BOARD_LEAKS = [
 
 @pytest.mark.parametrize(("sentence", "kind"), BOARD_LEAKS)
 def test_board_words_are_leaks_in_a_memo_only(sentence, kind):
-    assert kind in voice.find_leaks(sentence, "memo")
-    assert kind not in voice.find_leaks(sentence, "copilot")
+    assert kind in voice.find_leaks(sentence, surface="memo")
+    assert kind not in voice.find_leaks(sentence, surface="copilot")
 
 
 # News on both surfaces: each kind's near misses, and attribution among them.
@@ -231,6 +236,9 @@ NEWS = [
     "A spreadsheet named passwords_2024.xlsx was leaked [1].",
     "The leaked file name report_final was traced to an aide [1].",
     "Hackers used user names like john_doe to log in [2].",
+    # Markdown italics, not a placeholder name.
+    "He was tried _in absentia_ in Paris [1].",
+    "The group is the _de facto_ government in the north [2].",
     "Food is not given to detainees, the report says [2].",
     "The motive is not stated in court documents [1].",
     "Terms are not stated publicly, the company said [2].",
@@ -258,7 +266,7 @@ NEWS = [
 @pytest.mark.parametrize("surface", voice.SURFACES)
 @pytest.mark.parametrize("sentence", NEWS)
 def test_find_leaks_lets_news_through(surface, sentence):
-    assert voice.find_leaks(sentence, surface) == []
+    assert voice.find_leaks(sentence, surface=surface) == []
 
 
 # Ordinary English to the co-pilot, which has no pins; words about pins in a memo.
@@ -278,75 +286,94 @@ BOARD_WORDS_IN_THE_NEWS = [
 
 @pytest.mark.parametrize("sentence", BOARD_WORDS_IN_THE_NEWS)
 def test_board_words_are_english_to_the_copilot(sentence):
-    assert voice.find_leaks(sentence) == []
-    assert voice.find_leaks(sentence, "memo") != []
+    assert voice.find_leaks(sentence, surface="copilot") == []
+    assert voice.find_leaks(sentence, surface="memo") != []
 
 
 def test_a_surface_is_the_copilot_or_the_memo():
     with pytest.raises(ValueError):
-        voice.find_leaks("Floods hit Valencia [1].", "board")
+        voice.find_leaks("Floods hit Valencia [1].", surface="board")
+    with pytest.raises(ValueError):
+        voice.scrub("Floods hit Valencia [1].", NOW, surface="board")
+
+
+def test_a_caller_must_say_its_surface():
+    # A memo read by the co-pilot's rules would let "Pin 2 is Lagos." through.
+    with pytest.raises(TypeError):
+        voice.find_leaks("Pin 2 is Lagos.")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        voice.scrub("Pin 2 is Lagos.", NOW)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        voice.find_leaks("Pin 2 is Lagos.", "memo")  # type: ignore[misc]
 
 
 def test_scrub_drops_only_the_leaking_sentence_and_keeps_citations():
     text = "Talks resumed in Cairo [2]. Pin 3 is Steve Witkoff. Egypt hosted them [1]."
-    shown = voice.scrub(text, NOW, "memo")
+    shown = voice.scrub(text, NOW, surface="memo")
     assert shown.text == "Talks resumed in Cairo [2]. Egypt hosted them [1]."
     assert (shown.dropped, shown.rewritten, shown.kinds) == (1, 0, ("handle",))
 
 
 def test_scrub_turns_a_timestamp_into_a_date():
-    shown = voice.scrub("The vote was held on 2026-10-21 11:15 UTC [1].", NOW)
+    shown = voice.scrub("The vote was held on 2026-10-21 11:15 UTC [1].", NOW, surface="copilot")
     assert shown.text == "The vote was held on 21 October [1]."
     assert (shown.dropped, shown.rewritten, shown.kinds) == (0, 1, ("timestamp",))
 
 
 def test_scrub_keeps_the_year_of_another_year():
-    shown = voice.scrub("The treaty was signed on 2019-06-01 [2].", NOW)
+    shown = voice.scrub("The treaty was signed on 2019-06-01 [2].", NOW, surface="copilot")
     assert shown.text == "The treaty was signed on 1 June 2019 [2]."
 
 
 def test_scrub_leaves_dates_in_links_alone():
     text = "Details are at https://example.com/2026-10-21/story [1]."
-    assert voice.scrub(text, NOW) == voice.Scrubbed(text)
+    assert voice.scrub(text, NOW, surface="copilot") == voice.Scrubbed(text)
 
 
 def test_scrub_drops_a_sentence_whose_timestamp_is_no_date():
-    shown = voice.scrub("Floods hit Valencia [1]. Updated 2026-13-45 by the desk.", NOW)
+    shown = voice.scrub(
+        "Floods hit Valencia [1]. Updated 2026-13-45 by the desk.", NOW, surface="copilot"
+    )
     assert (shown.text, shown.kinds) == ("Floods hit Valencia [1].", ("timestamp",))
 
 
 def test_scrub_keeps_lists_and_paragraphs_and_drops_a_bullet_that_leaks():
     text = "- Strikes spread to Lyon [1].\n- Pin 2 is a union.\n\nUnions meet on Monday [2]."
-    shown = voice.scrub(text, NOW, "memo")
+    shown = voice.scrub(text, NOW, surface="memo")
     assert shown.text == "- Strikes spread to Lyon [1].\n\nUnions meet on Monday [2]."
 
 
 def test_scrub_does_not_split_abbreviations():
     text = "The U.S. President met Mr. Macron in Paris [1]. The user asked why."
-    assert voice.scrub(text, NOW).text == "The U.S. President met Mr. Macron in Paris [1]."
+    assert (
+        voice.scrub(text, NOW, surface="copilot").text
+        == "The U.S. President met Mr. Macron in Paris [1]."
+    )
 
 
 def test_a_citation_after_a_full_stop_stays_with_its_sentence():
     text = "Floods hit Valencia. [2] The user asked why. Rain eased [1]."
-    assert voice.scrub(text, NOW).text == "Floods hit Valencia. [2] Rain eased [1]."
+    assert (
+        voice.scrub(text, NOW, surface="copilot").text == "Floods hit Valencia. [2] Rain eased [1]."
+    )
 
 
 def test_scrub_keeps_quoted_speech():
     text = '"I can\'t confirm anything," the minister said [1].'
-    assert voice.scrub(text, NOW) == voice.Scrubbed(text)
+    assert voice.scrub(text, NOW, surface="copilot") == voice.Scrubbed(text)
 
 
 def test_scrub_of_an_all_leaking_reply_is_empty():
-    shown = voice.scrub("The user asked about Lagos. Pin 1 is Lagos.", NOW, "memo")
+    shown = voice.scrub("The user asked about Lagos. Pin 1 is Lagos.", NOW, surface="memo")
     assert (shown.text, shown.dropped) == ("", 2)
 
 
 def test_scrub_reads_a_reply_as_its_surface():
     text = "Surgeons removed the two pins from his ankle [3]. He walked out [1]."
-    assert voice.scrub(text, NOW) == voice.Scrubbed(text)
-    assert voice.scrub(text, NOW, "memo").text == "He walked out [1]."
+    assert voice.scrub(text, NOW, surface="copilot") == voice.Scrubbed(text)
+    assert voice.scrub(text, NOW, surface="memo").text == "He walked out [1]."
 
 
 def test_scrub_leaves_clean_text_alone():
     text = "Ceasefire talks resumed in Cairo [2].\n\nEgypt and Qatar are mediating [1] [3]."
-    assert voice.scrub(text, NOW) == voice.Scrubbed(text)
+    assert voice.scrub(text, NOW, surface="copilot") == voice.Scrubbed(text)
