@@ -845,6 +845,21 @@ async def test_a_memo_with_nothing_shared_and_three_questions_stands(claude):
 
 
 @pytest.mark.asyncio
+async def test_a_short_honest_memo_stands(claude):
+    # The redesign evals' shortest memo was 42 words (memo-6: two "None apparent." and
+    # three short questions): the floor leaves room below it.
+    short = {
+        **QUESTIONS_ONLY,
+        "open_questions": "Who called the strikes in Paris [1]? How long will the port in"
+        " Lagos [2] stay closed? What brought France and Nigeria [3] into the news"
+        " together this week?",
+    }
+    assert sum(len(text.split()) for text in short.values()) == 33
+    claude.messages.create.return_value = _response(json.dumps(short))
+    assert (await _analyze())["message"] is None
+
+
+@pytest.mark.asyncio
 async def test_a_memo_with_nothing_shared_must_still_cite(claude, cache):
     uncited = {**QUESTIONS_ONLY, "open_questions": "Who called the strikes? " * 15}
     claude.messages.create.return_value = _response(json.dumps(uncited))
@@ -854,24 +869,24 @@ async def test_a_memo_with_nothing_shared_must_still_cite(claude, cache):
 
 @pytest.mark.asyncio
 async def test_dropped_sentences_never_push_a_memo_under_the_word_floor(claude):
-    # 119 words as written; 38 once the guard drops the three handles in each section.
+    # 106 words as written; 25 once the guard drops the three handles in each section.
     # It still stands: the floor is the reply's, not the guard's (review I1).
     leaks = (
         " Pin 2 is Lagos. The pins share a place and a week of coverage in Paris and"
         " Lagos. Your board mixes two stories from the same week."
     )
     reply = {
-        "possible_connections": "The strikes in France [1] and the pension thread [4] may"
-        " be one walkout." + leaks,
-        "contradictions": "None apparent: the stories agree on the walkouts in Paris [1] [4]."
-        + leaks,
-        "open_questions": "It is unclear whether ECOWAS [6] is named in the French coverage."
-        + leaks,
+        "possible_connections": "The strikes [1] [4] may be one walkout." + leaks,
+        "contradictions": "None apparent: the walkouts in Paris agree [1] [4]." + leaks,
+        "open_questions": "Will ECOWAS [6] join the talks in Paris?" + leaks,
     }
+    written = sum(len(text.split()) for text in reply.values())
     claude.messages.create.return_value = _response(json.dumps(reply))
     memo = await _analyze()
     assert memo["message"] is None
-    assert len(" ".join(s["text"] for s in memo["sections"]).split()) < board.MIN_MEMO_WORDS
+    shown = len(" ".join(s["text"] for s in memo["sections"]).split())
+    assert (written, shown) == (106, 25)
+    assert shown < board.MIN_MEMO_WORDS <= written
 
 
 @pytest.mark.asyncio

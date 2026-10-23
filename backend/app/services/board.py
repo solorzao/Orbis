@@ -677,10 +677,11 @@ MEMO_SECTIONS = (
 # The prompt asks for at most 250 words; the ceiling is lenient, so a memo a little
 # over isn't thrown away. The floor only catches a broken reply: Connections and
 # Contradictions may each be "None apparent.", so an honest memo can be two of those
-# and three cited questions, about 45 words (memo redesign; it was 100 when the
-# prompt asked for 150, and that floor made unrelated stories pad Connections with
-# talk of their reporting).
-MIN_MEMO_WORDS = 40
+# and three cited questions, 42 words at the shortest in the redesign evals (PR
+# #154). It was 100 when the prompt asked for 150: that floor made unrelated stories
+# pad Connections with talk of their reporting, and would fail 11 of every 24 memos
+# the redesign writes.
+MIN_MEMO_WORDS = 30
 MAX_MEMO_WORDS = 350
 # A pin the server can no longer resolve may bring the text the client saved: at
 # most this many characters of its title, once cleaned. A place, saved or not, is
@@ -935,7 +936,7 @@ def memo_cache_key(items: list[BoardItem], saved: list[dict | None]) -> str:
     sent = [[item.id, kept] for item, kept in zip(items, saved)]
     digest = hashlib.sha256(json.dumps(sent, sort_keys=True, default=str).encode()).hexdigest()
     # v3: the memo redesign (each pin a statement, no structure words; Connections may
-    # be "None apparent."; a 40-word floor); v2 memos aren't shown again.
+    # be "None apparent."; a 30-word floor); v2 memos aren't shown again.
     return f"board:analyze:v3:{digest}"
 
 
