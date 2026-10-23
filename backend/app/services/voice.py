@@ -206,15 +206,36 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         r"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Aa]ll|[Bb]oth|[Ss]everal|[Tt]wo|[Tt]hree|[Ff]our"
         r"|[Ff]ive|[Ss]ix)\s+(?:(?:two|three|four|five|six|other|remaining)\s+)?items\b"
         r"(?!\s*\[)(?!\s+(?:of|\w+ed|stolen|taken|worth|valued|on\s+(?:sale|display))\b)"
+        # One pin called an item or an entry (21c-2 eval): "the Netanyahu item [2]",
+        # "the only item linking countries", "the only dated item", "the Netanyahu entry
+        # [3]", "the Russia place entry", "the place and organisation entries", "the
+        # given items". News passes: "the only item on the agenda", "the item in
+        # question", "the most expensive item sold", "the entry of aid convoys", "the
+        # US entry ban" and "Police listed items stolen"; an entry is a pin only before
+        # its number or after a pin's kind.
+        r"|\b(?:[Tt]he|[Tt]his|[Tt]hat|[Ee]ach|[Ee]very|[Oo]nly|[Oo]ne|[Oo]ther)\s+"
+        r"(?:[\w’'-]+\s+){0,2}item\b"
+        r"(?!\s+(?:of|on|in|to|into|for|\w+ed|sold|stolen|taken|worth)\b)"
+        r"|\b(?:[Tt]he|[Tt]his|[Tt]hat|[Ee]ach|[Ee]very|[Oo]nly|[Oo]ne|[Oo]ther)\s+"
+        r"(?:[\w’'-]+\s+){0,2}entr(?:y|ies)\s*\[\s*\d"
+        r"|\b(?i:place|person|people|organi[sz]ation|org|thread|story|link|article)\s+"
+        r"entr(?:y|ies)\b"
+        r"|\b(?i:the|this|that|these|those|each|every|only|one|other|all|both)\s+"
+        r"(?:only\s+)?(?i:dated|listed|given)\s+items?\b"
     ),
     # What it was given, as material or items, said to settle nothing (21c eval): "it is
     # unclear from the material", "not settled from this material", "unclear from
     # these items", "confirmed in the material", "nothing in the material", "the
     # material gives no…". "Unclear from the statement", "the material was seized",
-    # "leaked material shows" and "nothing in the report" pass.
+    # "leaked material shows" and "nothing in the report" pass. From the 21c-2 eval:
+    # "not stated in the material", "named in the material", "on the facts given"
+    # ("the facts given in court" and "listed in the indictment" pass).
     "gap": re.compile(
         r"\b(?:unclear|clear|unknown|settled|established|confirmed)\s+(?:from|in|by)\s+"
         r"(?:the|this|these)\s+(?:gathered\s+|given\s+)?(?:material|items|pins|board)\b"
+        r"|\b(?:stated|named|given|mentioned|shown|listed)\s+in\s+(?:the|this)\s+"
+        r"(?:gathered\s+|given\s+)?material\b"
+        r"|\bon\s+the\s+facts\s+given\b"
         r"|\bnothing\s+in\s+(?:the|this|these)\s+(?:gathered\s+|given\s+)?"
         r"(?:material|items|pins)\b"
         r"|\b(?:the|this)\s+(?:gathered\s+|given\s+)?material\s+(?:gives|shows|says|does"

@@ -283,6 +283,8 @@ BOARD_WORDS_IN_THE_NEWS = [
     # The 21c eval's misses made these memo words too (memo only, accepted).
     "The country pairing in the final drew a record audience [1].",
     "Both items were sold at auction [2].",
+    "One item was a rifle [2].",
+    "The NATO entry [1] was approved in March.",
 ]
 
 
@@ -317,6 +319,18 @@ MEMO_21C_LEAKS = [
     ("The Canada and Switzerland pairing [3] is a country pairing with no detail.", "internals"),
     ("The tanker story [1] is set in Petersburg, a standalone news location [5].", "internals"),
     ("Petersburg [5] is a standalone location.", "internals"),
+    # From the 21c-2 eval's read: a pin called an item or an entry, and "the material".
+    ("The story [1], the Netanyahu item [2] and the Tel Aviv item [3] agree.", "handle"),
+    ("The Netanyahu item lists Washington as its location rather than Israel.", "handle"),
+    ("They were covered together [3], the only item linking countries.", "handle"),
+    ("The storm's reporting from 23 October [1] is the only dated item.", "handle"),
+    ("Petersburg is the city in the Russia place entry [5].", "handle"),
+    ("The place and organisation entries do not conflict with the stories.", "handle"),
+    ("The Netanyahu entry [3] places him in Washington.", "handle"),
+    ("The given items share no person or place.", "handle"),
+    ("The Post's link to that story is not stated in the material.", "gap"),
+    ("No shared place or people are named in the material.", "gap"),
+    ("The stories concern different subjects and do not conflict on the facts given.", "gap"),
 ]
 
 
@@ -350,6 +364,20 @@ MEMO_21C_NEWS = [
     "Surgeons inserted two pins in his wrist [3].",
     "The two countries signed a pact in Lagos [1].",
     "The pair [2] were arrested in Madrid.",
+    # The 21c-2 patterns' near misses.
+    "The only item on the agenda was the budget [2].",
+    "The item in question was a rifle [1].",
+    "The most expensive item sold at the auction was a Monet [3].",
+    "The first item recovered was a necklace [2].",
+    "Troops blocked the entry of aid convoys [2].",
+    "The treaty's entry into force was delayed [1].",
+    "The US entry ban was extended to six countries [2].",
+    "Each entry costs $5 at the gate [1].",
+    "Police listed items stolen from the house [1].",
+    "The facts given in court were disputed [2].",
+    "Details were listed in the indictment [3].",
+    "Aid trucks were denied entry [3].",
+    "Sweden's NATO entry [1] was approved.",
 ]
 
 
