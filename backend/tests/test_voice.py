@@ -225,7 +225,6 @@ NEWS = [
     "Musk posted a thread [3] criticising the ruling.",
     "A thread of optimism ran through the speech [1].",
     "He posted a news thread on X defending the ruling [1].",
-    "The country pairing in the final drew a record audience [1].",
     "The board voted to replace the chief executive [1].",
     "The protest dominated the news cycle [2].",
     "The latest story from the BBC says rain will ease [1].",
@@ -281,6 +280,9 @@ BOARD_WORDS_IN_THE_NEWS = [
     "Users can now share saved pins with friends, Google said [2].",
     "The rivalry is the story thread of the season [2].",
     "Economists modelled trade for each country pair [3].",
+    # The 21c eval's misses made these memo words too (memo only, accepted).
+    "The country pairing in the final drew a record audience [1].",
+    "Both items were sold at auction [2].",
 ]
 
 
@@ -288,6 +290,73 @@ BOARD_WORDS_IN_THE_NEWS = [
 def test_board_words_are_english_to_the_copilot(sentence):
     assert voice.find_leaks(sentence, surface="copilot") == []
     assert voice.find_leaks(sentence, surface="memo") != []
+
+
+# Found in the 21c eval's manual read (2026-10-23): shown memos still described what
+# they were given as a set ("the material", "the board", "the three items"). Memo only:
+# the co-pilot reads these as English.
+MEMO_21C_LEAKS = [
+    ("It is unclear from the material what Netanyahu said in Washington.", "gap"),
+    ("It is not settled from this material who carried out the attack.", "gap"),
+    ("It is unclear from these items what the Hebron shooting involved.", "gap"),
+    ("It is unclear from the gathered material who will win the election.", "gap"),
+    ("The extent of the damage is not settled in the material.", "gap"),
+    ("Neither story's full timeline is confirmed in the material.", "gap"),
+    ("The stories differ, and nothing in the material shows them disagreeing.", "gap"),
+    ("The material gives no shared people or events beyond that timing.", "gap"),
+    ("The board does not show whether his visit concerns the closure.", "handle"),
+    ("The newest coverage on the board is placed in Tel Aviv on 23 October [3].", "handle"),
+    ("Al-Momani [1] appears alongside these items on the board.", "handle"),
+    ("The three items sit on the same country without conflicting details.", "handle"),
+    ("The three items share a country [1] [2] [3].", "handle"),
+    ("Several items share the 23 October date [1][2][5].", "handle"),
+    ("The items cover separate subjects, and none of them conflict.", "handle"),
+    ("The two items do not give conflicting places or dates.", "handle"),
+    ("Three pins share a Jordanian setting.", "handle"),
+    ("Storms hit the coast. Two pins name the same town [1] [2].", "handle"),
+    ("The Canada and Switzerland pairing [3] is a country pairing with no detail.", "internals"),
+    ("The tanker story [1] is set in Petersburg, a standalone news location [5].", "internals"),
+    ("Petersburg [5] is a standalone location.", "internals"),
+]
+
+
+@pytest.mark.parametrize(("sentence", "kind"), MEMO_21C_LEAKS)
+def test_the_21c_misses_are_leaks_in_a_memo_only(sentence, kind):
+    assert kind in voice.find_leaks(sentence, surface="memo")
+    assert voice.find_leaks(sentence, surface="copilot") == []
+
+
+# Their near misses: news on both surfaces.
+MEMO_21C_NEWS = [
+    "Items seized at the border were counterfeit [2].",
+    "Police found several items of clothing near the river [1].",
+    "Police recovered 40 stolen items [3].",
+    "Customs seized several items [2] at the border.",
+    "The items seized in the raid were returned to the museum [2].",
+    "The two items stolen from the Louvre were recovered [1].",
+    "The items listed in the indictment include a rifle [3].",
+    "The board voted to replace the chief executive [1].",
+    "She won a seat on the board of directors [2].",
+    "He has served on the board since 2019 [1].",
+    "She sits on the board at the central bank [3].",
+    "A board meeting is set for Friday [1].",
+    "He resigned from the board in March [1].",
+    "Prices rose across the board in September [2].",
+    "The board's chair resigned [2].",
+    "It is unclear from the statement whether talks will resume [1].",
+    "The material was seized at the border [2].",
+    "Leaked material shows the minister knew of the plan [1].",
+    "Nothing in the report explains the delay [2].",
+    "Surgeons inserted two pins in his wrist [3].",
+    "The two countries signed a pact in Lagos [1].",
+    "The pair [2] were arrested in Madrid.",
+]
+
+
+@pytest.mark.parametrize("sentence", MEMO_21C_NEWS)
+def test_the_21c_patterns_let_news_through(sentence):
+    assert voice.find_leaks(sentence, surface="memo") == []
+    assert voice.find_leaks(sentence, surface="copilot") == []
 
 
 def test_a_surface_is_the_copilot_or_the_memo():

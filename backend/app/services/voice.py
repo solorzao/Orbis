@@ -187,12 +187,47 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         rf"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Bb]oth|[Aa]ll)\s+(?:other\s+)?(?:{_NUMBER_WORDS}"
         r"|other|remaining)\s+pins\b"
         r"|\b(?:[Nn]either|[Ee]ither|[Nn]o|[Ee]very|[Aa]nother)\s+pin\b"
+        # From the 21c eval: the pins as a set, counted where a sentence starts
+        # ("Three pins share a setting"); "two pins in his wrist" passes.
+        r"|(?:^|[.!?]\s+)\W*(?:Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Several|Many"
+        r"|Some)\s+pins\b"
+        # The board as a place or a source ("the newest coverage on the board", "the
+        # board does not show"). Its directors pass: "on the board of directors", "sits
+        # on the board", "the board voted", "a board meeting", "resigned from the
+        # board", "across the board".
+        r"|(?<!\bsit )(?<!\bsits )(?<!\bsat )(?<!\bsitting )(?<!\bseat )(?<!\bseats )"
+        r"(?<!\bserve )(?<!\bserves )(?<!\bserved )(?<!\bserving )(?<!\bplace )"
+        r"\b[Oo]n\s+(?:the|this|your)\s+board\b(?!\s+(?:of|at|for|since|until)\b)"
+        r"|\b[Tt]he\s+board\s+(?:does\s+not|doesn['’]t|shows|gives|lists)\b"
+        # The items as a set: "the three items share", "several items share", "these
+        # items". Items in the news pass: "several items of clothing", "40 stolen
+        # items", "several items [2]" (a citation), "the items seized in the raid",
+        # "the two items stolen", "the items listed in the indictment".
+        r"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Aa]ll|[Bb]oth|[Ss]everal|[Tt]wo|[Tt]hree|[Ff]our"
+        r"|[Ff]ive|[Ss]ix)\s+(?:(?:two|three|four|five|six|other|remaining)\s+)?items\b"
+        r"(?!\s*\[)(?!\s+(?:of|\w+ed|stolen|taken|worth|valued|on\s+(?:sale|display))\b)"
+    ),
+    # What it was given, as material or items, said to settle nothing (21c eval): "it is
+    # unclear from the material", "not settled from this material", "unclear from
+    # these items", "confirmed in the material", "nothing in the material", "the
+    # material gives no…". "Unclear from the statement", "the material was seized",
+    # "leaked material shows" and "nothing in the report" pass.
+    "gap": re.compile(
+        r"\b(?:unclear|clear|unknown|settled|established|confirmed)\s+(?:from|in|by)\s+"
+        r"(?:the|this|these)\s+(?:gathered\s+|given\s+)?(?:material|items|pins|board)\b"
+        r"|\bnothing\s+in\s+(?:the|this|these)\s+(?:gathered\s+|given\s+)?"
+        r"(?:material|items|pins)\b"
+        r"|\b(?:the|this)\s+(?:gathered\s+|given\s+)?material\s+(?:gives|shows|says|does"
+        r"|doesn['’]t|did|didn['’]t|offers|provides)\b",
+        _I,
     ),
     # The board's data model (21a baseline): "story threads", "a country pair", "the
-    # newest-story time window", "latest-story timestamp". "A news thread", "the
-    # country pairing" and "the latest story from the BBC" pass.
+    # newest-story time window", "latest-story timestamp"; from the 21c eval, "a
+    # country pairing" and "a standalone news location". "A news thread" and "the
+    # latest story from the BBC" pass.
     "internals": re.compile(
-        r"\bstory\s+threads?\b|\bcountry\s+pairs?\b"
+        r"\bstory\s+threads?\b|\bcountry\s+pair(?:ing)?s?\b"
+        r"|\bstandalone\s+(?:news\s+)?locations?\b"
         r"|\b(?:newest|latest)[\s-]+story\s+(?:time(?:\s+window)?|timestamp|dated?)\b",
         _I,
     ),
