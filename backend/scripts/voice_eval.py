@@ -94,6 +94,8 @@ OUTCOMES = {
     "I'm sorry, I couldn't generate an answer right now.": "apology",
     board.MEMO_FAILED: "failed",
     board.NOT_ENOUGH_PINS: "not_enough",
+    # ai_summary._call_claude's message on a 429: a failure, not an answer.
+    "Summary temporarily unavailable due to rate limits.": "failed",
 }
 if getattr(agent, "_NO_ANSWER", None):  # from PR 21b
     OUTCOMES[agent._NO_ANSWER] = "no_answer"
@@ -376,11 +378,11 @@ def emptied_by_guard(surface: str, raw: str, sections: dict[str, str]) -> bool:
     """Whether the guard alone would leave nothing: the answer, or a memo section
     (a Contradictions section that said "None apparent" keeps those words)."""
     if surface == "copilot":
-        return bool(raw.strip()) and not voice.scrub(raw).text
+        return bool(raw.strip()) and not voice.scrub(raw, surface=surface).text
     for key, text in sections.items():
         if key == "contradictions" and text.lower().startswith("none apparent"):
             continue
-        if not voice.scrub(text).text:
+        if not voice.scrub(text, surface=surface).text:
             return True
     return False
 
@@ -395,12 +397,13 @@ def score(
     refused: bool = False,
 ) -> dict:
     """One output's grades: leak kinds before and after the guard, its outcome, whether
-    the guard emptied it, its size and its cost. "Shown" leaks are 0 by construction
-    once a surface is guarded (same detector): misses are counted in the manual read."""
+    the guard emptied it, its size and its cost, each read by *surface*'s patterns.
+    "Shown" leaks are 0 by construction once a surface is guarded (same detector):
+    misses are counted in the manual read."""
     usage = getattr(response, "usage", None)
     return {
-        "raw_kinds": voice.find_leaks(raw),
-        "shown_kinds": voice.find_leaks(shown),
+        "raw_kinds": voice.find_leaks(raw, surface),
+        "shown_kinds": voice.find_leaks(shown, surface),
         "outcome": outcome(shown),
         "guard_emptied": emptied_by_guard(surface, raw, sections),
         "refused": refused,

@@ -320,6 +320,7 @@ def test_raw_reply_is_the_answer_or_the_memos_sections_without_a_fence():
         (board.MEMO_FAILED, "failed"),
         (board.NOT_ENOUGH_PINS, "not_enough"),
         ("AI summaries are paused until 00:00 UTC (daily limit reached).", "paused"),
+        ("Summary temporarily unavailable due to rate limits.", "failed"),  # a 429
     ],
 )
 def test_outcomes_are_told_apart(shown, expected):
@@ -327,8 +328,10 @@ def test_outcomes_are_told_apart(shown, expected):
 
 
 def test_emptied_by_the_guard():
-    assert voice_eval.emptied_by_guard("copilot", "Pin 1 is Lagos.", {})
+    assert voice_eval.emptied_by_guard("copilot", "The user asked about Lagos.", {})
     assert not voice_eval.emptied_by_guard("copilot", "Floods hit Valencia [1].", {})
+    # The co-pilot has no pins: its "two pins" are surgery, not a board.
+    assert not voice_eval.emptied_by_guard("copilot", "Surgeons removed the two pins [3].", {})
     kept = {"contradictions": "None apparent: pin 2 and pin 3 differ."}
     assert not voice_eval.emptied_by_guard("memo", "", kept)
     assert voice_eval.emptied_by_guard("memo", "", {"possible_connections": "Pin 2 is Lagos."})
@@ -336,11 +339,22 @@ def test_emptied_by_the_guard():
 
 def test_score_counts_leaks_before_and_after_the_guard_and_the_cost():
     row = voice_eval.score(
-        "copilot", "Floods [1]. Pin 2 is Lagos.", {}, "Floods [1].", _response(""), 2.5
+        "copilot", "Floods [1]. Item 2 is Lagos.", {}, "Floods [1].", _response(""), 2.5
     )
     assert (row["raw_kinds"], row["shown_kinds"], row["outcome"]) == (["handle"], [], "answer")
     assert row["guard_emptied"] is False and row["words"] == 2
     assert row["cost_usd"] == pytest.approx(0.0008)  # 3,000 in and 1,000 out on Haiku 5.5
+
+
+def test_score_reads_each_surface_by_its_own_rules():
+    pins = "Surgeons removed the two pins [3]."
+    copilot = voice_eval.score("copilot", pins, {}, pins, _response(""), 1.0)
+    memo = voice_eval.score("memo", pins, {}, pins, _response(""), 1.0)
+    assert (copilot["raw_kinds"], memo["raw_kinds"]) == ([], ["handle"])
+
+
+def test_a_rate_limited_memo_needs_no_call():
+    voice_eval.counted([], "Summary temporarily unavailable due to rate limits.")
 
 
 def test_wilson_interval():
