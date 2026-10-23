@@ -122,6 +122,28 @@ OWNER_EXAMPLES = [
         ("No date is given for the vote.", "gap"),
         ("I searched for recent coverage of the strike.", "gap"),
         ("I don’t have access to the full articles.", "gap"),
+    ]
+    # Misses found in the 21a baseline's manual read (memo and co-pilot, 2026-10-23).
+    + [
+        ("The Tel Aviv place pin carries the same newest-story time window.", "handle"),
+        ("The Congo country pin is covered together with Canada.", "handle"),
+        ("The two dated pins share a date.", "handle"),
+        ("The three pins agree on the subject of the election.", "handle"),
+        ("The other two pins cover different subjects.", "handle"),
+        ("It is unclear, since no pin states the subject of that coverage.", "handle"),
+        ("Neither pin names the countries.", "handle"),
+        ("It is unclear whether the article in [1] matches the thread in [2].", "handle"),
+        ("The board has two story threads in the same window.", "internals"),
+        ("The third is only a country pair.", "internals"),
+        ("Both carry the same latest-story timestamp.", "internals"),
+        ("They share a newest story time of 21 October.", "internals"),
+        ("_json_placeholder", "internals"),
+        ("Israel said it thwarted an attack, with no details in the coverage I found [2].", "gap"),
+        ("The reports I have don't include a response from him.", "gap"),
+        ("I couldn't find the deal's details, so I can't explain its terms.", "gap"),
+        ("What the allegations are, and who made them, is not stated.", "gap"),
+        ("The latest update should be confirmed against current reporting [3].", "audience"),
+        ("Its details could be checked in the original articles.", "audience"),
     ],
 )
 def test_find_leaks_catches(sentence, kind):
@@ -168,6 +190,21 @@ def test_find_leaks_catches(sentence, kind):
         '"I searched everywhere," her mother told reporters [2].',
         # The one thing the co-pilot says about its material.
         "I couldn't find recent coverage of the strike.",
+        # Beside the baseline's new patterns: news that reads like them passes.
+        "He wore a lapel pin at the summit [1].",
+        "Surgeons inserted two pins in his wrist [3].",
+        "Floods hit Valencia in October [1].",
+        "The pair [2] were arrested in Madrid.",
+        "Musk posted a thread [3] criticising the ruling.",
+        "A thread of optimism ran through the speech [1].",
+        "The board voted to replace the chief executive [1].",
+        "The protest dominated the news cycle [2].",
+        "The latest story from the BBC says rain will ease [1].",
+        "In its latest update, the ministry raised the toll [2].",
+        "The post by @gov_press was deleted [1].",
+        "Food is not given to detainees, the report says [2].",
+        "The death toll could be confirmed in the coming days [1].",
+        "Police said the claim could not be independently verified [2].",
     ],
 )
 def test_find_leaks_lets_news_through(sentence):

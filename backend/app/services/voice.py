@@ -89,7 +89,12 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\b(?:the|a)\s+reader\b"
         r"|\breaders?\s+(?:could|can|may|might|should|would)\b"
         r"|\bthe\s+user\b"
-        r"|\byou\s+(?:could|can|may|might|should)\s+(?:check|verify|look\s+(?:up|into|at))\b",
+        r"|\byou\s+(?:could|can|may|might|should)\s+(?:check|verify|look\s+(?:up|into|at))\b"
+        # The same advice without the reader: "could be checked in the original
+        # articles", "should be confirmed against current reporting". "Could be
+        # confirmed in the coming days" and "could not be verified" are news.
+        r"|\b(?:could|can|should|might|may)\s+be\s+"
+        r"(?:(?:checked|verified)\s+(?:against|in)|confirmed\s+against)\b",
         _I,
     ),
     # Inputs by handle: "Pin 2", "Pin [2]", "item 3", "Item [3] says", "report #4", "pin
@@ -98,16 +103,26 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
     # so "item [3]" and "entry [3]" are handles only where a sentence starts. Verbs and
     # idioms pass ("pins hopes on", "a peg that pins the lira", "pulled the pin on"), and
     # "the PIN codes" does: the one-pin forms are case-sensitive.
+    # From the 21a baseline: a pin by its kind ("the Tel Aviv place pin", "the two dated
+    # pins", "neither pin"), and a bracketed number after "in", "from" or "under" ("the
+    # article in [1]"), which the memo wrote 51 times and the co-pilot never. A lapel
+    # pin, "two pins in his wrist" and "Valencia in October [1]" pass.
     "handle": re.compile(
         r"(?i:\bpins?\s*(?:#\s*|\[\s*)?\d{1,3}\b"
         r"|\b(?:items?|entr(?:y|ies)|reports?|results?|headlines?|sources?)\s*#?\s*\d{1,3}\b"
         rf"|\bpins?\s+{_NUMBER_WORDS}\b"
         rf"|\b{_ORDINALS}\s+pins?\b"
-        r"|\byour\s+(?:board|pins?|items?|notes?)\b)"
+        r"|\byour\s+(?:board|pins?|items?|notes?)\b"
+        r"|\b(?:in|from|under)\s+\[\s*\d)"
         r"|(?:^|[.!?]\s+)\W*(?i:(?:the\s+)?(?:items?|entr(?:y|ies)))\s*\[\s*\d"
         r"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Bb]oth|[Aa]ll|[Ee]ach|[Mm]y)\s+pins\b"
         r"|(?<!pulled )(?<!pull )(?<!pulls )(?<!pulling )"
         r"\b(?:[Tt]he|[Tt]his|[Tt]hat|[Ee]ach)\s+pin\b"
+        r"|\b(?i:place|person|story|thread|article|country|link|entity|organi[sz]ation"
+        r"|saved|expired|lost|dated)\s+pins?\b"
+        rf"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Bb]oth|[Aa]ll)\s+(?:other\s+)?(?:{_NUMBER_WORDS}"
+        r"|other|remaining)\s+pins\b"
+        r"|\b(?:[Nn]either|[Ee]ither|[Nn]o|[Ee]very|[Aa]nother)\s+pin\b"
     ),
     # Internal names: tools, fields, graph labels, prompt tags and parts, and the
     # "[Sources: …]" block history stores (an answer that writes one could steer the
@@ -119,7 +134,16 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
         r"|co_mentioned|mentioned_in|located_at|about_topic|screen\s+context"
         r"|system\s+prompt|knowledge\s+graph|these\s+instructions)\b"
         r"|<\s*/?\s*(?:news|pins|headlines)\s*>"
-        r"|\[\s*sources\s*:",
+        r"|\[\s*sources\s*:"
+        # From the 21a baseline: the board's data model ("story threads", "a country
+        # pair", "the newest-story time window", "latest-story timestamp"), and any
+        # snake_case name ("_json_placeholder"), except a handle or hashtag
+        # ("@gov_press"). "A thread of", "the news cycle" and "the latest story from
+        # the BBC" pass; "the board" and "thread [3]" are left to the prompts, since
+        # "the board voted" and "posted a thread [3]" are news.
+        r"|\b(?:story|news)\s+threads?\b|\bcountry\s+pair(?:s|ing)?\b"
+        r"|\b(?:newest|latest)[\s-]+story\s+(?:time(?:\s+window)?|timestamp|dated?)\b"
+        r"|(?<![\w@#/.])_?[a-z]+(?:_[a-z0-9]+)+\b(?!@)",
         _I,
     ),
     # Coordinates copied from the inputs: "(38.96, 35.24)", "38.9637, 35.2433".
@@ -129,13 +153,20 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     # Gaps in the material, and how the reply was made: the clearest forms only, so
     # news passes ("No date was given for the funeral", "the material was seized").
+    # From the 21a baseline: "the coverage I found", "the reports I have", "I can't
+    # explain" and "is not stated". "The reports don't say…" is attribution, left to
+    # the prompts (owner decision 2), and "food is not given to detainees" is news.
     "gap": re.compile(
         r"\b(?:the|my)\s+(?:material|context)\s+"
         rf"(?:I\s+(?:was|have\s+been)\s+given|provided|given|{_NOT}\s+\w+)"
         r"|\bI\s+(?:can['’]t|cannot|couldn['’]t|could\s+not|am\s+unable\s+to"
-        r"|was\s+unable\s+to)\s+(?:confirm|verify|determine|establish|access|tell|say)\b"
+        r"|was\s+unable\s+to)\s+(?:confirm|verify|determine|establish|access|tell|say"
+        r"|explain|describe)\b"
         r"|\bI\s+(?:don['’]t|do\s+not)\s+have\s+(?:access|the\s+full|more|enough)\b"
         r"|\bI\s+(?:searched|retrieved|looked\s+up|was\s+(?:given|provided))\b"
+        r"|\b(?:coverage|reports?|articles?|stories|headlines?|sources?|material)\s+I\s+"
+        r"(?:found|have|had|was\s+given|retrieved|saw|looked\s+at)\b"
+        r"|\b(?:is|are)\s+not\s+stated\b"
         r"|\bno\s+(?:exact\s+)?(?:date|time|timestamp)\s+is\s+"
         r"(?:given|provided|listed|stated|available)\b",
         _I,
