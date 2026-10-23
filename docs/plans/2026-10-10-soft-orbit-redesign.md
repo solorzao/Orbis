@@ -58,7 +58,7 @@
 | 22 | 6 | Voice evals and output guards (leak checks, a graded eval set) | 21 |
 | 23 | 6 | Co-pilot rework: a tool-using agent over the existing retrieval | 21, 22 |
 
-Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md` (done through #85), and Phase 4's is `docs/plans/2026-10-18-soft-orbit-phase-4.md` (PR 15 split into 15a–15c, 17 into 17a/17b, 18 into 18a/18b; done through #108), and Phase 5's is `docs/plans/2026-10-21-soft-orbit-phase-5.md` (PR 19 split into 19a–19c; done through #125). Phase 6 is scoped here and gets its bite-sized plan now that Phase 5 is done, so it builds on what actually shipped.
+Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md` (done through #85), and Phase 4's is `docs/plans/2026-10-18-soft-orbit-phase-4.md` (PR 15 split into 15a–15c, 17 into 17a/17b, 18 into 18a/18b; done through #108), and Phase 5's is `docs/plans/2026-10-21-soft-orbit-phase-5.md` (PR 19 split into 19a–19c; done through #125). Phase 6's bite-sized plan is `docs/plans/2026-10-23-soft-orbit-phase-6.md`. The owner narrowed it on 2026-10-23 to the co-pilot and the board memo, at zero added running cost: PR 21 becomes 21a–21c (21d optional), PR 22's guards and evals fold into them, and PR 23, the tool-using agent, is dropped.
 
 ---
 
@@ -829,6 +829,8 @@ Depends on 7a being deployed and 7b merged.
 ## Phase 6: AI voice and agent rework (scoped)
 
 Owner-requested on 2026-10-21. Every Claude surface still talks like a system describing its inputs, not like a guide to the news.
+
+> **Narrowed on 2026-10-23 (owner):** only the co-pilot and the board memo; same models and calls; deterministic guards and no regeneration; a small on-demand fixture eval; no tool-using agent (PR 23 dropped, on cost). The plan is `docs/plans/2026-10-23-soft-orbit-phase-6.md`, and the scope below is kept as history.
 - **Examples from the board memo on production:** it addresses "a reader" ("A reader could check the dated articles…"), names its inputs by handle ("Pin 2 is Steve Witkoff"), quotes raw metadata ("dated 2026-10-21 11:15 UTC"), and narrates gaps in its own data ("pin 2 gives only 'this week' with no date").
 - **The co-pilot** showed the same habit earlier (owner report, 2026-10-18): exposing its context and how it works.
 
