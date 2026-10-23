@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -30,3 +30,36 @@ async def test_shutdown_stops_background_work_before_closing_connections():
 
     # At shutdown every wk: read stops (a cycle's start leaves the relations' running).
     assert calls == ["scheduler", ("background tasks", {"shutdown": True}), "redis", "pool"]
+
+
+def test_the_servers_lifespan_runs_startup_then_shutdown():
+    """Through the ASGI lifespan, as uvicorn drives it: startup warms Redis and the
+    pool and starts the scheduler as the server starts, shutdown runs as it stops."""
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    calls: list = []
+
+    def step(name):
+        async def record(**kwargs):
+            calls.append(name)
+
+        return record
+
+    with (
+        patch.object(main, "get_redis", step("redis")),
+        patch.object(main, "get_pool", step("pool")),
+        patch.object(main, "run_ingestion_cycle", AsyncMock(return_value=0)),
+        patch.object(main, "start_scheduler", lambda: calls.append("scheduler")),
+        patch.object(main, "stop_scheduler", step("stop scheduler")),
+        patch.object(main, "stop_background_tasks", step("stop background tasks")),
+        patch.object(main, "close_redis", step("close redis")),
+        patch.object(main, "close_pool", step("close pool")),
+    ):
+        with TestClient(main.app):
+            started = list(calls)
+        stopped = calls[len(started) :]
+
+    assert started == ["redis", "pool", "scheduler"]
+    assert stopped == ["stop scheduler", "stop background tasks", "close redis", "close pool"]
