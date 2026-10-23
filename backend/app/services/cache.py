@@ -164,10 +164,13 @@ async def get_redis() -> aioredis.Redis | None:
         logger.warning("REDIS_URL not configured — caching disabled.")
         return None
     try:
+        # RESP2 on the wire, as before redis-py 8 made RESP3 its default: the
+        # protocol Upstash has always been spoken to with here.
         _redis_client = aioredis.from_url(
             settings.redis_url,
             decode_responses=True,
             socket_connect_timeout=5,
+            protocol=2,
         )
         # Ping to verify connectivity.
         await _redis_client.ping()
