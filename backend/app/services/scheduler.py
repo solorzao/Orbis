@@ -10,7 +10,7 @@ import asyncio
 import logging
 
 from app.config import settings
-from app.services.ingestion import run_ingestion_cycle
+from app.services.ingestion import run_ingestion_cycle, stop_cycle_task
 
 logger = logging.getLogger("orbis.scheduler")
 
@@ -35,14 +35,9 @@ def start_scheduler() -> None:
 
 
 async def stop_scheduler() -> None:
-    """Cancel the background ingestion loop."""
+    """Cancel the background ingestion loop and wait until it stops, a bounded time
+    (stop_cycle_task); a cancel of the caller propagates."""
     global _task
-    if _task is None:
-        return
-    _task.cancel()
-    try:
-        await _task
-    except asyncio.CancelledError:
-        pass
-    _task = None
-    logger.info("Scheduler stopped.")
+    task, _task = _task, None
+    if task is not None:
+        await stop_cycle_task(task, "Scheduler")

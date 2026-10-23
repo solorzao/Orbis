@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -26,7 +27,7 @@ from app.routers.search import router as search_router
 from app.routers.threads import router as threads_router
 from app.services.cache import close_redis, get_redis, open_redis
 from app.services.database import close_pool, get_pool, open_pool
-from app.services.ingestion import run_ingestion_cycle, stop_background_tasks
+from app.services.ingestion import run_ingestion_cycle, stop_background_tasks, stop_cycle_task
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 # ---------------------------------------------------------------------------
@@ -94,8 +95,13 @@ app.include_router(board_router)
 # ---------------------------------------------------------------------------
 # Lifecycle events (run by lifespan, above)
 # ---------------------------------------------------------------------------
+# Startup's ingestion cycle, held so shutdown can stop it (stop_initial_ingest).
+_initial_ingest_task: asyncio.Task | None = None
+
+
 async def startup() -> None:
     """Warm up connections and kick off the GDELT ingestion pipeline."""
+    global _initial_ingest_task
     logger.info("Starting Orbis API …")
     logger.info("Daily Claude budget: $%.2f (UTC day).", settings.llm_daily_budget_usd)
     # Open: also after a shutdown closed them, the app started again in one process.
@@ -103,21 +109,39 @@ async def startup() -> None:
     await open_pool()
 
     # Run one immediate ingestion so the DB has data, then start the
-    # periodic scheduler.  Fire-and-forget so startup isn't blocked.
-    import asyncio
-
+    # periodic scheduler.  In a task of its own so startup isn't blocked.
     async def _initial_ingest():
         count = await run_ingestion_cycle()
         logger.info("Initial ingestion complete: %d articles.", count)
 
-    asyncio.create_task(_initial_ingest())
+    _initial_ingest_task = asyncio.create_task(_initial_ingest())
     start_scheduler()
 
 
+async def stop_initial_ingest() -> None:
+    """Cancel startup's ingestion cycle if it is still running, and wait until it stops,
+    a bounded time (stop_cycle_task); a cancel of the caller propagates.
+
+    A replica shut down during its first cycle ran it on past close_pool, to fail
+    there ("Ingestion cycle failed." at ERROR) with its closing db:* invalidation a
+    no-op. Cancelled, the cycle's transactions roll back (the events step's advisory
+    lock, a transaction's, with them), its connections go back to the pool before
+    close_pool, and it starts no cache warm.
+    """
+    global _initial_ingest_task
+    task, _initial_ingest_task = _initial_ingest_task, None
+    if task is not None and not task.done():
+        await stop_cycle_task(task, "Initial ingestion")
+
+
 async def shutdown() -> None:
-    """Stop scheduler and release connections on shutdown."""
+    """Stop ingestion and background work, then release connections on shutdown."""
     logger.info("Shutting down Orbis API …")
+    # A cycle still running (the scheduler's, or startup's first) would reach Redis
+    # and the pool once closed: both stop first, so neither starts a cache warm
+    # after the background tasks have stopped.
     await stop_scheduler()
+    await stop_initial_ingest()
     # A cache warm or a week read still running would reach Redis or the pool once
     # closed: every one stops here. One that lands later still (breaking's query,
     # shielded, runs on for its requests) finds them closed, and never opens them again.

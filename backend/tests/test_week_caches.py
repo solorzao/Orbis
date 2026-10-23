@@ -339,8 +339,9 @@ class TestStopping:
 
     @pytest.mark.asyncio
     async def test_at_shutdown_every_week_read_is_stopped_a_relations_read_too(self, redis):
-        """Redis and the pool close next: a relations read left running could set_cached
-        after close_redis (reopening it) or reach get_pool after close_pool."""
+        """Redis and the pool close next: a relations read left running would find them
+        closed, its set_cached writing nothing and its get_pool raising. Stopped, its
+        request gets a 503 to retry."""
         from app.services import cache, ingestion
 
         relations_started, relations_cancelled = asyncio.Event(), asyncio.Event()
