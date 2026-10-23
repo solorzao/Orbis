@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from app.config import settings
-from app.services import board
+from app.services import agent, board
 from scripts import voice_eval
 
 NOW = datetime(2026, 10, 23, 12, tzinfo=timezone.utc)
@@ -285,6 +285,18 @@ def test_committed_broad_fixtures_carry_the_top_threads_and_the_breaking_state()
         [result] = case["results"]
         assert len(result["result"]) >= voice_eval.TOP_THREADS, case["id"]
         assert case["breaking"] == "unavailable" or isinstance(case["breaking"], list)
+
+
+def test_committed_broad_contexts_say_breadth_and_keep_their_links_server_side():
+    """PR 21d: each top story is shown with its summary and coverage, and its lead link
+    stays in the index (citations, read_article), never the context (21b)."""
+    for case in [c for c in _fixtures("copilot.json") if "broad" in c["tags"]]:
+        context, index = agent._build_context(case["results"])
+        assert context.count("  Coverage: ") == len(index), case["id"]
+        assert "  Summary: " in context, case["id"]
+        assert "http" not in context and "URL:" not in context, case["id"]
+        links = [row["source_url"] for row in case["results"][0]["result"] if row["source_url"]]
+        assert links and [a["url"] for a in index if a["url"]] == links, case["id"]
 
 
 def test_committed_memo_fixtures_parse_align_and_have_two_pins_with_text():

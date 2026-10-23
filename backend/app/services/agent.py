@@ -390,7 +390,11 @@ _SYNTHESIS_SYSTEM = (
     f"{voice.HOUSE_STYLE}\n\n"
     "Lead with the most important development. Answer a narrow question in a few "
     "sentences; for a briefing or an overview, write two short paragraphs or a short "
-    'bulleted list, without headings. Name an outlet or a speaker ("the health '
+    "bulleted list, without headings. For a broad question about what matters now, "
+    "lead with the two or three stories the most outlets and countries cover, one or "
+    "two sentences each, cited, with a globe action for each place; say how widely "
+    "each is covered in plain words, and call one the biggest only when its coverage "
+    'shows it. Name an outlet or a speaker ("the health '
     'ministry said", "according to Reuters") when attribution matters, as with a '
     "disputed claim or a casualty figure, or when asked who is reporting something. "
     "Leave links, coordinates and tone scores to the citations and the globe. When "
@@ -545,6 +549,13 @@ def _build_context(
         outlet = _prompt_text(item.get("source_name"), 100)
         if outlet:
             parts.append(f"  Source: {outlet}")
+        # top_stories' rows (21d): the thread's synopsis, and how widely it is covered.
+        summary = _prompt_text(item.get("summary"), 600)
+        if summary:
+            parts.append(f"  Summary: {summary}")
+        coverage = _prompt_text(item.get("coverage"), 120)
+        if coverage:
+            parts.append(f"  Coverage: {coverage}")
         # For globe_actions only. No sentiment score or count: Haiku narrated the
         # score as "the tone across these sources".
         if item.get("latitude") is not None and item.get("longitude") is not None:
