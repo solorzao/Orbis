@@ -734,7 +734,9 @@ class TestGetCellSpark:
 
         assert spark == [i % 3 for i in range(24)]
         query, args = _fetched(pool)
-        assert args == pytest.approx([*CELL, -75.01, 39.99, -73.99, 41.01, SPARK_END])
+        # pytest.approx wants an explicit tolerance for datetimes: the end matches exactly
+        assert args[:8] == pytest.approx([*CELL, -75.01, 39.99, -73.99, 41.01])
+        assert args[8:] == [SPARK_END]
         # Every hour from 23 before the end's hour to the end's, in UTC, oldest first.
         assert (
             "generate_series( date_trunc('hour', $9::timestamptz, 'UTC') - interval '23 hours', "
@@ -776,7 +778,8 @@ class TestGetCellEntities:
 
         assert rows == [{"name": "Jacinda Ardern", "type": "person", "n": 4}]
         query, args = _fetched(pool)
-        assert args == pytest.approx([*CELL, -75.01, 39.99, -73.99, 41.01, START, END, 10])
+        assert args[:8] == pytest.approx([*CELL, -75.01, 39.99, -73.99, 41.01])
+        assert args[8:] == [START, END, 10]
         assert "published_at >= $9 AND published_at <= $10" in query
         assert "unnest(persons) AS name, 'person' AS type" in query
         assert "unnest(orgs) AS name, 'org' AS type" in query

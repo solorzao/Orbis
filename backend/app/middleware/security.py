@@ -13,6 +13,7 @@ from typing import Callable
 from urllib.parse import unquote
 
 from fastapi import Request
+from fastapi.routing import iter_route_contexts
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Match
@@ -203,12 +204,13 @@ def route_template(request: Request) -> str:
     or ``unmatched``: never the path as sent, so never what a visitor typed nor a
     newline they forged (``%0A``). Read from the scope once routing has run; before
     it (the API-key gate, the rate limiter), matched as routing matches: the first
-    full match, else the first whose path matches but not its method."""
+    full match, else the first whose path matches but not its method. FastAPI keeps
+    included routers as a tree, so the routes are walked flat, prefixes applied."""
     route = request.scope.get("route")
     if route is None:
         router = getattr(request.scope.get("app"), "router", None)
         partial = None
-        for candidate in getattr(router, "routes", ()):
+        for candidate in iter_route_contexts(getattr(router, "routes", ())):
             match, _ = candidate.matches(request.scope)
             if match == Match.FULL:
                 route = candidate
