@@ -35,6 +35,11 @@ logger = logging.getLogger("orbis")
 # Uvicorn's access log, where a launch keeps it on (the container turns it off;
 # log_requests below logs each request): no query string, no entity name.
 logging.getLogger("uvicorn.access").addFilter(AccessLogPathFilter())
+# httpx logs each outbound request's URL whole at INFO, query string included,
+# and the scraper's URLs can come from a visitor's question (read_article).
+# httpcore logs at DEBUG only, connection details: kept quiet the same way.
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # App
