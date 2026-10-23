@@ -926,7 +926,7 @@ def _top_stories_args(args: dict) -> dict:
     hours: float = 24
     if isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw):
         hours = raw
-    elif isinstance(raw, str) and raw.strip().isdigit():
+    elif isinstance(raw, str) and raw.strip().isdecimal():  # not isdigit: int("²") raises
         hours = int(raw.strip())
     clean: dict = {"hours": min(LIST_HOURS, key=lambda h: abs(h - hours))}
     pills = {t.lower(): t for t in SCREEN_TOPICS}

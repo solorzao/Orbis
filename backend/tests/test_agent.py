@@ -1909,6 +1909,8 @@ def test_a_failed_plan_falls_back_by_kind_of_question(question, tool):
         ({"limit": 5}, {"hours": 24}),  # no TypeError, no empty answer
         ({"hours": 30, "topic": "politics"}, {"hours": 24, "topic": "Politics"}),
         ({"hours": "6"}, {"hours": 6}),
+        ({"hours": "²"}, {"hours": 24}),  # a digit, but int("²") raises: not decimal
+        ({"hours": "６"}, {"hours": 6}),  # a fullwidth decimal is a number
         ({"hours": True}, {"hours": 24}),
         ({"hours": float("nan")}, {"hours": 24}),
         ({"hours": float("inf")}, {"hours": 24}),
