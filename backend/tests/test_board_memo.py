@@ -174,6 +174,23 @@ async def test_an_entity_pin_says_where_it_is_in_the_news(claude):
 
 
 @pytest.mark.asyncio
+async def test_a_pin_from_another_year_keeps_its_year(claude, resolved):
+    # Saved pins can outlive a year: a date says its year when it isn't the board's.
+    last_year = datetime(2025, 10, 20, 9, tzinfo=timezone.utc)
+    resolved.return_value = [
+        None,
+        _snap("Lagos, Nigeria", "Lagos, Nigeria", last_year),
+        *SNAPSHOTS[2:],
+    ]
+    saved = [{"title": "Strikes spread", "place": "Paris, France", "time": last_year}]
+    await _analyze(saved=saved + [None] * 5)
+    lines = _lines(claude)
+    assert lines[0] == "[1] Article: Strikes spread (Paris, France) (20 October 2025)"
+    assert lines[1] == "[2] Place: Lagos, Nigeria (newest story 20 October 2025)"
+    assert lines[3].endswith("; latest story 20 October)")  # this year's, as said
+
+
+@pytest.mark.asyncio
 async def test_a_thread_pin_is_a_developing_story(claude):
     # "Story thread" planted "the thread" and "thread [2]" in the 21a baseline memos.
     await _analyze()
@@ -553,6 +570,31 @@ async def test_a_timestamp_the_memo_writes_is_said_as_the_day_and_kept(claude):
     claude.messages.create.return_value = _response(_reply(open_questions=said))
     text = (await _analyze())["sections"][2]["text"]
     assert text.endswith("The walkouts began on 20 October [1].")
+
+
+def test_a_timestamp_keeps_its_year_when_the_memo_is_read_in_another_year():
+    said = SECTIONS["open_questions"] + " The walkouts began on 2026-10-20 [1]."
+    later = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    memo = board.parse_memo(_reply(open_questions=said), _items(), set(range(1, 7)), later)
+    assert memo["sections"][2]["text"].endswith("The walkouts began on 20 October 2026 [1].")
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_sentence_citing_no_such_pin_leaves_the_memo_standing(claude):
+    # Citations are read from the text as shown, once the guard has dropped its sentences.
+    leaky = SECTIONS["possible_connections"] + " Pin 7 is Lagos [7]."
+    claude.messages.create.return_value = _response(_reply(possible_connections=leaky))
+    memo = await _analyze()
+    assert memo["message"] is None
+    assert [c["n"] for c in memo["citations"]] == [1, 2, 3, 4, 5, 6]
+
+
+@pytest.mark.asyncio
+async def test_a_section_left_with_only_citations_is_emptied(claude, cache):
+    reply = _reply(contradictions="[2] [3]. Pin 2 is Lagos and pin 3 is Abuja.")
+    claude.messages.create.return_value = _response(reply)
+    assert await _analyze() == {"sections": [], "citations": [], "message": board.MEMO_FAILED}
+    cache.set.assert_not_awaited()
 
 
 @pytest.mark.asyncio

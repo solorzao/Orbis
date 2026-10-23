@@ -749,6 +749,9 @@ _BRACKETS = str.maketrans("[]", "()")
 # A citation, and a group of them ("[1, 3]") split into one per pin.
 _CITATION = re.compile(r"\[(\d{1,3})\]")
 _CITATION_GROUP = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})+)\]")
+# A letter: a section the guard leaves with only citations and punctuation ("[2] [3].")
+# has none, and counts as emptied.
+_LETTER = re.compile(r"[^\W\d_]")
 
 
 def _label(item: BoardItem) -> str:
@@ -770,9 +773,10 @@ def _defuse(text: str) -> str:
     return _PINS_TAG.sub("", text).translate(_BRACKETS)
 
 
-def _details(item: BoardItem, place: str, time: datetime | None) -> list[str]:
-    """What a server snapshot adds to its title, by kind, with dates as people say them."""
-    when = voice.human_date(time) if time else ""
+def _details(item: BoardItem, place: str, time: datetime | None, now: datetime) -> list[str]:
+    """What a server snapshot adds to its title, by kind, with dates as people say them
+    (with the year when it isn't *now*'s)."""
+    when = voice.human_date(time, now) if time else ""
     if item.kind == "article":
         return [part for part in (place, when) if part]
     if item.kind == "place":
@@ -789,20 +793,21 @@ def _details(item: BoardItem, place: str, time: datetime | None) -> list[str]:
     return []
 
 
-def _server_text(item: BoardItem, snap: dict) -> str | None:
+def _server_text(item: BoardItem, snap: dict, now: datetime) -> str | None:
     """A resolved pin's text for the prompt, or None when it holds an injection phrase."""
     title = _clean(snap.get("title"), 200)
     if not title:
         return None
-    details = _details(item, _clean(snap.get("place"), 100), snap.get("time"))
+    details = _details(item, _clean(snap.get("place"), 100), snap.get("time"), now)
     text = f"{title} ({'; '.join(details)})" if details else title
     # Checked once cleaned: a control character can't hide a phrase ("Ig\x01nore").
     return None if has_injection_pattern(text) else _defuse(text)
 
 
-def _saved_text(saved: dict) -> str | None:
+def _saved_text(saved: dict, now: datetime) -> str | None:
     """An expired pin's client-saved text for the prompt: cleaned, checked for
-    injection over all of it, then capped; None when nothing usable is left."""
+    injection over all of it, then capped; None when nothing usable is left. Saved
+    pins can outlive a year, so a date keeps its year when it isn't *now*'s."""
     raw = saved.get("title") or ""
     if saved.get("place"):
         raw += f" ({saved['place']})"
@@ -811,23 +816,23 @@ def _saved_text(saved: dict) -> str | None:
         return None
     text = _defuse(text[:SAVED_CHARS].rstrip())
     time = saved.get("time")
-    return f"{text} ({voice.human_date(time)})" if isinstance(time, datetime) else text
+    return f"{text} ({voice.human_date(time, now)})" if isinstance(time, datetime) else text
 
 
 def build_memo_prompt(
-    items: list[BoardItem], snapshots: list[dict | None], saved: list[dict | None]
+    items: list[BoardItem], snapshots: list[dict | None], saved: list[dict | None], now: datetime
 ) -> tuple[str, set[int]]:
     """The user turn: the pins with something to say, numbered in board order inside
     <pins>, and their numbers. A resolved pin speaks from server data, an expired one
     from the text the client saved. A pin with neither, or whose text was left out as
     an injection, isn't listed: its number goes unused, so the model has no gap to
-    describe (Phase 6)."""
+    describe (Phase 6). *now* decides whether a pin's date says its year."""
     lines, usable = [], set()
     for n, (item, snap, kept) in enumerate(zip(items, snapshots, saved), start=1):
         if snap is not None:
-            text = _server_text(item, snap)
+            text = _server_text(item, snap, now)
         elif kept is not None:
-            text = _saved_text(kept)
+            text = _saved_text(kept, now)
         else:
             text = None
         if text is None:
@@ -872,7 +877,7 @@ def parse_memo(reply: str, items: list[BoardItem], usable: set[int], now: dateti
         shown = voice.scrub(written[key], now, surface="memo")
         dropped += shown.dropped
         kinds.update(shown.kinds)
-        text = shown.text
+        text = shown.text if _LETTER.search(_CITATION.sub("", shown.text)) else ""
         said_none = key == "contradictions" and written[key].lower().startswith("none apparent")
         if not text and said_none:
             text = NONE_APPARENT
@@ -923,7 +928,7 @@ async def analyze_board(items: list[BoardItem], saved: list[dict | None], now: d
         return cached
 
     snapshots = await resolve_items(items, now)
-    prompt, usable = build_memo_prompt(items, snapshots, saved)
+    prompt, usable = build_memo_prompt(items, snapshots, saved, now)
     n_saved = sum(1 for snap, kept in zip(snapshots, saved) if snap is None and kept is not None)
     # Counts only: pins and their saved text are what a visitor sent.
     logger.info(
