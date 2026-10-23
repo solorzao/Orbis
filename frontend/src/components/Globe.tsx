@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useCallback, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from "react";
 import type { GlobeInstance } from "globe.gl";
 import type { CountryLink, GlobePoint } from "@/types/news";
 import {
@@ -247,28 +247,13 @@ export default function Globe({
   const [dragging, setDragging] = useState(false);
 
   const onPointClickRef = useRef(onPointClick);
-  onPointClickRef.current = onPointClick;
-
   const onPointHoverRef = useRef(onPointHover);
-  onPointHoverRef.current = onPointHover;
-
   const onEmptyClickRef = useRef(onEmptyClick);
-  onEmptyClickRef.current = onEmptyClick;
-
   const onArcHoverRef = useRef(onArcHover);
-  onArcHoverRef.current = onArcHover;
-
   const onArcClickRef = useRef(onArcClick);
-  onArcClickRef.current = onArcClick;
-
   const onRelationHoverRef = useRef(onRelationHover);
-  onRelationHoverRef.current = onRelationHover;
-
   const onRelationClickRef = useRef(onRelationClick);
-  onRelationClickRef.current = onRelationClick;
-
   const onGrabRef = useRef(onGrab);
-  onGrabRef.current = onGrab;
 
   // The tokens the scene was built with, for the effects that redraw it.
   const tokensRef = useRef<ReturnType<typeof readGlobeTokens> | null>(null);
@@ -284,13 +269,24 @@ export default function Globe({
   const replayLogRef = useRef<{ thread: number; steps: string[] } | null>(null);
 
   const onZoomChangeRef = useRef(onZoomChange);
-  onZoomChangeRef.current = onZoomChange;
-
   const onReadyRef = useRef(onReady);
-  onReadyRef.current = onReady;
-
   const motionRef = useRef({ reduced, lowPower });
-  motionRef.current = { reduced, lowPower };
+
+  // The globe's handlers are set up once: they call the latest callbacks and read
+  // the latest motion settings, updated before any effect below runs.
+  useLayoutEffect(() => {
+    onPointClickRef.current = onPointClick;
+    onPointHoverRef.current = onPointHover;
+    onEmptyClickRef.current = onEmptyClick;
+    onArcHoverRef.current = onArcHover;
+    onArcClickRef.current = onArcClick;
+    onRelationHoverRef.current = onRelationHover;
+    onRelationClickRef.current = onRelationClick;
+    onGrabRef.current = onGrab;
+    onZoomChangeRef.current = onZoomChange;
+    onReadyRef.current = onReady;
+    motionRef.current = { reduced, lowPower };
+  });
 
   const altitudeRef = useRef(HOME_VIEW.altitude);
   // Focus mode's dots: the window's, plus a stand-in for each of the entity's
@@ -840,7 +836,7 @@ export default function Globe({
     // under it everywhere, even where the heat is clear: turn that off. Under a
     // replay's dots the frozen heatmap dims to a backdrop so the dots read.
     // This reaches into three-globe internals (the __globeObjType tag, the
-    // debounce, one mesh per heatmap) as of 2.45.0: package.json pins globe.gl
+    // debounce, one mesh per heatmap) as of 2.45.6: package.json pins globe.gl
     // and the lockfile its three-globe. Re-check Intensity over land on upgrade.
     const tuneHeatmap = (dim: boolean) =>
       globeRef.current?.scene().traverse((obj: object) => {

@@ -40,7 +40,7 @@ const stored = (page: Page) =>
   );
 
 /** Load the app at a share link, with the API mocked and the globe still. */
-async function gotoShare(page: Page, ids: string[], setup?: (page: Page) => Promise<void>) {
+async function gotoShare(page: Page, ids: string[], setup?: (page: Page) => Promise<unknown>) {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAllApiRoutes(page);
   await setup?.(page);
