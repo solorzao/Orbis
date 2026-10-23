@@ -108,8 +108,7 @@ export function clusterArticles(articles: NewsArticle[], altitude: number): Glob
       }),
     );
     const dominantTopic = Object.entries(topicCounts).sort((a, b) => b[1] - a[1])[0]?.[0] as
-      | Topic
-      | undefined;
+      Topic | undefined;
     const color = dominantTopic
       ? TOPIC_COLORS[dominantTopic] || TOPIC_COLORS.All
       : TOPIC_COLORS.All;

@@ -29,13 +29,7 @@ export interface NewsArticle {
 }
 
 export type Topic =
-  | "All"
-  | "Politics"
-  | "Conflict"
-  | "Technology"
-  | "Climate"
-  | "Economy"
-  | "Health";
+  "All" | "Politics" | "Conflict" | "Technology" | "Climate" | "Economy" | "Health";
 
 /** A place's lead story, for the hover card: its newest, preferring one with an image. */
 export interface GlobeLead {

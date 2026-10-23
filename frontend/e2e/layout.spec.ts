@@ -121,7 +121,7 @@ function tooClose(a: Box, b: Box) {
 async function settle(
   page: Page,
   size: { width: number; height: number },
-  setup?: (page: Page) => Promise<void>,
+  setup?: (page: Page) => Promise<unknown>,
 ) {
   await page.setViewportSize(size);
   // No transitions, so the panel, sheet and bottom row measure at their final place.

@@ -15,7 +15,7 @@ const IR_US = MOCK_LINKS_LIFT.find((l) => l.a.iso === "IR" && l.b.iso === "US")!
 const HEADING = "United States and Iran";
 
 /** Load the still globe, turn Links on and wait for its arcs. */
-async function withLinks(page: Page, setup?: (page: Page) => Promise<void>) {
+async function withLinks(page: Page, setup?: (page: Page) => Promise<unknown>) {
   await gotoStillGlobe(page, setup);
   await page.getByRole("button", { name: "Links", exact: true }).click();
   await expect(page.getByTestId("globe")).toHaveAttribute(

@@ -141,6 +141,7 @@ export default function NewsPanel({
     selectedTopics.size > 0 || selectedSentiment !== null || searchQuery.trim() !== "";
 
   const canSummarize = hasActiveFilters && filteredArticles.length >= 2;
+  const locationName = point?.locationName;
 
   const handleSummarize = useCallback(async () => {
     if (!canSummarize || filterSummaryLoading) return;
@@ -149,14 +150,14 @@ export default function NewsPanel({
       const headlines = filteredArticles
         .slice(0, MAX_SUMMARIZE)
         .map((a) => `${a.title} (${a.sourceName})`);
-      const result = await fetchSelectionSummary(headlines, point?.locationName);
+      const result = await fetchSelectionSummary(headlines, locationName);
       setFilterSummary(result.summary);
     } catch {
       setFilterSummary("Summary generation failed.");
     } finally {
       setFilterSummaryLoading(false);
     }
-  }, [canSummarize, filterSummaryLoading, filteredArticles, point?.locationName]);
+  }, [canSummarize, filterSummaryLoading, filteredArticles, locationName]);
 
   const handleMinimize = useCallback(() => {
     saveFilters();
