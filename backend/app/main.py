@@ -27,7 +27,7 @@ from app.routers.search import router as search_router
 from app.routers.threads import router as threads_router
 from app.services.cache import close_redis, get_redis, open_redis
 from app.services.database import close_pool, get_pool, open_pool
-from app.services.ingestion import run_ingestion_cycle, stop_background_tasks
+from app.services.ingestion import run_ingestion_cycle, stop_background_tasks, stop_cycle_task
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 # ---------------------------------------------------------------------------
@@ -119,7 +119,8 @@ async def startup() -> None:
 
 
 async def stop_initial_ingest() -> None:
-    """Cancel startup's ingestion cycle if it is still running, and wait until it stops.
+    """Cancel startup's ingestion cycle if it is still running, and wait until it stops,
+    a bounded time (stop_cycle_task); a cancel of the caller propagates.
 
     A replica shut down during its first cycle ran it on past close_pool, to fail
     there ("Ingestion cycle failed." at ERROR) with its closing db:* invalidation a
@@ -129,14 +130,8 @@ async def stop_initial_ingest() -> None:
     """
     global _initial_ingest_task
     task, _initial_ingest_task = _initial_ingest_task, None
-    if task is None or task.done():
-        return
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    logger.info("Initial ingestion stopped.")
+    if task is not None and not task.done():
+        await stop_cycle_task(task, "Initial ingestion")
 
 
 async def shutdown() -> None:

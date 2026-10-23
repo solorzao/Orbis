@@ -330,6 +330,27 @@ async def stop_background_tasks(*, shutdown: bool = False) -> None:
         )
 
 
+async def stop_cycle_task(task: asyncio.Task, name: str) -> None:
+    """Cancel *task*, which runs ingestion cycles (the scheduler's loop, startup's
+    first cycle), and wait until it stops; log ``<name> stopped.``
+
+    Waits as stop_background_tasks does, never raising the task's cancel: a cancel
+    of the caller (shutdown's own) still propagates, where catching CancelledError
+    would swallow it too. At most _STOP_TIMEOUT seconds: a cancel that the cycle's
+    cleanup turns into an error (asyncpg's ROLLBACK failing on a dead connection)
+    is caught by the cycle, which then runs on to its end, minutes with the
+    embeddings. Then it logs that the task is still stopping and goes on.
+    """
+    task.cancel()
+    done, _ = await asyncio.wait([task], timeout=_STOP_TIMEOUT)
+    if not done:
+        logger.warning("%s still stopping after %s s; going on.", name, _STOP_TIMEOUT)
+        return
+    if not task.cancelled():
+        task.exception()  # retrieved: how a cancelled task ended is no news
+    logger.info("%s stopped.", name)
+
+
 async def run_ingestion_cycle() -> int:
     """Run the ingestion pipeline.  Never raises.
 

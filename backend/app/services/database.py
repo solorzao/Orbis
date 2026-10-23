@@ -85,6 +85,10 @@ async def get_pool() -> asyncpg.Pool:
         if _pool_generation != generation:  # close_pool ran while this one opened
             await pool.close()
             raise RuntimeError(_POOL_CLOSED)
+        if _pool is not None:  # a concurrent first call's landed first: theirs is kept
+            kept = _pool
+            await pool.close()
+            return kept
         _pool = pool
         logger.info("Database connection pool created.")
     return _pool

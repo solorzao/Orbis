@@ -262,6 +262,30 @@ class TestPoolClosed:
         assert await database.get_pool() is new
 
     @pytest.mark.asyncio
+    async def test_two_first_calls_at_once_share_one_pool(self, pools, monkeypatch):
+        """Both found no pool and opened one: the second to land replaced the first,
+        which nothing then closed. Now it is closed, and its caller gets the first."""
+        opening, release = asyncio.Event(), asyncio.Event()
+        create_pool = database.asyncpg.create_pool  # the fixture's, at once
+
+        async def held(*args, **kwargs):
+            opening.set()
+            await release.wait()
+            return await create_pool(*args, **kwargs)
+
+        monkeypatch.setattr(database.asyncpg, "create_pool", held)
+        calls = [asyncio.create_task(database.get_pool()) for _ in range(2)]
+        await opening.wait()
+        await asyncio.sleep(0)  # the second call is opening too
+        release.set()
+
+        first, second = await asyncio.gather(*calls)
+        [kept, spare] = pools
+        assert first is second is kept is database._pool
+        spare.close.assert_awaited_once()
+        kept.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_startup_opens_it_again_after_a_shutdown(self, pools):
         await database.get_pool()
         await database.close_pool()
