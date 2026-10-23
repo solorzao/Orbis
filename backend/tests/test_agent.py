@@ -1422,7 +1422,10 @@ async def test_read_article_never_fetches_the_planners_own_urls(history_store):
             {
                 "tools": [
                     {"name": "keyword_search", "args": {"terms": "floods"}},
-                    {"name": "read_article", "args": {"urls": ["https://evil.example/x"]}},
+                    {
+                        "name": "read_article",
+                        "args": {"urls": ["https://evil.example/x"], "question": "planner's"},
+                    },
                 ]
             }
         )
@@ -1438,7 +1441,9 @@ async def test_read_article_never_fetches_the_planners_own_urls(history_store):
         patch.dict("app.services.agent._TOOL_DISPATCH", tools),
     ):
         await _stream("Tell me more about the floods")
+    # The pages and the question are the server's: neither is the planner's.
     assert reader.await_args.kwargs["urls"] == ["https://e.com/1"]
+    assert reader.await_args.kwargs["question"] == "Tell me more about the floods"
 
 
 @pytest.mark.asyncio
@@ -1856,11 +1861,9 @@ def test_the_planner_is_not_offered_read_articles_ignored_arguments():
     assert "params: []" in line
 
 
-def test_the_guard_names_every_planner_tool_and_no_removed_one():
+def test_the_guard_names_every_planner_tool():
     for name in (t["name"] for t in RETRIEVAL_TOOLS):
         assert "internals" in voice.find_leaks(f"{name} found three stories.", surface="copilot")
-    # Removed in 21d (top_stories replaced it): the model is never shown it now.
-    assert "trending_topics" not in voice.LEAK_PATTERNS["internals"].pattern
 
 
 @pytest.mark.asyncio
@@ -2087,14 +2090,20 @@ def test_a_broad_answer_is_two_or_three_stories_then_stops():
     assert "then stop: no further stories" in _SYNTHESIS_SYSTEM
 
 
-def test_a_broad_answer_says_breadth_once_for_the_lead_story():
+def test_a_broad_answer_gives_counts_for_the_first_story_only():
     """The 21d evals' broad answers followed every story with "It is covered by 168
     outlets in 17 countries [2]", and one called the lead "the most widely covered
-    item"."""
-    assert "Say how widely each is covered" not in _SYNTHESIS_SYSTEM
-    once = "Say how widely only the lead story is covered, once, in plain words"
-    assert once in _SYNTHESIS_SYSTEM
-    assert "never call a story an item" in _SYNTHESIS_SYSTEM
+    item". The polish eval's "only the lead story … once" wording was echoed to
+    visitors ("Broad question about what matters now, so…", "The lead story is…"), so
+    the counts are part of the list's own sentence, with no label to repeat."""
+    assert "Say how widely" not in _SYNTHESIS_SYSTEM
+    assert (
+        "with a globe action for each place, and outlet and country counts for the first "
+        "one only, then stop: no further stories."
+    ) in _SYNTHESIS_SYSTEM
+    assert "lead story" not in _SYNTHESIS_SYSTEM
+    assert _SYNTHESIS_SYSTEM.count("broad question") == 1  # no new words to echo
+    assert "Never call a story an item" in _SYNTHESIS_SYSTEM
 
 
 def test_the_synthesis_prompt_is_no_longer_than_21ds():

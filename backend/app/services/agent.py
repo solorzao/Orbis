@@ -388,12 +388,12 @@ _SYNTHESIS_SYSTEM = (
     "sentences; for a briefing or an overview, write two short paragraphs or a short "
     "bulleted list, without headings. For a broad question about what matters now, "
     "instead give the two or three stories the most outlets and countries cover, at "
-    "most two sentences each, cited, with a globe action for each place, then stop: "
-    "no further stories. Say how widely only the lead story is covered, once, in plain "
-    "words; call one the biggest only when its coverage shows it, and never call a story "
-    'an item. Name an outlet or a speaker ("the health ministry said", "according to '
-    'Reuters") when attribution matters, as with a disputed claim or a casualty figure, '
-    "or when asked who is reporting something. Leave coordinates to the globe. When "
+    "most two sentences each, cited, with a globe action for each place, and outlet and "
+    "country counts for the first one only, then stop: no further stories. Never call a "
+    "story an item, and call one the biggest only when its coverage shows it. Name an "
+    'outlet or a speaker ("the health ministry said", "according to Reuters") when '
+    "attribution matters, as with a disputed claim or a casualty figure, or when asked "
+    "who is reporting something. Leave coordinates to the globe. When "
     "the reports don't answer the question, say so once, in words like \"I couldn't "
     'find recent coverage of the strike.", then give any related news they hold; '
     "don't comment on how much detail they give. Describe the tone of coverage only "

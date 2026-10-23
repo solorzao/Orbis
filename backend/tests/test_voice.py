@@ -142,6 +142,26 @@ LEAKS = [
     ("Its details could be checked in the original articles.", "audience"),
     # A single-quoted phrase doesn't hide the sentence after it.
     ("The fans' chant 'we are the champions.' rang out. I can't confirm the score.", "gap"),
+    # The prompt's words echoed (polish eval): the kind of question, and "the lead
+    # story" as a label.
+    (
+        "Broad question about what matters now, so here are the three stories with the "
+        "widest coverage.",
+        "internals",
+    ),
+    ("Broad question, so here are the three stories with the widest coverage.", "internals"),
+    (
+        "This is a broad question about what matters now, so here are the three stories "
+        "with the widest coverage.",
+        "internals",
+    ),
+    ("That is a general question, so here is an overview [1].", "internals"),
+    ("As a follow-up question, so the earlier reports still apply [2].", "internals"),
+    ("The lead story is covered widely across national and regional UK outlets.", "internals"),
+    (
+        "Storms hit Cornwall [2]. The lead story is Putin agreeing to resume Ukraine talks [1].",
+        "internals",
+    ),
 ]
 
 
@@ -267,6 +287,18 @@ NEWS = [
     "The tariffs kicked in [2] on Monday.",
     "The airline went under [1].",
     "The army moved in [1] at dawn.",
+    # Beside the polish eval's narration and label: questions and lead stories in the
+    # news.
+    "A broad question of jurisdiction remains [1].",
+    "The court left a broad question open.",
+    "Broad questions remain about the deal's terms [2].",
+    "The senator asked a specific question about funding [1].",
+    "The Times' lead story on Sunday reported the leak [2].",
+    "The newspaper's lead story accused the minister [1].",
+    "The lead story in Sunday's Observer named the donor [3].",
+    "The strike was the lead story on the BBC website [1].",
+    "The strike was the lead story everywhere that week [1].",
+    "Its lead story said talks would resume [2].",
 ]
 
 
@@ -300,8 +332,11 @@ BOARD_WORDS_IN_THE_NEWS = [
     "Thieves took the three items in under eight minutes [2].",
     "The items appear in a 1923 catalogue [1].",
     "The items describe a 17th-century voyage [3].",
-    # Counted entries read as counted items do (held-out runs, accepted).
+    # Counted entries read as counted items do, and a pin's kind before "profile" as
+    # memos name a pin (held-out runs, #152 review: accepted).
     "The three entries in the contest drew record votes [1].",
+    "Both entries are favourites to win the contest [2].",
+    "The paper ran a person profile of the suspect [1].",
 ]
 
 

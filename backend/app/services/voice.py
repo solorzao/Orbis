@@ -129,7 +129,16 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
         # answer): a leading underscore and two parts at least. "john_doe",
         # "report_final", "COVID_19" and "passwords_2024.xlsx" are news, and so are
         # "@gov_press", "#breaking_news" and italics ("_in absentia_").
-        r"|(?-i:(?<![\w@#/.])_[a-z]+(?:_[a-z0-9]+)+\b)(?![@.]\w)",
+        r"|(?-i:(?<![\w@#/.])_[a-z]+(?:_[a-z0-9]+)+\b)(?![@.]\w)"
+        # The prompt's words echoed (polish eval): the kind of question where a
+        # sentence starts ("Broad question about what matters now, so…", "This is a
+        # broad question…") or before ", so" ("a follow-up question, so"), and "the
+        # lead story" as a label where a sentence starts. News passes: "A broad
+        # question of jurisdiction remains", "the court left a broad question open",
+        # "the Times' lead story on Sunday", "the lead story in Sunday's Observer".
+        r"|(?:^|[.!?]\s+)\W*(?:this\s+is\s+a\s+)?broad\s+question\b"
+        r"|\b(?:a|the)\s+(?:broad|specific|general|follow-up)\s+question\s*,\s*so\b"
+        r"|(?:^|[.!?]\s+)\W*the\s+lead\s+story\b(?!\s+(?:in|on|of|from|at|for|across)\b)",
         _I,
     ),
     # Coordinates copied from the inputs: "(38.96, 35.24)", "38.9637, 35.2433".
