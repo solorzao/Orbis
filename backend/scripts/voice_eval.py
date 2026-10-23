@@ -33,6 +33,7 @@ import json
 import math
 import sys
 import time
+from collections.abc import Sequence
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -230,8 +231,12 @@ def top_rows(threads: list[dict], breaking: list[dict], urls: dict[int, str]) ->
     return rows
 
 
-def broad_case(k: int, rows: list[dict], now: datetime) -> dict:
-    """A broad question (BROAD[k]) over the top-stories rows captured with it."""
+def broad_case(
+    k: int, rows: list[dict], now: datetime, breaking: Sequence[dict] | None = ()
+) -> dict:
+    """A broad question (BROAD[k]) over the top-stories rows captured with it. Its
+    "breaking" says what the breaking list was: the headlines taken, or "unavailable"
+    when the API failed to give it (*breaking* None)."""
     template = BROAD[k]
     case = {
         "id": f"cp-{len(SPECIFIC) + k + 1}-{template}",
@@ -243,6 +248,9 @@ def broad_case(k: int, rows: list[dict], now: datetime) -> dict:
         "now": now.isoformat(),
         "results": [{"tool": "top_stories", "result": rows}],
         "history": [],
+        "breaking": (
+            "unavailable" if breaking is None else [b["headline"] for b in breaking[:TOP_BREAKING]]
+        ),
     }
     if template == "broad_biggest":  # the owner's live case: "Last 24 h, live"
         case["screen"] = {"start": (now - timedelta(hours=24)).isoformat(), "end": now.isoformat()}
@@ -459,11 +467,12 @@ async def _get(http: httpx.AsyncClient, path: str, **params: Any) -> Any:
     return response.json()
 
 
-async def _breaking(http: httpx.AsyncClient) -> list[dict]:
-    """The breaking ticker's list, or [] when the server fails to give it: top_stories
-    takes up to TOP_BREAKING events, none included, and the broad fixtures keep their
-    threads. Said on the console, so a capture never hides it. A client error is the
-    capture's own mistake, and stops it."""
+async def _breaking(http: httpx.AsyncClient) -> list[dict] | None:
+    """The breaking ticker's list, or None when the server fails to give it:
+    top_stories takes up to TOP_BREAKING events, none included, so the broad fixtures
+    keep their threads, and each says "breaking": "unavailable". Said on the console
+    too, so a capture never hides it. A client error is the capture's own mistake,
+    and stops it."""
     try:
         return await _get(http, "/api/news/breaking")
     except httpx.HTTPStatusError as exc:
@@ -473,7 +482,7 @@ async def _breaking(http: httpx.AsyncClient) -> list[dict]:
         print(
             f"The breaking list is unavailable (HTTP {status}): broad fixtures carry threads only."
         )
-        return []
+        return None
 
 
 async def _resolve(http: httpx.AsyncClient, items: list[str]) -> list[dict | None]:
@@ -530,8 +539,8 @@ async def capture(base_url: str) -> None:
         for t in ranked[:TOP_THREADS]:
             d = await _get(http, f"/api/threads/{t['id']}")
             urls[t["id"]] = d["articles"][0]["source_url"] if d["articles"] else ""
-        rows = top_rows(top, breaking, urls)
-        copilot += [broad_case(k, rows, now) for k in range(len(BROAD))]
+        rows = top_rows(top, breaking or [], urls)
+        copilot += [broad_case(k, rows, now, breaking) for k in range(len(BROAD))]
 
         memo = []
         for n, (items, saved) in enumerate(memo_boards(details), start=1):
@@ -632,16 +641,36 @@ def _rows_in(path: Path) -> list[dict]:
 
 
 class Spend:
-    """One spend counter for the whole run, every surface and the planner (review I4)."""
+    """One spend counter for the whole run, every surface and the planner (review I4).
+
+    allows() reserves a call's estimate, so calls in flight together can't all pass
+    the cap; add() swaps that reservation for what the calls cost."""
 
     def __init__(self, cap: float) -> None:
-        self.cap, self.spent = cap, 0.0
+        self.cap, self.spent, self.reserved = cap, 0.0, 0.0
 
     def allows(self, estimate: float) -> bool:
-        return self.spent + estimate <= self.cap
+        if self.spent + self.reserved + estimate > self.cap:
+            return False
+        self.reserved += estimate
+        return True
 
-    def add(self, calls: list) -> None:
+    def add(self, calls: list, estimate: float) -> None:
+        self.reserved = max(0.0, self.reserved - estimate)
         self.spent += sum(llm_budget.cost_usd(c.usage, c.model) for c in calls)
+
+
+class UncountedCall(RuntimeError):
+    """An AI answer came back with no Claude call recorded: its spend is out of the
+    cap's sight, so the run stops."""
+
+
+def counted(calls: list, shown: str) -> None:
+    """Stops the run (UncountedCall) when *shown* is an AI answer but no call was
+    recorded: a surface that built its own client would otherwise run uncapped. A
+    fixed text (not enough pins, paused, an apology) needs no call."""
+    if not calls and outcome(shown) == "answer":
+        raise UncountedCall("An AI answer came back with no recorded Claude call.")
 
 
 async def run_surface(surface: str, label: str, reps: int, spend: Spend, pilot: bool) -> dict:
@@ -664,9 +693,12 @@ async def run_surface(surface: str, label: str, reps: int, spend: Spend, pilot: 
             calls: list = []
             _CALLS.set(calls)
             began = time.monotonic()
-            shown = await (run_copilot(case) if surface == "copilot" else run_memo(case))
+            try:
+                shown = await (run_copilot(case) if surface == "copilot" else run_memo(case))
+            finally:
+                spend.add(calls, EST_USD[surface])
             seconds = time.monotonic() - began
-            spend.add(calls)
+            counted(calls, shown)
             response = calls[-1] if calls else None
             raw, sections, refused = raw_reply(surface, response) if response else ("", {}, False)
             row = {
@@ -698,8 +730,10 @@ async def run_planner(label: str, spend: Spend) -> dict:
             break
         calls: list = []
         _CALLS.set(calls)
-        planned = await agent.plan_retrieval(case["question"], _history(case), _scope(case))
-        spend.add(calls)
+        try:
+            planned = await agent.plan_retrieval(case["question"], _history(case), _scope(case))
+        finally:
+            spend.add(calls, EST_USD["planner"])
         tools = [c["name"] for c in planned]
         ok = routed(case, tools)
         rows.append({"id": case["id"], "tags": case["tags"], "tools": tools, "routed": ok})

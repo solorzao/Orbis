@@ -3,6 +3,7 @@ No Claude, no network."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -138,6 +139,15 @@ def test_broad_cases_are_fixed_questions_over_top_stories():
     assert "screen" in voice_eval.broad_case(0, rows, NOW)  # the owner's "Last 24 h, live"
 
 
+def test_broad_cases_say_what_the_breaking_list_was():
+    rows = voice_eval.top_rows([_thread()], [], {})
+    assert voice_eval.broad_case(0, rows, NOW, None)["breaking"] == "unavailable"
+    assert voice_eval.broad_case(0, rows, NOW, [])["breaking"] == []
+    listed = [_breaking(n) for n in range(4)]
+    case = voice_eval.broad_case(0, voice_eval.top_rows([_thread()], listed, {}), NOW, listed)
+    assert case["breaking"] == [f"Storm hits coast {n}" for n in range(voice_eval.TOP_BREAKING)]
+
+
 def test_memo_boards_cover_each_pin_kind_and_parse():
     boards = voice_eval.memo_boards([_thread(i) for i in range(1, 9)])
     assert len(boards) == 8
@@ -172,7 +182,7 @@ async def test_capture_reads_the_breaking_list():
 @pytest.mark.asyncio
 async def test_capture_says_so_and_goes_on_without_the_breaking_list(capsys):
     async with _http(500) as http:
-        assert await voice_eval._breaking(http) == []
+        assert await voice_eval._breaking(http) is None
     assert "breaking list is unavailable (HTTP 500)" in capsys.readouterr().out
 
 
@@ -181,6 +191,62 @@ async def test_capture_stops_when_it_asks_the_breaking_list_wrongly():
     async with _http(422) as http:
         with pytest.raises(httpx.HTTPStatusError):
             await voice_eval._breaking(http)
+
+
+def _api(threads: int = 200, breaking: int = 200) -> httpx.MockTransport:
+    """The public API, faked: eight usable threads, the breaking list, board resolve
+    (an article pin is expired, every other pin resolves)."""
+    listed = [_thread(i, title=f"Story {i}") for i in range(1, 9)]
+    by_id = {t["id"]: t for t in listed}
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/threads":
+            return httpx.Response(threads, json=listed)
+        if path.startswith("/api/threads/"):
+            return httpx.Response(200, json=by_id[int(path.rsplit("/", 1)[1])])
+        if path == "/api/news/breaking":
+            return httpx.Response(breaking, json=[_breaking()])
+        if path == "/api/board/resolve":
+            items = json.loads(request.content)["items"]
+            snapshots = [None if i.startswith("article:") else {"title": i} for i in items]
+            return httpx.Response(
+                200, json={"items": [{"item": i, "snapshot": s} for i, s in zip(items, snapshots)]}
+            )
+        return httpx.Response(404)
+
+    return httpx.MockTransport(answer)
+
+
+def _capture_from(monkeypatch, tmp_path, transport: httpx.MockTransport) -> None:
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        voice_eval.httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw)
+    )
+    monkeypatch.setattr(voice_eval, "FIXTURES", tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_capture_stops_when_the_threads_list_fails(tmp_path, monkeypatch):
+    _capture_from(monkeypatch, tmp_path, _api(threads=500))
+    with pytest.raises(httpx.HTTPStatusError):
+        await voice_eval.capture("https://orbis.test")
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_capture_writes_fixtures_without_the_breaking_list_and_marks_them(
+    tmp_path, monkeypatch
+):
+    _capture_from(monkeypatch, tmp_path, _api(breaking=503))
+    await voice_eval.capture("https://orbis.test")
+    copilot = json.loads((tmp_path / "copilot.json").read_text(encoding="utf-8"))
+    memo = json.loads((tmp_path / "memo.json").read_text(encoding="utf-8"))
+    assert (len(copilot), len(memo)) == (len(voice_eval.SPECIFIC) + len(voice_eval.BROAD), 8)
+    broad = [c for c in copilot if "broad" in c["tags"]]
+    assert [c["breaking"] for c in broad] == ["unavailable"] * len(voice_eval.BROAD)
+    assert all(len(c["results"][0]["result"]) == voice_eval.TOP_THREADS for c in broad)
+    assert all(voice_eval.check_fixture(c) == [] for c in copilot)
 
 
 # --- Fixture checks -----------------------------------------------------------------------
@@ -211,6 +277,14 @@ def test_committed_copilot_fixtures_carry_no_visitor_text():
     assert sum("broad" in c["tags"] for c in cases) == len(voice_eval.BROAD)
     for case in cases:
         assert voice_eval.check_fixture(case) == [], case["id"]
+
+
+def test_committed_broad_fixtures_carry_the_top_threads_and_the_breaking_state():
+    broad = [c for c in _fixtures("copilot.json") if "broad" in c["tags"]]
+    for case in broad:
+        [result] = case["results"]
+        assert len(result["result"]) >= voice_eval.TOP_THREADS, case["id"]
+        assert case["breaking"] == "unavailable" or isinstance(case["breaking"], list)
 
 
 def test_committed_memo_fixtures_parse_align_and_have_two_pins_with_text():
@@ -313,8 +387,65 @@ def test_routing(tags, tools, ok):
 def test_one_spend_counts_the_whole_run():
     spend = voice_eval.Spend(0.001)
     assert spend.allows(0.0009)
-    spend.add([_response("")])  # $0.0008
+    spend.add([_response("")], 0.0009)  # $0.0008, for its $0.0009 reservation
     assert not spend.allows(0.0009)
+
+
+def test_spend_reserves_each_estimate_until_its_calls_are_counted():
+    spend = voice_eval.Spend(0.002)
+    assert spend.allows(0.0009) and spend.allows(0.0009)
+    assert not spend.allows(0.0009)  # two calls in flight hold $0.0018
+    spend.add([], 0.0009)  # one failed before any response: its reservation goes
+    assert spend.allows(0.0009)
+
+
+def _memo_cases(tmp_path, monkeypatch, n: int) -> None:
+    cases = [
+        {"id": f"memo-{k}", "items": ["thread:1", "thread:2"], "snapshots": [], "saved": []}
+        for k in range(n)
+    ]
+    (tmp_path / "memo.json").write_text(json.dumps(cases), encoding="utf-8")
+    monkeypatch.setattr(voice_eval, "FIXTURES", tmp_path)
+    monkeypatch.setattr(voice_eval, "RESULTS", tmp_path / "results")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cases_cannot_all_pass_the_cap(tmp_path, monkeypatch):
+    _memo_cases(tmp_path, monkeypatch, voice_eval.CONCURRENCY)
+
+    async def memo(case: dict) -> str:
+        await asyncio.sleep(0)  # every case is in flight before any is counted
+        voice_eval._CALLS.get().append(_response('{"possible_connections": "Floods [1]."}'))
+        return "Floods hit Valencia [1]."
+
+    monkeypatch.setattr(voice_eval, "run_memo", memo)
+    spend = voice_eval.Spend(2.5 * voice_eval.EST_USD["memo"])  # room for two estimates
+    summary = await voice_eval.run_surface("memo", "t", 1, spend, False)
+    assert summary["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_an_answer_with_no_recorded_call_stops_the_run(tmp_path, monkeypatch):
+    _memo_cases(tmp_path, monkeypatch, 1)
+
+    async def memo(case: dict) -> str:  # as if a surface built a client the run can't see
+        return "Floods hit Valencia [1]."
+
+    monkeypatch.setattr(voice_eval, "run_memo", memo)
+    with pytest.raises(voice_eval.UncountedCall):
+        await voice_eval.run_surface("memo", "t", 1, voice_eval.Spend(1.0), False)
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_text_needs_no_call(tmp_path, monkeypatch):
+    _memo_cases(tmp_path, monkeypatch, 1)
+
+    async def memo(case: dict) -> str:
+        return board.NOT_ENOUGH_PINS
+
+    monkeypatch.setattr(voice_eval, "run_memo", memo)
+    summary = await voice_eval.run_surface("memo", "t", 1, voice_eval.Spend(1.0), False)
+    assert summary["outcomes"] == {"not_enough": 1}
 
 
 def test_isolate_blanks_production_state(monkeypatch):

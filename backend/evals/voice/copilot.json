@@ -1499,7 +1499,8 @@
     "screen": {
       "start": "2026-10-22T17:05:13+00:00",
       "end": "2026-10-23T17:05:13+00:00"
-    }
+    },
+    "breaking": "unavailable"
   },
   {
     "id": "cp-10-broad_new",
@@ -1567,7 +1568,8 @@
         ]
       }
     ],
-    "history": []
+    "history": [],
+    "breaking": "unavailable"
   },
   {
     "id": "cp-11-broad_know",
@@ -1635,6 +1637,7 @@
         ]
       }
     ],
-    "history": []
+    "history": [],
+    "breaking": "unavailable"
   }
 ]
