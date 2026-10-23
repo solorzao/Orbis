@@ -26,9 +26,8 @@ from app.services.agent import (
     ScreenScope,
     ScreenTopic,
     _build_context,
-    _collect_urls,
-    _collect_urls_from_history,
     _enrich_citations,
+    _readable_urls,
     admit_ask,
     ask,
     clean_screen_context,
@@ -164,21 +163,18 @@ async def _save_history(
 ) -> None:
     """Append the latest exchange and persist to Redis (last 10 messages).
 
-    Embeds citation URLs in the assistant message so follow-up questions
-    can discover them via ``_collect_urls_from_history``. The paused answer
-    is not saved: it says nothing about the conversation, and the question
-    can be asked again once the budget resets.
+    The answer's citation links are stored in their own "sources" field, for a
+    follow-up's read_article (``_readable_urls``): never in the text, where the
+    model's own words could forge a block. Claude is sent role and content only.
+    The paused answer is not saved: it says nothing about the conversation, and
+    the question can be asked again once the budget resets.
     """
     if answer == _PAUSED_ANSWER:
         return
     history.append({"role": "user", "content": question})
-    # Append citation URLs so follow-up read_article calls can find them
-    answer_to_store = answer
-    if citations:
-        url_list = [c["url"] for c in citations if c.get("url")]
-        if url_list:
-            answer_to_store = answer + "\n\n[Sources: " + ", ".join(url_list) + "]"
-    history.append({"role": "assistant", "content": answer_to_store})
+    # `or []`: the off-topic stream path passes None.
+    sources = [c["url"] for c in citations or [] if c.get("url")]
+    history.append({"role": "assistant", "content": answer, "sources": sources})
     # Keep last 10 messages (5 exchanges)
     history = history[-10:]
 
@@ -276,16 +272,14 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
             yield {"event": "retrieving", "data": json.dumps({"tool": tc["name"]})}
         retrieval_results = list(await execute_retrieval(first_pass)) if first_pass else []
 
-        # Step 2b: Read articles (second pass)
+        # Step 2b: Read articles (second pass): only pages this turn found or the
+        # last answer cited, never the planner's own URLs
         if wants_read:
-            urls = _collect_urls(retrieval_results)
-            # Fallback: use URLs from conversation history if first-pass had none
-            if not urls:
-                urls = _collect_urls_from_history(history)
+            urls = _readable_urls(retrieval_results, history)
             if urls:
                 yield {"event": "retrieving", "data": json.dumps({"tool": "read_article"})}
                 read_results = await execute_retrieval(
-                    [{"name": "read_article", "args": {"urls": urls[:5], "question": question}}]
+                    [{"name": "read_article", "args": {"urls": urls, "question": question}}]
                 )
                 retrieval_results.extend(read_results)
 

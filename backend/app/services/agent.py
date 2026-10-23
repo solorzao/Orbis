@@ -23,6 +23,7 @@ from app.middleware.security import has_injection_pattern, sanitise_text, strip_
 from app.services import llm_budget, retrieval, voice
 from app.services.ai_summary import _clean_place
 from app.services.llm import response_text
+from app.services.urls import web_url
 
 logger = logging.getLogger("orbis.agent")
 
@@ -433,8 +434,10 @@ def _get_anthropic_client(*, timeout: float, max_retries: int) -> anthropic.Asyn
     )
 
 
-# The links the router's _save_history appends to each stored answer, for
-# _collect_urls_from_history. Shown to the model, they would be copied into answers.
+# The links the router's _save_history appended to each stored answer before 21b
+# (it now stores them in their own "sources" field, which the model is never sent).
+# Entries written then live for the history's hour; shown to the model, their links
+# would be copied into answers.
 _SOURCES = re.compile(r"\n*\[Sources: [^\]]*\]\s*$")
 
 # A <news> tag inside the reports (scraped page text can hold one) would end the
@@ -1080,27 +1083,48 @@ def _collect_urls(retrieval_results: list[dict]) -> list[str]:
     return urls
 
 
-def _collect_urls_from_history(history: list[dict]) -> list[str]:
-    """Extract article URLs from previous assistant messages in conversation history.
+# The block _save_history appended before 21b, at the very end of an answer.
+_STORED_SOURCES = re.compile(r"\n\n\[Sources: ([^\]]*)\]\s*$")
+_MAX_READS = 5
 
-    Looks for the ``[Sources: url1, url2, ...]`` block appended by ``_save_history``.
-    Returns URLs from the most recent assistant message that has them.
-    """
-    urls: list[str] = []
-    seen: set[str] = set()
+
+def _collect_urls_from_history(history: list[dict] | None) -> list[str]:
+    """The previous answer's citation links, as the server stored them: its "sources"
+    (21b on), or the block it appended at the very end (before 21b). Never a
+    "[Sources: …]" the model wrote inside an answer. http(s) only."""
     for msg in reversed(history or []):
-        if msg.get("role") != "assistant":
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
             continue
-        match = re.search(r"\[Sources: ([^\]]+)\]", msg.get("content", ""))
-        if match:
-            for url in match.group(1).split(", "):
-                url = url.strip()
-                if url and url.startswith("http") and url not in seen:
-                    seen.add(url)
-                    urls.append(url)
-            if urls:
-                break
-    return urls
+        stored = msg.get("sources")
+        if isinstance(stored, list):
+            urls = stored
+        else:
+            content = msg.get("content")
+            match = _STORED_SOURCES.search(content) if isinstance(content, str) else None
+            urls = match.group(1).split(", ") if match else []
+        clean = list(dict.fromkeys(u for u in map(web_url, urls) if u))
+        if clean:
+            return clean
+    return []
+
+
+def _readable_urls(retrieval_results: list[dict], history: list[dict] | None) -> list[str]:
+    """The pages read_article may fetch: this turn's retrieved stories, else the previous
+    answer's stored citations. Never a URL the planner wrote (its read_article
+    arguments are ignored). http(s) only; the scraper itself refuses non-public hosts
+    (#130). Logs counts only."""
+    found = _collect_urls(retrieval_results)
+    urls = list(dict.fromkeys(u for u in map(web_url, found) if u))
+    origin = "this turn"
+    if not urls:
+        urls, origin = _collect_urls_from_history(history), "the last answer"
+    logger.info(
+        "read_article: %d pages from %s; %d links refused.",
+        min(len(urls), _MAX_READS),
+        origin,
+        len(found) - len([u for u in found if web_url(u)]),
+    )
+    return urls[:_MAX_READS]
 
 
 async def ask(
@@ -1134,15 +1158,13 @@ async def ask(
     # Step 2: Retrieve (first pass)
     retrieval_results = list(await execute_retrieval(first_pass)) if first_pass else []
 
-    # Step 3: Read articles (second pass) — inject URLs from first-pass results
+    # Step 3: Read articles (second pass): only pages this turn found or the last
+    # answer cited, never the planner's own URLs
     if wants_read:
-        urls = _collect_urls(retrieval_results)
-        # Fallback: use URLs from conversation history if first-pass had none
-        if not urls:
-            urls = _collect_urls_from_history(conversation_history)
+        urls = _readable_urls(retrieval_results, conversation_history)
         if urls:
             read_results = await execute_retrieval(
-                [{"name": "read_article", "args": {"urls": urls[:5], "question": question}}]
+                [{"name": "read_article", "args": {"urls": urls, "question": question}}]
             )
             retrieval_results.extend(read_results)
 

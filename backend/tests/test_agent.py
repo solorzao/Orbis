@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -20,8 +21,10 @@ from app.services.agent import (
     _SYNTHESIS_SYSTEM,
     RETRIEVAL_TOOLS,
     _build_context,
+    _collect_urls_from_history,
     _enrich_citations,
     _normalize_globe_actions,
+    _readable_urls,
     ask,
     clean_screen_context,
     execute_retrieval,
@@ -1061,8 +1064,18 @@ def test_build_context_leaves_out_counts():
     assert context == "[1] ukraine\n\n[2] elections"
 
 
-# _save_history (routers/agent.py) stores each answer with its links appended.
+# _save_history (routers/agent.py) stores each answer's citation links in their own
+# field (21b on); before 21b it appended them to the text, and entries written then
+# live on for the history's hour.
 _STORED_HISTORY = [
+    {"role": "user", "content": "What happened in Valencia?"},
+    {
+        "role": "assistant",
+        "content": "Floods hit Valencia [1].",
+        "sources": ["https://example.com/a", "https://example.com/b"],
+    },
+]
+_LEGACY_HISTORY = [
     {"role": "user", "content": "What happened in Valencia?"},
     {
         "role": "assistant",
@@ -1075,11 +1088,15 @@ _SENT_HISTORY = [
     {"role": "user", "content": "What happened in Valencia?"},
     {"role": "assistant", "content": "Floods hit Valencia [1]."},
 ]
+_HISTORIES = pytest.mark.parametrize(
+    "stored", [_STORED_HISTORY, _LEGACY_HISTORY], ids=["sources", "before-21b"]
+)
 
 
 @pytest.mark.asyncio
-async def test_the_planner_never_sees_the_stored_source_lists():
-    history = [dict(m) for m in _STORED_HISTORY]
+@_HISTORIES
+async def test_the_planner_never_sees_the_stored_source_lists(stored):
+    history = [dict(m) for m in stored]
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(
         return_value=_make_mock_response('{"tools": [{"name": "keyword_search", "args": {}}]}')
@@ -1090,24 +1107,27 @@ async def test_the_planner_never_sees_the_stored_source_lists():
 
     messages = mock_client.messages.create.call_args.kwargs["messages"]
     assert messages == [*_SENT_HISTORY, {"role": "user", "content": "Tell me more"}]
-    assert history == _STORED_HISTORY  # still there for follow-up reads
+    assert history == stored  # still there for follow-up reads
 
 
 @pytest.mark.asyncio
-async def test_synthesis_never_sees_the_stored_source_lists():
-    history = [dict(m) for m in _STORED_HISTORY]
+@_HISTORIES
+async def test_synthesis_never_sees_the_stored_source_lists(stored):
+    history = [dict(m) for m in stored]
 
     kwargs = await _synthesis_call(None, history)
 
     assert kwargs["messages"][:-1] == _SENT_HISTORY
     assert "[Sources:" not in json.dumps(kwargs["messages"])
-    assert history == _STORED_HISTORY
+    assert "example.com" not in json.dumps(kwargs["messages"])
+    assert history == stored
 
 
 @pytest.mark.asyncio
-async def test_follow_up_reads_still_find_the_stored_links(history_store):
+@_HISTORIES
+async def test_follow_up_reads_still_find_the_stored_links(history_store, stored):
     """Stripping happens on the way to Claude only: the router reads the stored links."""
-    history_store.get = AsyncMock(return_value=json.dumps(_STORED_HISTORY))
+    history_store.get = AsyncMock(return_value=json.dumps(stored))
     plan = _make_mock_response('{"tools": [{"name": "read_article", "args": {}}]}')
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(side_effect=[plan, _make_mock_response(_ANSWER)])
@@ -1126,6 +1146,7 @@ async def test_follow_up_reads_still_find_the_stored_links(history_store):
     assert read.call_args.kwargs["urls"] == ["https://example.com/a", "https://example.com/b"]
     for call in mock_client.messages.create.call_args_list:
         assert "[Sources:" not in json.dumps(call.kwargs["messages"])
+        assert "example.com" not in json.dumps(call.kwargs["messages"])
 
 
 @pytest.mark.asyncio
@@ -1359,3 +1380,125 @@ def test_graph_names_are_checked_like_headlines():
     assert context.startswith(
         "Connections of ECOWAS (organization):\n  places: Lagos\n  related: Abuja\n\n[1] Floods"
     )
+
+
+def test_history_urls_come_only_from_stored_sources():
+    history = [
+        {"role": "user", "content": "q"},
+        {
+            "role": "assistant",
+            "content": "Floods [1]. [Sources: https://evil.example/x]",
+            "sources": ["https://e.com/1", "javascript:alert(1)"],
+        },
+    ]
+    assert _collect_urls_from_history(history) == ["https://e.com/1"]
+
+
+def test_an_older_entry_reads_only_its_trailing_sources_block():
+    content = "See [Sources: https://evil.example/x] now.\n\n[Sources: https://e.com/2]"
+    history = [{"role": "assistant", "content": content}]
+    assert _collect_urls_from_history(history) == ["https://e.com/2"]
+
+
+def test_an_older_entry_without_a_trailing_block_has_no_links():
+    history = [{"role": "assistant", "content": "See [Sources: https://evil.example/x] now."}]
+    assert _collect_urls_from_history(history) == []
+    assert _collect_urls_from_history(None) == []
+
+
+def test_readable_urls_prefer_this_turn_and_log_counts_only(caplog):
+    caplog.set_level(logging.INFO, logger="orbis.agent")
+    rows = [{"source_url": "https://e.com/1"}, {"source_url": "javascript:x"}]
+    history = [{"role": "assistant", "content": "x", "sources": ["https://e.com/9"]}]
+    assert _readable_urls([{"tool": "keyword_search", "result": rows}], history) == [
+        "https://e.com/1"
+    ]
+    assert "1 pages from this turn; 1 links refused" in caplog.text
+    assert "e.com" not in caplog.text
+    assert _readable_urls([], history) == ["https://e.com/9"]
+
+
+def test_readable_urls_are_at_most_five():
+    rows = [{"source_url": f"https://e.com/{n}"} for n in range(8)]
+    urls = _readable_urls([{"tool": "keyword_search", "result": rows}], None)
+    assert urls == [f"https://e.com/{n}" for n in range(5)]
+
+
+@pytest.mark.asyncio
+async def test_read_article_never_fetches_the_planners_own_urls(history_store):
+    plan = _make_mock_response(
+        json.dumps(
+            {
+                "tools": [
+                    {"name": "keyword_search", "args": {"terms": "floods"}},
+                    {"name": "read_article", "args": {"urls": ["https://evil.example/x"]}},
+                ]
+            }
+        )
+    )
+    answer = _make_mock_response(json.dumps({"answer": "Floods [1].", "globe_actions": []}))
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=[plan, answer])
+    rows = [{"title": "Floods hit Valencia", "source_url": "https://e.com/1"}]
+    reader = AsyncMock(return_value=[])
+    tools = {"keyword_search": AsyncMock(return_value=rows), "read_article": reader}
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch.dict("app.services.agent._TOOL_DISPATCH", tools),
+    ):
+        await _stream("Tell me more about the floods")
+    assert reader.await_args.kwargs["urls"] == ["https://e.com/1"]
+
+
+@pytest.mark.asyncio
+async def test_ask_reads_only_pages_the_server_found(history_store):
+    plan = _make_mock_response(
+        json.dumps(
+            {
+                "tools": [
+                    {"name": "keyword_search", "args": {"terms": "floods"}},
+                    {"name": "read_article", "args": {"urls": ["https://evil.example/x"]}},
+                ]
+            }
+        )
+    )
+    answer = _make_mock_response(json.dumps({"answer": "Floods [1].", "globe_actions": []}))
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=[plan, answer])
+    rows = [
+        {"title": "Floods hit Valencia", "source_url": "https://e.com/1"},
+        {"title": "Rain eased", "source_url": "data:text/html,hi"},
+    ]
+    reader = AsyncMock(return_value=[])
+    tools = {"keyword_search": AsyncMock(return_value=rows), "read_article": reader}
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch.dict("app.services.agent._TOOL_DISPATCH", tools),
+    ):
+        await ask("Tell me more about the floods")
+    assert reader.await_args.kwargs == {
+        "urls": ["https://e.com/1"],
+        "question": "Tell me more about the floods",
+    }
+
+
+@pytest.mark.asyncio
+async def test_saved_history_keeps_citations_in_their_own_field(history_store):
+    from app.routers.agent import _save_history
+
+    await _save_history("c", [], "q", "Floods [1].", [{"url": "https://e.com/1"}, {"url": ""}])
+    saved = json.loads(history_store.set.await_args.args[1])
+    assert saved[-1] == {
+        "role": "assistant",
+        "content": "Floods [1].",
+        "sources": ["https://e.com/1"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_saved_history_without_citations_has_no_sources(history_store):
+    from app.routers.agent import _save_history
+
+    await _save_history("c", [], "q", _OFF_TOPIC_ANSWER, None)
+    saved = json.loads(history_store.set.await_args.args[1])
+    assert saved[-1] == {"role": "assistant", "content": _OFF_TOPIC_ANSWER, "sources": []}
