@@ -135,10 +135,14 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
         # broad question…") or before ", so" ("a follow-up question, so"), and "the
         # lead story" as a label where a sentence starts. News passes: "A broad
         # question of jurisdiction remains", "the court left a broad question open",
-        # "the Times' lead story on Sunday", "the lead story in Sunday's Observer".
+        # "the Times' lead story on Sunday", "the lead story in Sunday's Observer",
+        # and a coverage answer's "The lead story about the strike…", "The lead story
+        # by Reuters…" and "The lead story, in The Times, …" (#152 re-review). "The
+        # lead story was the strike, the BBC said" is still dropped (accepted).
         r"|(?:^|[.!?]\s+)\W*(?:this\s+is\s+a\s+)?broad\s+question\b"
         r"|\b(?:a|the)\s+(?:broad|specific|general|follow-up)\s+question\s*,\s*so\b"
-        r"|(?:^|[.!?]\s+)\W*the\s+lead\s+story\b(?!\s+(?:in|on|of|from|at|for|across)\b)",
+        r"|(?:^|[.!?]\s+)\W*the\s+lead\s+story\b(?!,)"
+        r"(?!\s+(?:in|on|of|from|at|for|across|about|by)\b)",
         _I,
     ),
     # Coordinates copied from the inputs: "(38.96, 35.24)", "38.9637, 35.2433".

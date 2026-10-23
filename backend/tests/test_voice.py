@@ -299,6 +299,10 @@ NEWS = [
     "The strike was the lead story on the BBC website [1].",
     "The strike was the lead story everywhere that week [1].",
     "Its lead story said talks would resume [2].",
+    # A coverage answer's lead stories (#152 re-review).
+    "The lead story about the strike ran on page one [2].",
+    "The lead story by Reuters said talks would resume [1].",
+    "The lead story, in The Times, said the talks had stalled [3].",
 ]
 
 
