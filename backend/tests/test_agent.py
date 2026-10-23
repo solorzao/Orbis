@@ -1883,7 +1883,18 @@ def test_the_screen_guide_leaves_top_stories_window_and_topic_to_the_screen():
         ("Catch me up", "top_stories"),
         ("Top stories today", "top_stories"),
         ("Main headlines of the day?", "top_stories"),
+        ("Today's top stories", "top_stories"),
+        ("The top stories, please", "top_stories"),
+        ("Catch me up on the news", "top_stories"),
+        ("Catch me up on the top stories", "top_stories"),
+        ("What's going on in the world right now?", "top_stories"),
         ("Top stories in Nigeria", "keyword_search"),  # names a place (decision 21)
+        # A place in lower case after other words, or before the phrase (review M2).
+        ("biggest story right now in lagos", "keyword_search"),
+        ("what's happening right now in gaza", "keyword_search"),
+        ("Nigeria's top stories", "keyword_search"),
+        ("UK top headlines", "keyword_search"),
+        ("Show me Lagos top stories", "keyword_search"),
         ("top stories in nigeria", "keyword_search"),
         ("What's the latest news on the strike?", "keyword_search"),
         ("Catch me up on the strike", "keyword_search"),

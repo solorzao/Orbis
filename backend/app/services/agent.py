@@ -872,27 +872,54 @@ _BROAD = re.compile(
     r"(?:\b(?:biggest|top|main|major|latest)\s+(?:news|stories|story|headlines?)"
     r"|\bwhat(?:['’]s|\s+is)\s+(?:happening|new|breaking|going\s+on)"
     r"|\bwhat\s+should\s+i\s+know|\bcatch\s+me\s+up)\b"
-    # ...unless it goes on to say what about: "here", "with the strike", "in tech",
-    # "on the strike". A time or the world is still broad: "in the last few hours",
-    # "around the world", "about today", "of the day".
-    r"(?!\s+(?:here|there)\b)"
-    r"(?!\s+(?:in|at|on|with|to|between|around|about|for|from|of|over|near|across)\s+"
-    r"(?!(?:the\s+)?(?:last|past|day|week|world|globe|recent)\b"
-    r"|today\b|tonight\b|now\b|this\s+(?:morning|afternoon|evening|week)\b))",
+    r"(?!\s+(?:here|there|to)\b)",  # "what's happening here", "... to the economy"
     re.IGNORECASE,
 )
-# ...or names a place, person or topic anywhere ("Top stories in Nigeria", "biggest
-# story right now in Lagos", "news about Trump", "in the US"): then it is about that
-# (decision 21).
-_NAMES_SOMETHING = re.compile(
-    r"\b(?:in|at|from|across|around|near|about|on|for)\s+(?:the\s+)?[A-Z]\w"
+# ...unless it names a place, person or topic (decision 21). Either a phrase like "in
+# Lagos", "in gaza", "on the strike" or "in tech", anywhere and in any case, whose
+# object isn't a time, the world, the news or the asker ("in the last few hours",
+# "around the world", "about today", "on the top stories", "for me")...
+_BROAD_OBJECT = (
+    r"(?:(?:the|this|these|my|our)\s+)?(?:last|past|recent|day|week|weekend|morning"
+    r"|afternoon|evening|hours?|world|globe|news|headlines?|stories|story|top|biggest"
+    r"|main|major|latest)\b|today\b|tonight\b|now\b|me\b|us\b"
 )
+_ABOUT_SOMETHING = re.compile(
+    r"\b(?:in|at|on|with|between|around|about|for|from|of|over|near|across)\s+"
+    rf"(?!{_BROAD_OBJECT})\w",
+    re.IGNORECASE,
+)
+# ...or a name right before the broad words: a possessive ("Nigeria's top stories"), an
+# acronym ("UK top headlines"), or a capital past the question's first word ("Show me
+# Lagos top stories").
+_WORD_BEFORE = re.compile(r"(?:^|\s)([^\W\d_][\w'’]*)\s+$")
+_NOT_A_NAME = frozenset(
+    {"the", "a", "an", "my", "our", "your", "any", "all", "today", "today's", "tonight's"}
+    | {"world's", "week's", "day's", "what's", "that's", "it's", "here's", "there's"}
+)
+
+
+def _names_something(question: str, broad: re.Match[str]) -> bool:
+    """Whether a question with broad words (*broad*) is about something in particular.
+    The broad words read as "news" here, so "about the top stories" stays broad and
+    "going on" isn't a phrase "on"."""
+    before = question[: broad.start()]
+    if _ABOUT_SOMETHING.search(f"{before}news{question[broad.end() :]}"):
+        return True
+    word = _WORD_BEFORE.search(before)
+    if word is None or word[1].lower().replace("’", "'") in _NOT_A_NAME:
+        return False
+    name = word[1]
+    if re.search(r"['’]s$", name) or (len(name) > 1 and name.isupper()):
+        return True
+    return name[0].isupper() and bool(before[: word.start(1)].strip())
 
 
 def _fallback(question: str) -> list[dict]:
     """The tools when the planner fails: top_stories for a broad question, else a
     keyword search of the question's words."""
-    if _BROAD.search(question) and not _NAMES_SOMETHING.search(question):
+    broad = _BROAD.search(question)
+    if broad and not _names_something(question, broad):
         return [{"name": "top_stories", "args": {}}]
     terms = _extract_keywords(question)
     return [{"name": "keyword_search", "args": {"terms": terms or question[:50]}}]
