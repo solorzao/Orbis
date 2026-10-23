@@ -448,13 +448,18 @@ def coverage_words(outlets: int, countries: int, status: str) -> str:
     return f"{outlets} outlets, {countries} {places}, {status}"
 
 
-def top_story_rows(threads: list[dict], breaking: list[dict], urls: dict[int, str]) -> list[dict]:
+def top_story_rows(
+    threads: list[dict], breaking: list[dict], urls: dict[int, str], *, fresh: bool = True
+) -> list[dict]:
     """The rows top_stories returns: the TOP_THREADS widest threads, then up to
     TOP_BREAKING breaking events, as retrieval rows _build_context numbers, each with a
     summary and a coverage line. Threads come as /api/threads answers them (JSON),
     breaking events as /api/news/breaking does; *urls* maps thread ids to lead links,
     which stay server-side (the context never shows a link). A breaking event has
-    none: its citation flies to its place and opens nothing."""
+    none: its citation flies to its place and opens nothing. Its outlets are counted
+    over the last 2 hours as the list was made: said so only when it is *fresh*, not
+    the last good list, which can be an hour old."""
+    when = " in the last 2 hours" if fresh else ""
     rows = []
     for t in by_breadth(threads)[:TOP_THREADS]:
         place = (t.get("places") or [{}])[0]
@@ -478,7 +483,7 @@ def top_story_rows(threads: list[dict], breaking: list[dict], urls: dict[int, st
                 "source_name": b["lead"]["source_name"],
                 "latitude": b["lat"],
                 "longitude": b["lng"],
-                "coverage": f"breaking: {b['outlets']} outlets in the last 2 hours, {b['place']}",
+                "coverage": f"breaking: {b['outlets']} outlets{when}, {b['place']}",
             }
         )
     return rows
@@ -512,14 +517,17 @@ async def top_stories(hours: int = 24, topic: str | None = None) -> list[dict]:
         pool = await get_pool()
         rows = await pool.fetch(_LEAD_URLS_SQL, [t["id"] for t in threads])
         urls = {r["id"]: web_url(r["source_url"]) or "" for r in rows}
-    result = top_story_rows(threads, events, urls)
+    fresh = origin == "fresh"
+    result = top_story_rows(threads, events, urls, fresh=fresh)
     logger.info(
         "top_stories: %d threads, %d breaking events (breaking list: %s).",
         len(threads),
         min(len(events), TOP_BREAKING),
         origin,
     )
-    await set_cached(key, result, cycle_ttl(_TOP_TTL))
+    # Without the fresh breaking list, only briefly: the ticker's refill is then
+    # picked up within minutes, not at the cycle's end.
+    await set_cached(key, result, cycle_ttl(_TOP_TTL) if fresh else _TOP_TTL)
     return result
 
 

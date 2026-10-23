@@ -180,6 +180,29 @@ async def test_breaking_comes_from_the_last_good_list_when_the_fresh_one_is_gone
 
     assert [r["title"] for r in rows[5:]] == [f"Storm hits coast {n}" for n in range(3)]
     breaking_query.assert_not_awaited()
+    # Up to an hour old: not said as "the last 2 hours", and kept only briefly, so the
+    # ticker's refill is picked up (M3).
+    assert rows[5]["coverage"] == "breaking: 9 outlets, Valencia, Spain"
+    assert redis.ttls["db:copilot:top:v1:24h:"] == 300
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_breaking_list_is_said_as_the_last_two_hours_and_kept_for_the_cycle(
+    redis, listed, pool, breaking_query
+):
+    from app.services.cache import cycle_ttl
+
+    redis.values["db:breaking:v1"] = json.dumps([_breaking(1, "politics")])
+
+    rows = await retrieval.top_stories(24)
+
+    assert rows[5]["coverage"] == "breaking: 9 outlets in the last 2 hours, Valencia, Spain"
+    assert redis.ttls["db:copilot:top:v1:24h:"] == cycle_ttl(300) > 300
+
+
+def test_a_stale_breaking_event_has_no_time_in_its_coverage():
+    [row] = retrieval.top_story_rows([], [_breaking(1)], {}, fresh=False)
+    assert row["coverage"] == "breaking: 9 outlets, Valencia, Spain"
 
 
 @pytest.mark.asyncio
@@ -195,6 +218,7 @@ async def test_with_no_cached_breaking_list_it_never_starts_or_waits_on_the_quer
     assert [r["title"] for r in rows] == [f"Story {i}" for i in range(1, 6)]
     breaking_query.assert_not_awaited()
     assert news._breaking_in_flight == {}
+    assert redis.ttls["db:copilot:top:v1:24h:"] == 300  # a refill is picked up soon
 
 
 @pytest.mark.asyncio
