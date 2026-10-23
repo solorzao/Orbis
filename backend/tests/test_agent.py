@@ -14,12 +14,15 @@ import pytest
 from app.routers.agent import AskRequest, ask_endpoint, ask_stream_endpoint
 from app.services import llm_budget, voice
 from app.services.agent import (
+    _APOLOGY,
     _NEWS_TAG,
+    _NO_ANSWER,
     _OFF_TOPIC_ANSWER,
     _PLANNING_SYSTEM,
     _SYNTHESIS_SCREEN_GUIDE,
     _SYNTHESIS_SYSTEM,
     RETRIEVAL_TOOLS,
+    SYNTHESIS_SCHEMA,
     _build_context,
     _collect_urls_from_history,
     _enrich_citations,
@@ -28,6 +31,7 @@ from app.services.agent import (
     ask,
     clean_screen_context,
     execute_retrieval,
+    guard_answer,
     plan_retrieval,
     synthesize_answer,
 )
@@ -88,12 +92,11 @@ async def test_plan_retrieval_returns_tool_calls():
 @pytest.mark.asyncio
 async def test_synthesize_answer_returns_structured_response():
     """synthesize_answer should return answer, citations, and globe_actions."""
-    sonnet_json = (
+    reply = (
         '{"answer": "An earthquake hit Turkey [1].", '
-        '"citations": [{"index": 1, "title": "Turkey quake", "source_url": "https://example.com"}], '
         '"globe_actions": [{"lat": 38.0, "lng": 34.0, "label": "Turkey"}]}'
     )
-    mock_response = _make_mock_response(sonnet_json)
+    mock_response = _make_mock_response(reply)
 
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -105,8 +108,8 @@ async def test_synthesize_answer_returns_structured_response():
         )
 
     assert "earthquake" in result["answer"].lower()
-    assert len(result["citations"]) == 1
-    assert result["citations"][0]["source_url"] == "https://example.com"
+    # The markers the answer keeps: cite() gives them their reports.
+    assert result["citations"] == [{"index": 1}]
     assert len(result["globe_actions"]) == 1
     assert result["globe_actions"][0] == {
         "type": "flyTo",
@@ -156,7 +159,7 @@ async def test_plan_retrieval_reads_text_after_thinking_block():
 
 @pytest.mark.asyncio
 async def test_synthesize_answer_reads_text_after_thinking_block():
-    answer_json = '{"answer": "Floods in Spain [1].", "citations": [], "globe_actions": []}'
+    answer_json = '{"answer": "Floods in Spain [1].", "globe_actions": []}'
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(
         return_value=_make_mock_response(answer_json, thinking_first=True)
@@ -204,7 +207,7 @@ async def test_ask_over_budget_skips_claude_and_retrieval(budget):
 async def test_admitted_ask_synthesizes_even_if_planning_spent_the_budget(budget):
     budget.has_budget.side_effect = [True, False]  # a second check would refuse
     plan = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {"terms": "x"}}]}')
-    answer = _make_mock_response('{"answer": "Floods [1].", "citations": [], "globe_actions": []}')
+    answer = _make_mock_response('{"answer": "Floods [1].", "globe_actions": []}')
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(side_effect=[plan, answer])
 
@@ -561,7 +564,7 @@ def test_ask_request_drops_invalid_context_fields_without_rejecting():
 @pytest.mark.asyncio
 async def test_stream_scopes_the_planner_with_the_screen_context(history_store):
     plan = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {"terms": "x"}}]}')
-    answer = _make_mock_response('{"answer": "Calm [1].", "citations": [], "globe_actions": []}')
+    answer = _make_mock_response('{"answer": "Calm [1].", "globe_actions": []}')
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(side_effect=[plan, answer])
     search = AsyncMock(return_value=[])
@@ -625,15 +628,16 @@ def test_enriched_citations_keep_the_number_the_answer_cites():
 
     enriched = _enrich_citations(raw, article_index)
 
-    assert [c["index"] for c in enriched] == [4, 1, 9]
+    # A number no report has is dropped: the model writes no titles or links.
+    assert [c["index"] for c in enriched] == [4, 1]
     assert enriched[0]["title"] == "Story 4"
-    assert enriched[2]["url"] == "https://x.com"
     assert enriched[0]["lat"] == 0 and enriched[0]["lng"] == 0
 
 
-def test_enriched_citations_without_a_number_get_none():
-    enriched = _enrich_citations([{"title": "T", "url": "https://e.com"}], [])
-    assert enriched[0]["index"] is None
+@pytest.mark.parametrize("index", [0, -1, None, True, "1", 1.0])
+def test_enriched_citations_need_a_report_number(index):
+    article_index = [{"title": "S", "url": "https://e.com/1", "source_name": "W"}]
+    assert _enrich_citations([{"index": index}], article_index) == []
 
 
 @pytest.mark.parametrize(
@@ -641,20 +645,20 @@ def test_enriched_citations_without_a_number_get_none():
     ["javascript:alert(1)", " JavaScript:alert(1)", "data:text/html,hi", "//evil.com/x", 42, None],
 )
 def test_enriched_citations_drop_a_non_web_link(url):
-    """A model-written source_url (the fallback) must be http(s) to reach the UI."""
-    [citation] = _enrich_citations([{"index": 7, "title": "T", "source_url": url}], [])
+    """A report's link must be http(s) to reach the UI, which opens it as given."""
+    article_index = [{"title": "S", "url": url, "source_name": "W"}]
+    [citation] = _enrich_citations([{"index": 1}], article_index)
     assert citation["url"] == ""
 
 
 def test_enriched_citations_keep_web_links():
-    raw = [
-        {"index": 1},
-        {"index": 9, "title": "T", "source_url": "HTTPS://example.com/a"},
-        {"index": 8, "title": "T", "url": "http://example.com/b"},
+    article_index = [
+        {"title": "S", "url": "javascript:x", "source_name": "W"},
+        {"title": "T", "url": "HTTPS://example.com/a", "source_name": "W"},
+        {"title": "U", "url": "http://example.com/b", "source_name": "W"},
     ]
-    article_index = [{"title": "S", "url": "javascript:x", "source_name": "W"}]
 
-    enriched = _enrich_citations(raw, article_index)
+    enriched = _enrich_citations([{"index": n} for n in (1, 2, 3)], article_index)
 
     assert [c["url"] for c in enriched] == ["", "HTTPS://example.com/a", "http://example.com/b"]
 
@@ -760,7 +764,7 @@ def test_screen_context_place_loses_tag_characters_and_letter_marks():
 # Screen context reaches the answer-writing step too
 # ---------------------------------------------------------------------------
 
-_ANSWER = '{"answer": "Calm [1].", "citations": [], "globe_actions": []}'
+_ANSWER = '{"answer": "Calm [1].", "globe_actions": []}'
 
 
 async def _synthesis_call(scope=None, history=None) -> dict:
@@ -1192,7 +1196,7 @@ async def test_the_answer_prompt_sent_to_claude(scoped):
     """The system prompt is static; the user turn holds the screen line, question and news."""
     plan = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {"terms": "Gaza"}}]}')
     answer = _make_mock_response(
-        '{"answer": "Strikes hit Khan Younis [1].", "citations": [{"index": 1}], '
+        '{"answer": "Strikes hit Khan Younis [1].", '
         '"globe_actions": [{"lat": 31.34, "lng": 34.3, "label": "Khan Younis"}]}'
     )
     mock_client = AsyncMock()
@@ -1489,3 +1493,135 @@ async def test_saved_history_without_citations_has_no_sources(history_store):
     await _save_history("c", [], "q", _OFF_TOPIC_ANSWER, None)
     saved = json.loads(history_store.set.await_args.args[1])
     assert saved[-1] == {"role": "assistant", "content": _OFF_TOPIC_ANSWER, "sources": []}
+
+
+@pytest.mark.asyncio
+async def test_synthesis_asks_for_the_answer_schema():
+    reply = json.dumps(
+        {"answer": "Floods hit Valencia [2]. Rain eased [1] [2].", "globe_actions": []}
+    )
+    client = _synthesis_client(reply)
+    with patch("app.services.agent._get_anthropic_client", return_value=client):
+        result = await synthesize_answer("What happened in Valencia?", "[1] A\n\n[2] B")
+    kwargs = client.messages.create.await_args.kwargs
+    assert kwargs["output_config"] == {
+        "effort": "medium",
+        "format": {"type": "json_schema", "schema": SYNTHESIS_SCHEMA},
+    }
+    assert (kwargs["model"], kwargs["max_tokens"]) == ("claude-haiku-5-5", 8192)
+    assert result["citations"] == [{"index": 1}, {"index": 2}]
+    assert SYNTHESIS_SCHEMA["additionalProperties"] is False
+
+
+def test_the_answer_schema_follows_the_structured_output_rules():
+    """Every object closed, every property required, no length bounds (Haiku 5.5)."""
+
+    def objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                yield node
+            for value in node.values():
+                yield from objects(value)
+
+    for node in objects(SYNTHESIS_SCHEMA):
+        assert node["additionalProperties"] is False
+        assert set(node["required"]) == set(node["properties"])
+    assert "minLength" not in json.dumps(SYNTHESIS_SCHEMA)
+    assert "maxLength" not in json.dumps(SYNTHESIS_SCHEMA)
+    assert "citations" not in SYNTHESIS_SCHEMA["properties"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["not json", '{"answer": 3, "globe_actions": []}', '["answer"]'])
+async def test_an_unusable_synthesis_reply_is_the_apology(text):
+    with patch("app.services.agent._get_anthropic_client", return_value=_synthesis_client(text)):
+        result = await synthesize_answer("q", "[1] A")
+    assert result == {"answer": _APOLOGY, "citations": [], "globe_actions": []}
+
+
+@pytest.mark.asyncio
+async def test_a_synthesis_cut_off_at_max_tokens_is_the_apology():
+    client = _synthesis_client('{"answer": "Floods', stop_reason="max_tokens")
+    with patch("app.services.agent._get_anthropic_client", return_value=client):
+        assert (await synthesize_answer("q", "[1] A"))["answer"] == _APOLOGY
+
+
+def test_the_guard_drops_leaking_sentences_and_logs_kinds_only(caplog):
+    caplog.set_level(logging.INFO, logger="orbis.agent")
+    result = guard_answer(
+        "Floods hit Valencia [2]. Report 3 is Reuters [3]. The user asked [1].", []
+    )
+    assert result == {
+        "answer": "Floods hit Valencia [2].",
+        "citations": [{"index": 2}],
+        "globe_actions": [],
+    }
+    assert "2 sentences dropped" in caplog.text and "(audience, handle)" in caplog.text
+    assert "Reuters" not in caplog.text  # counts and kinds only (#107)
+
+
+def test_the_guard_keeps_attribution():
+    answer = "The reports say police used tear gas [1]. Outlets describe it as calm [2]."
+    assert guard_answer(answer, [])["answer"] == answer
+
+
+def test_the_guard_reads_pins_as_ordinary_english_in_the_co_pilot():
+    """Pin handles are the memo's: the co-pilot has no pins (voice, surface="copilot")."""
+    answer = "Neither pin was recovered from the wreck [1]."
+    assert voice.find_leaks(answer, surface="memo")  # a memo would drop it
+    assert guard_answer(answer, [])["answer"] == answer
+
+
+def test_the_guard_drops_the_live_answers_closing_hedge():
+    answer = (
+        "A row over the couple's finances dominated UK coverage [1]. The reports give "
+        "headlines but few details, so I can't confirm the substance of these claims."
+    )
+    expected = "A row over the couple's finances dominated UK coverage [1]."
+    assert guard_answer(answer, [])["answer"] == expected
+
+
+def test_the_guard_says_timestamps_as_dates():
+    answer = guard_answer("Voting closed on 2026-10-21 18:00 UTC [1].", [])["answer"]
+    assert answer.startswith("Voting closed on 21 October")
+
+
+def test_a_leaking_globe_label_becomes_fly_there():
+    actions = [
+        {"lat": 6.4, "lng": 3.4, "label": "Lagos (item 2)"},
+        {"lat": 9.1, "lng": 7.5, "label": "Abuja"},
+    ]
+    result = guard_answer("Fuel queues grew in Lagos [1].", actions)
+    assert [a["label"] for a in result["globe_actions"]] == ["", "Abuja"]
+    assert all(a["type"] == "flyTo" for a in result["globe_actions"])
+
+
+def test_an_answer_the_guard_empties_is_the_fixed_no_answer(caplog):
+    caplog.set_level(logging.INFO, logger="orbis.agent")
+    result = guard_answer("Item 1 is Lagos.", [{"lat": 6.4, "lng": 3.4, "label": "Lagos"}])
+    assert result == {"answer": _NO_ANSWER, "citations": [], "globe_actions": []}
+    assert "1 sentences dropped" in caplog.text and "Lagos" not in caplog.text
+
+
+def test_the_fixed_texts_pass_the_guard():
+    for text in (_NO_ANSWER, _APOLOGY, _OFF_TOPIC_ANSWER):
+        assert voice.find_leaks(text, surface="copilot") == [], text
+
+
+@pytest.mark.asyncio
+async def test_synthesis_shows_only_the_guarded_answer(caplog):
+    caplog.set_level(logging.INFO, logger="orbis.agent")
+    reply = json.dumps(
+        {
+            "answer": "Floods hit Valencia [1]. The reader could check [2].",
+            "globe_actions": [{"lat": 39.47, "lng": -0.38, "label": "Valencia"}],
+        }
+    )
+    with patch("app.services.agent._get_anthropic_client", return_value=_synthesis_client(reply)):
+        result = await synthesize_answer("What happened in Valencia?", "[1] A\n\n[2] B")
+    assert result == {
+        "answer": "Floods hit Valencia [1].",
+        "citations": [{"index": 1}],
+        "globe_actions": [{"type": "flyTo", "lat": 39.47, "lng": -0.38, "label": "Valencia"}],
+    }
+    assert "Valencia" not in caplog.text

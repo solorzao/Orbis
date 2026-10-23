@@ -99,6 +99,66 @@ async def test_call_claude_sends_the_messages_request_the_api_expects(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_the_co_pilots_answer_is_the_structured_output_request(monkeypatch, budget):
+    """Phase 6 (21b): synthesis asks for SYNTHESIS_SCHEMA, at medium effort, with no
+    sampling parameters and no prefill; the reply's JSON is read from its text block."""
+    from app.services import agent
+
+    seen: list[httpx2.Request] = []
+    reply = {"answer": "Floods hit Valencia [1].", "globe_actions": []}
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": settings.haiku_model_id,
+                "content": [{"type": "text", "text": json.dumps(reply)}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 40, "output_tokens": 12},
+            },
+        )
+
+    real = anthropic.AsyncAnthropic
+
+    def build(**kwargs):
+        http = anthropic.DefaultAsyncHttpxClient(transport=_transport(seen, answer))
+        return real(**kwargs, http_client=http)
+
+    monkeypatch.setattr(agent.settings, "anthropic_api_key", "test-key")
+    with patch("app.services.agent.anthropic.AsyncAnthropic", side_effect=build):
+        result = await agent.synthesize_answer("What happened in Valencia?", "[1] Floods")
+
+    assert result == {
+        "answer": "Floods hit Valencia [1].",
+        "citations": [{"index": 1}],
+        "globe_actions": [],
+    }
+    [request] = seen
+    assert request.url.path == "/v1/messages"
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert json.loads(request.content) == {
+        "model": settings.haiku_model_id,
+        "max_tokens": 8192,
+        "output_config": {
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": agent.SYNTHESIS_SCHEMA},
+        },
+        "system": agent._SYNTHESIS_SYSTEM,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Question: What happened in Valencia?\n\n<news>\n[1] Floods\n</news>",
+            }
+        ],
+    }
+    llm_budget.record.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_generate_embeddings_sends_the_request_openai_expects(monkeypatch):
     seen: list[httpx2.Request] = []
     vector = [0.25, -0.5, 1.0]  # exact in float32

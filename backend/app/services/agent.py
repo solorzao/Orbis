@@ -623,49 +623,28 @@ def _build_context(
     return context, article_index
 
 
-_WEB_URL = re.compile(r"^https?://", re.IGNORECASE)
-
-
-def _web_url(url: object) -> str:
-    """*url* if it is an http(s) link, else "": the UI opens citation links as given."""
-    return url if isinstance(url, str) and _WEB_URL.match(url) else ""
-
-
 def _enrich_citations(raw_citations: list, article_index: list[dict]) -> list[dict]:
-    """Map LLM-generated citations back to full article metadata.
-
-    Each keeps its ``index``, the number the answer cites it by ([4]), so the
-    co-pilot can link each marker to its source. Links are http(s) only: a
-    fallback's link is model-written, and retrieved pages could steer it.
-    """
+    """Each cited report the model was given: its number, headline, link (http(s)
+    only: the UI opens it as given), outlet and place. A number no report has is
+    dropped: the model writes no titles or links."""
     enriched = []
     for c in raw_citations:
         idx = c.get("index")
-        number = idx if isinstance(idx, int) and not isinstance(idx, bool) and idx >= 1 else None
-        if number is not None and number <= len(article_index):
-            article = article_index[number - 1]
-            enriched.append(
-                {
-                    "index": number,
-                    "title": article["title"],
-                    "url": _web_url(article["url"]),
-                    "source_name": article["source_name"],
-                    "lat": article.get("lat") or 0,
-                    "lng": article.get("lng") or 0,
-                }
-            )
-        else:
-            # Fallback: use whatever the LLM provided
-            enriched.append(
-                {
-                    "index": number,
-                    "title": c.get("title", ""),
-                    "url": _web_url(c.get("source_url", c.get("url", ""))),
-                    "source_name": c.get("source_name", ""),
-                    "lat": c.get("lat", 0),
-                    "lng": c.get("lng", 0),
-                }
-            )
+        if not (
+            isinstance(idx, int) and not isinstance(idx, bool) and 1 <= idx <= len(article_index)
+        ):
+            continue
+        article = article_index[idx - 1]
+        enriched.append(
+            {
+                "index": idx,
+                "title": article["title"],
+                "url": web_url(article["url"]) or "",
+                "source_name": article["source_name"],
+                "lat": article.get("lat") or 0,
+                "lng": article.get("lng") or 0,
+            }
+        )
     return enriched
 
 
@@ -941,7 +920,7 @@ def _normalize_globe_actions(raw: object) -> list[dict]:
         if not (-90 <= lat <= 90 and -180 <= lng <= 180):
             continue
         if lat == 0 and lng == 0:
-            continue  # the schema example in _SYNTHESIS_SYSTEM, copied verbatim
+            continue  # a placeholder: open sea off West Africa, never a news place
         label = item.get("label")
         if isinstance(label, str):
             label = " ".join(label.split())[:_MAX_GLOBE_LABEL_LENGTH]
@@ -951,6 +930,76 @@ def _normalize_globe_actions(raw: object) -> list[dict]:
         if len(actions) == _MAX_GLOBE_ACTIONS:
             break
     return actions
+
+
+_APOLOGY = "I'm sorry, I couldn't generate an answer right now."
+# Shown when the voice guard leaves nothing of an answer: never a second call (Phase 6).
+_NO_ANSWER = (
+    "I couldn't put together an answer from recent coverage. "
+    "Try asking about a place or a story on the globe."
+)
+_CITED = re.compile(r"\[(\d{1,3})\]")
+
+# Structured outputs (as the memo and synopses use): the reply is this object.
+# Citations aren't in it: they are the [N] markers the answer keeps (cite()).
+SYNTHESIS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "globe_actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "lat": {"type": "number"},
+                    "lng": {"type": "number"},
+                    "label": {"type": "string"},
+                },
+                "required": ["lat", "lng", "label"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["answer", "globe_actions"],
+    "additionalProperties": False,
+}
+
+
+def guard_answer(answer: str, globe_actions: object) -> dict:
+    """The answer a visitor sees: voice.scrub's, with the markers it still cites, and
+    globe actions whose labels don't leak (a leaking label shows as "Fly there").
+
+    Read by the co-pilot's patterns (surface="copilot"): it has no pins, so "pins"
+    is ordinary English here. Logs counts and kinds only, never text: an answer can
+    echo the visitor's question (#107). With nothing left, _NO_ANSWER, without
+    citations or actions. Runs inside synthesize_answer, so both routes, the
+    simulated stream and the saved history see only this.
+    """
+    shown = voice.scrub(answer, surface="copilot")
+    if shown.kinds:
+        logger.info(
+            "Co-pilot voice guard: %d sentences dropped, %d dates rewritten (%s).",
+            shown.dropped,
+            shown.rewritten,
+            ", ".join(shown.kinds),
+        )
+    if not shown.text:
+        return {"answer": _NO_ANSWER, "citations": [], "globe_actions": []}
+    actions = [
+        {
+            **action,
+            "label": ""
+            if voice.find_leaks(action["label"], surface="copilot")
+            else action["label"],
+        }
+        for action in _normalize_globe_actions(globe_actions)
+    ]
+    cited = sorted({int(n) for n in _CITED.findall(shown.text)})
+    return {
+        "answer": shown.text,
+        "citations": [{"index": n} for n in cited],
+        "globe_actions": actions,
+    }
 
 
 async def synthesize_answer(
@@ -980,59 +1029,26 @@ async def synthesize_answer(
         client = _get_anthropic_client(timeout=SYNTHESIS_TIMEOUT_S, max_retries=CLAUDE_MAX_RETRIES)
         response = await client.messages.create(
             model=settings.haiku_model_id,
-            max_tokens=8192,  # room for adaptive thinking plus the cited answer
-            output_config={"effort": "medium"},
+            max_tokens=8192,  # room for adaptive thinking plus the answer
+            output_config={
+                "effort": "medium",
+                "format": {"type": "json_schema", "schema": SYNTHESIS_SCHEMA},
+            },
             system=system,
             messages=messages,
         )
         # Before response_text: refusals are billed too.
         await llm_budget.record(response.usage, response.model)
-        text = response_text(response).strip()
-        # Strip markdown code fences the model sometimes adds
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            # LLM sometimes outputs prose before/after JSON — extract the JSON block
-            json_match = re.search(r"\{[\s\S]*\"answer\"[\s\S]*\}", text)
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    parsed = None
-            else:
-                parsed = None
-
-        if parsed and "answer" in parsed:
-            return {
-                "answer": parsed["answer"],
-                "citations": parsed.get("citations", []),
-                "globe_actions": _normalize_globe_actions(parsed.get("globe_actions")),
-            }
-
-        # Truncated JSON fallback: extract the answer value directly
-        answer_match = re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
-        if answer_match:
-            logger.warning("JSON truncated — extracted answer field via regex.")
-            return {
-                "answer": answer_match.group(1).replace('\\"', '"').replace("\\n", "\n"),
-                "citations": [],
-                "globe_actions": [],
-            }
-
-        # Final fallback: strip any JSON wrapper and use prose as the answer
-        clean_text = re.sub(r"```json\s*\{[\s\S]*\}\s*```", "", text).strip()
-        clean_text = re.sub(r"\{[\s\S]*\"answer\"[\s\S]*\}\s*$", "", clean_text).strip()
-        return {"answer": clean_text or text, "citations": [], "globe_actions": []}
+        if response.stop_reason == "max_tokens":
+            raise ValueError("The synthesis was cut off at max_tokens.")
+        parsed = json.loads(response_text(response))
     except Exception:
         logger.error("Synthesis failed.", exc_info=True)
-        return {
-            "answer": "I'm sorry, I couldn't generate an answer right now.",
-            "citations": [],
-            "globe_actions": [],
-        }
+        return {"answer": _APOLOGY, "citations": [], "globe_actions": []}
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("answer"), str):
+        logger.error("The synthesis reply is not the answer schema.")
+        return {"answer": _APOLOGY, "citations": [], "globe_actions": []}
+    return guard_answer(parsed["answer"], parsed.get("globe_actions"))
 
 
 def _collect_urls(retrieval_results: list[dict]) -> list[str]:
