@@ -1698,6 +1698,7 @@ kbd {
   padding: 0 6px;
   margin: 0 1px;
   vertical-align: 1px;
+  white-space: nowrap; /* "16" never wraps to two lines (.msg breaks anywhere) */
 }
 button.cite:hover {
   background: rgba(0, 212, 255, 0.26);
@@ -1723,7 +1724,7 @@ button.cite:hover {
 }
 .sources button {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr); /* room for two digits (was 22px) */
   gap: 6px;
   align-items: center;
   text-align: left;

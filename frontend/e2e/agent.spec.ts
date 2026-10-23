@@ -356,4 +356,35 @@ test.describe("Co-pilot console", () => {
     const actions = page.getByRole("group", { name: "Suggested actions" });
     await expect(actions.getByRole("button")).toHaveText(["Fly to Sydney"]);
   });
+
+  test("two-digit source numbers stay on one line, in the panel and the sheet", async ({
+    page,
+  }) => {
+    const many = {
+      ...PARIS_ANSWER,
+      answer: Array.from({ length: 12 }, (_, i) => `Fact ${i + 1} [${i + 1}].`).join(" "),
+      citations: Array.from({ length: 12 }, (_, i) => ({
+        ...PARIS_ANSWER.citations[0],
+        index: i + 1,
+        url: `https://example.com/${i + 1}`,
+      })),
+    };
+    for (const size of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(size);
+      // As its neighbours do: every API route mocked, then this answer (later routes win).
+      await gotoStillGlobe(page, (p) => mockAgentRoute(p, many));
+      await openCopilot(page); // at 390 px the panel is the bottom sheet (layout.spec.ts)
+      await askQuestion(page, "Tell me about climate");
+      const badges = page.getByRole("group", { name: "Sources" }).locator(".cite");
+      await expect(badges).toHaveCount(12);
+      // One browser call: every badge is one line tall (no "1" above "0").
+      const heights = await badges.evaluateAll((els) =>
+        els.map((e) => Math.round(e.getBoundingClientRect().height)),
+      );
+      expect(new Set(heights).size, `badge heights at ${size.width}px`).toBe(1);
+    }
+  });
 });

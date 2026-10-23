@@ -16,11 +16,11 @@ const TOOL_LINES: Record<string, string> = {
   keyword_search: "searching headlines",
   graph_traverse: "following connections",
   entity_lookup: "looking up names",
-  trending_topics: "checking trends",
+  top_stories: "checking the top stories",
   read_article: "reading articles",
 };
 
-/** "Searching articles, checking trends…", or "Thinking…" before the plan. */
+/** "Searching articles, checking the top stories…", or "Thinking…" before the plan. */
 export function toolLine(tools: readonly string[]): string {
   const doing = [...new Set(tools.map((t) => TOOL_LINES[t] ?? "searching"))].join(", ");
   return doing ? `${doing[0].toUpperCase()}${doing.slice(1)}…` : "Thinking…";
