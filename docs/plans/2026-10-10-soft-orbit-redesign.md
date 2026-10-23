@@ -58,7 +58,7 @@
 | 22 | 6 | Voice evals and output guards (leak checks, a graded eval set) | 21 |
 | 23 | 6 | Co-pilot rework: a tool-using agent over the existing retrieval | 21, 22 |
 
-Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md` (done through #85), and Phase 4's is `docs/plans/2026-10-18-soft-orbit-phase-4.md` (PR 15 split into 15a–15c, 17 into 17a/17b, 18 into 18a/18b; done through #108). Phases 5 and 6 are scoped here and each gets its bite-sized plan when the phase before it is done, so it builds on what actually shipped.
+Phase 1 is detailed below and done (through #58). Phase 2's bite-sized plan is `docs/plans/2026-10-11-soft-orbit-phase-2.md` (done through #64), Phase 3's is `docs/plans/2026-10-12-soft-orbit-phase-3.md` (done through #85), and Phase 4's is `docs/plans/2026-10-18-soft-orbit-phase-4.md` (PR 15 split into 15a–15c, 17 into 17a/17b, 18 into 18a/18b; done through #108), and Phase 5's is `docs/plans/2026-10-21-soft-orbit-phase-5.md` (PR 19 split into 19a–19c; done through #125). Phase 6 is scoped here and gets its bite-sized plan now that Phase 5 is done, so it builds on what actually shipped.
 
 ---
 
