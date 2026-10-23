@@ -7,6 +7,7 @@ and lengths.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -230,6 +231,58 @@ class TestRequestLine:
         assert resp.status_code == 405
         [line] = [r.getMessage() for r in caplog.records if r.name == "orbis"]
         assert line.startswith("POST /api/search -> 405 (")
+
+
+# --- A route that times out -------------------------------------------------------------
+
+
+class TestTimeoutBackstop:
+    """A TimeoutError a route leaves unhandled is app.main's: a 503 to retry, not a 500
+    and a traceback, answered inside the middleware. Its one line names the route as
+    declared, never the path or query as sent."""
+
+    def test_a_route_that_times_out_is_a_503_logged_by_its_route(self, monkeypatch, caplog):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+        from app.middleware import security
+        from app.routers import entities
+
+        async def hung(*_args):
+            await asyncio.Event().wait()  # never set
+
+        monkeypatch.setattr(security.settings, "api_key", "")
+        security._rate_buckets.clear()
+        monkeypatch.setattr(entities, "_DOSSIER_QUERY_TIMEOUT", 0.01)
+        monkeypatch.setattr(entities, "_dossier_in_flight", {})
+        with (
+            patch("app.routers.entities.get_cached", AsyncMock(return_value=None)),
+            patch("app.routers.entities.resolve_entity", hung),
+            caplog.at_level(logging.INFO, logger="orbis"),
+        ):
+            # TestClient raises an error no handler answers: this 503 is the handler's.
+            resp = TestClient(app).get(f"/api/entities/person/{ENCODED}?timespan=24h")
+
+        assert resp.status_code == 503
+        assert resp.headers["retry-after"] == "15"
+        assert "cache-control" not in resp.headers  # never kept at the edge
+        assert resp.json() == {"detail": "Timed out; retry shortly."}
+        lines = [r.getMessage() for r in caplog.records if r.name == "orbis"]
+        assert lines[0] == f"GET {ENTITY_ROUTE} timed out; answered 503."
+        assert lines[1].startswith(f"GET {ENTITY_ROUTE} -> 503 (")  # log_requests saw it
+        assert not [r for r in caplog.records if r.exc_info]
+        _no_secret("\n".join(lines))
+
+    def test_a_cancellation_is_never_answered(self):
+        """A cancelled request (a client gone, a shutdown) is no TimeoutError, nor any
+        handler's: it is never turned into a 503."""
+        from app.main import app, timed_out
+
+        assert app.exception_handlers[TimeoutError] is timed_out
+        assert not any(
+            isinstance(key, type) and issubclass(asyncio.CancelledError, key)
+            for key in app.exception_handlers
+        )
 
 
 # --- The API-key gate and the rate limiter ---------------------------------------------

@@ -31,7 +31,9 @@ Warmer = Callable[[], Awaitable[object]]
 
 # Run in order: the first visit's globe and timeline (24 hours, all topics),
 # then the links layer's 24-hour window, then breaking stories (one list for
-# every topic: the ticker's, and the delta's count), then the threads rail's
+# every topic: the ticker's, and the delta's count; a miss before this refill
+# gets the last good list, and the globe has no such fallback, so it stays
+# first and breaking's 11-14 s query never holds it up), then the threads rail's
 # default list (24 hours, all topics, 20), then the Relations layer's (every
 # class, 40: its 7-day lens reads only the daily rollups, so it is under db:*
 # and refilled each cycle, as the events step adds to them). Another

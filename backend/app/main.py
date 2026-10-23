@@ -14,6 +14,7 @@ from app.middleware.security import AccessLogPathFilter, SecurityMiddleware, rou
 from app.routers.agent import router as agent_router
 from app.routers.board import router as board_router
 from app.routers.entities import router as entities_router
+from app.routers.http_cache import RETRY_AFTER_SECONDS
 from app.routers.links import router as links_router
 from app.routers.news import router as news_router
 from app.routers.relations import router as relations_router
@@ -127,6 +128,25 @@ async def log_requests(request: Request, call_next):
         elapsed_ms,
     )
     return response
+
+
+# ---------------------------------------------------------------------------
+# Timeouts
+# ---------------------------------------------------------------------------
+@app.exception_handler(TimeoutError)
+async def timed_out(request: Request, exc: TimeoutError) -> JSONResponse:
+    """A route's query or call that ran out of time, unhandled there: a 503 the client
+    retries after Retry-After, not a 500 and a traceback (the breaking query's, 110
+    in four days before its route answered 503 itself). Answered inside the
+    middleware, so log_requests logs the 503; nothing of the error in the body.
+    One line names the route as declared (route_template), never the path or query
+    as sent. A CancelledError is no TimeoutError: a cancelled request stays one."""
+    logger.warning("%s %s timed out; answered 503.", request.method, route_template(request))
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Timed out; retry shortly."},
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+    )
 
 
 # ---------------------------------------------------------------------------

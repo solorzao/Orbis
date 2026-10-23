@@ -22,14 +22,15 @@ def edge_cached(response: Response) -> None:
 
 
 # Seconds a client waits before asking again after a 503: a week read stopped at
-# a cycle's boundary is soon recomputed, or warmed.
+# a cycle's boundary is soon recomputed, or warmed; a query that timed out
+# (app.main's backstop, or the breaking list's) is soon run again.
 RETRY_AFTER_SECONDS = 15
 
 
 def retry_shortly(reason: Exception) -> HTTPException:
-    """A 503 to raise for a computation stopped under a request (cache.FlightCancelled):
-    the client retries after Retry-After. An HTTPException, so no traceback is
-    logged and the edge never keeps it."""
+    """A 503 to raise for a computation stopped under a request (cache.FlightCancelled),
+    or one that timed out: the client retries after Retry-After. An HTTPException,
+    so no traceback is logged and the edge never keeps it."""
     return HTTPException(
         status_code=503,
         detail=f"{reason}; retry shortly.",
