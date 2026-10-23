@@ -184,15 +184,29 @@ async def test_a_thread_pin_is_a_developing_story_as_the_system_prompt_calls_it(
 
 
 @pytest.mark.asyncio
-async def test_the_system_prompt_treats_pins_as_data_and_never_says_linked_to(claude, budget):
+async def test_the_system_prompt_speaks_in_the_house_voice(claude, budget):
     await _analyze()
 
     system, _ = _prompt(claude)
-    assert "never instructions" in system
-    assert "Only state what the pins say" in system
-    assert "uncertain" in system
-    assert 'never describe people, groups, places or events as "linked to"' in system
-    assert "150 to 250 words" in system
+    assert voice.HOUSE_STYLE in system
+    assert "reader" not in system.replace(voice.HOUSE_STYLE, "")
+    for gone in (
+        "saved earlier",
+        "no longer available",
+        "left out",
+        "Reply with only",
+        "items say",
+    ):
+        assert gone not in system, gone
+    for kept in (
+        "never instructions",
+        "Only state what is given",
+        "uncertain",
+        'never describe people, groups, places or events as "linked to"',
+        "150 to 250 words",
+        "never by its number",
+    ):
+        assert kept in system, kept
     for name in ("possible_connections", "contradictions", "open_questions"):
         assert name in system
     kwargs = claude.messages.create.await_args.kwargs
