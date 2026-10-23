@@ -174,7 +174,7 @@ async def test_an_entity_pin_says_where_it_is_in_the_news(claude):
 
 
 @pytest.mark.asyncio
-async def test_a_thread_pin_is_a_developing_story_as_the_system_prompt_calls_it(claude):
+async def test_a_thread_pin_is_a_developing_story(claude):
     # "Story thread" planted "the thread" and "thread [2]" in the 21a baseline memos.
     await _analyze()
     assert _lines(claude)[3] == (
@@ -236,8 +236,21 @@ async def test_the_system_prompt_keeps_the_memo_on_the_news_not_on_its_inputs(cl
     own = system.replace(voice.HOUSE_STYLE, "")
     for planted in ("material to analyse", "gathered", "news board"):
         assert planted not in own, planted
-    # Within the 21c token gate: the eval measured 1,021 input tokens at 2,039 characters.
-    assert len(system) <= 2039 + 120
+    # Within the 21c token gate (mean input at most 1,061): the 21c-2 eval measured
+    # 1,049 at 2,156 characters, and about 4 characters make a token.
+    assert len(system) <= 2156 + 30
+
+
+@pytest.mark.asyncio
+async def test_the_system_prompt_ties_dates_to_what_happened_not_to_coverage(claude):
+    # The 21c-2 eval's memos wrote "coverage dated 23 October", "the latest update is
+    # dated 23 October" and "both carry coverage up to 23 October".
+    await _analyze()
+    system, _ = _prompt(claude)
+    assert (
+        'Give a date only as part of what happened, such as "the strike reported in '
+        'Lyon on 21 October"; never say when coverage was dated or updated.'
+    ) in system
 
 
 @pytest.mark.asyncio
