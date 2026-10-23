@@ -1,0 +1,1643 @@
+[
+  {
+    "id": "cp-1-place",
+    "tags": [
+      "place"
+    ],
+    "template": "place",
+    "slots": {
+      "place": "Tel Aviv, Tel Aviv, Israel",
+      "story": "Israel orders West Bank closure after Hebron shooting",
+      "person": "Benjamin Netanyahu",
+      "other": "Washington Post"
+    },
+    "question": "What's happening in Tel Aviv, Tel Aviv, Israel?",
+    "source": {
+      "title": "Israel orders West Bank closure after Hebron shooting",
+      "names": [
+        "Benjamin Netanyahu",
+        "Washington Post",
+        "Heidi Levine",
+        "Bank On",
+        "Eyal Zamir",
+        "Itamar Ben-Gvir",
+        "Palestinian Authority",
+        "Magen David Adom",
+        "Mike Huckabee",
+        "Tzuriel Edri",
+        "Abu Falah",
+        "United States"
+      ],
+      "places": [
+        "Tel Aviv, Tel Aviv, Israel",
+        "Washington, Washington, United States",
+        "Jerusalem, Israel",
+        "Khirbet Abu Falah, Palestine",
+        "Brussel, Bruxelles-Capitale, Belgium",
+        "Aulnoye-Aymeries, Nord-Pas-De-Calais, France",
+        "Gaza, Israel",
+        "Anadolu, Turkey",
+        "Philadelphia, Pennsylvania, United States",
+        "Istanbul, Istanbul, Turkey",
+        "Cairo, Al Qahirah, Egypt",
+        "Geneva, Genè, Switzerland"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "2 Israeli soldiers killed in West Bank attack as Netanyahu orders lockdown",
+            "source_url": "https://news4sanantonio.com/news/nation-world/israeli-prime-minister-benjamin-netanyahu-orders-west-bank-lockdown-after-army-israel-defense-forces-kills-2-palestinians-accused-of-attack-hamas-hebron-m16-rifle-handgun-emergency-meeting-security-cabinet",
+            "source_name": "news4sanantonio.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Israel says it thwarted 'terror attack,' and other Middle East news",
+            "source_url": "https://www.sandiegouniontribune.com/2026/10/23/israel-thwarted-terror-attack-middle-east-news/",
+            "source_name": "sandiegouniontribune.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "West Bank lockdown ordered after attack",
+            "source_url": "https://www.manilatimes.net/2026/10/24/world/americas-emea/west-bank-lockdown-ordered-after-attack/2452813",
+            "source_name": "manilatimes.net",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Netanyahu Orders West Bank Closure After Soldiers Killed",
+            "source_url": "https://wsfcam.iheart.com/content/2026-10-23-netanyahu-orders-west-bank-closure-after-soldiers-killed/",
+            "source_name": "iheart.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Netanyahu vows massive security crackdown, settlement expansion in Hebron following West Bank attack",
+            "source_url": "http://www.bignewsnetwork.com/news/279394911/netanyahu-vows-massive-security-crackdown-settlement-expansion-in-hebron-following-west-bank-attack",
+            "source_name": "bignewsnetwork.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Netanyahu security crackdown: Netanyahu vows massive security crackdown, settlement expansion in Hebron following West Bank attack",
+            "source_url": "https://economictimes.indiatimes.com/news/international/world-news/netanyahu-vows-massive-security-crackdown-settlement-expansion-in-hebron-following-west-bank-attack/articleshow/135149095.cms",
+            "source_name": "indiatimes.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Israel orders closure of West Bank after soldiers kill 2 men behind an alleged attack",
+            "source_url": "https://www.ijpr.org/npr-news/2026-10-23/israel-orders-closure-of-west-bank-after-soldiers-kill-2-men-behind-an-alleged-attack",
+            "source_name": "ijpr.org",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Israel orders West Bank closure after soldiers kill 2 Palestinians accused of carrying out attack",
+            "source_url": "https://whdh.com/news/israel-orders-west-bank-closure-after-soldiers-kill-2-palestinians-accused-of-carrying-out-attack/",
+            "source_name": "whdh.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Two soldiers from Ari Battalion killed in West Bank terror attack",
+            "source_url": "http://www.jpost.com/israel-news/defense-news/article-912657",
+            "source_name": "jpost.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Hamas Kills Israeli Troops, Bibi Vows West Bank Push",
+            "source_url": "https://www.newser.com/story/398701/netanyahu-plans-west-bank-push-after-hamas-kills-troops.html",
+            "source_name": "newser.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "PM warns of major West Bank military operation after attack kills Israeli soldiers",
+            "source_url": "https://www.al-monitor.com/originals/2026/10/pm-warns-major-west-bank-military-operation-after-attack-kills-israeli-soldiers",
+            "source_name": "al-monitor.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Palestinian gunmen kill two Israeli soldiers; Israel threatens new West Bank offensive",
+            "source_url": "https://www.al-monitor.com/originals/2026/10/palestinian-gunmen-kill-two-israeli-soldiers-israel-threatens-new-west-bank",
+            "source_name": "al-monitor.com",
+            "latitude": 30.05,
+            "longitude": 31.25
+          }
+        ]
+      }
+    ],
+    "history": [],
+    "screen": {
+      "place": "Tel Aviv, Tel Aviv, Israel",
+      "start": "2026-10-22T17:05:13+00:00",
+      "end": "2026-10-23T17:05:13+00:00"
+    }
+  },
+  {
+    "id": "cp-2-briefing",
+    "tags": [
+      "briefing"
+    ],
+    "template": "briefing",
+    "slots": {
+      "place": "Montecito, California, United States",
+      "story": "Meghan responds to allegations against her father",
+      "person": "Prince Harry",
+      "other": "Meghan Markle"
+    },
+    "question": "Give me a briefing on Meghan responds to allegations against her father.",
+    "source": {
+      "title": "Meghan responds to allegations against her father",
+      "names": [
+        "Prince Harry",
+        "Meghan Markle",
+        "Thomas Markle Jr",
+        "Thomas Markle",
+        "Samantha Markle",
+        "Thomas Jr",
+        "Doria Ragland",
+        "Markle Jr",
+        "United States",
+        "Netflix",
+        "Windsor Castle",
+        "London Metropolitan Police"
+      ],
+      "places": [
+        "Montecito, California, United States",
+        "Hollywood, California, United States",
+        "Sussex, East Sussex, United Kingdom",
+        "Toronto, Ontario, Canada",
+        "London, London, City Of, United Kingdom",
+        "Napa Valley, California, United States",
+        "Rosarito, Sinaloa, Mexico",
+        "Windsor Castle, Pennsylvania, United States",
+        "Philippine, Benguet, Philippines",
+        "Bogota, Cundinamarca, Colombia",
+        "Manila, Manila, Philippines",
+        "Sussex, New Brunswick, Canada",
+        "Windsor Castle, Limpopo, South Africa",
+        "Windsor Castle, Saint Thomas, Jamaica",
+        "San Diego, California, United States",
+        "Chicago, Illinois, United States",
+        "Paris, France",
+        "Berkshire, United Kingdom",
+        "Aberfan, Merthyr Tydfil, United Kingdom",
+        "Geneva, Genè, Switzerland"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "Meghan Markle 'distressed' by claims father had child abuse images",
+            "source_url": "https://nationalpost.com/news/world/meghan-markle-responds-to-claims-father-had-child-abuse-images",
+            "source_name": "nationalpost.com",
+            "latitude": 46.1956,
+            "longitude": 6.14811
+          },
+          {
+            "title": "Duchess Meghan Distressed By Allegations Against Father",
+            "source_url": "https://wspd.iheart.com/content/2026-10-23-duchess-meghan-distressed-by-allegations-against-father/",
+            "source_name": "iheart.com",
+            "latitude": 50.9167,
+            "longitude": -0.083333
+          },
+          {
+            "title": "Meghan Markle reacts to child abuse images allegedly found at her father's home",
+            "source_url": "https://www.wsoctv.com/news/trending/meghan-markle-speaks-allegation-child-porn-found-thomas-markles-home/YWE3SSI4MFHUZCP4Y6UEY4E4RQ/",
+            "source_name": "wsoctv.com",
+            "latitude": 50.9167,
+            "longitude": -0.083333
+          },
+          {
+            "title": "Meghan Markle's Response to Dad Thomas' Child Abuse Claims",
+            "source_url": "https://stylecaster.com/entertainment/celebrity-news/1234956086/meghan-dad-thomas-child-abuse/",
+            "source_name": "stylecaster.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Meghan Markle 'deeply distressed' over child abuse image allegations against father Thomas Markle Sr.",
+            "source_url": "https://www.moneycontrol.com/world/meghan-markle-deeply-distressed-over-child-abuse-image-allegations-against-father-thomas-markle-sr-article-14058864.html",
+            "source_name": "moneycontrol.com",
+            "latitude": 50.9167,
+            "longitude": -0.083333
+          },
+          {
+            "title": "Prince Harry's wife Meghan 'deeply distressed' by allegations her father had indecent images",
+            "source_url": "https://www.mykxlg.com/news/world/prince-harrys-wife-meghan-deeply-distressed-by-allegations-her-father-had-indecent-images/article_4e194ad0-f50b-592b-aba8-101ace44cdf4.html",
+            "source_name": "mykxlg.com",
+            "latitude": 51.5,
+            "longitude": -0.116667
+          },
+          {
+            "title": "Meghan Markle 'deeply distressed' by allegation her father had child abuse images",
+            "source_url": "https://www.chroniclelive.co.uk/news/uk-news/meghan-markle-deeply-distressed-allegation-34807926",
+            "source_name": "chroniclelive.co.uk",
+            "latitude": 50.9167,
+            "longitude": -0.083333
+          },
+          {
+            "title": "Philippines investigates Thomas Markle, father of Meghan, after child sexual abuse images claims",
+            "source_url": "https://www.emirates247.com/world/philippines-investigates-thomas-markle-after-child-sexual-abuse-images-claims-meghan-says-shes-deeply-distressed/7070",
+            "source_name": "emirates247.com",
+            "latitude": 51.5,
+            "longitude": -0.116667
+          },
+          {
+            "title": "\"Deeply distressed\": Meghan Markle reacts to allegations against father Thomas Markle",
+            "source_url": "http://www.bignewsnetwork.com/news/279394919/deeply-distressed-meghan-markle-reacts-to-allegations-against-father-thomas-markle",
+            "source_name": "bignewsnetwork.com",
+            "latitude": 16.45,
+            "longitude": 120.55
+          },
+          {
+            "title": "Meghan's eight-year rift with her estranged father: The duchess' troubled relationship with Thomas Markle as he faces child abuse images probe",
+            "source_url": "https://www.dailymail.com/news/article-16233383/Meghan-eight-year-rift-estranged-father-Thomas-Markle.html",
+            "source_name": "dailymail.com",
+            "latitude": 50.9167,
+            "longitude": -0.083333
+          },
+          {
+            "title": "Meghan Markle Says She Was Alerted to 'Disturbing Allegations' Against Her Father in 2018 After Royal Wedding",
+            "source_url": "https://www.aol.com/articles/meghan-markle-says-she-alerted-145031000.html",
+            "source_name": "aol.com",
+            "latitude": 24.3333,
+            "longitude": -107.4
+          },
+          {
+            "title": "Why royal family may distance themselves from Meghan Markle, Prince Harry in hour of need amid her dad's child porn allegations",
+            "source_url": "https://pagesix.com/2026/10/23/royal-family/why-royal-family-may-distance-themselves-from-meghan-markle-prince-harry-in-hour-of-need-amid-her-dads-child-porn-allegations/",
+            "source_name": "pagesix.com",
+            "latitude": 51.6872,
+            "longitude": -3.33194
+          }
+        ]
+      }
+    ],
+    "history": []
+  },
+  {
+    "id": "cp-3-who",
+    "tags": [
+      "who"
+    ],
+    "template": "who",
+    "slots": {
+      "place": "White House, District Of Columbia, United States",
+      "story": "Melania Trump brokers Oleshky ceasefire for aid",
+      "person": "Melania Trump",
+      "other": "White House"
+    },
+    "question": "Who is Melania Trump?",
+    "source": {
+      "title": "Melania Trump brokers Oleshky ceasefire for aid",
+      "names": [
+        "Melania Trump",
+        "White House",
+        "Vladimir Putin",
+        "Donald Trump",
+        "United Nations",
+        "Associated Press",
+        "Steve Witkoff",
+        "U N Security Council",
+        "Volodymyr Zelenskyy",
+        "Dmitry Peskov",
+        "Dmytro Lubinets",
+        "Lady Melania"
+      ],
+      "places": [
+        "White House, District Of Columbia, United States",
+        "Kherson, Khersons'ka Oblast', Ukraine",
+        "Kakhovka, Amurskaya Oblast', Russia",
+        "Kremlin, Moskva, Russia",
+        "Donbas, Ukraine",
+        "Kakhovka, Khersons'ka Oblast', Ukraine",
+        "Kyiv, Kyyiv, Misto, Ukraine"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "entity_lookup",
+        "result": {
+          "node": {
+            "name": "Melania Trump",
+            "type": "ENTITY"
+          },
+          "connections": [
+            {
+              "name": "White House",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 38
+            },
+            {
+              "name": "Vladimir Putin",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 18
+            },
+            {
+              "name": "Donald Trump",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 16
+            },
+            {
+              "name": "United Nations",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 10
+            },
+            {
+              "name": "Associated Press",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 9
+            },
+            {
+              "name": "Steve Witkoff",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 8
+            },
+            {
+              "name": "U N Security Council",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 7
+            }
+          ],
+          "articles": [
+            {
+              "title": "Melania Trump helps broker a ceasefire deal in Oleshky",
+              "source_url": "https://www.wgal.com/article/melania-trump-ceasefire-deal-russian-occupied-oleshky-white-house/74221941",
+              "source_name": "wgal.com",
+              "latitude": 50.7932,
+              "longitude": 129.218
+            },
+            {
+              "title": "Melania Trump helps forge a ceasefire deal in a Russian-occupied Ukrainian city",
+              "source_url": "https://www.chicagotribune.com/2026/10/23/melania-trump-helps-forge-ceasefire-deal-in-a-russian-occupied-ukrainian-city/",
+              "source_name": "chicagotribune.com",
+              "latitude": 38.8951,
+              "longitude": -77.0364
+            },
+            {
+              "title": "Melania Trump Brokers Ceasefire For Humanitarian Aid In Oleshky",
+              "source_url": "https://wsfcam.iheart.com/content/2026-10-23-melania-trump-brokers-ceasefire-for-humanitarian-aid-in-oleshky/",
+              "source_name": "iheart.com",
+              "latitude": 38.8951,
+              "longitude": -77.0364
+            },
+            {
+              "title": "Melania Trump claims she just secured a 'ceasefire' between Russia and Ukraine",
+              "source_url": "https://www.rawstory.com/melania-trump-russia-ukraine-ceasefire/",
+              "source_name": "rawstory.com",
+              "latitude": 50.4333,
+              "longitude": 30.5167
+            },
+            {
+              "title": "Melania Trump helps forge a ceasefire deal in a Russian-occupied Ukrainian city, White House says",
+              "source_url": "http://www.reflector.com/news/national/melania-trump-helps-forge-a-ceasefire-deal-in-a-russian-occupied-ukrainian-city-white-house/article_4e1925fa-e10c-5e32-8238-9eb6f74d69e9.html",
+              "source_name": "reflector.com",
+              "latitude": 50.4333,
+              "longitude": 30.5167
+            }
+          ]
+        }
+      },
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "Melania Trump helps broker a ceasefire deal in Oleshky",
+            "source_url": "https://www.wgal.com/article/melania-trump-ceasefire-deal-russian-occupied-oleshky-white-house/74221941",
+            "source_name": "wgal.com",
+            "latitude": 50.7932,
+            "longitude": 129.218
+          },
+          {
+            "title": "Melania Trump helps forge a ceasefire deal in a Russian-occupied Ukrainian city",
+            "source_url": "https://www.chicagotribune.com/2026/10/23/melania-trump-helps-forge-ceasefire-deal-in-a-russian-occupied-ukrainian-city/",
+            "source_name": "chicagotribune.com",
+            "latitude": 38.8951,
+            "longitude": -77.0364
+          },
+          {
+            "title": "Melania Trump Brokers Ceasefire For Humanitarian Aid In Oleshky",
+            "source_url": "https://wsfcam.iheart.com/content/2026-10-23-melania-trump-brokers-ceasefire-for-humanitarian-aid-in-oleshky/",
+            "source_name": "iheart.com",
+            "latitude": 38.8951,
+            "longitude": -77.0364
+          },
+          {
+            "title": "Melania Trump claims she just secured a 'ceasefire' between Russia and Ukraine",
+            "source_url": "https://www.rawstory.com/melania-trump-russia-ukraine-ceasefire/",
+            "source_name": "rawstory.com",
+            "latitude": 50.4333,
+            "longitude": 30.5167
+          },
+          {
+            "title": "Melania Trump helps forge a ceasefire deal in a Russian-occupied Ukrainian city, White House says",
+            "source_url": "http://www.reflector.com/news/national/melania-trump-helps-forge-a-ceasefire-deal-in-a-russian-occupied-ukrainian-city-white-house/article_4e1925fa-e10c-5e32-8238-9eb6f74d69e9.html",
+            "source_name": "reflector.com",
+            "latitude": 50.4333,
+            "longitude": 30.5167
+          },
+          {
+            "title": "2nd LD Writethru: Russia, Ukraine agree to temporary ceasefire in Oleshky -- White House",
+            "source_url": "http://www.bignewsnetwork.com/news/279394968/2nd-ld-writethru-russia-ukraine-agree-to-temporary-ceasefire-in-oleshky-white-house",
+            "source_name": "bignewsnetwork.com",
+            "latitude": 46.6558,
+            "longitude": 32.6178
+          },
+          {
+            "title": "US first lady announces ceasefire agreement between Russia and Ukraine in city of Oleshky",
+            "source_url": "https://aa.com.tr/en/americas/us-first-lady-announces-ceasefire-agreement-between-russia-and-ukraine-in-city-of-oleshky/4098661",
+            "source_name": "aa.com.tr",
+            "latitude": 38.8951,
+            "longitude": -77.0364
+          },
+          {
+            "title": "Melania Trump helps forge a ceasefire deal in Russian-occupied Oleshky, the White House says",
+            "source_url": "https://www.wellandtribune.ca/news/world/united-states/melania-trump-helps-forge-ceasefire-deal-in-russian-occupied-oleshky-k-the-white-house-says/article_5a896c0b-cda8-5985-972c-f1a66589862d.html",
+            "source_name": "wellandtribune.ca",
+            "latitude": 38.8951,
+            "longitude": -77.0364
+          },
+          {
+            "title": "Kremlin confirms Oleshky ceasefire, says working with Ukraine on evacuation timing",
+            "source_url": "https://cyprus-mail.com/2026/10/23/kremlin-confirms-oleshky-ceasefire-says-working-with-ukraine-on-evacuation-timing",
+            "source_name": "cyprus-mail.com",
+            "latitude": 55.7522,
+            "longitude": 37.6156
+          },
+          {
+            "title": "White House: Melania Donald Trump secures Oleshky ceasefire between Russia, Ukraine",
+            "source_url": "https://www.jpost.com/international/internationalrussia-ukraine-war/article-912658",
+            "source_name": "jpost.com",
+            "latitude": 38.8951,
+            "longitude": -77.0364
+          },
+          {
+            "title": "Melania Trump secures ceasefire for aid, evacuations in occupied Ukrainian city",
+            "source_url": "https://wchstv.com/news/nation-world/first-lady-melania-trump-secures-ceasefire-for-aid-evacuations-in-russia-occupied-ukrainian-city-oleshky-white-house-news-push-to-end-war-special-envoy-steve-witkoff-putin-zelenskyy",
+            "source_name": "wchstv.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Kremlin welcomes Melania Trump's efforts on Oleshky truce",
+            "source_url": "https://aa.com.tr/en/americas/kremlin-welcomes-melania-trump-s-efforts-on-oleshky-truce/4098850",
+            "source_name": "aa.com.tr",
+            "latitude": 38.8951,
+            "longitude": -77.0364
+          }
+        ]
+      }
+    ],
+    "history": []
+  },
+  {
+    "id": "cp-4-connection",
+    "tags": [
+      "connection"
+    ],
+    "template": "connection",
+    "slots": {
+      "place": "Karak, Jordan",
+      "story": "Gunmen attack church funeral in Jordan",
+      "person": "Mohammad Al-Momani",
+      "other": "Hammoud Church"
+    },
+    "question": "How is Mohammad Al-Momani connected to Hammoud Church?",
+    "source": {
+      "title": "Gunmen attack church funeral in Jordan",
+      "names": [
+        "Mohammad Al-Momani",
+        "Hammoud Church",
+        "Khaled Burqan",
+        "Associated Press",
+        "Joseph Aoun",
+        "Petra News Agency",
+        "Abu Eid",
+        "Al Jazeera",
+        "Al Mamlaka",
+        "Government Communications Mohammed Al-Momani",
+        "Mohammad Al Momani",
+        "Obeidallah Maaytah"
+      ],
+      "places": [
+        "Karak, Jordan",
+        "Karak, Mus, Turkey"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "entity_lookup",
+        "result": {
+          "node": {
+            "name": "Mohammad Al-Momani",
+            "type": "ENTITY"
+          },
+          "connections": [
+            {
+              "name": "Hammoud Church",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 6
+            },
+            {
+              "name": "Khaled Burqan",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 6
+            },
+            {
+              "name": "Associated Press",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 4
+            },
+            {
+              "name": "Joseph Aoun",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 4
+            },
+            {
+              "name": "Petra News Agency",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 4
+            },
+            {
+              "name": "Abu Eid",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 3
+            },
+            {
+              "name": "Al Jazeera",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 3
+            }
+          ],
+          "articles": [
+            {
+              "title": "Several killed as gunmen open fire at church in Jordan",
+              "source_url": "https://news.az/news/several-killed-as-gunmen-open-fire-at-church-in-jordan",
+              "source_name": "news.az",
+              "latitude": 31.1847,
+              "longitude": 35.7047
+            },
+            {
+              "title": "Seven killed in Jordan as gunmen attack church during funeral",
+              "source_url": "https://www.greenocktelegraph.co.uk/news/national/26666326.seven-killed-jordan-gunmen-attack-church-funeral/",
+              "source_name": "greenocktelegraph.co.uk",
+              "latitude": 31.1847,
+              "longitude": 35.7047
+            },
+            {
+              "title": "Gunmen open fire on Jordan church, kill at least seven",
+              "source_url": "https://www.jpost.com/middle-east/article-912659",
+              "source_name": "jpost.com",
+              "latitude": null,
+              "longitude": null
+            },
+            {
+              "title": "Gunmen open fire at a church during a funeral in Jordan, killing 7 and wounding 34 others",
+              "source_url": "https://www.airdriecityview.com/world-news/gunmen-open-fire-at-a-church-during-a-funeral-in-jordan-killing-7-and-wounding-34-others-12928983",
+              "source_name": "airdriecityview.com",
+              "latitude": null,
+              "longitude": null
+            },
+            {
+              "title": "At least 7 people killed in unprecedented shooting at church in Jordan",
+              "source_url": "https://krdo.com/news/national-world/cnn-world/2026/10/23/at-least-7-people-killed-in-shooting-at-church-in-jordan-state-media-says/",
+              "source_name": "krdo.com",
+              "latitude": 31.1847,
+              "longitude": 35.7047
+            }
+          ]
+        }
+      },
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "Several killed as gunmen open fire at church in Jordan",
+            "source_url": "https://news.az/news/several-killed-as-gunmen-open-fire-at-church-in-jordan",
+            "source_name": "news.az",
+            "latitude": 31.1847,
+            "longitude": 35.7047
+          },
+          {
+            "title": "Seven killed in Jordan as gunmen attack church during funeral",
+            "source_url": "https://www.greenocktelegraph.co.uk/news/national/26666326.seven-killed-jordan-gunmen-attack-church-funeral/",
+            "source_name": "greenocktelegraph.co.uk",
+            "latitude": 31.1847,
+            "longitude": 35.7047
+          },
+          {
+            "title": "Gunmen open fire on Jordan church, kill at least seven",
+            "source_url": "https://www.jpost.com/middle-east/article-912659",
+            "source_name": "jpost.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Gunmen open fire at a church during a funeral in Jordan, killing 7 and wounding 34 others",
+            "source_url": "https://www.airdriecityview.com/world-news/gunmen-open-fire-at-a-church-during-a-funeral-in-jordan-killing-7-and-wounding-34-others-12928983",
+            "source_name": "airdriecityview.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "At least 7 people killed in unprecedented shooting at church in Jordan",
+            "source_url": "https://krdo.com/news/national-world/cnn-world/2026/10/23/at-least-7-people-killed-in-shooting-at-church-in-jordan-state-media-says/",
+            "source_name": "krdo.com",
+            "latitude": 31.1847,
+            "longitude": 35.7047
+          },
+          {
+            "title": "At least seven killed in attack at church in Jordan, state-owned outlet says",
+            "source_url": "https://dunyanews.tv/en/World/979294-at-least-seven-killed-in-attack-at-church-in-jordan-stateowned-outle",
+            "source_name": "dunyanews.tv",
+            "latitude": 31.1847,
+            "longitude": 35.7047
+          },
+          {
+            "title": "At least 7 killed in church shooting in southern Jordan, state TV reports",
+            "source_url": "https://article.wn.com/view/2026/10/23/At_least_7_killed_in_church_shooting_in_southern_Jordan_stat/",
+            "source_name": "wn.com",
+            "latitude": 31.1847,
+            "longitude": 35.7047
+          },
+          {
+            "title": "At least seven killed after gunmen open fire at church in Jordan - Dominican Republic Post - Caribbean News, Business, Travel & Culture",
+            "source_url": "https://dominicanrepublicpost.com/at-least-seven-killed-after-gunmen-open-fire-at-church-in-jordan/",
+            "source_name": "dominicanrepublicpost.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Gunmen open fire at a church in Jordan, killing 6 and wounding 28 others",
+            "source_url": "https://www.wgauradio.com/news/world/gunmen-open-fire/XFWGR2CZVM46DEZQE6WAQ52UNE/",
+            "source_name": "wgauradio.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Jordan: Karak church shooting leaves 7 dead, dozens injured",
+            "source_url": "https://www.dw.com/en/jordan-karak-church-shooting-leaves-7-dead-dozens-injured/a-79743535",
+            "source_name": "dw.com",
+            "latitude": 31.1847,
+            "longitude": 35.7047
+          },
+          {
+            "title": "At least seven killed after gunmen open fire at church in Jordan - Grenada Chronicle",
+            "source_url": "https://grenadachronicle.com/at-least-seven-killed-after-gunmen-open-fire-at-church-in-jordan/",
+            "source_name": "grenadachronicle.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "At least 6 killed in Jordan church shooting: What to know",
+            "source_url": "https://www.al-monitor.com/originals/2026/10/least-6-killed-jordan-church-shooting-what-know",
+            "source_name": "al-monitor.com",
+            "latitude": null,
+            "longitude": null
+          }
+        ]
+      }
+    ],
+    "history": []
+  },
+  {
+    "id": "cp-5-why",
+    "tags": [
+      "why"
+    ],
+    "template": "why",
+    "slots": {
+      "place": "Petersburg, Sankt-Peterburg, Russia",
+      "story": "First Russian diesel tanker sails for United States",
+      "person": "Vladimir Putin",
+      "other": "Donald Trump"
+    },
+    "question": "What's behind First Russian diesel tanker sails for United States?",
+    "source": {
+      "title": "First Russian diesel tanker sails for United States",
+      "names": [
+        "Vladimir Putin",
+        "Donald Trump",
+        "Alexander Novak",
+        "United States",
+        "Dmitry Peskov",
+        "Agioi Fanendes",
+        "Steve Witkoff",
+        "Volodymyr Zelensky",
+        "Reuters",
+        "Joe Biden",
+        "Ministry Of Energy",
+        "Volodymyr Zelenskyy"
+      ],
+      "places": [
+        "Petersburg, Sankt-Peterburg, Russia",
+        "Kremlin, Moskva, Russia",
+        "Oslo, Oslo, Norway",
+        "Primorsk, Orenburgskaya Oblast', Russia",
+        "Washington, Washington, United States",
+        "Kyiv, Kyyiv, Misto, Ukraine",
+        "Kharkiv, Kharkivs'ka Oblast', Ukraine",
+        "Sheremetyevo, Khabarovskiy Kray, Russia",
+        "Point Edward, Ontario, Canada",
+        "Vnukovo, Kostromskaya Oblast', Russia"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "Kremlin says first tanker of Russian diesel sets sail for the US",
+            "source_url": "https://www.chicagotribune.com/2026/10/23/first-russia-diesel-sent-us/",
+            "source_name": "chicagotribune.com",
+            "latitude": 47.3617,
+            "longitude": 134.26
+          },
+          {
+            "title": "Tanker with Russian diesel sets sail for US following Trump deal",
+            "source_url": "https://www.bicesteradvertiser.net/news/national/26665346.tanker-russian-diesel-sets-sail-us-following-trump-deal/",
+            "source_name": "bicesteradvertiser.net",
+            "latitude": 50.4333,
+            "longitude": 30.5167
+          },
+          {
+            "title": "Report: Russian Diesel Shipment Heads to New York Under Trump-Putin Deal",
+            "source_url": "https://www.rfdtv.com/report-russian-diesel-shipment-heads-to-new-york-under-trump-putin-deal",
+            "source_name": "rfdtv.com",
+            "latitude": 51.8862,
+            "longitude": 58.8888
+          },
+          {
+            "title": "The Kremlin says a first tanker of Russian diesel sets sail for the US despite Ukraine's protests",
+            "source_url": "https://www.ksat.com/business/2026/10/23/the-kremlin-says-a-first-tanker-of-russian-diesel-sets-sail-for-the-us-despite-ukraines-protests/",
+            "source_name": "ksat.com",
+            "latitude": 59.8944,
+            "longitude": 30.2642
+          },
+          {
+            "title": "First tanker of Russian diesel sets sail for the US despite Ukraine's protests, Kremlin says",
+            "source_url": "https://www.wisn.com/article/russian-diesel-tanker-sails-for-us/74230341",
+            "source_name": "wisn.com",
+            "latitude": 50.4333,
+            "longitude": 30.5167
+          },
+          {
+            "title": "First Russian diesel shipment under Trump deal heads for New York: Report",
+            "source_url": "https://www.moneycontrol.com/world/first-russian-diesel-shipment-under-trump-deal-heads-for-new-york-report-article-14058845.html",
+            "source_name": "moneycontrol.com",
+            "latitude": 51.8862,
+            "longitude": 58.8888
+          },
+          {
+            "title": "Exclusive-First Russian diesel from Putin-Trump deal heading for US, data shows",
+            "source_url": "https://www.al-monitor.com/originals/2026/10/exclusive-first-russian-diesel-putin-trump-deal-heading-us-data-shows",
+            "source_name": "al-monitor.com",
+            "latitude": 51.8862,
+            "longitude": 58.8888
+          },
+          {
+            "title": "Kremlin says first tanker of Russian diesel sets sail for US despite Ukraine's protests",
+            "source_url": "https://www.naharnet.com:443/stories/en/323304-kremlin-says-first-tanker-of-russian-diesel-sets-sail-for-us-despite-ukraine-s-protests",
+            "source_name": "naharnet.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Tanker with Russian diesel heads to New York under Trump deal",
+            "source_url": "https://edmontonsun.com/news/world/tanker-with-russian-diesel-heads-to-new-york-under-trump-deal/wcm/9bae4f95-1bf1-4c17-895c-37f4ed5d7402",
+            "source_name": "edmontonsun.com",
+            "latitude": 43.0,
+            "longitude": -82.4
+          },
+          {
+            "title": "Russian Diesel Expected to Arrive on Nov. 7 After Trump-Putin Deal",
+            "source_url": "https://www.theepochtimes.com/us/russian-diesel-heads-to-us-after-trump-putin-deal-6107962",
+            "source_name": "theepochtimes.com",
+            "latitude": 59.8944,
+            "longitude": 30.2642
+          },
+          {
+            "title": "Russian diesel shipment from Putin-Trump deal headed for US",
+            "source_url": "https://nypost.com/2026/10/23/world-news/russian-diesel-shipment-from-putin-trump-deal-headed-for-us-but-it-wont-arrive-before-midterms/",
+            "source_name": "nypost.com",
+            "latitude": 55.7522,
+            "longitude": 37.6156
+          },
+          {
+            "title": "US set to receive first Russian diesel shipment since 2022",
+            "source_url": "https://www.azernews.az/region/266084.html",
+            "source_name": "azernews.az",
+            "latitude": null,
+            "longitude": null
+          }
+        ]
+      }
+    ],
+    "history": []
+  },
+  {
+    "id": "cp-6-latest",
+    "tags": [
+      "latest"
+    ],
+    "template": "latest",
+    "slots": {
+      "place": "Bundibugyo, Bundibugyo, Uganda",
+      "story": "Ebola outbreak spreads from Congo to Africa",
+      "person": "Nigeria Centre For Disease",
+      "other": "Ministry Of Health"
+    },
+    "question": "What's the latest on Ebola outbreak spreads from Congo to Africa?",
+    "source": {
+      "title": "Ebola outbreak spreads from Congo to Africa",
+      "names": [
+        "Nigeria Centre For Disease",
+        "Ministry Of Health",
+        "World Health Organization",
+        "Jean Kaseya",
+        "World Health Organisation",
+        "Muhammad Ali Pate",
+        "Muhammad Pate",
+        "Whatsapp Linkedin",
+        "Femi Gbajabiamila",
+        "Africa Centers For Disease",
+        "Airports Authority Of Nigeria",
+        "Nigeria Immigration Service"
+      ],
+      "places": [
+        "Bundibugyo, Bundibugyo, Uganda",
+        "Ubangi, Republic of the Congo",
+        "Washington, Washington, United States",
+        "Kinshasa, Kinshasa, Democratic Republic Of The Congo",
+        "Wajir, North-Eastern, Kenya",
+        "Nairobi, Nairobi Area, Kenya",
+        "Winnipeg, Manitoba, Canada",
+        "Abuja, Abuja Federal Capital Territory, Nigeria",
+        "Lagos, Lagos, Nigeria",
+        "Kivu, Eastern, Kenya",
+        "Accra, Greater Accra, Ghana",
+        "Kaseya, Kaduna, Nigeria",
+        "Kampala, Kampala, Uganda",
+        "Addis Ababa, (Et10), Ethiopia",
+        "Kano, Kano, Nigeria",
+        "Kebbi, Sokoto, Nigeria",
+        "Kwara, Zamfara, Nigeria",
+        "Enugu, Enugu, Nigeria",
+        "Manila, Manila, Philippines",
+        "Ndeye, ThièSg, Senegal",
+        "Abayomi, Nigeria",
+        "Badariya, Kebbi, Nigeria",
+        "Monrovia, Montserrado, Liberia",
+        "Ogala, Nigeria",
+        "Wapinda, ÉUateur, Democratic Republic Of The Congo",
+        "Ebola, ÉUateur, Democratic Republic Of The Congo",
+        "Ituri, Congo, Democratic Republic Of The, Democratic Republic Of The Congo",
+        "Anambra, Nigeria",
+        "Abakaliki, Ebonyi, Nigeria",
+        "Okwe, Abia, Nigeria"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "WHO investigates mystery Ebola case in Nigeria as outbreak spreads beyond DR Congo",
+            "source_url": "https://www.thenews.com.pk/latest/1421052-who-investigates-mystery-ebola-case-in-nigeria-as-outbreak-spreads-beyond-dr-congo",
+            "source_name": "thenews.com.pk",
+            "latitude": 9.08333,
+            "longitude": 7.53333
+          },
+          {
+            "title": "Switzerland disputes Ebola claims",
+            "source_url": "http://www.nigeriasun.com/news/279394665/switzerland-disputes-ebola-claims-media",
+            "source_name": "nigeriasun.com",
+            "latitude": 9.08333,
+            "longitude": 7.53333
+          },
+          {
+            "title": "Ebola: FG orders strict enforcement of screening protocols at entry points",
+            "source_url": "https://thesun.ng/ebola-fg-orders-strict-enforcement-of-screening-protocols-at-entry-points/",
+            "source_name": "thesun.ng",
+            "latitude": 9.08333,
+            "longitude": 7.53333
+          },
+          {
+            "title": "Ebola Burden Grows in DR Congo as Kenya Bolsters Containment",
+            "source_url": "https://www.miragenews.com/ebola-burden-grows-in-dr-congo-as-kenya-1765791/",
+            "source_name": "miragenews.com",
+            "latitude": 0.741389,
+            "longitude": 30.0417
+          },
+          {
+            "title": "Health officials race to trace source of Nigeria's Ebola infection",
+            "source_url": "https://www.timeslive.co.za/news/africa/2026-10-23-health-officials-race-to-trace-source-of-nigerias-ebola-infection/",
+            "source_name": "timeslive.co.za",
+            "latitude": 3.32354,
+            "longitude": 20.9605
+          },
+          {
+            "title": "Mystery over source of Ebola infection in Nigeria fuels concern about spread of virus",
+            "source_url": "https://www.theguardian.com/world/2026/oct/23/ebola-swiss-patient-nigeria-dr-congo-concerns-virus-spread",
+            "source_name": "theguardian.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Ebola: Patient zero in Nigeria revealed to be Swiss diplomat's wife",
+            "source_url": "https://thesun.ng/ebola-patient-zero-in-nigeria-revealed-to-be-swiss-diplomats-wife/",
+            "source_name": "thesun.ng",
+            "latitude": 9.08333,
+            "longitude": 7.53333
+          },
+          {
+            "title": "Ebola Patient in Nigeria Is Swiss Woman Who Never Visited DR Congo",
+            "source_url": "https://www.opinionnigeria.com/ebola-patient-in-nigeria-is-swiss-woman-who-never-visited-dr-congo-swiss-foreign-ministry/",
+            "source_name": "opinionnigeria.com",
+            "latitude": 9.08333,
+            "longitude": 7.53333
+          },
+          {
+            "title": "Authorities investigating whether first Kenyan and Nigerian Ebola cases crossed paths",
+            "source_url": "https://www.wsiu.org/2026-10-23/authorities-investigating-whether-first-kenyan-and-nigerian-ebola-cases-crossed-paths",
+            "source_name": "wsiu.org",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Nigeria's first Ebola patient holidayed in Uganda",
+            "source_url": "https://www.surinametimes.com/artikel/nigerias-first-ebola-patient-holidayed-in-uganda",
+            "source_name": "surinametimes.com",
+            "latitude": 9.08333,
+            "longitude": 7.53333
+          },
+          {
+            "title": "Woman with Ebola in Nigeria confirmed as wife of Swiss diplomat",
+            "source_url": "https://www.aol.com/articles/nigeria-kenya-ebola-patients-may-045429000.html",
+            "source_name": "aol.com",
+            "latitude": 0.741389,
+            "longitude": 30.0417
+          },
+          {
+            "title": "Ebola patient in Nigeria is Swiss, had not visited DR Congo",
+            "source_url": "https://www.vanguardngr.com/2026/10/ebola-patient-in-nigeria-is-swiss-had-not-visited-drc-foreign-ministry/",
+            "source_name": "vanguardngr.com",
+            "latitude": 0.741389,
+            "longitude": 30.0417
+          }
+        ]
+      }
+    ],
+    "history": [],
+    "screen": {
+      "topic": "Health",
+      "start": "2026-10-22T00:00:00+00:00",
+      "end": "2026-10-23T00:00:00+00:00"
+    }
+  },
+  {
+    "id": "cp-7-follow_up",
+    "tags": [
+      "follow_up"
+    ],
+    "template": "follow_up",
+    "slots": {
+      "place": "Gaza, Israel",
+      "story": "Israel's 2026 election and Netanyahu's future",
+      "person": "Benjamin Netanyahu",
+      "other": "Gadi Eisenkot"
+    },
+    "question": "Tell me more about Benjamin Netanyahu.",
+    "source": {
+      "title": "Israel's 2026 election and Netanyahu's future",
+      "names": [
+        "Benjamin Netanyahu",
+        "Gadi Eisenkot",
+        "Donald Trump",
+        "United States",
+        "Bezalel Smotrich",
+        "Itamar Ben-Gvir",
+        "Naftali Bennett",
+        "Yair Golan",
+        "Mansour Abbas",
+        "Mark Halperin",
+        "Bibi Netanyahu",
+        "Supreme Court"
+      ],
+      "places": [
+        "Gaza, Israel",
+        "White House, District Of Columbia, United States",
+        "Jerusalem, Israel",
+        "Munich, Bayern, Germany",
+        "Las Vegas, Nevada, United States",
+        "Lubban -Sharqiya, Palestine",
+        "Budapest, Budapest, Hungary",
+        "London, London, City Of, United Kingdom",
+        "Ramat Gan, Tel Aviv, Israel",
+        "Tabarre, Ouest, Haiti",
+        "Oslo, Oslo, Norway",
+        "Balad, Sistan Va Baluchestan, Iran",
+        "Bogota, Cundinamarca, Colombia",
+        "Tehran, Tehran, Iran",
+        "Liri, Kohgiluyeh Va Buyer A?Mad, Iran",
+        "Medan, Sumatera Utara, Indonesia",
+        "Mediterranean Sea, Oceans",
+        "Balad, Sala? Ad Din, Iraq",
+        "Miami, Florida, United States",
+        "Golani, Madhya Pradesh, India",
+        "Entebbe, Wakiso, Uganda",
+        "Anadolu, Turkey"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "entity_lookup",
+        "result": {
+          "node": {
+            "name": "Benjamin Netanyahu",
+            "type": "ENTITY"
+          },
+          "connections": [
+            {
+              "name": "Gadi Eisenkot",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 58
+            },
+            {
+              "name": "Donald Trump",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 48
+            },
+            {
+              "name": "United States",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 33
+            },
+            {
+              "name": "Bezalel Smotrich",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 29
+            },
+            {
+              "name": "Itamar Ben-Gvir",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 20
+            },
+            {
+              "name": "Naftali Bennett",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 19
+            },
+            {
+              "name": "Yair Golan",
+              "type": "ENTITY",
+              "rel_type": "CO_MENTIONED",
+              "weight": 17
+            }
+          ],
+          "articles": [
+            {
+              "title": "Can Arab voters help prevent Netanyahu's return to power?",
+              "source_url": "https://news.az/news/can-arab-voters-help-prevent-netanyahus-return-to-power",
+              "source_name": "news.az",
+              "latitude": 31.4167,
+              "longitude": 34.3333
+            },
+            {
+              "title": "Yair Lapid: The upcoming election is about what we want Israel to be",
+              "source_url": "https://www.jpost.com/opinion/article-912425",
+              "source_name": "jpost.com",
+              "latitude": null,
+              "longitude": null
+            },
+            {
+              "title": "Yoaz Hendel: Reservists are the key to breaking Israel's political deadlock",
+              "source_url": "https://www.jpost.com/opinion/article-912499",
+              "source_name": "jpost.com",
+              "latitude": null,
+              "longitude": null
+            },
+            {
+              "title": "Israeli elections: Arab voters weigh participation against abstention in bid to oust Netanyahu",
+              "source_url": "https://aa.com.tr/en/middle-east/israeli-elections-arab-voters-weigh-participation-against-abstention-in-bid-to-oust-netanyahu/4098656",
+              "source_name": "aa.com.tr",
+              "latitude": 39.0,
+              "longitude": 35.0
+            },
+            {
+              "title": "Middle Israel: Why Naftali Bennett should be Israel's next prime minister",
+              "source_url": "http://www.jpost.com/opinion/article-912617",
+              "source_name": "jpost.com",
+              "latitude": null,
+              "longitude": null
+            }
+          ]
+        }
+      },
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "Can Arab voters help prevent Netanyahu's return to power?",
+            "source_url": "https://news.az/news/can-arab-voters-help-prevent-netanyahus-return-to-power",
+            "source_name": "news.az",
+            "latitude": 31.4167,
+            "longitude": 34.3333
+          },
+          {
+            "title": "Yair Lapid: The upcoming election is about what we want Israel to be",
+            "source_url": "https://www.jpost.com/opinion/article-912425",
+            "source_name": "jpost.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Yoaz Hendel: Reservists are the key to breaking Israel's political deadlock",
+            "source_url": "https://www.jpost.com/opinion/article-912499",
+            "source_name": "jpost.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Israeli elections: Arab voters weigh participation against abstention in bid to oust Netanyahu",
+            "source_url": "https://aa.com.tr/en/middle-east/israeli-elections-arab-voters-weigh-participation-against-abstention-in-bid-to-oust-netanyahu/4098656",
+            "source_name": "aa.com.tr",
+            "latitude": 39.0,
+            "longitude": 35.0
+          },
+          {
+            "title": "Middle Israel: Why Naftali Bennett should be Israel's next prime minister",
+            "source_url": "http://www.jpost.com/opinion/article-912617",
+            "source_name": "jpost.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Israel Elections 2026: Why Israel's upcoming vote is not the most important",
+            "source_url": "http://www.jpost.com/israel-election-2026/article-912612",
+            "source_name": "jpost.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Benjamin Netanyahu: Israel's longest-serving PM fighting for survival",
+            "source_url": "https://www.al-monitor.com/originals/2026/10/benjamin-netanyahu-israels-longest-serving-pm-fighting-survival",
+            "source_name": "al-monitor.com",
+            "latitude": 0.064444,
+            "longitude": 32.4469
+          },
+          {
+            "title": "How Israel's election is further excluding Palestinian citizens from politics",
+            "source_url": "https://www.middleeasteye.net/opinion/israels-election-deepens-political-exclusion-its-palestinian-citizens",
+            "source_name": "middleeasteye.net",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "The coming elections: A voter's guide to Israel's perplexing \"polito-sphere\"",
+            "source_url": "https://www.israelnationalnews.com/news/435061",
+            "source_name": "israelnationalnews.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "In Netanyahu stronghold, signs of fraying loyalty emerge before election",
+            "source_url": "https://www.newsday.com/news/nation/israel-elections-netanyahu-north-hezbollah-war-p73025",
+            "source_name": "newsday.com",
+            "latitude": 25.7743,
+            "longitude": -80.1937
+          },
+          {
+            "title": "Trump Backs Netanyahu Ahead of Israeli Election as Iran Looms Over the Middle East",
+            "source_url": "https://www.inewsgr.com/330/Trump-Backs-Netanyahu-Ahead-of-Israeli-Election-as-Iran-Looms-Over-the-Middle-East.htm",
+            "source_name": "inewsgr.com",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "On Lebanon's border, Israelis' support for Netanyahu drops before election",
+            "source_url": "https://www.naharnet.com/stories/en/323286-on-lebanon-s-border-israelis-support-for-netanyahu-drops-before-election",
+            "source_name": "naharnet.com",
+            "latitude": 25.7743,
+            "longitude": -80.1937
+          }
+        ]
+      }
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "Give me a briefing on Israel's 2026 election and Netanyahu's future."
+      },
+      {
+        "role": "assistant",
+        "content": "Can Arab voters help prevent Netanyahu's return to power? [1]."
+      }
+    ]
+  },
+  {
+    "id": "cp-8-coverage",
+    "tags": [
+      "coverage"
+    ],
+    "template": "coverage",
+    "slots": {
+      "place": "Northern Ireland, Craigavon, United Kingdom",
+      "story": "Storm Austen batters UK with high winds",
+      "person": "Tom Crabtree",
+      "other": "Office Deputy"
+    },
+    "question": "How are outlets covering Storm Austen batters UK with high winds?",
+    "source": {
+      "title": "Storm Austen batters UK with high winds",
+      "names": [
+        "Tom Crabtree",
+        "Office Deputy",
+        "Chris Bulmer",
+        "A Met Office",
+        "Ross Macleod",
+        "Midlothian Council",
+        "Neil Armstrong",
+        "Google",
+        "Tayside Fife",
+        "United Kingdom Met Office",
+        "National Rail",
+        "Eileanan Siar"
+      ],
+      "places": [
+        "Northern Ireland, Craigavon, United Kingdom",
+        "Tiverton, Devon, United Kingdom",
+        "Monmouthshire, United Kingdom",
+        "Chelmsford, Essex, United Kingdom",
+        "Brighton, Brighton And Hove, United Kingdom",
+        "Clacton, Essex, United Kingdom",
+        "Wicklow, Wicklow, Ireland",
+        "North Sea, Oceans",
+        "Black Country, Sandwell, United Kingdom",
+        "Amlwch, Isle Of Anglesey, United Kingdom",
+        "London, London, City Of, United Kingdom",
+        "Penzance, Cornwall, United Kingdom",
+        "Merseyside, United Kingdom",
+        "Edinburgh, Edinburgh, City Of, United Kingdom",
+        "Glasgow, Glasgow City, United Kingdom",
+        "Wicklow Head, Wicklow, Ireland",
+        "Donegal, Donegal, Ireland",
+        "Lake District, Cumbria, United Kingdom",
+        "Sheringham, Norfolk, United Kingdom",
+        "Middlesbrough, Redcar And Cleveland, United Kingdom",
+        "Perth, Western Australia, Australia",
+        "Wrexham, Wrexham, United Kingdom",
+        "Stourbridge, Dudley, United Kingdom",
+        "Ladock, Cornwall, United Kingdom",
+        "Ilkley, Bradford, United Kingdom",
+        "Fishguard, Pembrokeshire, United Kingdom",
+        "Connacht, Mayo, Ireland",
+        "Dublin, Dublin, Ireland",
+        "Berkshire, United Kingdom",
+        "County Fermanagh, Fermanagh, United Kingdom"
+      ]
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "keyword_search",
+        "result": [
+          {
+            "title": "Storm Austen to hit UK with heavy wind and rain forecast",
+            "source_url": "https://www.bournemouthecho.co.uk/news/26665890.storm-austen-hit-uk-heavy-wind-rain-forecast/",
+            "source_name": "bournemouthecho.co.uk",
+            "latitude": 54.5,
+            "longitude": -6.5
+          },
+          {
+            "title": "Gateshead match postponed due to 'heavy rainfall' with Storm Boelo to strike",
+            "source_url": "https://www.chroniclelive.co.uk/news/north-east-news/gateshead-match-postponed-due-heavy-34807968",
+            "source_name": "chroniclelive.co.uk",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Chris Bulmer warns Storm Boelo will bring 130 km/h gusts",
+            "source_url": "https://www.el-balad.com/17060236",
+            "source_name": "el-balad.com",
+            "latitude": 55.3333,
+            "longitude": 3.0
+          },
+          {
+            "title": "Royal Mail alert ahead of Storm Boelo as 30 areas affected",
+            "source_url": "https://www.belfastlive.co.uk/news/uk-world-news/royal-mail-alert-ahead-storm-34808960",
+            "source_name": "belfastlive.co.uk",
+            "latitude": 55.8333,
+            "longitude": -4.25
+          },
+          {
+            "title": "Weather warning as Britain faces battering from three back-to-back storms",
+            "source_url": "https://www.mirror.co.uk/news/uk-news/weather-warning-britain-faces-battering-37804285",
+            "source_name": "mirror.co.uk",
+            "latitude": 50.8333,
+            "longitude": -0.15
+          },
+          {
+            "title": "Millions under yellow warning as Storm Austen hits",
+            "source_url": "https://www.bbc.co.uk/sounds/play/curation/m001bm45/p0pj7xdb",
+            "source_name": "bbc.co.uk",
+            "latitude": 54.5,
+            "longitude": -6.5
+          },
+          {
+            "title": "Beloved Wiltshire park event cancelled due to Storm Austen",
+            "source_url": "https://www.gazetteandherald.co.uk/news/26663698.beloved-wiltshire-park-event-cancelled-due-storm-austen/",
+            "source_name": "gazetteandherald.co.uk",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "Met Office urges Brits in 70 areas to gather essential items for Saturday",
+            "source_url": "https://www.mirror.co.uk/news/uk-news/uk-weather-storm-met-office-37803019",
+            "source_name": "mirror.co.uk",
+            "latitude": null,
+            "longitude": null
+          },
+          {
+            "title": "33-hour Storm Boelo weather warning issued with 'very windy and wet' weekend forecast",
+            "source_url": "https://www.grimsbytelegraph.co.uk/news/local-news/33-hour-storm-boelo-weather-11211815",
+            "source_name": "grimsbytelegraph.co.uk",
+            "latitude": 54.5,
+            "longitude": -6.5
+          },
+          {
+            "title": "Amber wind warnings issued for weekend as storms sweep in",
+            "source_url": "https://www.ipswichstar.co.uk/news/national/26664343.amber-wind-warnings-issued-weekend-storms-sweep/",
+            "source_name": "ipswichstar.co.uk",
+            "latitude": 55.95,
+            "longitude": -3.2
+          },
+          {
+            "title": "Thousands of homes without power as Storm Austen hits south-west England",
+            "source_url": "https://www.theguardian.com/uk-news/2026/oct/23/storm-austen-weather-updates-thousands-without-power-south-west-england",
+            "source_name": "theguardian.com",
+            "latitude": 54.5,
+            "longitude": -6.5
+          },
+          {
+            "title": "Scots braced for heavy rain and strong winds as two named storms sweep in",
+            "source_url": "https://www.bridgwatermercury.co.uk/news/national/26662948.scots-braced-heavy-rain-strong-winds-two-named-storms-sweep/",
+            "source_name": "bridgwatermercury.co.uk",
+            "latitude": null,
+            "longitude": null
+          }
+        ]
+      }
+    ],
+    "history": []
+  },
+  {
+    "id": "cp-9-broad_biggest",
+    "tags": [
+      "broad"
+    ],
+    "template": "broad_biggest",
+    "slots": {},
+    "question": "What's the biggest story right now?",
+    "source": {
+      "title": "",
+      "names": [],
+      "places": []
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "top_stories",
+        "result": [
+          {
+            "title": "Putin and Zelensky agree to resume Ukraine talks",
+            "summary": "Putin has agreed to resume trilateral talks on the Ukraine war involving Kyiv and Washington, according to the Kremlin. Zelensky says Ukraine supports a ceasefire and is ready to freeze the conflict along the current front line, while US envoy Steve Witkoff met Putin in St. Petersburg for talks on Ukraine and the Persian Gulf.",
+            "source_url": "https://www.theepochtimes.com/world/talks-must-focus-on-security-guarantees-for-russia-ukraine-says-putin-6107956",
+            "source_name": "theepochtimes.com",
+            "latitude": 38.8951,
+            "longitude": -77.0364,
+            "coverage": "391 outlets, 24 countries, developing"
+          },
+          {
+            "title": "Ramaswamy ad featuring Acton's estranged mother sparks row",
+            "summary": "Ohio gubernatorial candidate Vivek Ramaswamy has run a campaign ad featuring the estranged mother of his Democratic rival, Amy Acton, who alleges childhood abuse. The ad has drawn criticism from voters and some Republicans, while JD Vance has defended it and criticised the GOP pushback, and Acton has called the ad horrible.",
+            "source_url": "https://www.portsmouth-dailytimes.com/ramaswamy-takes-responsibility-for-ad-with-amy-acton-s-mother-and-will-spend-millions-to/article_78926258-c726-524a-99c7-9b4f05ed4e56.html",
+            "source_name": "portsmouth-dailytimes.com",
+            "latitude": 40.1028,
+            "longitude": -84.633,
+            "coverage": "212 outlets, 5 countries, developing"
+          },
+          {
+            "title": "Ebola outbreak spreads from Congo to Africa",
+            "summary": "An Ebola outbreak that began in Congo has spread to several African countries, including Nigeria and Kenya, where patients and high-risk contacts have been identified and quarantined. Nigerian authorities say an imported patient is recovering, that there is no evidence of community transmission yet, and that 46 Ebola contacts have been barred from flying. The United States is set to require an attestation from international air passengers related to the outbreak.",
+            "source_url": "https://www.thenews.com.pk/latest/1421052-who-investigates-mystery-ebola-case-in-nigeria-as-outbreak-spreads-beyond-dr-congo",
+            "source_name": "thenews.com.pk",
+            "latitude": 0.741389,
+            "longitude": 30.0417,
+            "coverage": "168 outlets, 17 countries, developing"
+          },
+          {
+            "title": "Israel orders West Bank closure after Hebron shooting",
+            "summary": "Israel has ordered a closure of the occupied West Bank after a shooting attack in Hebron wounded five Israelis. Israeli soldiers killed two Palestinian men whom the military says were behind the attack.",
+            "source_url": "https://news4sanantonio.com/news/nation-world/israeli-prime-minister-benjamin-netanyahu-orders-west-bank-lockdown-after-army-israel-defense-forces-kills-2-palestinians-accused-of-attack-hamas-hebron-m16-rifle-handgun-emergency-meeting-security-cabinet",
+            "source_name": "news4sanantonio.com",
+            "latitude": 32.0667,
+            "longitude": 34.7667,
+            "coverage": "157 outlets, 9 countries, developing"
+          },
+          {
+            "title": "Global stocks slide on AI spending worries",
+            "summary": "Tech stocks fell sharply after Wall Street's AI-related losses, with investors worried about AI spending, and shares in Asia and elsewhere were mixed to lower. Oil prices jumped to multi-month highs amid geopolitical tensions, and South Korean and Japanese stocks fell.",
+            "source_url": "https://globalnews.ca/news/12118396/stock-markets-ai-tech-oil/",
+            "source_name": "globalnews.ca",
+            "latitude": 39.9523,
+            "longitude": -75.1638,
+            "coverage": "130 outlets, 20 countries, developing"
+          }
+        ]
+      }
+    ],
+    "history": [],
+    "screen": {
+      "start": "2026-10-22T17:05:13+00:00",
+      "end": "2026-10-23T17:05:13+00:00"
+    },
+    "breaking": "unavailable"
+  },
+  {
+    "id": "cp-10-broad_new",
+    "tags": [
+      "broad"
+    ],
+    "template": "broad_new",
+    "slots": {},
+    "question": "What's new in the last few hours?",
+    "source": {
+      "title": "",
+      "names": [],
+      "places": []
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "top_stories",
+        "result": [
+          {
+            "title": "Putin and Zelensky agree to resume Ukraine talks",
+            "summary": "Putin has agreed to resume trilateral talks on the Ukraine war involving Kyiv and Washington, according to the Kremlin. Zelensky says Ukraine supports a ceasefire and is ready to freeze the conflict along the current front line, while US envoy Steve Witkoff met Putin in St. Petersburg for talks on Ukraine and the Persian Gulf.",
+            "source_url": "https://www.theepochtimes.com/world/talks-must-focus-on-security-guarantees-for-russia-ukraine-says-putin-6107956",
+            "source_name": "theepochtimes.com",
+            "latitude": 38.8951,
+            "longitude": -77.0364,
+            "coverage": "391 outlets, 24 countries, developing"
+          },
+          {
+            "title": "Ramaswamy ad featuring Acton's estranged mother sparks row",
+            "summary": "Ohio gubernatorial candidate Vivek Ramaswamy has run a campaign ad featuring the estranged mother of his Democratic rival, Amy Acton, who alleges childhood abuse. The ad has drawn criticism from voters and some Republicans, while JD Vance has defended it and criticised the GOP pushback, and Acton has called the ad horrible.",
+            "source_url": "https://www.portsmouth-dailytimes.com/ramaswamy-takes-responsibility-for-ad-with-amy-acton-s-mother-and-will-spend-millions-to/article_78926258-c726-524a-99c7-9b4f05ed4e56.html",
+            "source_name": "portsmouth-dailytimes.com",
+            "latitude": 40.1028,
+            "longitude": -84.633,
+            "coverage": "212 outlets, 5 countries, developing"
+          },
+          {
+            "title": "Ebola outbreak spreads from Congo to Africa",
+            "summary": "An Ebola outbreak that began in Congo has spread to several African countries, including Nigeria and Kenya, where patients and high-risk contacts have been identified and quarantined. Nigerian authorities say an imported patient is recovering, that there is no evidence of community transmission yet, and that 46 Ebola contacts have been barred from flying. The United States is set to require an attestation from international air passengers related to the outbreak.",
+            "source_url": "https://www.thenews.com.pk/latest/1421052-who-investigates-mystery-ebola-case-in-nigeria-as-outbreak-spreads-beyond-dr-congo",
+            "source_name": "thenews.com.pk",
+            "latitude": 0.741389,
+            "longitude": 30.0417,
+            "coverage": "168 outlets, 17 countries, developing"
+          },
+          {
+            "title": "Israel orders West Bank closure after Hebron shooting",
+            "summary": "Israel has ordered a closure of the occupied West Bank after a shooting attack in Hebron wounded five Israelis. Israeli soldiers killed two Palestinian men whom the military says were behind the attack.",
+            "source_url": "https://news4sanantonio.com/news/nation-world/israeli-prime-minister-benjamin-netanyahu-orders-west-bank-lockdown-after-army-israel-defense-forces-kills-2-palestinians-accused-of-attack-hamas-hebron-m16-rifle-handgun-emergency-meeting-security-cabinet",
+            "source_name": "news4sanantonio.com",
+            "latitude": 32.0667,
+            "longitude": 34.7667,
+            "coverage": "157 outlets, 9 countries, developing"
+          },
+          {
+            "title": "Global stocks slide on AI spending worries",
+            "summary": "Tech stocks fell sharply after Wall Street's AI-related losses, with investors worried about AI spending, and shares in Asia and elsewhere were mixed to lower. Oil prices jumped to multi-month highs amid geopolitical tensions, and South Korean and Japanese stocks fell.",
+            "source_url": "https://globalnews.ca/news/12118396/stock-markets-ai-tech-oil/",
+            "source_name": "globalnews.ca",
+            "latitude": 39.9523,
+            "longitude": -75.1638,
+            "coverage": "130 outlets, 20 countries, developing"
+          }
+        ]
+      }
+    ],
+    "history": [],
+    "breaking": "unavailable"
+  },
+  {
+    "id": "cp-11-broad_know",
+    "tags": [
+      "broad"
+    ],
+    "template": "broad_know",
+    "slots": {},
+    "question": "What should I know about today?",
+    "source": {
+      "title": "",
+      "names": [],
+      "places": []
+    },
+    "now": "2026-10-23T17:05:13+00:00",
+    "results": [
+      {
+        "tool": "top_stories",
+        "result": [
+          {
+            "title": "Putin and Zelensky agree to resume Ukraine talks",
+            "summary": "Putin has agreed to resume trilateral talks on the Ukraine war involving Kyiv and Washington, according to the Kremlin. Zelensky says Ukraine supports a ceasefire and is ready to freeze the conflict along the current front line, while US envoy Steve Witkoff met Putin in St. Petersburg for talks on Ukraine and the Persian Gulf.",
+            "source_url": "https://www.theepochtimes.com/world/talks-must-focus-on-security-guarantees-for-russia-ukraine-says-putin-6107956",
+            "source_name": "theepochtimes.com",
+            "latitude": 38.8951,
+            "longitude": -77.0364,
+            "coverage": "391 outlets, 24 countries, developing"
+          },
+          {
+            "title": "Ramaswamy ad featuring Acton's estranged mother sparks row",
+            "summary": "Ohio gubernatorial candidate Vivek Ramaswamy has run a campaign ad featuring the estranged mother of his Democratic rival, Amy Acton, who alleges childhood abuse. The ad has drawn criticism from voters and some Republicans, while JD Vance has defended it and criticised the GOP pushback, and Acton has called the ad horrible.",
+            "source_url": "https://www.portsmouth-dailytimes.com/ramaswamy-takes-responsibility-for-ad-with-amy-acton-s-mother-and-will-spend-millions-to/article_78926258-c726-524a-99c7-9b4f05ed4e56.html",
+            "source_name": "portsmouth-dailytimes.com",
+            "latitude": 40.1028,
+            "longitude": -84.633,
+            "coverage": "212 outlets, 5 countries, developing"
+          },
+          {
+            "title": "Ebola outbreak spreads from Congo to Africa",
+            "summary": "An Ebola outbreak that began in Congo has spread to several African countries, including Nigeria and Kenya, where patients and high-risk contacts have been identified and quarantined. Nigerian authorities say an imported patient is recovering, that there is no evidence of community transmission yet, and that 46 Ebola contacts have been barred from flying. The United States is set to require an attestation from international air passengers related to the outbreak.",
+            "source_url": "https://www.thenews.com.pk/latest/1421052-who-investigates-mystery-ebola-case-in-nigeria-as-outbreak-spreads-beyond-dr-congo",
+            "source_name": "thenews.com.pk",
+            "latitude": 0.741389,
+            "longitude": 30.0417,
+            "coverage": "168 outlets, 17 countries, developing"
+          },
+          {
+            "title": "Israel orders West Bank closure after Hebron shooting",
+            "summary": "Israel has ordered a closure of the occupied West Bank after a shooting attack in Hebron wounded five Israelis. Israeli soldiers killed two Palestinian men whom the military says were behind the attack.",
+            "source_url": "https://news4sanantonio.com/news/nation-world/israeli-prime-minister-benjamin-netanyahu-orders-west-bank-lockdown-after-army-israel-defense-forces-kills-2-palestinians-accused-of-attack-hamas-hebron-m16-rifle-handgun-emergency-meeting-security-cabinet",
+            "source_name": "news4sanantonio.com",
+            "latitude": 32.0667,
+            "longitude": 34.7667,
+            "coverage": "157 outlets, 9 countries, developing"
+          },
+          {
+            "title": "Global stocks slide on AI spending worries",
+            "summary": "Tech stocks fell sharply after Wall Street's AI-related losses, with investors worried about AI spending, and shares in Asia and elsewhere were mixed to lower. Oil prices jumped to multi-month highs amid geopolitical tensions, and South Korean and Japanese stocks fell.",
+            "source_url": "https://globalnews.ca/news/12118396/stock-markets-ai-tech-oil/",
+            "source_name": "globalnews.ca",
+            "latitude": 39.9523,
+            "longitude": -75.1638,
+            "coverage": "130 outlets, 20 countries, developing"
+          }
+        ]
+      }
+    ],
+    "history": [],
+    "breaking": "unavailable"
+  }
+]
