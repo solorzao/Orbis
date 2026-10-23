@@ -29,6 +29,7 @@ from app.services.agent import (
     _normalize_globe_actions,
     _readable_urls,
     ask,
+    cite,
     clean_screen_context,
     execute_retrieval,
     guard_answer,
@@ -217,7 +218,7 @@ async def test_admitted_ask_synthesizes_even_if_planning_spent_the_budget(budget
     ):
         result = await ask("flood news")
 
-    assert result["answer"] == "Floods [1]."
+    assert result["answer"] == "Floods."  # nothing was retrieved, so [1] cites no report
     assert mock_client.messages.create.await_count == 2
 
 
@@ -896,7 +897,7 @@ async def test_ask_endpoint_synthesis_sees_the_screen_context(history_store):
     ):
         result = await ask_endpoint(body)
 
-    assert result.answer == "Calm [1]."
+    assert result.answer == "Calm."  # nothing was retrieved, so [1] cites no report
     synthesis = mock_client.messages.create.call_args_list[1].kwargs
     assert synthesis["messages"][-1]["content"].startswith(
         "Screen context: place=Lagos, Nigeria; topic=Health\n\nQuestion: What is happening here?"
@@ -1625,3 +1626,80 @@ async def test_synthesis_shows_only_the_guarded_answer(caplog):
         "globe_actions": [{"type": "flyTo", "lat": 39.47, "lng": -0.38, "label": "Valencia"}],
     }
     assert "Valencia" not in caplog.text
+
+
+_SIXTEEN = [
+    {"title": f"Story {n}", "url": f"https://e.com/{n}", "source_name": "Wire"}
+    for n in range(1, 17)
+]
+
+
+def test_cited_reports_are_numbered_from_one_in_the_order_cited():
+    answer = "Harry spoke [12]. Meghan replied [9] [12]. More [99]."
+    result = cite({"answer": answer, "citations": [], "globe_actions": []}, _SIXTEEN)
+    assert result["answer"] == "Harry spoke [1]. Meghan replied [2] [1]. More."
+    assert [(c["index"], c["title"]) for c in result["citations"]] == [
+        (1, "Story 12"),
+        (2, "Story 9"),
+    ]
+
+
+def test_an_answer_without_markers_cites_nothing():
+    result = cite({"answer": _NO_ANSWER, "citations": [], "globe_actions": []}, _SIXTEEN)
+    assert result == {"answer": _NO_ANSWER, "citations": [], "globe_actions": []}
+
+
+def test_a_removed_marker_leaves_no_gap_in_a_list_item():
+    answer = "- [40] Rain eased [3].\n- Talks resumed [7]."
+    result = cite({"answer": answer, "citations": [], "globe_actions": []}, _SIXTEEN)
+    assert result["answer"] == "- Rain eased [1].\n- Talks resumed [2]."
+
+
+@pytest.mark.asyncio
+async def test_stream_shows_saves_and_numbers_only_the_guarded_answer(history_store):
+    plan = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {"terms": "x"}}]}')
+    leaky = json.dumps(
+        {"answer": "Floods hit Valencia [3]. Report 2 is the mayor.", "globe_actions": []}
+    )
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=[plan, _make_mock_response(leaky)])
+    rows = [
+        {"title": f"Story {n}", "source_url": f"https://e.com/{n}", "source_name": "Wire"}
+        for n in (1, 2, 3)
+    ]
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch.dict(
+            "app.services.agent._TOOL_DISPATCH", {"keyword_search": AsyncMock(return_value=rows)}
+        ),
+    ):
+        events = await _stream("What happened in Valencia?")
+    shown = "".join(json.loads(e["data"])["token"] for e in events if e["event"] == "token")
+    assert shown == "Floods hit Valencia [1]."
+    done = json.loads(events[-1]["data"])
+    assert [(c["index"], c["url"]) for c in done["citations"]] == [(1, "https://e.com/3")]
+    saved = json.loads(history_store.set.await_args.args[1])[-1]
+    assert saved == {"role": "assistant", "content": shown, "sources": ["https://e.com/3"]}
+
+
+@pytest.mark.asyncio
+async def test_ask_endpoint_answers_and_saves_the_numbered_answer(history_store):
+    plan = _make_mock_response('{"tools": [{"name": "keyword_search", "args": {"terms": "x"}}]}')
+    reply = json.dumps({"answer": "Rain eased [2]. Floods hit Valencia [3].", "globe_actions": []})
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(side_effect=[plan, _make_mock_response(reply)])
+    rows = [
+        {"title": f"Story {n}", "source_url": f"https://e.com/{n}", "source_name": "Wire"}
+        for n in (1, 2, 3)
+    ]
+    with (
+        patch("app.services.agent._get_anthropic_client", return_value=mock_client),
+        patch.dict(
+            "app.services.agent._TOOL_DISPATCH", {"keyword_search": AsyncMock(return_value=rows)}
+        ),
+    ):
+        result = await ask_endpoint(AskRequest(question="What happened in Valencia?"))
+    assert result.answer == "Rain eased [1]. Floods hit Valencia [2]."
+    assert [(c["index"], c["title"]) for c in result.citations] == [(1, "Story 2"), (2, "Story 3")]
+    saved = json.loads(history_store.set.await_args.args[1])[-1]
+    assert saved["sources"] == ["https://e.com/2", "https://e.com/3"]

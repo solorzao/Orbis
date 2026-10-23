@@ -26,10 +26,10 @@ from app.services.agent import (
     ScreenScope,
     ScreenTopic,
     _build_context,
-    _enrich_citations,
     _readable_urls,
     admit_ask,
     ask,
+    cite,
     clean_screen_context,
     execute_retrieval,
     plan_retrieval,
@@ -286,7 +286,7 @@ async def ask_stream_endpoint(body: AskRequest) -> EventSourceResponse:
         # Step 3: Build context and synthesize
         context, article_index = _build_context(retrieval_results)
         result = await synthesize_answer(question, context, history, scope)
-        result["citations"] = _enrich_citations(result.get("citations", []), article_index)
+        result = cite(result, article_index)
         result["tools_used"] = [tc["name"] for tc in tool_calls]
 
         # Step 4: Stream answer text in chunks

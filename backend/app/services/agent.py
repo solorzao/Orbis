@@ -1002,6 +1002,36 @@ def guard_answer(answer: str, globe_actions: object) -> dict:
     }
 
 
+def cite(result: dict, article_index: list[dict]) -> dict:
+    """The answer as the visitor sees it: the reports it cites numbered 1..n in the
+    order first cited, in the text and the Sources list alike, each one a report the
+    model was given. A marker no report has leaves the text."""
+    answer = result["answer"]
+    order: list[int] = []
+    for match in _CITED.finditer(answer):
+        n = int(match[1])
+        if 1 <= n <= len(article_index) and n not in order:
+            order.append(n)
+    new = {old: i for i, old in enumerate(order, start=1)}
+    removed = False
+
+    def renumber(match: re.Match[str]) -> str:
+        nonlocal removed
+        n = int(match[1])
+        if n in new:
+            return f"[{new[n]}]"
+        removed = True
+        return ""
+
+    answer = _CITED.sub(renumber, answer)
+    if removed:  # "a claim [99]." became "a claim ."
+        answer = re.sub(r"[ \t]+([.,;:!?])", r"\1", re.sub(r"(?<=\S)[ \t]{2,}", " ", answer))
+    citations = _enrich_citations([{"index": n} for n in order], article_index)
+    for citation in citations:
+        citation["index"] = new[citation["index"]]
+    return {**result, "answer": answer, "citations": citations}
+
+
 async def synthesize_answer(
     question: str,
     context: str,
@@ -1162,6 +1192,6 @@ async def ask(
 
     # Step 5: Synthesize
     result = await synthesize_answer(question, context, conversation_history, scope)
-    result["citations"] = _enrich_citations(result.get("citations", []), article_index)
+    result = cite(result, article_index)
     result["tools_used"] = [tc["name"] for tc in tool_calls]
     return result
