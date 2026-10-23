@@ -28,11 +28,11 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 
 from app.middleware.security import has_injection_pattern, sanitise_text, strip_invisible
-from app.services import llm_budget
+from app.services import llm_budget, voice
 from app.services.ai_summary import SummaryUnavailable, _call_claude
 from app.services.cache import cycle_ttl, get_cached, get_many, set_cached, set_many
 from app.services.country_centroids import centroid
@@ -744,10 +744,6 @@ def _label(item: BoardItem) -> str:
     return _LABELS[("entity", item.key[0])] if item.kind == "entity" else _LABELS[item.kind]
 
 
-def _when(time: datetime) -> str:
-    return time.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
 def _clean(text: str | None, max_length: int) -> str:
     """Pin text as one clean line: entities unescaped and compatibility forms folded
     (NFKC, as display_title does for headlines: "ｉｇｎｏｒｅ" is "ignore", "＜/pins＞" is
@@ -764,8 +760,8 @@ def _defuse(text: str) -> str:
 
 
 def _details(item: BoardItem, place: str, time: datetime | None) -> list[str]:
-    """What a server snapshot adds to its title, by kind."""
-    when = _when(time) if time else ""
+    """What a server snapshot adds to its title, by kind, with dates as people say them."""
+    when = voice.human_date(time) if time else ""
     if item.kind == "article":
         return [part for part in (place, when) if part]
     if item.kind == "place":
@@ -777,8 +773,8 @@ def _details(item: BoardItem, place: str, time: datetime | None) -> list[str]:
         ]
         return [part for part in parts if part]
     if item.kind == "entity" and place:
-        # The top cell of a sample of its members: "much of", not "most".
-        return [f"much of its coverage this week in {place}"]
+        # The top cell of a sample of its members: where it is in the news, not "most".
+        return [f"in the news from {place}"]
     return []
 
 
@@ -804,7 +800,7 @@ def _saved_text(saved: dict) -> str | None:
         return None
     text = _defuse(text[:SAVED_CHARS].rstrip())
     time = saved.get("time")
-    return f"{text} ({_when(time)})" if isinstance(time, datetime) else text
+    return f"{text} ({voice.human_date(time)})" if isinstance(time, datetime) else text
 
 
 def build_memo_prompt(

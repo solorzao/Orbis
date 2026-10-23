@@ -4,6 +4,7 @@ pins' resolution stubbed."""
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,7 +13,7 @@ import anthropic
 import httpx
 import pytest
 
-from app.services import ai_summary, board, llm_budget
+from app.services import ai_summary, board, llm_budget, voice
 
 NOW = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
 WHEN = datetime(2026, 10, 20, 9, tzinfo=timezone.utc)
@@ -137,18 +138,33 @@ async def test_pins_are_numbered_in_board_order_from_server_snapshots(claude, re
     _, user = _prompt(claude)
     assert user == (
         "<pins>\n"
-        "[1] Article: Strikes spread across France (Paris, France; 2026-10-20 09:00 UTC)\n"
-        "[2] Place: Lagos, Nigeria (newest story 2026-10-20 09:00 UTC)\n"
+        "[1] Article: Strikes spread across France (Paris, France; 20 October)\n"
+        "[2] Place: Lagos, Nigeria (newest story 20 October)\n"
         "[3] Countries covered together: France and Nigeria\n"
         "[4] Story thread: Pension strikes (first reported in Paris, France; "
-        "latest story 2026-10-20 09:00 UTC)\n"
-        # The place is the top cell of a 100-member sample: "much of", not "most".
-        "[5] Person: Bola Tinubu (much of its coverage this week in Abuja, Nigeria)\n"
+        "latest story 20 October)\n"
+        # The place is the top cell of a 100-member sample: where it is in the news.
+        "[5] Person: Bola Tinubu (in the news from Abuja, Nigeria)\n"
         "[6] Organisation: ECOWAS\n"
         "</pins>"
     )
     [items, now] = resolved.await_args.args
     assert [i.id for i in items] == ITEMS and now == NOW
+
+
+@pytest.mark.asyncio
+async def test_pin_times_are_days_not_timestamps(claude):
+    await _analyze()
+    _, user = _prompt(claude)
+    assert "[1] Article: Strikes spread across France (Paris, France; 20 October)" in user
+    assert "2026-10-20" not in user and "UTC" not in user
+
+
+@pytest.mark.asyncio
+async def test_an_entity_pin_says_where_it_is_in_the_news(claude):
+    await _analyze()
+    assert "[5] Person: Bola Tinubu (in the news from Abuja, Nigeria)" in _lines(claude)
+    assert "this week" not in _prompt(claude)[1]
 
 
 @pytest.mark.asyncio
@@ -232,7 +248,7 @@ async def test_an_expired_pins_saved_text_is_cleaned_filtered_capped_and_marked(
     assert text.startswith("Old strike story word word")
     body, when = text.rsplit(" (", 1)
     assert len(body) <= board.SAVED_CHARS
-    assert when == "2026-10-20 09:00 UTC)"
+    assert when == "20 October)"
     assert lines[1] == "[2] (left out)"  # an injection phrase, after cleaning
     assert lines[2] == "[3] Countries covered together (saved earlier): Lagos port reopens"
     assert lines[3].startswith("[4] Story thread: Pension strikes")
