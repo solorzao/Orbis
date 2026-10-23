@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from app.services import board, knowledge_graph
+from app.services import board, knowledge_graph, retrieval
 from tests import db_plans
 
 DATABASE_URL = os.environ.get("ORBIS_TEST_DATABASE_URL", "")
@@ -578,6 +578,29 @@ async def test_at_production_scale_pins_are_read_by_primary_key(big):
     assert resolved[first] == first
     assert resolved[first + 1] == resolved[first + 11] == first + 101
     assert resolved[first + 12] == first + 12
+
+
+@pytest.mark.asyncio
+async def test_at_production_scale_top_stories_lead_links_are_read_by_primary_key(big):
+    """The co-pilot's top_stories (Phase 6, 21d) reads its top threads' lead links: on
+    one-row tables PostgreSQL picks a seq scan, so this runs on the filled week."""
+    ids = await _production_week(big, _now())
+    top = ids["threads"][:5]
+    await big.execute(
+        "UPDATE threads SET lead_article_id = $2 WHERE id = ANY($1::bigint[])",
+        top,
+        uuid.UUID(ids["articles"][0]),
+    )
+
+    custom = await db_plans.custom_plan(big, retrieval._LEAD_URLS_SQL, top)
+    generic = await db_plans.generic_plan(
+        big, retrieval._LEAD_URLS_SQL, ["bigint[]"], [db_plans.literal(top)]
+    )
+
+    expected = {"seq_scans": set(), "indexes": {"threads_pkey", "articles_pkey"}}
+    assert custom == generic == expected
+    rows = await big.fetch(retrieval._LEAD_URLS_SQL, top)
+    assert {r["id"] for r in rows} == set(top)
 
 
 # --- Pages read, at production's scale ----------------------------------------------

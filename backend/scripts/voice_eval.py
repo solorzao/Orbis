@@ -47,6 +47,11 @@ from app.config import settings
 from app.services import agent, board, llm_budget, voice
 from app.services.llm import ClaudeRefusalError, response_text
 
+# PR 21d's top_stories ranking and rows, so fixtures and the tool can't drift.
+from app.services.retrieval import TOP_BREAKING, TOP_THREADS, by_breadth
+from app.services.retrieval import coverage_words as coverage_words
+from app.services.retrieval import top_story_rows as top_rows
+
 FIXTURES = Path(__file__).resolve().parent.parent / "evals" / "voice"
 RESULTS = Path(__file__).resolve().parents[2] / ".claude" / "hillclimb"
 SURFACES = ("copilot", "memo")
@@ -86,8 +91,6 @@ EXPIRED = (
     "article:00000000-0000-4000-8000-000000000001",
     "article:00000000-0000-4000-8000-000000000002",
 )
-TOP_THREADS = 5  # PR 21d's top_stories: threads, then breaking events
-TOP_BREAKING = 3
 
 # What a surface shows instead of an AI answer, by outcome.
 OUTCOMES = {
@@ -190,47 +193,6 @@ def copilot_case(i: int, d: dict, now: datetime) -> dict:
             {"role": "assistant", "content": f"{rows[0]['title']} [1]."},
         ]
     return case
-
-
-def coverage_words(outlets: int, countries: int, status: str) -> str:
-    """A thread's breadth, as the top_stories context says it (PR 21d)."""
-    places = "country" if countries == 1 else "countries"
-    return f"{outlets} outlets, {countries} {places}, {status}"
-
-
-def top_rows(threads: list[dict], breaking: list[dict], urls: dict[int, str]) -> list[dict]:
-    """PR 21d's top_stories rows, from /api/threads and /api/news/breaking answers: the
-    TOP_THREADS threads the most outlets, then countries, cover, then up to
-    TOP_BREAKING breaking events. 21d moves this into app.services.retrieval and
-    imports it here, so fixtures and the tool can't drift."""
-    ranked = sorted(threads, key=lambda t: (-t["n_sources"], -len(t["countries"]), t["id"]))
-    rows = []
-    for t in ranked[:TOP_THREADS]:
-        place = (_places(t) or [{}])[0]
-        rows.append(
-            {
-                "title": t["title"],
-                "summary": t.get("synopsis"),
-                "source_url": urls.get(t["id"], ""),
-                "source_name": (t.get("lead") or {}).get("source_name", ""),
-                "latitude": place.get("lat"),
-                "longitude": place.get("lng"),
-                "coverage": coverage_words(t["n_sources"], len(t["countries"]), t["status"]),
-            }
-        )
-    for b in breaking[:TOP_BREAKING]:
-        rows.append(
-            {
-                "title": b["headline"],
-                "summary": None,
-                "source_url": "",
-                "source_name": b["lead"]["source_name"],
-                "latitude": b["lat"],
-                "longitude": b["lng"],
-                "coverage": f"breaking: {b['outlets']} outlets in the last 2 hours, {b['place']}",
-            }
-        )
-    return rows
 
 
 def broad_case(
@@ -537,9 +499,8 @@ async def capture(base_url: str) -> None:
         # breaking ticker show now, with each top thread's newest story as its link.
         top = await _get(http, "/api/threads", timespan="24h", limit=20)
         breaking = await _breaking(http)
-        ranked = sorted(top, key=lambda t: (-t["n_sources"], -len(t["countries"]), t["id"]))
         urls = {}
-        for t in ranked[:TOP_THREADS]:
+        for t in by_breadth(top)[:TOP_THREADS]:
             d = await _get(http, f"/api/threads/{t['id']}")
             urls[t["id"]] = d["articles"][0]["source_url"] if d["articles"] else ""
         rows = top_rows(top, breaking or [], urls)

@@ -1,8 +1,8 @@
 """Retrieval functions for the Orbis embedded agent.
 
 Provides semantic search, knowledge-graph traversal, keyword filtering,
-trending-topic aggregation, entity lookup, and article text extraction
-against the Orbis database.
+the top stories (Orbis's own cached rankings), entity lookup, and article
+text extraction against the Orbis database.
 """
 
 from __future__ import annotations
@@ -15,8 +15,10 @@ from typing import Any
 import asyncpg
 
 from app.config import settings
+from app.services.cache import cycle_ttl, get_cached, set_cached
 from app.services.database import get_pool
 from app.services.scraper import extract_article_text
+from app.services.urls import web_url
 
 logger = logging.getLogger("orbis.retrieval")
 
@@ -422,25 +424,111 @@ async def keyword_search(
         return []
 
 
-async def trending_topics(hours: int = 24) -> list[dict]:
-    """Return the top-20 trending topics over the last *hours* hours."""
-    try:
-        pool = await get_pool()
-        rows = await pool.fetch(
-            """
-            SELECT UNNEST(topic_tags) AS topic, COUNT(*) AS count
-            FROM articles
-            WHERE published_at > NOW() - make_interval(hours => $1)
-            GROUP BY topic
-            ORDER BY count DESC
-            LIMIT 20
-            """,
-            hours,
+# Broad questions (Phase 6, 21d): what Orbis already ranks, never a new heavy read.
+TOP_THREADS = 5
+TOP_BREAKING = 3
+_TOP_TTL = 300
+# Each top thread's lead link, by primary key on both tables (at most TOP_THREADS).
+_LEAD_URLS_SQL = """
+    SELECT t.id, a.source_url
+    FROM threads t JOIN articles a ON a.id = t.lead_article_id
+    WHERE t.id = ANY($1::bigint[])
+"""
+
+
+def by_breadth(threads: list[dict]) -> list[dict]:
+    """Threads the most outlets, then countries, cover first (then the lower id)."""
+    return sorted(threads, key=lambda t: (-t["n_sources"], -len(t["countries"]), t["id"]))
+
+
+def coverage_words(outlets: int, countries: int, status: str) -> str:
+    """A thread's breadth as the top_stories context says it: "12 outlets, 2 countries,
+    developing"."""
+    places = "country" if countries == 1 else "countries"
+    return f"{outlets} outlets, {countries} {places}, {status}"
+
+
+def top_story_rows(
+    threads: list[dict], breaking: list[dict], urls: dict[int, str], *, fresh: bool = True
+) -> list[dict]:
+    """The rows top_stories returns: the TOP_THREADS widest threads, then up to
+    TOP_BREAKING breaking events, as retrieval rows _build_context numbers, each with a
+    summary and a coverage line. Threads come as /api/threads answers them (JSON),
+    breaking events as /api/news/breaking does; *urls* maps thread ids to lead links,
+    which stay server-side (the context never shows a link). A breaking event has
+    none: its citation flies to its place and opens nothing. Its outlets are counted
+    over the last 2 hours as the list was made: said so only when it is *fresh*, not
+    the last good list, which can be an hour old."""
+    when = " in the last 2 hours" if fresh else ""
+    rows = []
+    for t in by_breadth(threads)[:TOP_THREADS]:
+        place = (t.get("places") or [{}])[0]
+        rows.append(
+            {
+                "title": t["title"],
+                "summary": t.get("synopsis"),
+                "source_url": urls.get(t["id"], ""),
+                "source_name": (t.get("lead") or {}).get("source_name", ""),
+                "latitude": place.get("lat"),
+                "longitude": place.get("lng"),
+                "coverage": coverage_words(t["n_sources"], len(t["countries"]), t["status"]),
+            }
         )
-        return [dict(r) for r in rows]
-    except Exception:
-        logger.error("Trending topics query failed.", exc_info=True)
-        return []
+    for b in breaking[:TOP_BREAKING]:
+        rows.append(
+            {
+                "title": b["headline"],
+                "summary": None,
+                "source_url": "",
+                "source_name": b["lead"]["source_name"],
+                "latitude": b["lat"],
+                "longitude": b["lng"],
+                "coverage": f"breaking: {b['outlets']} outlets{when}, {b['place']}",
+            }
+        )
+    return rows
+
+
+async def top_stories(hours: int = 24, topic: str | None = None) -> list[dict]:
+    """What Orbis ranks highest now, for broad questions: the threads the most outlets
+    and countries cover in the window, then the breaking events. The threads come from
+    the rail's list (its cache, or its own query on a miss), the breaking events from
+    the ticker's cached lists only, plus the top threads' lead links by primary key;
+    the answer is cached until the cycle ends. *hours* is a live window (1, 6, 24 or
+    168); *topic* a topic pill, or None.
+
+    The breaking events never wait on the breaking query (news.breaking_from_cache):
+    a broad answer goes without them rather than wait."""
+    # Here, not at the top: the routers import the services.
+    from app.routers.news import _globe_topic_tag, breaking_from_cache
+    from app.routers.threads import DEFAULT_LIMIT, cached_threads
+
+    tag = _globe_topic_tag(topic)
+    key = f"db:copilot:top:v1:{hours}h:{tag or ''}"
+    cached = await get_cached(key)
+    if isinstance(cached, list):
+        return cached
+    listed = await cached_threads(hours, tag, DEFAULT_LIMIT)
+    threads = by_breadth([t.model_dump(mode="json") for t in listed])[:TOP_THREADS]
+    stories, origin = await breaking_from_cache()
+    events = [b.model_dump(mode="json") for b in stories if tag in (None, b.topic)]
+    urls: dict[int, str] = {}
+    if threads:
+        pool = await get_pool()
+        rows = await pool.fetch(_LEAD_URLS_SQL, [t["id"] for t in threads])
+        urls = {r["id"]: web_url(r["source_url"]) or "" for r in rows}
+    fresh = origin == "fresh"
+    result = top_story_rows(threads, events, urls, fresh=fresh)
+    logger.info(
+        "top_stories: %d threads, %d breaking events (breaking list: %s).",
+        len(threads),
+        min(len(events), TOP_BREAKING),
+        origin,
+    )
+    # Without the fresh breaking list, only briefly: the ticker's refill is then
+    # picked up within minutes, not at the cycle's end.
+    await set_cached(key, result, cycle_ttl(_TOP_TTL) if fresh else _TOP_TTL)
+    return result
 
 
 # entity_lookup reads both from $2 of the entity's most recent stored edges,

@@ -826,34 +826,6 @@ class TestKeywordSearch:
         assert params == ["politics", start, end, 10]
 
 
-class TestTrendingTopics:
-    @pytest.mark.asyncio
-    async def test_trending_topics_returns_counts(self):
-        from app.services.retrieval import trending_topics
-
-        db_rows = [
-            {"topic": "politics", "count": 42},
-            {"topic": "climate", "count": 31},
-        ]
-
-        mock_pool = AsyncMock()
-        mock_pool.fetch = AsyncMock(return_value=db_rows)
-
-        with patch(
-            "app.services.retrieval.get_pool",
-            new_callable=AsyncMock,
-            return_value=mock_pool,
-        ):
-            results = await trending_topics(hours=12)
-
-        assert len(results) == 2
-        assert results[0]["topic"] == "politics"
-        assert results[0]["count"] == 42
-        mock_pool.fetch.assert_called_once()
-        # Verify hours param was passed
-        assert mock_pool.fetch.call_args[0][1] == 12
-
-
 class TestEntityLookup:
     @pytest.mark.asyncio
     async def test_entity_lookup_finds_node_and_connections(self):

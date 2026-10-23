@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, render, screen, fireEvent, within } from "@testing-library/react";
+import { toolLine } from "./AgentMessage";
 import CoPilot, { type ScreenContext } from "./CoPilot";
 import type { AgentMessage, Citation, GlobeAction } from "@/hooks/useAgent";
 
@@ -282,10 +283,14 @@ describe("CoPilot", () => {
     it("show one quiet tool line while the answer streams", () => {
       renderCoPilot({
         isLoading: true,
-        activeTools: ["semantic_search", "trending_topics"],
+        activeTools: ["semantic_search", "top_stories"],
         messages: answer({ content: "", citations: [], status: "streaming" }),
       });
-      expect(screen.getByText("Searching articles, checking trends…")).toBeInTheDocument();
+      expect(screen.getByText("Searching articles, checking the top stories…")).toBeInTheDocument();
+    });
+
+    it("say what top_stories is doing", () => {
+      expect(toolLine(["top_stories"])).toBe("Checking the top stories…");
     });
 
     it("never load an image the answer writes", () => {
