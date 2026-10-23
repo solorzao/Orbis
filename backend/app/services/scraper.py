@@ -21,6 +21,7 @@ import ipaddress
 import logging
 import re
 import socket
+import zlib
 from typing import Any, NamedTuple
 from urllib.parse import urlsplit
 
@@ -47,6 +48,14 @@ _MAX_REDIRECTS = 3
 # its number, internal by its use.
 _AZURE_PLATFORM_IP = ipaddress.ip_address("168.63.129.16")
 _LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
+# The encodings asked for, and the only ones read: _read_capped inflates them no
+# further than its cap. (httpx would ask for zstd too, and inflate whole chunks.)
+_ACCEPT_ENCODING = "gzip, deflate"
+_ZLIB_WBITS = {
+    "gzip": 16 + zlib.MAX_WBITS,
+    "x-gzip": 16 + zlib.MAX_WBITS,
+    "deflate": zlib.MAX_WBITS,
+}
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -82,9 +91,9 @@ def _unmapped(ip: IPAddress) -> IPAddress:
 
 def is_public_ip(ip: IPAddress) -> bool:
     """True for an address on the public internet. False for loopback, private
-    (RFC 1918, ULA), link-local (the cloud metadata services), CGNAT, multicast,
-    reserved and unspecified addresses, Azure's platform address, and any IPv4
-    address in IPv4-mapped IPv6 form."""
+    (RFC 1918, ULA), link-local (the cloud metadata services), IPv6 site-local,
+    CGNAT, multicast, reserved and unspecified addresses, Azure's platform
+    address, and any of these in IPv4-mapped IPv6 form."""
     ip = _unmapped(ip)
     if ip == _AZURE_PLATFORM_IP:
         return False
@@ -95,6 +104,7 @@ def is_public_ip(ip: IPAddress) -> bool:
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
+        or (isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local)  # fec0::/10
     )
 
 
@@ -104,12 +114,12 @@ async def _resolve(host: str, port: int) -> list[str]:
     return [info[4][0] for info in infos]
 
 
-async def _public_address(host: str, port: int) -> IPAddress:
-    """The address to connect to for *host* (a name or an IP literal).
+async def _public_addresses(host: str, port: int) -> list[IPAddress]:
+    """The addresses to try, in order, for *host* (a name or an IP literal).
 
     Refused unless every address it has is public: a name that also resolves
-    inward is never fetched. IPv4 is preferred, as the container may have no
-    IPv6 route and a pinned connection doesn't fall back to another address.
+    inward is never fetched. IPv4 comes first, as the container may have no
+    IPv6 route.
     """
     try:
         addresses = [ipaddress.ip_address(host)]
@@ -121,19 +131,19 @@ async def _public_address(host: str, port: int) -> IPAddress:
         if not is_public_ip(ip):
             name = "" if str(ip) == host else f" ({host})"
             raise Refused(f"non-public address {ip}{name}")
-    addresses = [_unmapped(ip) for ip in addresses]
-    return next((ip for ip in addresses if ip.version == 4), addresses[0])
+    unique = list(dict.fromkeys(_unmapped(ip) for ip in addresses))
+    return sorted(unique, key=lambda ip: ip.version)  # stable: DNS order within each
 
 
-async def _pin(url: str) -> tuple[httpx.URL, dict[str, str], dict[str, str]]:
-    """*url* re-addressed to the public IP its host resolves to, with the headers
+async def _pin(url: str) -> tuple[list[httpx.URL], dict[str, str], dict[str, str]]:
+    """*url* re-addressed to each public IP its host resolves to, with the headers
     and extensions that keep it the host's: the Host header, and the TLS server
     name (SNI, which the certificate is checked against).
 
-    The address checked is the address connected to, so a name can't pass the
-    check at one address and connect at another (DNS rebinding). Refused for
-    anything but an http(s) URL on a public host. Any port is allowed: it's the
-    address check that keeps internal services out of reach.
+    The addresses checked are the addresses connected to, so a name can't pass
+    the check at one address and connect at another (DNS rebinding). Refused
+    for anything but an http(s) URL on a public host. Any port is allowed: it's
+    the address check that keeps internal services out of reach.
     """
     try:
         parsed = httpx.URL(url)
@@ -143,12 +153,40 @@ async def _pin(url: str) -> tuple[httpx.URL, dict[str, str], dict[str, str]]:
         raise Refused("not an http(s) URL")
     host = parsed.raw_host.decode("ascii")  # IDNA-encoded, as DNS and TLS want it
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    ip = await _public_address(host, port)
+    ips = await _public_addresses(host, port)
     return (
-        parsed.copy_with(host=str(ip)),
+        [parsed.copy_with(host=str(ip)) for ip in ips],
         {"Host": parsed.netloc.decode("ascii")},
         {"sni_hostname": host},
     )
+
+
+async def _send(
+    client: httpx.AsyncClient,
+    targets: list[httpx.URL],
+    headers: dict[str, str],
+    extensions: dict[str, str],
+    deadline: float,
+) -> httpx.Response:
+    """A streamed GET from the first of *targets* (one host's addresses) that
+    takes a connection. Each has an equal share of the time left to connect in,
+    so one dead address leaves time for the next."""
+    loop = asyncio.get_running_loop()
+
+    def request(target: httpx.URL, left: int) -> httpx.Request:
+        connect = max(deadline - loop.time(), 0.0) / left
+        timeout = httpx.Timeout(client.timeout.read, connect=connect)
+        return client.build_request(
+            "GET", target, headers=headers, extensions=extensions, timeout=timeout
+        )
+
+    *others, last = targets
+    for n, target in enumerate(others):
+        try:
+            return await client.send(request(target, len(targets) - n), stream=True)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            pass  # the next address
+    return await client.send(request(last, 1), stream=True)
 
 
 def _next_hop(url: str, location: str) -> str:
@@ -160,10 +198,35 @@ def _next_hop(url: str, location: str) -> str:
 
 
 async def _read_capped(resp: httpx.Response, max_bytes: int) -> bytes:
-    """At most *max_bytes* of *resp*'s body: the rest is never read."""
+    """At most *max_bytes* of *resp*'s body, decoded: the rest is never read.
+
+    The raw body is inflated here, never past the cap: a few kilobytes of gzip
+    can inflate to gigabytes, and httpx's own decoding inflates each chunk
+    whole. Refused for an encoding fetch_public didn't ask for. A deflate body
+    without its zlib header (as some servers send it) is read as raw deflate.
+    """
+    encoding = resp.headers.get("content-encoding", "").strip().lower()
+    if encoding not in ("", "identity", *_ZLIB_WBITS):
+        raise Refused(f"content-encoding {encoding[:20]!r}")
+    if max_bytes <= 0:
+        return b""  # and never decompress(raw, 0): a max_length of 0 is no limit
+    inflate = zlib.decompressobj(_ZLIB_WBITS[encoding]) if encoding in _ZLIB_WBITS else None
     body = bytearray()
-    async for chunk in resp.aiter_bytes():
-        body += chunk
+    first = True
+    async for raw in resp.aiter_raw():
+        if inflate is None:
+            body += raw
+        else:
+            try:
+                body += inflate.decompress(raw, max_bytes - len(body))
+            except zlib.error:
+                if not (first and encoding == "deflate"):
+                    raise
+                inflate = zlib.decompressobj(-zlib.MAX_WBITS)
+                body += inflate.decompress(raw, max_bytes - len(body))
+            if inflate.eof:
+                break  # anything after the compressed stream is ignored, unread
+        first = False
         if len(body) >= max_bytes:
             break
     return bytes(body[:max_bytes])
@@ -189,31 +252,36 @@ async def fetch_public(
 ) -> Page | None:
     """GET an untrusted *url*: http(s) only, public addresses only, at most
     _MAX_REDIRECTS redirects, each checked as the first URL is, and each hop
-    connected to the address its check resolved (_pin).
+    connected to an address its check resolved (_pin). A redirect from https
+    to http is followed: the address check applies to it all the same.
 
     None when a URL on the way is refused, logged without its query string.
-    Reads at most *max_bytes* of the final response's body. The fetch has
-    *timeout* seconds in all, redirects included (TimeoutError past it), so a
-    host dripping bytes can't hold it; httpx's own errors are raised as well.
+    Decodes at most *max_bytes* of the final response's body (_read_capped),
+    so a compressed body can't inflate past it either. The fetch has *timeout*
+    seconds in all, redirects included (TimeoutError past it), so a host
+    dripping bytes can't hold it; httpx's own errors are raised as well.
     """
     hop = url
     try:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout(timeout) as deadline:
             # trust_env=False: no proxy from the environment, so the address
             # checked is the address connected to.
             async with httpx.AsyncClient(
-                timeout=timeout, headers=headers, trust_env=False
+                timeout=timeout,
+                headers={**(headers or {}), "Accept-Encoding": _ACCEPT_ENCODING},
+                trust_env=False,
             ) as client:
                 for _ in range(_MAX_REDIRECTS + 1):
-                    target, host_header, extensions = await _pin(hop)
-                    async with client.stream(
-                        "GET", target, headers=host_header, extensions=extensions
-                    ) as resp:
+                    targets, host_header, extensions = await _pin(hop)
+                    resp = await _send(client, targets, host_header, extensions, deadline.when())
+                    try:
                         if resp.has_redirect_location:
                             hop = _next_hop(hop, resp.headers["location"])
                             continue
                         body = await _read_capped(resp, max_bytes)
                         return Page(resp.status_code, body, resp.charset_encoding)
+                    finally:
+                        await resp.aclose()
                 raise Refused(f"more than {_MAX_REDIRECTS} redirects")
     except Refused as exc:
         logger.warning("Refused to fetch %s: %s", _loggable_url(url), exc)

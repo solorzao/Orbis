@@ -7,8 +7,13 @@ private ranges). Fetches go through httpx.MockTransport, DNS through a table.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
+import sys
+import time
+import tracemalloc
+import zlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,11 +23,14 @@ import pytest
 from app.services import scraper
 from app.services.scraper import extract_article_text, fetch_public, is_public_ip
 
+REAL_RESOLVE = scraper._resolve  # before any test stands in for it
+
 PUBLIC = "93.184.216.34"
 MIRROR = "151.101.65.1"
 DNS = {
     "news.example": [PUBLIC],
     "mirror.example": [MIRROR],
+    "two.example": [PUBLIC, MIRROR],
     "v6.example": ["2606:4700::6810:84e5"],
     "dual.example": ["2606:4700::6810:84e5", MIRROR],
     "inside.example": ["10.1.2.3"],
@@ -40,10 +48,14 @@ ARTICLE = (
 @pytest.fixture
 def web(monkeypatch):
     """The scraper's network: names resolved from DNS, and each request answered
-    by ``web.handler`` (an article unless the test sets one). ``web.requests``
-    and ``web.lookups`` record what reached it."""
+    by ``web.handler`` (an article unless the test sets one). ``web.requests``,
+    ``web.lookups`` and ``web.clients`` (each client's arguments) record what
+    reached it."""
     web = SimpleNamespace(
-        requests=[], lookups=[], handler=lambda request: httpx.Response(200, text=ARTICLE)
+        requests=[],
+        lookups=[],
+        clients=[],
+        handler=lambda request: httpx.Response(200, text=ARTICLE),
     )
 
     async def resolve(host, port):
@@ -52,18 +64,30 @@ def web(monkeypatch):
 
     def handle(request):
         web.requests.append(request)
-        return web.handler(request)
+        response = web.handler(request)  # an async handler's coroutine is awaited
+        return _unread(response) if isinstance(response, httpx.Response) else response
 
     real = httpx.AsyncClient
-    monkeypatch.setattr(
-        scraper.httpx,
-        "AsyncClient",
-        lambda **kw: real(transport=httpx.MockTransport(handle), **kw),
-    )
+
+    def client(**kw):
+        web.clients.append(kw)
+        return real(transport=httpx.MockTransport(handle), **kw)
+
+    monkeypatch.setattr(scraper.httpx, "AsyncClient", client)
     monkeypatch.setattr(scraper, "_resolve", resolve)
     monkeypatch.setattr(scraper, "get_cached", AsyncMock(return_value=None))
     monkeypatch.setattr(scraper, "set_cached", AsyncMock())
     return web
+
+
+def _unread(response: httpx.Response) -> httpx.Response:
+    """*response* with its body still to read, as the network gives one: httpx
+    reads (and decodes) a body given as bytes at once, and fetch_public reads
+    the raw stream. A compressed body is given as a stream (_streamed)."""
+    if not response.is_stream_consumed:
+        return response
+    stream = httpx.ByteStream(response.content)
+    return httpx.Response(response.status_code, headers=response.headers, stream=stream)
 
 
 def _redirect(location: str, status: int = 302) -> httpx.Response:
@@ -320,6 +344,226 @@ class TestPublicPages:
         assert result["quality"] == "failed"
 
 
+# --- Several addresses, one deadline, no proxy ----------------------------------------
+
+
+class TestConnecting:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", [httpx.ConnectError, httpx.ConnectTimeout])
+    async def test_a_dead_address_falls_back_to_the_next_checked_one(self, web, error):
+        def handler(request):
+            if request.url.host == PUBLIC:
+                raise error("dead", request=request)
+            return httpx.Response(200, text=ARTICLE)
+
+        web.handler = handler
+
+        page = await fetch_public("https://two.example/a", max_bytes=100, timeout=5)
+
+        assert page is not None and page.status == 200
+        assert [r.url.host for r in web.requests] == [PUBLIC, MIRROR]
+        assert _hosts(web) == ["two.example", "two.example"]
+        assert web.lookups == ["two.example"]  # the same checked answer, not a new one
+
+    @pytest.mark.asyncio
+    async def test_each_address_has_a_share_of_the_time_left_to_connect(self, web):
+        def handler(request):
+            if request.url.host == PUBLIC:
+                raise httpx.ConnectTimeout("dead", request=request)
+            return httpx.Response(200)
+
+        web.handler = handler
+
+        await fetch_public("https://two.example/a", max_bytes=100, timeout=5)
+
+        first, second = (r.extensions["timeout"]["connect"] for r in web.requests)
+        assert 2.0 < first <= 2.5  # half the deadline: one address of two
+        assert 4.0 < second <= 5.0  # all that is left: the last address
+
+    @pytest.mark.asyncio
+    async def test_only_a_failed_connection_moves_on(self, web):
+        def handler(request):
+            raise httpx.ReadError("reset", request=request)
+
+        web.handler = handler
+
+        with pytest.raises(httpx.ReadError):
+            await fetch_public("https://two.example/a", max_bytes=100, timeout=5)
+        assert len(web.requests) == 1
+
+    @pytest.mark.asyncio
+    async def test_when_every_address_is_dead_the_scrape_fails(self, web):
+        def handler(request):
+            raise httpx.ConnectError("dead", request=request)
+
+        web.handler = handler
+
+        result = await extract_article_text("https://two.example/story")
+
+        assert result["quality"] == "failed"
+        assert len(web.requests) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_whole_fetch_has_one_deadline(self, web):
+        """Each hop answers inside any per-request timeout, but the hops add up."""
+
+        async def slow(request):
+            await asyncio.sleep(0.2)
+            return _redirect(f"{request.url.path}/again")
+
+        web.handler = slow
+        started = time.monotonic()
+
+        with pytest.raises(TimeoutError):
+            await fetch_public("https://news.example/a", max_bytes=100, timeout=0.5)
+
+        assert 0.45 < time.monotonic() - started < 1.0
+        assert len(web.requests) == 3  # cut short in the third hop
+
+    @pytest.mark.asyncio
+    async def test_no_proxy_from_the_environment(self, web, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://10.0.0.9:3128")
+
+        await fetch_public("https://news.example/a", max_bytes=100, timeout=5)
+
+        [client] = web.clients
+        assert client["trust_env"] is False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="glibc and musl read these as IPv4")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host", ["2130706433", "0x7f.1", "127.1"])
+async def test_a_numeric_host_is_resolved_and_refused(web, monkeypatch, host):
+    """Not IP literals to ipaddress, but the resolver reads them as 127.0.0.1."""
+    looked_up = []
+
+    async def real_resolve(name, port):
+        looked_up.append(name)
+        return await REAL_RESOLVE(name, port)
+
+    monkeypatch.setattr(scraper, "_resolve", real_resolve)
+
+    assert await fetch_public(f"http://{host}/", max_bytes=100, timeout=5) is None
+    assert looked_up == [host]
+    assert web.requests == []
+
+
+# --- Compressed bodies are inflated no further than the cap ---------------------------
+
+
+def _deflated(size: int, wbits: int) -> bytes:
+    """*size* zero bytes compressed at zlib's best (*wbits* as zlib takes them):
+    64 MiB is about 64 KB on the wire."""
+    compressor = zlib.compressobj(9, zlib.DEFLATED, wbits)
+    zeros = bytes(1 << 20)
+    return b"".join(compressor.compress(zeros) for _ in range(size >> 20)) + compressor.flush()
+
+
+def _streamed(body: bytes, sent: list[int], chunk: int = 64 * 1024):
+    """*body* as a stream of *chunk*-byte reads, counting each in *sent*."""
+
+    async def stream():
+        for i in range(0, len(body), chunk):
+            sent.append(i)
+            yield body[i : i + chunk]
+
+    return stream()
+
+
+GZIP, ZLIB, RAW = 16 + zlib.MAX_WBITS, zlib.MAX_WBITS, -zlib.MAX_WBITS
+
+
+class TestCompressedBodies:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("encoding", "wbits"),
+        [("gzip", GZIP), ("x-gzip", GZIP), ("deflate", ZLIB), ("deflate", RAW)],
+    )
+    async def test_a_compression_bomb_inflates_no_further_than_the_cap(self, web, encoding, wbits):
+        """64 MiB of zeros, about one 64 KB read on the wire. httpx's decoding
+        inflates each read whole (to 64 MiB here): the peak memory shows it was
+        inflated only to the cap."""
+        bomb = _deflated(64 << 20, wbits)
+        web.handler = lambda request: httpx.Response(
+            200, content=_streamed(bomb, []), headers={"content-encoding": encoding}
+        )
+
+        tracemalloc.start()
+        try:
+            page = await fetch_public("https://news.example/a", max_bytes=15_000, timeout=5)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert page.body == bytes(15_000)
+        assert peak < 4 << 20, f"peak {peak >> 20} MiB"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("encoding", "wbits"), [("gzip", GZIP), ("deflate", RAW)])
+    async def test_a_compressed_page_is_read_as_before(self, web, encoding, wbits):
+        compressor = zlib.compressobj(6, zlib.DEFLATED, wbits)
+        body = compressor.compress(ARTICLE.encode()) + compressor.flush()
+        web.handler = lambda request: httpx.Response(
+            200, content=_streamed(body, []), headers={"content-encoding": encoding}
+        )
+
+        result = await extract_article_text("https://news.example/story")
+
+        assert result["title"] == "Storm hits the coast"
+        assert "landfall" in result["text"]
+
+    @pytest.mark.asyncio
+    async def test_nothing_after_the_compressed_stream_is_read(self, web):
+        compressor = zlib.compressobj(6, zlib.DEFLATED, GZIP)
+        page_gz = compressor.compress(b"<title>Storm</title>") + compressor.flush()
+        sent = []
+        web.handler = lambda request: httpx.Response(
+            200,
+            content=_streamed(page_gz + bytes(64 * 1024) * 100, sent),
+            headers={"content-encoding": "gzip"},
+        )
+
+        page = await fetch_public("https://news.example/a", max_bytes=15_000, timeout=5)
+
+        assert page.body == b"<title>Storm</title>"
+        assert len(sent) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("encoding", ["zstd", "br", "compress", "gzip, gzip"])
+    async def test_an_encoding_not_asked_for_is_refused(self, web, caplog, encoding):
+        zstd_frame = b"\x28\xb5\x2f\xfd" + bytes(100)
+        web.handler = lambda request: httpx.Response(
+            200, content=_streamed(zstd_frame, []), headers={"content-encoding": encoding}
+        )
+
+        with caplog.at_level(logging.WARNING, logger="orbis.scraper"):
+            page = await fetch_public("https://news.example/a?k=zzsecret", max_bytes=100, timeout=5)
+
+        assert page is None
+        assert f"content-encoding {encoding!r}" in caplog.text
+        assert "zzsecret" not in caplog.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("encoding", [None, "identity"])
+    async def test_an_uncompressed_body_is_capped(self, web, encoding):
+        headers = {"content-encoding": encoding} if encoding else {}
+        web.handler = lambda request: httpx.Response(
+            200, content=_streamed(b"x" * 640 * 1024, []), headers=headers
+        )
+
+        page = await fetch_public("https://news.example/a", max_bytes=1000, timeout=5)
+
+        assert page.body == b"x" * 1000
+
+    @pytest.mark.asyncio
+    async def test_asks_for_gzip_and_deflate_only(self, web):
+        await extract_article_text("https://news.example/story")
+
+        [request] = web.requests
+        assert request.headers["accept-encoding"] == "gzip, deflate"
+        assert request.headers["user-agent"].startswith("Mozilla/5.0 (compatible; OrbisBot")
+
+
 # --- The address check ------------------------------------------------------------------
 
 
@@ -343,6 +587,7 @@ class TestPublicPages:
         ("fd12:3456::1", False),  # ULA
         ("fe80::1", False),
         ("ff02::1", False),
+        ("fec0::1", False),  # site-local (deprecated), which is_global lets through
         ("::ffff:127.0.0.1", False),
         ("::ffff:169.254.169.254", False),
         (f"::ffff:{PUBLIC}", True),

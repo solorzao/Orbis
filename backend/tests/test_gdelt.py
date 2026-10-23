@@ -1052,8 +1052,16 @@ class TestStaleRecrawlsSkipped:
 
 def _pages(monkeypatch, handler, dns=None):
     """scrape_titles' fetches answered by *handler*: every name is at a public
-    address unless *dns* ({host: [address]}) says otherwise."""
-    _client_with(monkeypatch, handler)
+    address unless *dns* ({host: [address]}) says otherwise. Each body is left
+    to read, as the network's are: fetch_public reads the raw stream, and httpx
+    reads a body given as bytes at once."""
+
+    def unread(request):
+        resp = handler(request)
+        stream = httpx.ByteStream(resp.content)
+        return httpx.Response(resp.status_code, headers=resp.headers, stream=stream)
+
+    _client_with(monkeypatch, unread)
 
     async def resolve(host, port):
         return (dns or {}).get(host, ["93.184.216.34"])
