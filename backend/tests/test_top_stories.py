@@ -209,7 +209,7 @@ def test_a_stale_breaking_event_has_no_time_in_its_coverage():
 async def test_with_no_cached_breaking_list_it_never_starts_or_waits_on_the_query(
     redis, listed, pool, breaking_query
 ):
-    """The breaking query outlasts its 15 s limit on production: a co-pilot answer
+    """The breaking query can run long, past a request's wait: a co-pilot answer
     takes the threads alone rather than start it, or wait on one a miss started."""
     from app.routers import news
 

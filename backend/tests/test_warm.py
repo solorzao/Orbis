@@ -43,8 +43,9 @@ def test_the_first_visit_is_warmed_globe_first_then_the_links_layer_then_breakin
     )
     assert warm.WARM_TIMEOUT == 30
     # The week's reads get longer: 168h globe queries took 20-73 s cold on
-    # production, and the 7-day links warm passed 30 s on 2026-10-21.
-    assert warm.WARMER_TIMEOUTS == {warm_globe_week: 90, warm_links_7d: 90}
+    # production, and the 7-day links warm passed 30 s on 2026-10-21. Breaking
+    # waits out its query's own 45 s limit, past the 15 s a request waits.
+    assert warm.WARMER_TIMEOUTS == {warm_breaking: 60, warm_globe_week: 90, warm_links_7d: 90}
 
 
 def test_a_cycles_entries_last_until_the_next_cycle_ends():
@@ -117,7 +118,7 @@ async def test_a_slow_or_failing_warmer_is_a_warning_and_the_rest_still_run(capl
 
 @pytest.mark.asyncio
 async def test_a_timeout_inside_a_warmer_is_a_failure_not_the_warms_limit(caplog):
-    """A TimeoutError from inside the warmer (breaking's 15 s query) is no sign the
+    """A TimeoutError from inside the warmer (breaking's query limit) is no sign the
     warm's limit ran out: the line says how long it ran, never "timed out after 5 s"."""
     calls = []
 

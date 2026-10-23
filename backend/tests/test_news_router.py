@@ -1599,8 +1599,8 @@ class TestGetBreaking:
     async def test_a_timeout_inside_the_query_is_not_called_its_limit(
         self, monkeypatch, breaking_db, caplog
     ):
-        """A TimeoutError of the query's own (a connection's), well inside the 15 s: a
-        503 to retry as well, never said to have taken over 15 s."""
+        """A TimeoutError of the query's own (a connection's), well inside the 45 s: a
+        503 to retry as well, never said to have taken over 45 s."""
         breaking_db.side_effect = TimeoutError()
         with (
             patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
@@ -1610,7 +1610,7 @@ class TestGetBreaking:
 
         assert resp.status_code == 503
         assert resp.headers["retry-after"] == "15"
-        detail = "The breaking query timed out before its 15 s limit"
+        detail = "The breaking query timed out before its 45 s limit"
         assert resp.json()["detail"] == f"{detail}; retry shortly."
         mock_set.assert_not_awaited()
         assert f"Breaking query failed (TimeoutError: {detail})" in caplog.text
@@ -1710,7 +1710,8 @@ class TestBreakingSingleFlight:
 
         import app.routers.news as news
 
-        assert news._BREAKING_QUERY_TIMEOUT == 15
+        assert news._BREAKING_QUERY_TIMEOUT == 45  # its own limit: past a request's wait
+        assert news._BREAKING_REQUEST_WAIT == 15
         monkeypatch.setattr(news, "_BREAKING_QUERY_TIMEOUT", 0.01)
 
         async def hung(*_args):
@@ -1877,6 +1878,115 @@ class TestBreakingLastGood:
             "Breaking query failed (RuntimeError: connection reset); the next miss retries."
         ]
         assert json.loads(redis.values["last:breaking:v1"]) == [STORY_JSON]
+        assert "db:breaking:v1" not in redis.values
+        assert news._breaking_in_flight == {}
+
+
+class TestBreakingRequestWait:
+    """The query can outlast a visitor's patience: a miss with no last good list waits
+    briefly (_BREAKING_REQUEST_WAIT), then is a 503 to retry, while the query runs on
+    to its own limit (_BREAKING_QUERY_TIMEOUT) and fills both keys for the retry."""
+
+    @pytest.mark.asyncio
+    async def test_a_query_past_the_wait_is_a_503_and_lands_for_the_next_request(
+        self, monkeypatch, redis, breaking_db, caplog
+    ):
+        import app.routers.news as news
+
+        monkeypatch.setattr(news, "_BREAKING_REQUEST_WAIT", 0.01)  # the query keeps its 45 s
+        release = _held(breaking_db, [STORY])
+
+        with caplog.at_level(logging.WARNING, logger="app.routers.news"):
+            resp = await asyncio.wait_for(_get(monkeypatch, "/api/news/breaking"), 1)
+
+            assert resp.status_code == 503
+            assert resp.headers["retry-after"] == "15"
+            assert "cache-control" not in resp.headers
+            assert resp.json()["detail"] == (
+                "The breaking query is still running after 0.01 s; retry shortly."
+            )
+            refill = news._breaking_in_flight["db:breaking:v1"]
+            assert not refill.done()  # the wait gave up, not the query
+            assert redis.writes == []
+
+            release.set()
+            assert await asyncio.wait_for(refill, 1) == [news.BreakingStory(**STORY)]
+            for key in ("db:breaking:v1", "last:breaking:v1"):
+                assert json.loads(redis.values[key]) == [STORY_JSON], key
+            resp = await _get(monkeypatch, "/api/news/breaking")
+
+        assert resp.status_code == 200
+        assert resp.json() == [STORY_JSON]
+        breaking_db.assert_awaited_once()  # the retry is served what that query cached
+        assert not [r for r in caplog.records if r.name == "app.routers.news"]  # no failure
+
+    @pytest.mark.asyncio
+    async def test_the_warm_waits_past_a_requests_wait_and_fills_the_cache(
+        self, monkeypatch, redis, breaking_db, caplog
+    ):
+        """app.warm gives breaking longer than the query's own limit, itself longer than a
+        request waits: the warm is what fills the cache, so it never gives up first. A
+        visitor meanwhile gets a 503 and shares the warm's query."""
+        import app.routers.news as news
+        from app import warm
+
+        wait, limit = news._BREAKING_REQUEST_WAIT, news._BREAKING_QUERY_TIMEOUT
+        assert wait < limit < warm.WARMER_TIMEOUTS[news.warm_breaking]
+        monkeypatch.setattr(news, "_BREAKING_REQUEST_WAIT", 0.01)
+        release = _held(breaking_db, [STORY])
+
+        with (
+            patch("app.warm.get_redis", AsyncMock(return_value=redis)),
+            caplog.at_level(logging.INFO, logger="orbis.warm"),
+        ):
+            # A default limit as short as a request's wait: breaking's own one applies.
+            warming = asyncio.create_task(warm.warm_caches((news.warm_breaking,), timeout=0.01))
+            resp = await asyncio.wait_for(_get(monkeypatch, "/api/news/breaking"), 1)
+            await asyncio.sleep(0.05)  # past the request's wait and the default limit
+            assert not warming.done()
+            release.set()
+            await asyncio.wait_for(warming, 1)
+
+        assert resp.status_code == 503
+        breaking_db.assert_awaited_once()  # the warm's query and the visitor's are one
+        for key in ("db:breaking:v1", "last:breaking:v1"):
+            assert json.loads(redis.values[key]) == [STORY_JSON], key
+        messages = [r.getMessage() for r in caplog.records if r.name == "orbis.warm"]
+        assert messages[0].startswith("Cache warm warm_breaking took ")
+        assert messages[-1].startswith("Cache warm: 1 of 1 in ")
+
+    @pytest.mark.asyncio
+    async def test_the_querys_own_limit_is_one_warning_and_keeps_the_last_good_list(
+        self, monkeypatch, redis, breaking_db, caplog
+    ):
+        """Its own limit still stops a hung connection: one line, no traceback, and the
+        last good list serves on while the next miss retries."""
+        import app.routers.news as news
+
+        monkeypatch.setattr(news, "_BREAKING_QUERY_TIMEOUT", 0.01)
+        await set_cached("last:breaking:v1", [STORY_JSON], 3600)
+        queries = []
+
+        async def hung(*_args):
+            queries.append(asyncio.current_task())
+            await asyncio.Event().wait()  # never set
+
+        breaking_db.side_effect = hung
+        with caplog.at_level(logging.WARNING, logger="app.routers.news"):
+            resp = await _get(monkeypatch, "/api/news/breaking")
+            [refill] = queries
+            [result] = await asyncio.wait_for(asyncio.gather(refill, return_exceptions=True), 1)
+
+        assert resp.status_code == 200
+        assert resp.json() == [STORY_JSON]
+        assert isinstance(result, TimeoutError)
+        assert [r.getMessage() for r in caplog.records] == [
+            "Breaking query failed (TimeoutError: The breaking query took over 0.01 s);"
+            " the next miss retries."
+        ]
+        assert not [r for r in caplog.records if r.exc_info]
+        assert json.loads(redis.values["last:breaking:v1"]) == [STORY_JSON]
+        assert redis.ttls["last:breaking:v1"] == 3600
         assert "db:breaking:v1" not in redis.values
         assert news._breaking_in_flight == {}
 
@@ -2119,3 +2229,32 @@ class TestGetDelta:
         release.set()
         await news._breaking_in_flight["db:breaking:v1"]
         assert json.loads(redis.values["db:breaking:v1"]) == [STORY_JSON]
+
+    @pytest.mark.asyncio
+    async def test_a_breaking_query_past_the_requests_wait_is_a_503_then_counted(
+        self, monkeypatch, redis, delta_db
+    ):
+        """With no last good list, the delta waits on breaking as the ticker does: a 503
+        to retry while the query runs on, and the retry counts what it cached."""
+        import app.routers.news as news
+
+        monkeypatch.setattr(news, "_BREAKING_REQUEST_WAIT", 0.01)
+        release = _held(delta_db.breaking, [STORY])
+        since = "2026-10-12T00:20:00Z"
+
+        resp = await asyncio.wait_for(_get(monkeypatch, "/api/news/delta", since=since), 1)
+
+        assert resp.status_code == 503
+        assert resp.headers["retry-after"] == "15"
+        assert "cache-control" not in resp.headers
+        assert resp.json()["detail"] == (
+            "The breaking query is still running after 0.01 s; retry shortly."
+        )
+        assert redis.writes == []  # no delta cached with a wrong count
+        release.set()
+        await asyncio.wait_for(news._breaking_in_flight["db:breaking:v1"], 1)
+
+        resp = await _get(monkeypatch, "/api/news/delta", since=since)
+        assert resp.status_code == 200
+        assert resp.json()["breaking"] == 1
+        delta_db.breaking.assert_awaited_once()

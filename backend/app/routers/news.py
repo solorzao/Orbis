@@ -582,14 +582,12 @@ _BREAKING_KEY = "db:breaking:v1"
 # The last list the query answered, outside the db:* each cycle invalidates
 # (as the week reads keep theirs under wk:*), written with _BREAKING_KEY by
 # every query that lands, the warm's too. A miss serves it at once while one
-# query refills both in the background: that query takes 11-14 s on
-# production, near its 15 s limit, and a visitor between a cycle's
-# invalidation and the warm's refill waited on it, or got a 500 when it timed
-# out (110 in the four days to 2026-10-23). It lives an hour, four cycles:
-# breaking counts the last 2 hours' coverage, so a list an hour old (plus the
-# edge's minutes) still names events that broke within the last three: a
-# ticker a little behind, rather than one failing. Older, it is gone, and a
-# miss waits for the query again.
+# query refills both in the background, rather than wait on that slow query
+# between a cycle's invalidation and the warm's refill. It lives an hour, four
+# cycles: breaking counts the last 2 hours' coverage, so a list an hour old
+# (plus the edge's minutes) still names events that broke within the last
+# three: a ticker a little behind, rather than one failing. Older, it is gone,
+# and a miss waits for the query again (_BREAKING_REQUEST_WAIT at most).
 _BREAKING_LAST_KEY = "last:breaking:v1"
 _BREAKING_LAST_TTL = 60 * 60
 
@@ -604,7 +602,12 @@ _breaking_in_flight: dict[str, asyncio.Task[list[BreakingStory]]] = {}
 # Seconds the shared query may take. The pool sets no command timeout, so
 # without this a hung query (a half-open connection) would hold every later
 # breaking miss and delta in the process.
-_BREAKING_QUERY_TIMEOUT = 15
+_BREAKING_QUERY_TIMEOUT = 45
+
+# Seconds a miss with no last good list waits for that query. The query can
+# outlast a visitor's patience: the request waits briefly, then is a 503 to
+# retry, and the query runs on and fills the cache for the retry.
+_BREAKING_REQUEST_WAIT = 15
 
 
 async def _cached_breaking() -> list[BreakingStory]:
@@ -613,9 +616,10 @@ async def _cached_breaking() -> list[BreakingStory]:
     One list serves every topic: an event's topic is its stories', so the
     filter and the cap apply to it per request. On a miss, one query runs at
     a time, and the last good list (_BREAKING_LAST_KEY) is served while it
-    does. With none, every concurrent caller waits for the query and gets its
-    answer, or its error (nothing is cached then): a TimeoutError after 15 s.
-    A caller that is cancelled leaves the query running for the others.
+    does. With none, every concurrent caller waits for the query, up to
+    _BREAKING_REQUEST_WAIT, and gets its answer, or its error (nothing is
+    cached then). A wait that runs out is a TimeoutError of its own, and
+    leaves the query running to fill both keys, as does a caller cancelled.
     """
     stories = await _breaking_entry(_BREAKING_KEY)
     if stories is not None:
@@ -624,7 +628,16 @@ async def _cached_breaking() -> list[BreakingStory]:
     stories = await _breaking_entry(_BREAKING_LAST_KEY)
     if stories is not None:
         return stories  # the query runs on, and lands in both keys
-    return await asyncio.shield(task)
+    wait = asyncio.timeout(_BREAKING_REQUEST_WAIT)
+    try:
+        async with wait:
+            return await asyncio.shield(task)
+    except TimeoutError:
+        if not wait.expired():
+            raise  # the query's own: its limit, or a connection's
+        raise TimeoutError(
+            f"The breaking query is still running after {_BREAKING_REQUEST_WAIT} s"
+        ) from None
 
 
 async def _breaking_entry(cache_k: str) -> list[BreakingStory] | None:
@@ -689,8 +702,9 @@ def _landed(cache_k: str, task: asyncio.Task) -> None:
 
 
 async def _breaking_for_request() -> list[BreakingStory]:
-    """_cached_breaking for a request: a query that timed out with no last good list
-    to serve is a 503 to retry (retry_shortly), not a 500."""
+    """_cached_breaking for a request: with no last good list to serve, a query that
+    timed out, or a wait for one that ran out, is a 503 to retry (retry_shortly), not
+    a 500."""
     try:
         return await _cached_breaking()
     except TimeoutError as timed_out:
@@ -701,8 +715,9 @@ async def warm_breaking() -> None:
     """Cache every breaking story, the list each topic's request filters (app.warm, after
     each ingestion cycle): the ticker's and the delta's first request then hit it.
 
-    Joins a query a miss has started, and waits for it: the last good list a
-    miss is served never stands in for the refill."""
+    Joins a query a miss has started, and waits for it to land or reach its own
+    limit, never a request's shorter wait (app.warm allows it longer): the last
+    good list a miss is served never stands in for the refill."""
     if await _breaking_entry(_BREAKING_KEY) is None:
         await asyncio.shield(_breaking_query())
 
@@ -728,7 +743,9 @@ async def get_news_breaking(
     mostly of it.
 
     On a cache miss, the last good list, up to an hour old, while the query
-    reruns; with none, a query that times out is a 503 with Retry-After.
+    reruns; with none, the request waits up to 15 s for the query, then is a
+    503 with Retry-After while the query runs on to fill the cache (as is a
+    query that times out).
     """
     tag = _globe_topic_tag(topic)
     stories = await _breaking_for_request()
@@ -793,7 +810,8 @@ async def get_news_delta(
     if delta is not None:
         return delta
 
-    # A breaking query that times out with no last good list is a 503, as the ticker's.
+    # With no last good list, a breaking query that times out, or outlasts the
+    # request's wait, is a 503, as the ticker's.
     changes, stories = await asyncio.gather(get_delta(start), _breaking_for_request())
     delta = Delta(**changes, breaking=len(stories[:_MAX_BREAKING]))
     await set_cached(cache_k, delta.model_dump(mode="json"), _DELTA_TTL)
