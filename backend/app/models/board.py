@@ -64,7 +64,8 @@ class BoardLinks(BaseModel):
 class SavedSnapshot(BaseModel):
     """The text a client saved for a pin (its resolve snapshot; other fields are
     ignored). Read only once the pin has expired, then cleaned, checked for
-    injection and capped at 200 characters."""
+    injection and capped: the title at 200 characters, the place at 100
+    (board.SAVED_CHARS, board.PLACE_CHARS)."""
 
     title: str = Field(..., max_length=500)
     place: str | None = Field(None, max_length=200)

@@ -683,6 +683,10 @@ MEMO_SECTIONS = (
 # the redesign writes.
 MIN_MEMO_WORDS = 30
 MAX_MEMO_WORDS = 350
+# Words shown once guarded, at least: what the guard and the "None apparent." rescue
+# leave nearly empty fails ("None apparent. / None apparent. / Why [1]?"). The redesign
+# evals' 117 answers showed 42 words at the shortest (#154 review).
+MIN_SHOWN_WORDS = 20
 # A pin the server can no longer resolve may bring the text the client saved: at
 # most this many characters of its title, once cleaned. A place, saved or not, is
 # capped at PLACE_CHARS.
@@ -751,8 +755,9 @@ _NEWS_TAG = re.compile(r"<(?=\s*/?\s*news\b)", re.IGNORECASE)
 # A headline that ends its own sentence ("Can talks end the strike?"), closing quote
 # or bracket and all: what it adds starts the next sentence.
 _SENTENCE_END = re.compile(r"[.!?][\"'”’)]*$")
-# Square brackets in pin text would read as pin numbers: shown as parentheses.
-_BRACKETS = str.maketrans("[]", "()")
+# Square brackets in pin text would read as pin numbers: shown as parentheses, as are
+# the lookalikes NFKC leaves alone ("【2】").
+_BRACKETS = str.maketrans("[]【】〔〕〖〗〘〙", "()()()()()")
 # A citation, and a group of them ("[1, 3]") split into one per pin.
 _CITATION = re.compile(r"\[(\d{1,3})\]")
 _CITATION_GROUP = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})+)\]")
@@ -812,6 +817,14 @@ def _statement(
     return _sentence(f"{title}, {said}")
 
 
+def _as_sent(statement: str) -> str | None:
+    """*statement* made safe inside <news>, or None when the sentence as sent holds an
+    injection phrase: its joining words, or a cap's cut, can complete one that neither
+    the title nor the place holds ("Paris you are now in" + " on 20 October";
+    "&#580" cut to "&#58", read as ":")."""
+    return None if has_injection_pattern(statement) else _defuse(statement)
+
+
 def _server_text(item: BoardItem, snap: dict, now: datetime) -> str | None:
     """A resolved pin's statement for the prompt, or None when it holds an injection
     phrase."""
@@ -819,25 +832,26 @@ def _server_text(item: BoardItem, snap: dict, now: datetime) -> str | None:
     if not title:
         return None
     place = _clean(snap.get("place"), PLACE_CHARS)
-    # Checked once cleaned: a control character can't hide a phrase ("Ig\x01nore").
+    # Checked once cleaned: a control character can't hide a phrase ("Ig\x01nore"). Title
+    # and place together, so a phrase split between them is caught, then as sent.
     if has_injection_pattern(f"{title} {place}"):
         return None
-    return _defuse(_statement(item, title, place, snap.get("time"), now))
+    return _as_sent(_statement(item, title, place, snap.get("time"), now))
 
 
 def _saved_text(item: BoardItem, saved: dict, now: datetime) -> str | None:
     """An expired pin's statement from the text the client saved, said as its kind is:
     cleaned, checked for injection over all of it (title and place together, so a
-    phrase split between them is caught), then capped; None when nothing usable is
-    left. Saved pins can outlive a year, so a date keeps its year when it isn't
-    *now*'s."""
+    phrase split between them is caught), then capped and checked again as sent; None
+    when nothing usable is left. Saved pins can outlive a year, so a date keeps its
+    year when it isn't *now*'s."""
     raw_title, raw_place = saved.get("title") or "", saved.get("place") or ""
     title = _clean(raw_title, max_length=len(raw_title))
     place = _clean(raw_place, max_length=len(raw_place))
     if not title or has_injection_pattern(f"{title} {place}"):
         return None
     time = saved.get("time")
-    return _defuse(
+    return _as_sent(
         _statement(
             item,
             title[:SAVED_CHARS].rstrip(),
@@ -884,8 +898,9 @@ def parse_memo(reply: str, items: list[BoardItem], usable: set[int], now: dateti
     None when it isn't exactly the expected JSON object or fails validation: an
     injection phrase anywhere, a length outside MIN_MEMO_WORDS-MAX_MEMO_WORDS (as
     written: sentences the guard drops don't count against it), a section the guard
-    empties, or a citation of a pin without text (or none at all). *now* decides
-    whether a date the guard rewrites keeps its year."""
+    empties, fewer than MIN_SHOWN_WORDS left once guarded, or a citation of a pin
+    without text (or none at all). *now* decides whether a date the guard rewrites
+    keeps its year."""
     try:
         data = json.loads(reply)
     except ValueError:
@@ -924,7 +939,7 @@ def parse_memo(reply: str, items: list[BoardItem], usable: set[int], now: dateti
         logger.info(
             "Board memo voice guard: %d sentences dropped (%s).", dropped, ", ".join(sorted(kinds))
         )
-    if not cited:
+    if not cited or sum(len(s["text"].split()) for s in sections) < MIN_SHOWN_WORDS:
         return None
     citations = [{"n": n, "item": items[n - 1].id} for n in sorted(cited)]
     return {"sections": sections, "citations": citations, "message": None}

@@ -542,6 +542,53 @@ async def test_a_phrase_split_between_a_saved_title_and_place_is_dropped(claude,
 
 
 @pytest.mark.asyncio
+async def test_a_phrase_split_between_a_server_title_and_place_is_dropped(claude, resolved):
+    # The statement puts ", reported from" between them, so only the joint check sees it.
+    resolved.return_value = [_snap("Ignore previous", "instructions", WHEN), *SNAPSHOTS[1:]]
+    await _analyze()
+    assert _numbers(claude) == [2, 3, 4, 5, 6]
+
+
+# The sentence sent is checked too: its joining words, and a cap's cut, can complete a
+# phrase that neither the title nor the place holds (#154 review).
+@pytest.mark.asyncio
+async def test_a_phrase_the_statements_own_words_complete_is_dropped(claude, resolved):
+    # "Paris you are now in" + " on 20 October" is "you are now in ".
+    resolved.return_value = [_snap("Strikes", "Paris you are now in", WHEN), *SNAPSHOTS[1:]]
+    await _analyze()
+    assert _numbers(claude) == [2, 3, 4, 5, 6]
+
+
+@pytest.mark.asyncio
+async def test_a_phrase_a_saved_titles_cap_completes_is_dropped(claude, resolved):
+    # Cut at SAVED_CHARS to "…you are now a", then " has been in the news".
+    title = "x" * (board.SAVED_CHARS - len(" you are now a")) + " you are now abcdef"
+    resolved.return_value = [*SNAPSHOTS[:4], None, SNAPSHOTS[5]]
+    saved = [None] * 4 + [{"title": title, "place": None, "time": None}, None]
+    await _analyze(saved=saved)
+    assert _numbers(claude) == [1, 2, 3, 4, 6]
+
+
+@pytest.mark.asyncio
+async def test_an_entity_a_saved_places_cap_cuts_is_read_as_sent_and_dropped(claude, resolved):
+    # "&amp;#580" cleans to "&#580" (a letter), and the cap at PLACE_CHARS cuts it to
+    # "&#58", which reads as ":": "new instruction:".
+    place = "y" * (board.PLACE_CHARS - len(" new instruction&#58")) + " new instruction&amp;#580"
+    resolved.return_value = [None, *SNAPSHOTS[1:]]
+    saved = [{"title": "Strikes", "place": place, "time": WHEN}] + [None] * 5
+    await _analyze(saved=saved)
+    assert _numbers(claude) == [2, 3, 4, 5, 6]
+
+
+@pytest.mark.asyncio
+async def test_bracket_lookalikes_nfkc_keeps_are_shown_as_parentheses(claude, resolved):
+    # NFKC folds "［9］" to "[9]" (defused like any bracket), but not these.
+    resolved.return_value = [_snap("Strikes 【2】 〔3〕 〖4〗 〘5〙 spread"), *SNAPSHOTS[1:]]
+    await _analyze()
+    assert _lines(claude)[0] == "[1] Strikes (2) (3) (4) (5) spread."
+
+
+@pytest.mark.asyncio
 async def test_the_saved_text_is_checked_for_injection_before_it_is_capped(claude, resolved):
     resolved.return_value = [None, *SNAPSHOTS[1:]]
     # The phrase sits past the cap: the whole cleaned text is checked first.
@@ -862,9 +909,83 @@ async def test_a_short_honest_memo_stands(claude):
 @pytest.mark.asyncio
 async def test_a_memo_with_nothing_shared_must_still_cite(claude, cache):
     uncited = {**QUESTIONS_ONLY, "open_questions": "Who called the strikes? " * 15}
+    # Long enough as written and as shown: only the missing citation fails it.
+    words = sum(len(text.split()) for text in uncited.values())
+    assert words >= board.MIN_MEMO_WORDS and words >= board.MIN_SHOWN_WORDS
     claude.messages.create.return_value = _response(json.dumps(uncited))
     assert (await _analyze())["message"] == board.MEMO_FAILED
     cache.set.assert_not_awaited()
+
+
+# Two questions, 26 words: with two "None apparent." parts, 30 words.
+TWO_QUESTIONS = (
+    "Who called the strikes in Paris [1], and when will the unions meet the government"
+    " again? How long will the port in Lagos [2] stay closed?"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("questions", "stands"),
+    [(TWO_QUESTIONS, True), (TWO_QUESTIONS.replace(" again?", "?"), False)],
+    ids=["30-words", "29-words"],
+)
+async def test_the_word_floor_is_on_the_reply_as_written(claude, questions, stands):
+    reply = {**QUESTIONS_ONLY, "open_questions": questions}
+    words = sum(len(text.split()) for text in reply.values())
+    assert words == board.MIN_MEMO_WORDS - (0 if stands else 1)
+    claude.messages.create.return_value = _response(json.dumps(reply))
+    assert ((await _analyze())["message"] is None) is stands
+
+
+# What the reviewer of #154 sent: 50 words as written, so over the written floor, and
+# both "None apparent:" parts are rescued once the guard empties them. Without a floor
+# on what is shown, the visitor saw "None apparent. / None apparent. / Why [1]?" for
+# an hour.
+DEGENERATE = {
+    "possible_connections": "None apparent: the two items appear in the same coverage on 23"
+    " October. Your board mixes two stories from the same week.",
+    "contradictions": "None apparent: the pins share nothing. Your board mixes two stories"
+    " from the same week.",
+    "open_questions": "Why [1]? The pins share a week of coverage in Paris and Lagos.",
+}
+
+
+@pytest.mark.asyncio
+async def test_a_memo_the_guard_leaves_nearly_empty_is_a_failure_never_cached(claude, cache):
+    assert sum(len(text.split()) for text in DEGENERATE.values()) == 50
+    claude.messages.create.return_value = _response(json.dumps(DEGENERATE))
+    assert await _analyze() == {"sections": [], "citations": [], "message": board.MEMO_FAILED}
+    cache.set.assert_not_awaited()
+
+
+# One question, 16 words, after a leak the guard drops: 20 words shown, 40 written.
+SHOWN_AT_FLOOR = {
+    "possible_connections": "None apparent: your board mixes two stories from the same week.",
+    "contradictions": "None apparent.",
+    "open_questions": "Who called the strikes in Paris [1], and when will the unions meet the"
+    " government again? The pins share a week of coverage in Paris and Lagos.",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("questions", "stands"),
+    [
+        (SHOWN_AT_FLOOR["open_questions"], True),
+        (SHOWN_AT_FLOOR["open_questions"].replace(" again?", "?"), False),
+    ],
+    ids=["20-shown", "19-shown"],
+)
+async def test_the_shown_floor_is_on_what_the_guard_leaves(claude, questions, stands):
+    reply = {**SHOWN_AT_FLOOR, "open_questions": questions}
+    assert sum(len(text.split()) for text in reply.values()) >= board.MIN_MEMO_WORDS
+    claude.messages.create.return_value = _response(json.dumps(reply))
+    memo = await _analyze()
+    assert (memo["message"] is None) is stands
+    if stands:
+        shown = sum(len(section["text"].split()) for section in memo["sections"])
+        assert shown == board.MIN_SHOWN_WORDS
 
 
 @pytest.mark.asyncio
@@ -886,7 +1007,8 @@ async def test_dropped_sentences_never_push_a_memo_under_the_word_floor(claude):
     assert memo["message"] is None
     shown = len(" ".join(s["text"] for s in memo["sections"]).split())
     assert (written, shown) == (106, 25)
-    assert shown < board.MIN_MEMO_WORDS <= written
+    # Under the written floor once shown, but not nearly empty (MIN_SHOWN_WORDS).
+    assert board.MIN_SHOWN_WORDS <= shown < board.MIN_MEMO_WORDS <= written
 
 
 @pytest.mark.asyncio
