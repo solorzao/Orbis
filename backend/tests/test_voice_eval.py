@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.config import settings
@@ -153,6 +154,33 @@ def test_memo_boards_cover_each_pin_kind_and_parse():
 def test_pins_with_text():
     snapshots, saved = [None, {"title": "a"}, None], [{"title": "b"}, None, None]
     assert voice_eval.pins_with_text(snapshots, saved) == 2
+
+
+def _http(status: int, body: object = None) -> httpx.AsyncClient:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=body)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(answer), base_url="https://x")
+
+
+@pytest.mark.asyncio
+async def test_capture_reads_the_breaking_list():
+    async with _http(200, [_breaking()]) as http:
+        assert await voice_eval._breaking(http) == [_breaking()]
+
+
+@pytest.mark.asyncio
+async def test_capture_says_so_and_goes_on_without_the_breaking_list(capsys):
+    async with _http(500) as http:
+        assert await voice_eval._breaking(http) == []
+    assert "breaking list is unavailable (HTTP 500)" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_capture_stops_when_it_asks_the_breaking_list_wrongly():
+    async with _http(422) as http:
+        with pytest.raises(httpx.HTTPStatusError):
+            await voice_eval._breaking(http)
 
 
 # --- Fixture checks -----------------------------------------------------------------------

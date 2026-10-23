@@ -459,6 +459,23 @@ async def _get(http: httpx.AsyncClient, path: str, **params: Any) -> Any:
     return response.json()
 
 
+async def _breaking(http: httpx.AsyncClient) -> list[dict]:
+    """The breaking ticker's list, or [] when the server fails to give it: top_stories
+    takes up to TOP_BREAKING events, none included, and the broad fixtures keep their
+    threads. Said on the console, so a capture never hides it. A client error is the
+    capture's own mistake, and stops it."""
+    try:
+        return await _get(http, "/api/news/breaking")
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status < 500:
+            raise
+        print(
+            f"The breaking list is unavailable (HTTP {status}): broad fixtures carry threads only."
+        )
+        return []
+
+
 async def _resolve(http: httpx.AsyncClient, items: list[str]) -> list[dict | None]:
     response = await http.post("/api/board/resolve", json={"items": items})
     response.raise_for_status()
@@ -507,7 +524,7 @@ async def capture(base_url: str) -> None:
         # Broad questions: what /api/threads (24 h, the rail's warmed list) and the
         # breaking ticker show now, with each top thread's newest story as its link.
         top = await _get(http, "/api/threads", timespan="24h", limit=20)
-        breaking = await _get(http, "/api/news/breaking")
+        breaking = await _breaking(http)
         ranked = sorted(top, key=lambda t: (-t["n_sources"], -len(t["countries"]), t["id"]))
         urls = {}
         for t in ranked[:TOP_THREADS]:
