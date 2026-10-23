@@ -1951,6 +1951,17 @@ async def test_top_stories_runs_with_its_cleaned_arguments():
     top.assert_awaited_once_with(hours=6)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [None, [], "24", 6])
+async def test_a_plan_steps_args_that_are_not_an_object_are_none(args):
+    """The planner's JSON may put anything in "args": top_stories still runs."""
+    top = AsyncMock(return_value=[])
+    with patch.dict("app.services.agent._TOOL_DISPATCH", {"top_stories": top}):
+        [result] = await execute_retrieval([{"name": "top_stories", "args": args}])
+    assert result == {"tool": "top_stories", "result": []}
+    top.assert_awaited_once_with(hours=24)
+
+
 _LIVE_NOW = datetime(2026, 10, 23, 12, tzinfo=timezone.utc)
 
 

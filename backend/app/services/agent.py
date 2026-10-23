@@ -981,10 +981,12 @@ async def execute_retrieval(tool_calls: list[dict]) -> list[dict]:
         fn = _TOOL_DISPATCH.get(name)
         if fn is None:
             return {"tool": name, "error": f"Unknown tool: {name}"}
+        # The plan's JSON may put anything in "args": anything but an object is none.
+        args = call.get("args")
         try:
             # Inside the try: a malformed argument ({"limit": "ten"}) is a tool error,
             # not an exception that ends /ask with a 500 or the stream without "done".
-            result = await fn(**_sanitize_tool_args(name, call.get("args", {})))
+            result = await fn(**_sanitize_tool_args(name, args if isinstance(args, dict) else {}))
             return {"tool": name, "result": result}
         except Exception as exc:
             # The exception's type only: its message can quote the model's arguments,
