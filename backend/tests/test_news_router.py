@@ -1595,6 +1595,27 @@ class TestGetBreaking:
             caplog.text
         )
 
+    @pytest.mark.asyncio
+    async def test_a_timeout_inside_the_query_is_not_called_its_limit(
+        self, monkeypatch, breaking_db, caplog
+    ):
+        """A TimeoutError of the query's own (a connection's), well inside the 15 s: a
+        503 to retry as well, never said to have taken over 15 s."""
+        breaking_db.side_effect = TimeoutError()
+        with (
+            patch("app.routers.news.set_cached", new_callable=AsyncMock) as mock_set,
+            caplog.at_level(logging.INFO),
+        ):
+            resp = await _get(monkeypatch, "/api/news/breaking")
+
+        assert resp.status_code == 503
+        assert resp.headers["retry-after"] == "15"
+        detail = "The breaking query timed out before its 15 s limit"
+        assert resp.json()["detail"] == f"{detail}; retry shortly."
+        mock_set.assert_not_awaited()
+        assert f"Breaking query failed (TimeoutError: {detail})" in caplog.text
+        assert "took over" not in caplog.text
+
 
 class TestBreakingSingleFlight:
     """Concurrent misses share one query (the delta asks too)."""

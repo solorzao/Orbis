@@ -646,11 +646,19 @@ def _breaking_query() -> asyncio.Task[list[BreakingStory]]:
 
 
 async def _load_breaking(cache_k: str) -> list[BreakingStory]:
+    timer = asyncio.timeout(_BREAKING_QUERY_TIMEOUT)
     try:
-        async with asyncio.timeout(_BREAKING_QUERY_TIMEOUT):
+        async with timer:
             rows = await get_breaking(_now())
-    except TimeoutError:
-        raise TimeoutError(f"The breaking query took over {_BREAKING_QUERY_TIMEOUT} s") from None
+    except TimeoutError as exc:
+        if timer.expired():
+            raise TimeoutError(
+                f"The breaking query took over {_BREAKING_QUERY_TIMEOUT} s"
+            ) from None
+        # One of its own (a connection's), not this limit: said as such.
+        raise TimeoutError(
+            f"The breaking query timed out before its {_BREAKING_QUERY_TIMEOUT} s limit"
+        ) from exc
     stories = [BreakingStory(**s) for s in rows]
     dumped = [s.model_dump(mode="json") for s in stories]
     await set_cached(cache_k, dumped, cycle_ttl(_BREAKING_TTL))

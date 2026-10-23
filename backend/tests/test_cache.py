@@ -1,12 +1,13 @@
 """The cache helpers (app.services.cache), Redis faked: several keys at once, entries
-that no longer fit their model, single-flight computations, week-long entries' age."""
+that no longer fit their model, single-flight computations, week-long entries' age,
+and the client closed at shutdown."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
@@ -360,3 +361,55 @@ class TestWeekFresh:
         assert cache.WEEK_TTL == 80 * 60
         slack = cache.WEEK_TTL - cache.WEEK_REFRESH_AGE
         assert slack >= cache.cycle_ttl(0) > settings.ingestion_interval_seconds
+
+
+class TestClosed:
+    """After shutdown's close_redis, a refill that lands late (breaking's query, a
+    warm's, a week read's) finds no Redis: a miss and a no-op, never a second client
+    that nothing closes. Startup's open_redis connects again."""
+
+    @pytest.fixture(autouse=True)
+    def clients(self, monkeypatch):
+        """Every client get_redis connects, faked; the module's state restored after."""
+        monkeypatch.setattr(cache, "_redis_client", None)
+        monkeypatch.setattr(cache, "_redis_closed", False)
+        monkeypatch.setattr(cache.settings, "redis_url", "redis://cache.test:6379")
+        connected: list[MagicMock] = []
+
+        def from_url(*_args, **_kwargs):
+            client = MagicMock()
+            client.ping, client.aclose = AsyncMock(), AsyncMock()
+            client.get, client.set = AsyncMock(return_value=None), AsyncMock()
+            connected.append(client)
+            return client
+
+        monkeypatch.setattr(cache.aioredis, "from_url", from_url)
+        return connected
+
+    @pytest.mark.asyncio
+    async def test_after_close_redis_get_redis_never_reconnects(self, clients):
+        first = await cache.get_redis()
+        await cache.close_redis()
+
+        assert await cache.get_redis() is None
+        assert clients == [first]
+        first.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_after_close_redis_the_cache_is_a_miss_and_set_cached_a_no_op(self, clients):
+        await cache.get_redis()
+        await cache.close_redis()
+
+        await cache.set_cached("db:breaking:v1", [], 60)
+        assert await cache.get_cached("db:breaking:v1") is None
+        assert len(clients) == 1
+        clients[0].set.assert_not_awaited()
+        clients[0].get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_startup_connects_again_after_a_shutdown(self, clients):
+        await cache.get_redis()
+        await cache.close_redis()
+
+        assert await cache.open_redis() is clients[1]
+        assert await cache.get_redis() is clients[1]

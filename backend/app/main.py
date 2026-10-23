@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,8 +24,8 @@ from app.routers.news import router as news_router
 from app.routers.relations import router as relations_router
 from app.routers.search import router as search_router
 from app.routers.threads import router as threads_router
-from app.services.cache import close_redis, get_redis
-from app.services.database import close_pool, get_pool
+from app.services.cache import close_redis, get_redis, open_redis
+from app.services.database import close_pool, get_pool, open_pool
 from app.services.ingestion import run_ingestion_cycle, stop_background_tasks
 from app.services.scheduler import start_scheduler, stop_scheduler
 
@@ -40,8 +42,9 @@ logger = logging.getLogger("orbis")
 logging.getLogger("uvicorn.access").addFilter(AccessLogPathFilter())
 # httpx logs each outbound request's URL whole at INFO, query string included,
 # and the scraper's URLs can come from a visitor's question (read_article).
-# httpcore logs at DEBUG only, connection details: kept quiet the same way.
-for _name in ("httpx", "httpcore"):
+# httpx2, the anthropic and openai SDKs' client, logs its requests the same way.
+# httpcore and httpcore2 log at DEBUG only, connection details: kept quiet too.
+for _name in ("httpx", "httpcore", "httpx2", "httpcore2"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
 
@@ -95,8 +98,9 @@ async def startup() -> None:
     """Warm up connections and kick off the GDELT ingestion pipeline."""
     logger.info("Starting Orbis API …")
     logger.info("Daily Claude budget: $%.2f (UTC day).", settings.llm_daily_budget_usd)
-    await get_redis()
-    await get_pool()
+    # Open: also after a shutdown closed them, the app started again in one process.
+    await open_redis()
+    await open_pool()
 
     # Run one immediate ingestion so the DB has data, then start the
     # periodic scheduler.  Fire-and-forget so startup isn't blocked.
@@ -114,8 +118,9 @@ async def shutdown() -> None:
     """Stop scheduler and release connections on shutdown."""
     logger.info("Shutting down Orbis API …")
     await stop_scheduler()
-    # A cache warm or a week read still running would reopen Redis or the pool once
-    # closed: every one stops here.
+    # A cache warm or a week read still running would reach Redis or the pool once
+    # closed: every one stops here. One that lands later still (breaking's query,
+    # shielded, runs on for its requests) finds them closed, and never opens them again.
     await stop_background_tasks(shutdown=True)
     await close_redis()
     await close_pool()
@@ -145,6 +150,19 @@ async def log_requests(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Timeouts
 # ---------------------------------------------------------------------------
+def raised_at(exc: BaseException) -> str:
+    """Where *exc* was raised, as ``module:line``: the innermost frame of the app's own
+    code in its traceback (an asyncio.timeout's innermost is asyncio's, the same for
+    every route), else the innermost of all. The code's place, never data."""
+    frames = [
+        (frame.f_globals.get("__name__") or os.path.basename(frame.f_code.co_filename), line)
+        for frame, line in traceback.walk_tb(exc.__traceback__)
+    ]
+    ours = [(module, line) for module, line in frames if module.split(".")[0] == "app"]
+    module, line = (ours or frames or [("unknown", 0)])[-1]
+    return f"{module}:{line}"
+
+
 @app.exception_handler(TimeoutError)
 async def timed_out(request: Request, exc: TimeoutError) -> JSONResponse:
     """A route's query or call that ran out of time, unhandled there: a 503 the client
@@ -152,8 +170,16 @@ async def timed_out(request: Request, exc: TimeoutError) -> JSONResponse:
     in four days before its route answered 503 itself). Answered inside the
     middleware, so log_requests logs the 503; nothing of the error in the body.
     One line names the route as declared (route_template), never the path or query
-    as sent. A CancelledError is no TimeoutError: a cancelled request stays one."""
-    logger.warning("%s %s timed out; answered 503.", request.method, route_template(request))
+    as sent, and where the timeout came from: the error's type and the code's
+    place (raised_at), never its message. A CancelledError is no TimeoutError: a
+    cancelled request stays one."""
+    logger.warning(
+        "%s %s timed out (%s at %s); answered 503.",
+        request.method,
+        route_template(request),
+        type(exc).__name__,
+        raised_at(exc),
+    )
     return JSONResponse(
         status_code=503,
         content={"detail": "Timed out; retry shortly."},

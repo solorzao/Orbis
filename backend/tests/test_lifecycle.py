@@ -51,8 +51,8 @@ def lifecycle_calls():
         return record
 
     with (
-        patch.object(main, "get_redis", step("redis")),
-        patch.object(main, "get_pool", step("pool")),
+        patch.object(main, "open_redis", step("redis")),
+        patch.object(main, "open_pool", step("pool")),
         patch.object(main, "run_ingestion_cycle", AsyncMock(return_value=0)),
         patch.object(main, "start_scheduler", lambda: calls.append("scheduler")),
         patch.object(main, "stop_scheduler", step("stop scheduler")),

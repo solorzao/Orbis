@@ -116,6 +116,29 @@ async def test_a_slow_or_failing_warmer_is_a_warning_and_the_rest_still_run(capl
 
 
 @pytest.mark.asyncio
+async def test_a_timeout_inside_a_warmer_is_a_failure_not_the_warms_limit(caplog):
+    """A TimeoutError from inside the warmer (breaking's 15 s query) is no sign the
+    warm's limit ran out: the line says how long it ran, never "timed out after 5 s"."""
+    calls = []
+
+    async def inner_timeout():
+        async with asyncio.timeout(0.01):
+            await asyncio.sleep(5)
+
+    async def last():
+        calls.append("last")
+
+    with caplog.at_level(logging.INFO, logger="orbis.warm"):
+        await warm.warm_caches((inner_timeout, last), timeout=5)  # does not raise
+
+    assert calls == ["last"]
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warning.startswith("Cache warm inner_timeout failed after ")
+    assert warning.endswith(" s (TimeoutError); continuing.")
+    assert caplog.records[-1].getMessage().startswith("Cache warm: 1 of 2 in ")
+
+
+@pytest.mark.asyncio
 async def test_a_warmer_with_its_own_timeout_gets_it(caplog):
     """The default cuts the others off; a slow warmer named in timeouts runs to its own."""
     calls = []
