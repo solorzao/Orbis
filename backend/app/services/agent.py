@@ -391,10 +391,10 @@ _SYNTHESIS_SYSTEM = (
     "Lead with the most important development. Answer a narrow question in a few "
     "sentences; for a briefing or an overview, write two short paragraphs or a short "
     "bulleted list, without headings. For a broad question about what matters now, "
-    "lead with the two or three stories the most outlets and countries cover, one or "
-    "two sentences each, cited, with a globe action for each place; say how widely "
-    "each is covered in plain words, and call one the biggest only when its coverage "
-    'shows it. Name an outlet or a speaker ("the health '
+    "instead give the two or three stories the most outlets and countries cover, at "
+    "most two sentences each, cited, with a globe action for each place, then stop: "
+    "no further stories. Say how widely each is covered in plain words, and call one "
+    'the biggest only when its coverage shows it. Name an outlet or a speaker ("the health '
     'ministry said", "according to Reuters") when attribution matters, as with a '
     "disputed claim or a casualty figure, or when asked who is reporting something. "
     "Leave links, coordinates and tone scores to the citations and the globe. When "
@@ -482,6 +482,24 @@ def _prompt_text(text: object, max_length: int) -> str:
     return "" if has_injection_pattern(clean) else clean
 
 
+# A top story's summary as the model sees it: whole sentences, up to about this many
+# characters (21d review I1: whole synopses made broad answers long).
+_SUMMARY_CHARS = 300
+
+
+def _lead_sentences(text: str, limit: int = _SUMMARY_CHARS) -> str:
+    """*text*'s first sentences while they fit in *limit* characters, or its first
+    sentence alone, however long: never a cut mid-sentence. voice's splitter, so an
+    abbreviation's full stop ("St. Petersburg") doesn't end one."""
+    sentences = voice._sentences(text)
+    kept = sentences[:1]
+    for sentence in sentences[1:]:
+        if len(" ".join([*kept, sentence])) > limit:
+            break
+        kept.append(sentence)
+    return " ".join(kept)
+
+
 def _page_text(text: object) -> str:
     """Scraped page text for the prompt, lines kept; "" when it holds an injection phrase."""
     if not isinstance(text, str):
@@ -550,7 +568,7 @@ def _build_context(
         if outlet:
             parts.append(f"  Source: {outlet}")
         # top_stories' rows (21d): the thread's synopsis, and how widely it is covered.
-        summary = _prompt_text(item.get("summary"), 600)
+        summary = _lead_sentences(_prompt_text(item.get("summary"), 600))
         if summary:
             parts.append(f"  Summary: {summary}")
         coverage = _prompt_text(item.get("coverage"), 120)

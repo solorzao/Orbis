@@ -2073,6 +2073,34 @@ def test_synthesis_system_leads_broad_answers_with_the_widest_stories():
     assert "call one the biggest only when its coverage shows it" in _SYNTHESIS_SYSTEM
 
 
+def test_a_broad_answer_is_two_or_three_stories_then_stops():
+    """Review I1: broad answers ran to 4-5 stories and about 250 words."""
+    assert "at most two sentences each" in _SYNTHESIS_SYSTEM
+    assert "then stop: no further stories" in _SYNTHESIS_SYSTEM
+
+
+_FIRST = "Putin has agreed to resume talks on the war, according to the Kremlin."
+_SECOND = "Zelensky says Ukraine is ready to freeze the front line, " * 4 + "and talks go on."
+
+
+@pytest.mark.parametrize(
+    ("summary", "shown"),
+    [
+        (f"{_FIRST} {_SECOND}", _FIRST),  # whole sentences, up to about 300 characters
+        (f"{_FIRST} Talks follow.", f"{_FIRST} Talks follow."),  # all of it fits
+        ("A" * 400 + ". Then more.", "A" * 400 + "."),  # never a cut mid-sentence
+        (
+            "Envoys met in St. Petersburg on Monday. Then " + "x" * 280 + ".",
+            "Envoys met in St. Petersburg on Monday.",
+        ),  # an abbreviation's full stop doesn't end a sentence
+    ],
+)
+def test_a_top_storys_summary_is_its_first_sentences(summary, shown):
+    row = {**_TOP_ROWS[0], "summary": summary}
+    context, _ = _build_context([{"tool": "top_stories", "result": [row]}])
+    assert f"  Summary: {shown}\n" in context
+
+
 @pytest.mark.parametrize(
     ("url", "label"),
     [
