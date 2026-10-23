@@ -286,6 +286,12 @@ BOARD_WORDS_IN_THE_NEWS = [
     # entry [3]"); "Sweden's NATO entry [1]" and "the UK's Eurovision entry [2]" pass.
     "The NATO entry [1] was approved in March.",
     "The Indian Oscar entry [3] was withdrawn.",  # as "the Tel Aviv entry [3]" (21c-3)
+    # Items as a set, as the 21c memos wrote them (#147 re-review B1, accepted).
+    "One of the items is a diadem [2].",
+    "Both items share a maker's mark [1].",
+    "Thieves took the three items in under eight minutes [2].",
+    "The items appear in a 1923 catalogue [1].",
+    "The items describe a 17th-century voyage [3].",
 ]
 
 
@@ -350,6 +356,16 @@ MEMO_21C_LEAKS = [
     ("Two of the three items are developing stories from 23 October.", "handle"),
     ("Two of the items are unrelated in subject.", "handle"),
     ("The church and the attack are both in Karak, and nothing in them conflicts.", "gap"),
+    # From the 21c-4 memos (#147 re-review B1): a counted set with other verbs.
+    ("Two of the items are stories about named public figures [1].", "handle"),
+    ("Two of the items involve high-profile people in the United States [1] [2].", "handle"),
+    ("The three items are consistent in focusing on Netanyahu's return to power.", "handle"),
+    ("Both items may appear in coverage of UK news on the same days.", "handle"),
+    ("Both White House and Washington locations appear across the three items.", "handle"),
+    ("The three items place their stories in Washington and the White House [3].", "handle"),
+    ("The three items place the events in Jordan.", "handle"),
+    ("This item [2] is about the floods.", "handle"),
+    ("The floods are the subject of that item [3].", "handle"),
 ]
 
 
@@ -438,6 +454,14 @@ MEMO_21C_NEWS = [
     "Some pins carried the party logo [3].",
     "Officials want a standalone location for the embassy [1].",
     "The kiosk is a standalone location [2].",
+    # The #147 re-review: a counted set's news, and facts given in court.
+    "None of the items are insured [1].",
+    "The eight items stolen from the Louvre appear in Interpol's database [1].",
+    "Police recovered both items [2].",
+    "The two items, a crown and a necklace, were found [1].",
+    "Both items went missing in 2019 [3].",
+    "The three items are expected at auction in May [2].",
+    "Witnesses disagree on the facts given in court [2].",
 ]
 
 

@@ -160,15 +160,11 @@ LEAK_PATTERNS: dict[str, re.Pattern[str]] = {
         _I,
     ),
 }
-# The board's words, read in a memo only (surface="memo"): pins, and the
-# memo's story threads, country pairs and story times. The co-pilot has no pins, so
-# to it these are ordinary English ("the two pins in his ankle", "neither pin was
-# recovered", "a country pin on his lapel", "the story thread of the season").
-# What the 21c evals' memos had their inputs do as a set, after a count or a
-# determiner: "the three items share", "Three pins describe", "the two items do not
-# give", "both items are developing stories", "the items may be covered together".
-# Items and pins in the news do other things: "were stolen", "include a rifle", "are
-# banned", "were removed from his ankle", "may be sold" (#147 review).
+# What the 21c evals' memos had their inputs do as a set, after a determiner or a
+# sentence-start count: "the items share", "Three pins describe", "these items do not
+# give", "the items may be covered together". Items and pins in the news do other
+# things: "were stolen", "include a rifle", "are banned", "were removed from his
+# ankle", "may be sold" (#147 review).
 _SET_VERBS = (
     r"(?:(?:all|both|also)\s+)?(?:share[sd]?|cover(?:s|ed)?|agree[sd]?|describe[sd]?"
     r"|concern(?:s|ed)?|conflict(?:s|ed)?|sit|sat|appear(?:s|ed)?|give|gave|name[sd]?"
@@ -179,6 +175,18 @@ _SET_VERBS = (
 # Material that was released, seized or found is news ("the material released by
 # police"), not what a memo was given.
 _NOT_RELEASED = r"(?!\s+(?:released|published|seized|leaked|obtained|recovered|found)\b)"
+# After a counted set ("the three items", "both items", "two of the items"), what
+# reads as news about objects: a citation, a comma, "of", a participle, were/was,
+# "are stolen" (#147 re-review). Anything else is the memo counting its inputs: "two
+# of the items involve", "the three items are consistent", "across the three items".
+_COUNTED_NEWS = (
+    r"(?!\s*\[)(?!,)(?!\s+(?:of|\w+ed|were|was|stolen|taken|sold|worth|valued|went"
+    r"|remain)\b)(?!\s+(?:are|is)\s+\w+ed\b)"
+)
+# The board's words, read in a memo only (surface="memo"): pins, and the
+# memo's story threads, country pairs and story times. The co-pilot has no pins, so
+# to it these are ordinary English ("the two pins in his ankle", "neither pin was
+# recovered", "a country pin on his lapel", "the story thread of the season").
 MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
     # A pin by number or word ("Pin 2", "Pin [2]", "pin two", "the second pin", "the
     # pins", "your board"), and from the 21a baseline by its kind ("the Tel Aviv place
@@ -216,30 +224,34 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         r"(?:the|this|your)\s+board\b"
         r"|\b[Tt]he\s+board\s+(?:does\s+not|doesn['’]t)\s+(?:show|say|give|list|state"
         r"|mention|name|include)\b"
-        # The items as a set (_SET_VERBS), and "two of the items are unrelated", "the
+        # The items as a set: uncounted with _SET_VERBS ("the items share", "these
+        # items describe"), counted unless _COUNTED_NEWS follows ("the three items are
+        # consistent", "two of the items involve", "both items may appear"), and "the
         # item does not confirm". Items in the news pass (#147 review): "the items were
         # stolen", "the items include a rifle", "these items are banned", "two items
-        # were missing", "the items may be sold", "two of the items were recovered",
-        # "these items place the suspect at the scene".
+        # were missing", "the two items stolen", "two of the items were recovered",
+        # "both items went missing", "these items place the suspect at the scene".
         r"|\b(?:[Tt]he|[Tt]hese|[Tt]hose|[Aa]ll|[Bb]oth|[Ss]everal|[Tt]wo|[Tt]hree|[Ff]our"
         r"|[Ff]ive|[Ss]ix)\s+(?:(?:two|three|four|five|six|other|remaining)\s+)?items\s+"
         rf"{_SET_VERBS}"
-        r"|\b(?:[Oo]ne|[Tt]wo|[Tt]hree|[Bb]oth|[Aa]ll|[Nn]one|[Ee]ach)\s+of\s+(?:the|these)\s+"
-        r"(?:(?:two|three|four|five|six)\s+)?items\s+(?:are|is|were|was)\s+(?:all\s+)?"
-        r"(?:separate|unrelated|developing)\b"
+        r"|\b(?:(?:[Tt]he|[Tt]hese|[Tt]hose|[Aa]ll)\s+(?:two|three|four|five|six)|[Bb]oth)"
+        rf"\s+items\b{_COUNTED_NEWS}"
+        r"|\b(?:[Oo]ne|[Tt]wo|[Tt]hree|[Bb]oth|[Aa]ll|[Ee]ach)\s+of\s+(?:the|these)\s+"
+        rf"(?:(?:two|three|four|five|six)\s+)?items\b{_COUNTED_NEWS}"
         r"|\b[Tt]he\s+item\s+(?:does\s+not|doesn['’]t)\s+(?:confirm|say|show|state|give"
         r"|mention|name|establish)\b"
         # One pin called an item (21c-2 eval), after a name ("the Netanyahu item", "the
         # Tel Aviv item [3]"), an ordinal ("the third item") or "only" ("the only
         # dated item", "the only item linking countries"), or before its number ("the
-        # item [2]"). News passes: "the item was stolen", "the most valuable item",
+        # item [2]", "this item [2]"). News passes: "the item was stolen", "the most
+        # valuable item",
         # "the UK's Eurovision item" (a possessive), "the only item on the agenda",
         # "the first item recovered".
         r"|(?:\b[Tt]he\s+(?:[A-Z][\w-]*\s+){1,2}"
         rf"|\b[Tt]he\s+{_ORDINALS}\s+"
         r"|\b(?:[Tt]he\s+)?[Oo]nly\s+(?:[\w-]+\s+)?)item\b"
         r"(?!\s+(?:of|on|in|to|into|for|\w+ed|sold|stolen|taken|worth)\b)"
-        r"|\b[Tt]he\s+item\s*\[\s*\d"
+        r"|\b(?:[Tt]he|[Tt]his|[Tt]hat|[Ee]ach)\s+item\s*\[\s*\d"
         # One pin called an entry: after a name and before its number ("the Netanyahu
         # entry [3]", "the Tel Aviv entry [3]"), or after a pin's kind ("the Russia
         # place entry", "the place and organisation entries"). "The UK's Eurovision
@@ -259,7 +271,8 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
     # facts given". News passes (#147 review): "the material shows the minister
     # knew", "officials named in the material have denied", "it is clear from these
     # items that", "the material released by police", "unclear from the statement",
-    # "settled on the facts given", "nothing in the report".
+    # "settled on the facts given", "disagree on the facts given in court", "nothing
+    # in the report".
     "gap": re.compile(
         r"\b(?:unclear|unknown)\s+(?:from|in|by)\s+(?:the|this|these)\s+"
         rf"(?:gathered\s+|given\s+)?(?:material|items|pins)\b{_NOT_RELEASED}"
@@ -270,6 +283,7 @@ MEMO_PATTERNS: dict[str, re.Pattern[str]] = {
         r"|mentioned|shown|listed)\s+in\s+(?:the|this)\s+(?:gathered\s+|given\s+)?"
         rf"material\b{_NOT_RELEASED}"
         r"|\b(?:conflict|disagree|contradict|differ)\w*\s+on\s+the\s+facts\s+given\b"
+        r"(?!\s+(?:in|by|at|to|during)\b)"
         r"|\bnothing\s+in\s+(?:the|this|these)\s+(?:gathered\s+|given\s+)?"
         r"(?:material|items|pins)\b"
         r"|\bnothing\s+in\s+them\s+(?:conflicts|contradicts|disagrees)\b"
