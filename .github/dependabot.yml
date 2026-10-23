@@ -1,10 +1,13 @@
 version: 2
 
 # Minor and patch updates arrive as one grouped PR per ecosystem; each major
-# stays its own PR so a breaking change is reviewed alone. The cooldown holds a
-# new release back for a week before Dependabot proposes it, so a compromised
-# or broken publish has time to be pulled first. Security updates ignore both
-# the cooldown and these groups.
+# stays its own PR so a breaking change is reviewed alone. The cooldown only
+# delays the PRs Dependabot opens: it proposes no release under a week old. It
+# can't hold back what resolves outside those PRs. A floating tag (the
+# actions/* steps' @v7) takes a release the day it ships, and so does any
+# package left unpinned. So the third-party actions are pinned by commit SHA,
+# backend/requirements.txt pins every package, and frontend/package-lock.json
+# locks the npm tree. Security updates skip both the cooldown and these groups.
 updates:
   - package-ecosystem: npm
     directory: /frontend
@@ -20,7 +23,11 @@ updates:
         update-types:
           - minor
           - patch
-  - package-ecosystem: pip
+  # uv, not pip: requirements.txt is compiled by uv pip compile, and this
+  # ecosystem recompiles it with the --universal and --python-version its
+  # header records (pip's would rerun pip-compile without them, dropping the
+  # platform markers).
+  - package-ecosystem: uv
     directory: /backend
     schedule:
       interval: weekly
@@ -28,7 +35,7 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      pip-minor-patch:
+      uv-minor-patch:
         patterns:
           - "*"
         update-types:

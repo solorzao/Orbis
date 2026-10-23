@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,10 +43,22 @@ logging.getLogger("uvicorn.access").addFilter(AccessLogPathFilter())
 for _name in ("httpx", "httpcore"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Orbis API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Run startup as the server starts and shutdown as it stops (both below),
+    also when the server's lifespan task is cancelled instead."""
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+
+app = FastAPI(title="Orbis API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -74,9 +88,8 @@ app.include_router(board_router)
 
 
 # ---------------------------------------------------------------------------
-# Lifecycle events
+# Lifecycle events (run by lifespan, above)
 # ---------------------------------------------------------------------------
-@app.on_event("startup")
 async def startup() -> None:
     """Warm up connections and kick off the GDELT ingestion pipeline."""
     logger.info("Starting Orbis API …")
@@ -96,7 +109,6 @@ async def startup() -> None:
     start_scheduler()
 
 
-@app.on_event("shutdown")
 async def shutdown() -> None:
     """Stop scheduler and release connections on shutdown."""
     logger.info("Shutting down Orbis API …")

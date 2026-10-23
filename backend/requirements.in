@@ -1,0 +1,23 @@
+# What app/, scripts/ and tests/ import, plus the test runner CI uses.
+# requirements.txt pins these and everything they pull in; regenerate it with
+# a cutoff a week back, so no release goes in on its first day:
+#
+#   uv pip compile requirements.in -o requirements.txt --universal \
+#     --python-version 3.12 --exclude-newer <UTC time 7 days ago>
+#
+# The floors are the versions last reviewed (the majors' changelogs read).
+anthropic>=1.15.0,<2
+asyncpg>=0.32.0
+beautifulsoup4>=4.15.0
+fastapi>=0.143.3
+httpx>=0.28.1
+openai>=3.32.0,<4
+pydantic>=2.14.1
+python-dotenv>=1.2.4
+redis>=8.1.0,<9
+sse-starlette>=3.5.0
+starlette>=1.8.0,<2
+trafilatura>=2.3.1
+uvicorn>=0.54.0
+pytest>=9.1.1
+pytest-asyncio>=1.4.0
