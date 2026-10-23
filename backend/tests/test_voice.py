@@ -225,7 +225,6 @@ NEWS = [
     "Musk posted a thread [3] criticising the ruling.",
     "A thread of optimism ran through the speech [1].",
     "He posted a news thread on X defending the ruling [1].",
-    "The country pairing in the final drew a record audience [1].",
     "The board voted to replace the chief executive [1].",
     "The protest dominated the news cycle [2].",
     "The latest story from the BBC says rain will ease [1].",
@@ -281,6 +280,18 @@ BOARD_WORDS_IN_THE_NEWS = [
     "Users can now share saved pins with friends, Google said [2].",
     "The rivalry is the story thread of the season [2].",
     "Economists modelled trade for each country pair [3].",
+    # The 21c eval's misses made these memo words too (memo only, accepted).
+    "The country pairing in the final drew a record audience [1].",
+    # A name, then "entry" and a citation, is how memos name a pin ("the Netanyahu
+    # entry [3]"); "Sweden's NATO entry [1]" and "the UK's Eurovision entry [2]" pass.
+    "The NATO entry [1] was approved in March.",
+    "The Indian Oscar entry [3] was withdrawn.",  # as "the Tel Aviv entry [3]" (21c-3)
+    # Items as a set, as the 21c memos wrote them (#147 re-review B1, accepted).
+    "One of the items is a diadem [2].",
+    "Both items share a maker's mark [1].",
+    "Thieves took the three items in under eight minutes [2].",
+    "The items appear in a 1923 catalogue [1].",
+    "The items describe a 17th-century voyage [3].",
 ]
 
 
@@ -288,6 +299,176 @@ BOARD_WORDS_IN_THE_NEWS = [
 def test_board_words_are_english_to_the_copilot(sentence):
     assert voice.find_leaks(sentence, surface="copilot") == []
     assert voice.find_leaks(sentence, surface="memo") != []
+
+
+# Found in the 21c eval's manual read (2026-10-23): shown memos still described what
+# they were given as a set ("the material", "the board", "the three items"). Memo only:
+# the co-pilot reads these as English.
+MEMO_21C_LEAKS = [
+    ("It is unclear from the material what Netanyahu said in Washington.", "gap"),
+    ("It is not settled from this material who carried out the attack.", "gap"),
+    ("It is unclear from these items what the Hebron shooting involved.", "gap"),
+    ("It is unclear from the gathered material who will win the election.", "gap"),
+    ("The extent of the damage is not settled in the material.", "gap"),
+    ("Neither story's full timeline is confirmed in the material.", "gap"),
+    ("The stories differ, and nothing in the material shows them disagreeing.", "gap"),
+    ("The material gives no shared people or events beyond that timing.", "gap"),
+    ("The board does not show whether his visit concerns the closure.", "handle"),
+    ("The newest coverage on the board is placed in Tel Aviv on 23 October [3].", "handle"),
+    ("Al-Momani [1] appears alongside these items on the board.", "handle"),
+    ("The three items sit on the same country without conflicting details.", "handle"),
+    ("The three items share a country [1] [2] [3].", "handle"),
+    ("Several items share the 23 October date [1][2][5].", "handle"),
+    ("The items cover separate subjects, and none of them conflict.", "handle"),
+    ("The two items do not give conflicting places or dates.", "handle"),
+    ("Three pins share a Jordanian setting.", "handle"),
+    ("Storms hit the coast. Two pins name the same town [1] [2].", "handle"),
+    ("The Canada and Switzerland pairing [3] is a country pairing with no detail.", "internals"),
+    ("The tanker story [1] is set in Petersburg, a standalone news location [5].", "internals"),
+    # From the 21c-2 eval's read: a pin called an item or an entry, and "the material".
+    ("The story [1], the Netanyahu item [2] and the Tel Aviv item [3] agree.", "handle"),
+    ("The Netanyahu item lists Washington as its location rather than Israel.", "handle"),
+    ("They were covered together [3], the only item linking countries.", "handle"),
+    ("The storm's reporting from 23 October [1] is the only dated item.", "handle"),
+    ("Petersburg is the city in the Russia place entry [5].", "handle"),
+    ("The place and organisation entries do not conflict with the stories.", "handle"),
+    ("The Netanyahu entry [3] places him in Washington.", "handle"),
+    ("The Tel Aviv entry [3] is also in Israel, so the locations fit together.", "handle"),
+    ("The given items share no person or place.", "handle"),
+    ("The Post's link to that story is not stated in the material.", "gap"),
+    ("No shared place or people are named in the material.", "gap"),
+    ("The stories concern different subjects and do not conflict on the facts given.", "gap"),
+    # Forms the narrowed patterns (#147 review) still catch.
+    ("The two items describe different events in different countries.", "handle"),
+    ("The three items are separate and do not give conflicting accounts.", "handle"),
+    ("These items all share a Washington setting [1] [2].", "handle"),
+    ("The third item names Washington as its location.", "handle"),
+    ("Washington is named in the item [2].", "handle"),
+    ("The material shows no link between the closure and the storm.", "gap"),
+    # From the 21c-3 and 21c-3b memos, which the narrowing would otherwise let through.
+    ("Both items are developing stories with coverage dated 23 October.", "handle"),
+    ("He is the central figure, so the three items may be covered together.", "handle"),
+    ("The two items may share a source or setting.", "handle"),
+    ("The three items may therefore be covered together as one story.", "handle"),
+    ("The three items all frame Netanyahu as a figure whose return is in doubt.", "handle"),
+    ("The three items focus on the same election question from different angles.", "handle"),
+    ("The agency may be tied to the outbreak, though the item does not confirm this.", "handle"),
+    ("Two of the three items are developing stories from 23 October.", "handle"),
+    ("Two of the items are unrelated in subject.", "handle"),
+    ("The church and the attack are both in Karak, and nothing in them conflicts.", "gap"),
+    # From the 21c-4 memos (#147 re-review B1): a counted set with other verbs.
+    ("Two of the items are stories about named public figures [1].", "handle"),
+    ("Two of the items involve high-profile people in the United States [1] [2].", "handle"),
+    ("The three items are consistent in focusing on Netanyahu's return to power.", "handle"),
+    ("Both items may appear in coverage of UK news on the same days.", "handle"),
+    ("Both White House and Washington locations appear across the three items.", "handle"),
+    ("The three items place their stories in Washington and the White House [3].", "handle"),
+    ("The three items place the events in Jordan.", "handle"),
+    ("This item [2] is about the floods.", "handle"),
+    ("The floods are the subject of that item [3].", "handle"),
+]
+
+
+@pytest.mark.parametrize(("sentence", "kind"), MEMO_21C_LEAKS)
+def test_the_21c_misses_are_leaks_in_a_memo_only(sentence, kind):
+    assert kind in voice.find_leaks(sentence, surface="memo")
+    assert voice.find_leaks(sentence, surface="copilot") == []
+
+
+# Their near misses: news on both surfaces.
+MEMO_21C_NEWS = [
+    "Items seized at the border were counterfeit [2].",
+    "Police found several items of clothing near the river [1].",
+    "Police recovered 40 stolen items [3].",
+    "Customs seized several items [2] at the border.",
+    "The items seized in the raid were returned to the museum [2].",
+    "The two items stolen from the Louvre were recovered [1].",
+    "The items listed in the indictment include a rifle [3].",
+    "The board voted to replace the chief executive [1].",
+    "She won a seat on the board of directors [2].",
+    "He has served on the board since 2019 [1].",
+    "She sits on the board at the central bank [3].",
+    "A board meeting is set for Friday [1].",
+    "He resigned from the board in March [1].",
+    "Prices rose across the board in September [2].",
+    "The board's chair resigned [2].",
+    "It is unclear from the statement whether talks will resume [1].",
+    "The material was seized at the border [2].",
+    "Leaked material shows the minister knew of the plan [1].",
+    "Nothing in the report explains the delay [2].",
+    "Surgeons inserted two pins in his wrist [3].",
+    "The two countries signed a pact in Lagos [1].",
+    "The pair [2] were arrested in Madrid.",
+    # The 21c-2 patterns' near misses.
+    "The only item on the agenda was the budget [2].",
+    "The item in question was a rifle [1].",
+    "The most expensive item sold at the auction was a Monet [3].",
+    "The first item recovered was a necklace [2].",
+    "Troops blocked the entry of aid convoys [2].",
+    "The treaty's entry into force was delayed [1].",
+    "The US entry ban was extended to six countries [2].",
+    "Each entry costs $5 at the gate [1].",
+    "Police listed items stolen from the house [1].",
+    "The facts given in court were disputed [2].",
+    "Details were listed in the indictment [3].",
+    "Aid trucks were denied entry [3].",
+    "Sweden's NATO entry [1] was approved.",
+    # The #147 review's probes: governance, theft and spending news a memo may carry.
+    "His appointment was confirmed by the board on Monday [2].",
+    "The dispute was settled by the board in March [1].",
+    "The board does not expect to meet again until March [2].",
+    "Musk will remain on the board [1].",
+    "She is the only woman on the board [3].",
+    "A vacancy on the board was filled in June [2].",
+    "The proposal is now on the board's agenda [3].",
+    "Arsenal put two goals on the board before half-time [2].",
+    "The items were stolen from the museum in 2019 [2].",
+    "The items include a rifle and two pistols [3].",
+    "These items are banned under the new law [3].",
+    "Police said two items were missing [1].",
+    "All items were returned to the museum [2].",
+    "Both items were sold at auction [2].",
+    "The item was stolen in 2019 [2].",
+    "One item was a rifle [2].",
+    "The most valuable item was a Monet painting [2].",
+    "The biggest item is defence spending [3].",
+    "The UK's Eurovision entry [2] finished last.",
+    "The material shows the minister knew of the plan [1].",
+    "Three officials named in the material have denied wrongdoing [2].",
+    # Beside the forms won back from the 21c-3 memos.
+    "Two of the items were recovered by police [1].",
+    "The items may be sold at auction next year [3].",
+    "The item does not work without a charger, the company said [2].",
+    "These items place the suspect at the scene, prosecutors said [2].",
+    "The boxes had nothing in them when police arrived [1].",
+    # The #147 review's probe sentences for the other 21c patterns.
+    "Illegal people entry rose sharply [1].",
+    "The story entry was edited [2].",
+    "The judge said the case could not be settled on the facts given [1].",
+    "No names were given in the material released by police [2].",
+    "It is clear from these items that the shipment was illegal, officials said [2].",
+    "The cause is unknown in the material released [1].",
+    "His role was confirmed in the material released by the court [3].",
+    "Several pins were found in the bread [1].",
+    "Two pins were removed from his ankle [2].",
+    "Some pins carried the party logo [3].",
+    "Officials want a standalone location for the embassy [1].",
+    "The kiosk is a standalone location [2].",
+    # The #147 re-review: a counted set's news, and facts given in court.
+    "None of the items are insured [1].",
+    "The eight items stolen from the Louvre appear in Interpol's database [1].",
+    "Police recovered both items [2].",
+    "The two items, a crown and a necklace, were found [1].",
+    "Both items went missing in 2019 [3].",
+    "The three items are expected at auction in May [2].",
+    "Witnesses disagree on the facts given in court [2].",
+]
+
+
+@pytest.mark.parametrize("sentence", MEMO_21C_NEWS)
+def test_the_21c_patterns_let_news_through(sentence):
+    assert voice.find_leaks(sentence, surface="memo") == []
+    assert voice.find_leaks(sentence, surface="copilot") == []
 
 
 def test_a_surface_is_the_copilot_or_the_memo():
